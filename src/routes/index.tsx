@@ -140,6 +140,7 @@ function App() {
   const [trackingError, setTrackingError] = useState<string | null>(null)
   const [insightTab, setInsightTab] = useState<'closed' | 'activity' | 'profile'>('closed')
   const [isAddWalletModalOpen, setIsAddWalletModalOpen] = useState(false)
+  const [isWalletManagerOpen, setIsWalletManagerOpen] = useState(false)
   const [trades, setTrades] = useState<PolymarketTrade[]>([])
   const [positions, setPositions] = useState<PolymarketPosition[]>([])
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -763,24 +764,23 @@ useEffect(() => {
           <p className="text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
           </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setIsWalletManagerOpen(true)}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-4 py-2 text-sm text-gray-200 hover:border-cyan-400"
+            >
+              <Wallet className="h-4 w-4 text-cyan-300" />
+              Manage tracked wallets
+            </button>
+          </div>
         </div>
         <div className="space-y-8">
-          <div className="flex flex-col gap-8 md:flex-row md:items-start">
-            <TrackedWalletSidebar
-              trackedWallets={trackedWallets}
-              selectedWallet={selectedWallet}
-              onSelectWallet={setSelectedWallet}
-              walletStats={walletStats}
-              onDeleteWatcher={handleWatcherDelete}
-              onOpenAddWallet={() => setIsAddWalletModalOpen(true)}
-            />
-
-            <PortfolioOverview
-              trackedWallets={trackedWallets}
-              walletStats={walletStats}
-              walletPositions={walletPositions}
-            />
-          </div>
+          <PortfolioOverview
+            trackedWallets={trackedWallets}
+            walletStats={walletStats}
+            walletPositions={walletPositions}
+          />
 
           <main className="space-y-8">
             <WalletSummaryList
@@ -1174,18 +1174,30 @@ useEffect(() => {
             onClose={() => setIsAddWalletModalOpen(false)}
           />
         )}
+        {isWalletManagerOpen && (
+          <ManageWalletsModal
+            trackedWallets={trackedWallets}
+            selectedWallet={selectedWallet}
+            onSelectWallet={setSelectedWallet}
+            walletStats={walletStats}
+            onDeleteWatcher={handleWatcherDelete}
+            onOpenAddWallet={() => setIsAddWalletModalOpen(true)}
+            onClose={() => setIsWalletManagerOpen(false)}
+          />
+        )}
       </div>
     </div>
   )
 }
 
-function TrackedWalletSidebar({
+function ManageWalletsModal({
   trackedWallets,
   selectedWallet,
   onSelectWallet,
   walletStats,
   onDeleteWatcher,
   onOpenAddWallet,
+  onClose,
 }: {
   trackedWallets: TrackedWalletRow[]
   selectedWallet: string | null
@@ -1193,80 +1205,99 @@ function TrackedWalletSidebar({
   walletStats: Record<string, WalletStatsSummary>
   onDeleteWatcher: (watcherId: string, walletAddress?: string) => void
   onOpenAddWallet: () => void
+  onClose: () => void
 }) {
   const normalizedSelection = selectedWallet?.toLowerCase()
 
   return (
-    <aside className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-4 h-fit">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-            Tracked wallets
-          </p>
-          <h2 className="text-xl font-semibold">Monitor multiple users</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
+      <div className="w-full max-w-3xl rounded-3xl border border-slate-800 bg-slate-950/95 p-6 shadow-2xl shadow-cyan-500/20">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Tracked wallets</p>
+            <h2 className="text-2xl font-semibold">Manage the board</h2>
+            <p className="text-sm text-gray-400">
+              Tap a wallet to inspect it, or remove entries you no longer want to monitor.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenAddWallet}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs font-semibold text-gray-200 hover:border-cyan-400"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-slate-800 p-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-200"
+              aria-label="Close wallet manager"
+            >
+              X
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onOpenAddWallet}
-          className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs font-semibold text-gray-200 hover:border-cyan-400"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add
-        </button>
-      </div>
 
-      <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
-        {trackedWallets.length === 0 ? (
-          <p className="text-sm text-gray-400">
-            No wallets yet. Tap add to start building the watchlist.
-          </p>
-        ) : (
-          trackedWallets.map((wallet) => {
-            const key = wallet.walletAddress.toLowerCase()
-            const stats = walletStats[key] ?? EMPTY_WALLET_STATS
-            const isActive = normalizedSelection === key
-            return (
-              <button
-                type="button"
-                key={wallet.walletAddress}
-                onClick={() => onSelectWallet(wallet.walletAddress)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                  isActive
-                    ? 'border-cyan-400 bg-cyan-500/10'
-                    : 'border-slate-800 bg-slate-900/50 hover:border-cyan-400/60'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-                      {wallet.nickname || 'Wallet'}
-                    </p>
-                    <p className="font-semibold">{formatWalletAddress(wallet.walletAddress)}</p>
+        <div className="mt-6 space-y-3 max-h-[65vh] overflow-y-auto pr-1">
+          {trackedWallets.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              No wallets yet. Use the add button to bring your first trader onto the board.
+            </p>
+          ) : (
+            trackedWallets.map((wallet) => {
+              const key = wallet.walletAddress.toLowerCase()
+              const stats = walletStats[key] ?? EMPTY_WALLET_STATS
+              const isActive = normalizedSelection === key
+              return (
+                <button
+                  type="button"
+                  key={wallet.walletAddress}
+                  onClick={() => {
+                    onSelectWallet(wallet.walletAddress)
+                    onClose()
+                  }}
+                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                    isActive
+                      ? 'border-cyan-400 bg-cyan-500/10'
+                      : 'border-slate-800 bg-slate-900/50 hover:border-cyan-400/60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                        {wallet.nickname || 'Wallet'}
+                      </p>
+                      <p className="font-semibold">
+                        {formatWalletAddress(wallet.walletAddress)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDeleteWatcher(wallet.watcherId, wallet.walletAddress)
+                      }}
+                      className="rounded-full border border-transparent p-1 text-gray-500 hover:border-rose-400 hover:text-rose-300"
+                      aria-label="Remove wallet"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onDeleteWatcher(wallet.watcherId, wallet.walletAddress)
-                    }}
-                    className="rounded-full border border-transparent p-1 text-gray-500 hover:border-rose-400 hover:text-rose-300"
-                    aria-label="Remove wallet"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
-                  <span>
-                    Record {`${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`}
-                  </span>
-                  <span>{formatUsdCompact(stats.allTime.pnlUsd)}</span>
-                </div>
-              </button>
-            )
-          })
-        )}
+                  <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                    <span>
+                      Record {`${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`}
+                    </span>
+                    <span>{formatUsdCompact(stats.allTime.pnlUsd)}</span>
+                  </div>
+                </button>
+              )
+            })
+          )}
+        </div>
       </div>
-    </aside>
+    </div>
   )
 }
 function AlertCenter({
