@@ -1626,7 +1626,6 @@ function WalletSummaryList({
           const positions = walletPositions[key]
           const sortedPositions =
             positions?.slice().sort((a, b) => b.currentValue - a.currentValue) ?? []
-          const displayCount = Math.min(sortedPositions.length, 5)
           const isSelected =
             selectedWallet?.toLowerCase() === wallet.walletAddress.toLowerCase()
 
@@ -1660,7 +1659,7 @@ function WalletSummaryList({
                   sortedPositions.length > 0 ? (
                     <>
                       <div className="rounded-2xl border border-slate-900/70 bg-slate-950/40 divide-y divide-slate-900/60">
-                        {sortedPositions.slice(0, displayCount).map((position) => (
+                        {sortedPositions.map((position) => (
                           <div
                             key={position.asset}
                             className="flex flex-col gap-2 px-4 py-3 text-sm text-gray-300"
@@ -1687,11 +1686,6 @@ function WalletSummaryList({
                           </div>
                         ))}
                       </div>
-                      {positions.length > displayCount && (
-                        <p className="text-xs text-cyan-300">
-                          +{positions.length - displayCount} more markets
-                        </p>
-                      )}
                     </>
                   ) : (
                     <p className="text-xs text-gray-500">No open risk right now.</p>
