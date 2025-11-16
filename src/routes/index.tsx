@@ -1265,11 +1265,11 @@ function ManageWalletsModal({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-                        {wallet.nickname || 'Wallet'}
+                      <p className="text-base font-semibold text-white">
+                        {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
                       </p>
-                      <p className="font-semibold">
-                        {formatWalletAddress(wallet.walletAddress)}
+                      <p className="text-xs text-gray-500">
+                        {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
                       </p>
                     </div>
                     <button
