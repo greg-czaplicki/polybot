@@ -1849,17 +1849,6 @@ function PositionCard({
 }) {
   const formatOutcomeLabel = (pos: PolymarketPosition) => {
     if (pos.title?.toLowerCase().startsWith('spread:') && pos.outcome) {
-      const match = pos.title.match(/\(([^)]+)\)/)
-      if (match?.[1]) {
-        const line = match[1]
-        const value = line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
-        return `${pos.outcome} ${value}`
-      }
-    }
-    return pos.outcome ?? 'Outcome'
-  }
-  const formatOutcomeLabel = (pos: PolymarketPosition) => {
-    if (pos.title?.toLowerCase().startsWith('spread:') && pos.outcome) {
       return `${pos.outcome} ${pos.title
         .split('(')[1]
         ?.replace(')', '')
