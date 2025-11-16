@@ -1686,7 +1686,7 @@ function WalletSummaryList({
                             position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
                           }`}
                         >
-                          {formatOutcomeLabel(position)} · {formatUsdCompact(position.cashPnl)} (
+                          {describeOutcome(position)} · {formatUsdCompact(position.cashPnl)} (
                           {position.percentPnl.toFixed(1)}%)
                         </p>
                       </div>
@@ -1838,6 +1838,19 @@ function formatTradeTimestamp(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString()
 }
 
+function describeOutcome(position: PolymarketPosition) {
+  if (position.title?.toLowerCase().startsWith('spread:') && position.outcome) {
+    const match = position.title.match(/\(([^)]+)\)/)
+    if (match?.[1]) {
+      const line = match[1]
+      const adjusted = line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
+      return `${position.outcome} ${adjusted}`
+    }
+    return `${position.outcome} ${position.title.split('(')[1]?.replace(')', '') ?? ''}`.trim()
+  }
+  return position.outcome ?? 'Outcome'
+}
+
 function PositionCard({
   position,
   numberFormatter,
@@ -1847,15 +1860,6 @@ function PositionCard({
   numberFormatter: Intl.NumberFormat
   currencyFormatter: Intl.NumberFormat
 }) {
-  const formatOutcomeLabel = (pos: PolymarketPosition) => {
-    if (pos.title?.toLowerCase().startsWith('spread:') && pos.outcome) {
-      return `${pos.outcome} ${pos.title
-        .split('(')[1]
-        ?.replace(')', '')
-        ?.replace(/^[+-]?/, (sign) => (sign === '-' ? '+' : '-')) ?? pos.outcome}`
-    }
-    return pos.outcome ?? 'Outcome'
-  }
 
   const formatPrice = (price: number) =>
     `${numberFormatter.format(price * 100).replace(/\.00$/, '')}¢`
@@ -1878,7 +1882,7 @@ function PositionCard({
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Market</p>
           <h3 className="text-lg font-semibold">{position.title}</h3>
-          <p className="text-sm text-cyan-300">{formatOutcomeLabel(position)}</p>
+          <p className="text-sm text-cyan-300">{describeOutcome(position)}</p>
           <p className="text-sm text-gray-400">
             {numberFormatter.format(position.size)} shares at {formatPrice(position.avgPrice)}
           </p>
