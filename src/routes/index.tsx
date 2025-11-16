@@ -1156,14 +1156,6 @@ useEffect(() => {
             />
           </main>
         </div>
-        <button
-          type="button"
-          onClick={() => setIsAddWalletModalOpen(true)}
-          className="fixed bottom-6 right-6 inline-flex items-center gap-2 rounded-full bg-cyan-500 px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 hover:bg-cyan-400"
-        >
-          <Wallet className="h-4 w-4" />
-          Track new wallet
-        </button>
         {isAddWalletModalOpen && (
           <AddWalletModal
             trackingForm={trackingForm}
