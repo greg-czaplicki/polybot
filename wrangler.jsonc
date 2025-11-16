@@ -13,6 +13,9 @@
 			"database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7"
 		}
 	],
+	"vars": {
+		"PRIMARY_USER_ID": "polywhaler-admin"
+	},
 	"triggers": {
 		"crons": [
 			"*/5 * * * *"
