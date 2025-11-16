@@ -746,7 +746,11 @@ useEffect(() => {
 
   const hasTrades = trades.length > 0
   const visiblePositions = useMemo(
-    () => positions.filter((position) => position.currentValue > 0),
+    () =>
+      positions.filter(
+        (position) =>
+          position.currentValue > 0 && !/^will\s/i.test(position.title ?? ''),
+      ),
     [positions],
   )
   const hasPositions = visiblePositions.length > 0
@@ -1625,7 +1629,9 @@ function WalletSummaryList({
           const stats = walletStats[key] ?? EMPTY_WALLET_STATS
           const positions = walletPositions[key]
           const sortedPositions =
-            positions?.slice().sort((a, b) => b.currentValue - a.currentValue) ?? []
+            positions
+              ?.filter((position) => !/^will\s/i.test(position.title ?? ''))
+              .sort((a, b) => b.currentValue - a.currentValue) ?? []
           const isSelected =
             selectedWallet?.toLowerCase() === wallet.walletAddress.toLowerCase()
 
