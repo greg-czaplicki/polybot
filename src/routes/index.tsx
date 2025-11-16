@@ -757,8 +757,8 @@ useEffect(() => {
           <p className="text-sm uppercase tracking-[0.3em] text-cyan-400/80">
             Polywhaler
           </p>
-          <h1 className="text-4xl md:text-5xl font-black">
-            Multi-wallet Polymarket dashboard.
+          <h1 className="text-3xl md:text-5xl font-black">
+            Polymarket dashboard
           </h1>
           <p className="text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
@@ -1215,7 +1215,7 @@ function TrackedWalletSidebar({
         </button>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
         {trackedWallets.length === 0 ? (
           <p className="text-sm text-gray-400">
             No wallets yet. Tap add to start building the watchlist.
@@ -1551,12 +1551,12 @@ function PortfolioOverview({
     <section className="rounded-2xl border border-slate-900 bg-slate-950/60 p-6 space-y-4">
       <div className="flex flex-col gap-1">
         <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Portfolio overview</p>
-        <h2 className="text-2xl font-semibold">What&apos;s the board doing?</h2>
+        <h2 className="text-2xl font-semibold text-balance">What&apos;s the board doing?</h2>
         <p className="text-sm text-gray-400">
           High-level snapshot of every wallet you&apos;re monitoring.
         </p>
       </div>
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Tracked wallets" value={trackedWallets.length.toString()} />
         <StatCard title="Open markets" value={totalOpenMarkets.toString()} />
         <StatCard title="Live exposure" value={formatUsdCompact(totalValue)} />
@@ -1807,9 +1807,9 @@ function PerformanceCard({ label, bucket }: { label: string; bucket: WalletStats
 
 function StatCard({ title, value }: { title: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-slate-900 bg-slate-900/50 p-4">
+    <div className="rounded-2xl border border-slate-900 bg-slate-900/50 p-4 min-w-[160px]">
       <p className="text-xs uppercase tracking-[0.3em] text-gray-500">{title}</p>
-      <p className="text-2xl font-semibold mt-2">{value}</p>
+      <p className="mt-2 text-2xl font-semibold text-white whitespace-nowrap">{value}</p>
     </div>
   )
 }
