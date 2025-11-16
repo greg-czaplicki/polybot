@@ -1843,10 +1843,12 @@ function describeOutcome(position: PolymarketPosition) {
     const match = position.title.match(/\(([^)]+)\)/)
     if (match?.[1]) {
       const line = match[1]
-      const adjusted = line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
+      const isFavorite = position.outcome && position.title.toLowerCase().includes(position.outcome.toLowerCase())
+      const adjusted = isFavorite
+        ? line
+        : line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
       return `${position.outcome} ${adjusted}`
     }
-    return `${position.outcome} ${position.title.split('(')[1]?.replace(')', '') ?? ''}`.trim()
   }
   return position.outcome ?? 'Outcome'
 }
