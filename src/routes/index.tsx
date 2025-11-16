@@ -1660,44 +1660,38 @@ function WalletSummaryList({
                 </div>
               </div>
 
-              <div className="mt-4 space-y-2">
-                {positions ? (
-                  sortedPositions.length > 0 ? (
-                    <>
-                      <div className="rounded-2xl border border-slate-900/70 bg-slate-950/40 divide-y divide-slate-900/60">
-                        {sortedPositions.map((position) => (
-                          <div
-                            key={position.asset}
-                            className="flex flex-col gap-2 px-4 py-3 text-sm text-gray-300"
-                          >
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                              <p className="font-semibold text-white break-words">
-                                {position.title}
-                              </p>
-                              <span
-                                className="inline-flex items-center justify-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1 text-base font-semibold text-cyan-100 sm:text-sm"
-                                title="Current value"
-                              >
-                                {formatUsdCompact(position.currentValue)}
-                              </span>
-                            </div>
-                            <p
-                              className={`text-sm ${
-                                position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
-                              }`}
-                            >
-                              {position.outcome} · {formatUsdCompact(position.cashPnl)} (
-                              {position.percentPnl.toFixed(1)}%)
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-gray-500">No open risk right now.</p>
-                  )
+              <div className="mt-4">
+                {sortedPositions.length === 0 ? (
+                  <p className="text-xs text-gray-500">No open risk right now.</p>
                 ) : (
-                  <p className="text-xs text-gray-500">Loading position snapshot…</p>
+                  <div className="space-y-2 rounded-2xl border border-slate-900/70 bg-slate-950/40 p-3">
+                    {sortedPositions.map((position) => (
+                      <div
+                        key={position.asset}
+                        className="flex flex-col gap-1 rounded-xl border border-slate-900 bg-slate-950/60 px-4 py-3 text-sm text-gray-300"
+                      >
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="font-semibold text-white break-words">
+                            {position.title}
+                          </p>
+                          <span
+                            className="inline-flex items-center justify-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1 text-base font-semibold text-cyan-100 sm:text-sm"
+                            title="Current value"
+                          >
+                            {formatUsdCompact(position.currentValue)}
+                          </span>
+                        </div>
+                        <p
+                          className={`text-sm ${
+                            position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                          }`}
+                        >
+                          {position.outcome} · {formatUsdCompact(position.cashPnl)} (
+                          {position.percentPnl.toFixed(1)}%)
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </button>
