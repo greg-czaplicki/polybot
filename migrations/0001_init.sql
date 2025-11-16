@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS wallet_watchers (
   notify_channels TEXT NOT NULL DEFAULT '[]',
   last_triggered_at INTEGER,
   last_seen_trade_timestamp INTEGER DEFAULT 0,
+  last_position_value_notified REAL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
