@@ -1215,7 +1215,10 @@ function ManageWalletsModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onOpenAddWallet}
+              onClick={() => {
+                onClose()
+                onOpenAddWallet()
+              }}
               className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs font-semibold text-gray-200 hover:border-cyan-400"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -1640,11 +1643,11 @@ function WalletSummaryList({
             >
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-                    {wallet.nickname || 'Wallet'}
+                  <p className="text-lg font-semibold text-white">
+                    {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
                   </p>
-                  <p className="text-lg font-semibold">
-                    {formatWalletAddress(wallet.walletAddress)}
+                  <p className="text-sm text-gray-500">
+                    {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
                   </p>
                   <p className="text-sm text-gray-500">
                     {stats ? 'Active positions' : 'Compiling stats…'}
