@@ -1686,7 +1686,7 @@ function WalletSummaryList({
                             position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
                           }`}
                         >
-                          {position.outcome} · {formatUsdCompact(position.cashPnl)} (
+                          {formatOutcomeLabel(position)} · {formatUsdCompact(position.cashPnl)} (
                           {position.percentPnl.toFixed(1)}%)
                         </p>
                       </div>
@@ -1847,6 +1847,27 @@ function PositionCard({
   numberFormatter: Intl.NumberFormat
   currencyFormatter: Intl.NumberFormat
 }) {
+  const formatOutcomeLabel = (pos: PolymarketPosition) => {
+    if (pos.title?.toLowerCase().startsWith('spread:') && pos.outcome) {
+      const match = pos.title.match(/\(([^)]+)\)/)
+      if (match?.[1]) {
+        const line = match[1]
+        const value = line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
+        return `${pos.outcome} ${value}`
+      }
+    }
+    return pos.outcome ?? 'Outcome'
+  }
+  const formatOutcomeLabel = (pos: PolymarketPosition) => {
+    if (pos.title?.toLowerCase().startsWith('spread:') && pos.outcome) {
+      return `${pos.outcome} ${pos.title
+        .split('(')[1]
+        ?.replace(')', '')
+        ?.replace(/^[+-]?/, (sign) => (sign === '-' ? '+' : '-')) ?? pos.outcome}`
+    }
+    return pos.outcome ?? 'Outcome'
+  }
+
   const formatPrice = (price: number) =>
     `${numberFormatter.format(price * 100).replace(/\.00$/, '')}¢`
   const pnlPositive = position.cashPnl >= 0
@@ -1868,7 +1889,7 @@ function PositionCard({
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Market</p>
           <h3 className="text-lg font-semibold">{position.title}</h3>
-          <p className="text-sm text-cyan-300">{position.outcome}</p>
+          <p className="text-sm text-cyan-300">{formatOutcomeLabel(position)}</p>
           <p className="text-sm text-gray-400">
             {numberFormatter.format(position.size)} shares at {formatPrice(position.avgPrice)}
           </p>
