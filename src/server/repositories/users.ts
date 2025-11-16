@@ -20,7 +20,7 @@ export async function ensureUser(db: Db, userId?: string) {
     }
   }
 
-  const id = crypto.randomUUID()
+  const id = userId ?? crypto.randomUUID()
   const timestamp = nowUnixSeconds()
 
   await run(
