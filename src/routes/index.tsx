@@ -1633,25 +1633,25 @@ function WalletSummaryList({
                 {positions ? (
                   sortedPositions.length > 0 ? (
                     <>
-                      <div className="rounded-xl border border-slate-900/70 bg-slate-950/40 divide-y divide-slate-900/60">
+                      <div className="rounded-2xl border border-slate-900/70 bg-slate-950/40 divide-y divide-slate-900/60">
                         {sortedPositions.slice(0, displayCount).map((position) => (
                           <div
                             key={position.asset}
-                            className="flex flex-col gap-1 px-4 py-3 text-sm text-gray-300"
+                            className="flex flex-col gap-2 px-4 py-3 text-sm text-gray-300"
                           >
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="font-semibold text-white truncate">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="font-semibold text-white break-words">
                                 {position.title}
                               </p>
                               <span
-                                className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1 text-sm font-semibold text-cyan-100"
+                                className="inline-flex items-center justify-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1 text-base font-semibold text-cyan-100 sm:text-sm"
                                 title="Current value"
                               >
                                 {formatUsdCompact(position.currentValue)}
                               </span>
                             </div>
                             <p
-                              className={`text-xs ${
+                              className={`text-sm ${
                                 position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
                               }`}
                             >
