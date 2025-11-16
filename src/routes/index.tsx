@@ -90,6 +90,13 @@ const DEFAULT_ADD_WALLET_FORM: AddWalletFormState = {
   nickname: '',
 }
 
+const EMPTY_WALLET_STATS: WalletStatsSummary = {
+  allTime: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
+  daily: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
+  weekly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
+  monthly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
+}
+
 function parsePositiveNumber(value: string) {
   if (!value) {
     return undefined
@@ -1225,7 +1232,7 @@ function TrackedWalletSidebar({
         ) : (
           trackedWallets.map((wallet) => {
             const key = wallet.walletAddress.toLowerCase()
-            const stats = walletStats[key]
+            const stats = walletStats[key] ?? EMPTY_WALLET_STATS
             const isActive = normalizedSelection === key
             return (
               <button
@@ -1257,16 +1264,12 @@ function TrackedWalletSidebar({
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                {stats ? (
-                  <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
-                    <span>
-                      Record {`${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`}
-                    </span>
-                    <span>{formatUsdCompact(stats.allTime.pnlUsd)}</span>
-                  </div>
-                ) : (
-                  <p className="mt-3 text-xs text-gray-500">Waiting on stats…</p>
-                )}
+                <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                  <span>
+                    Record {`${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`}
+                  </span>
+                  <span>{formatUsdCompact(stats.allTime.pnlUsd)}</span>
+                </div>
               </button>
             )
           })
@@ -1602,7 +1605,7 @@ function WalletSummaryList({
       <div className="space-y-4">
         {trackedWallets.map((wallet) => {
           const key = wallet.walletAddress.toLowerCase()
-          const stats = walletStats[key]
+          const stats = walletStats[key] ?? EMPTY_WALLET_STATS
           const positions = walletPositions[key]
           const sortedPositions =
             positions?.slice().sort((a, b) => b.currentValue - a.currentValue) ?? []
