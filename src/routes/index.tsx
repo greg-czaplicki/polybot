@@ -33,7 +33,6 @@ import { getWalletStatsFn, listWalletResultsFn } from '../server/api/wallet-stat
 const REFRESH_INTERVAL_MS = 30_000
 const INITIAL_TRADE_BATCH_SIZE = 20
 const TRADE_BATCH_INCREMENT = 20
-const USER_ID_STORAGE_KEY = 'polywhaler:user-id'
 const ALERT_CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
@@ -324,23 +323,15 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
     let isMounted = true
 
     const bootstrapUser = async () => {
       try {
-        const stored = window.localStorage.getItem(USER_ID_STORAGE_KEY)
-        const response = await ensureUserFn({
-          data: stored ? { userId: stored } : undefined,
-        })
+        const response = await ensureUserFn({ data: undefined })
         if (!isMounted) {
           return
         }
         setUserId(response.userId)
-        window.localStorage.setItem(USER_ID_STORAGE_KEY, response.userId)
       } catch (error) {
         console.error('Unable to initialize user identity', error)
         setAlertCenterError(

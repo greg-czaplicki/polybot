@@ -3,6 +3,7 @@ export interface Env {
   ALERT_PUSH_VAPID_PUBLIC_KEY?: string
   ALERT_PUSH_VAPID_PRIVATE_KEY?: string
   ALERT_EMAIL_FROM?: string
+  PRIMARY_USER_ID?: string
 }
 
 export interface RequestContext {

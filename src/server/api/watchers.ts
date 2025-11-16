@@ -21,7 +21,9 @@ const requireString = (value: unknown, label: string) => {
 export const ensureUserFn = createServerFn({ method: 'POST' }).handler(
   async ({ data, context }) => {
     const db = getDb(context)
-    const user = await ensureUser(db, (data as { userId?: string })?.userId)
+    const preferredUserId =
+      context?.env?.PRIMARY_USER_ID || (data as { userId?: string })?.userId
+    const user = await ensureUser(db, preferredUserId)
     return { userId: user.id }
   },
 )
