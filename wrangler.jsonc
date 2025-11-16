@@ -1,0 +1,21 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "tanstack-start-app",
+	"compatibility_date": "2025-09-02",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"main": "src/server.ts",
+	"d1_databases": [
+		{
+			"binding": "POLYWHALER_DB",
+			"database_name": "polywhaler",
+			"database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	}
+}
