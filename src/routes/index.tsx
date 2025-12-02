@@ -3,6 +3,8 @@ import type { LucideIcon } from 'lucide-react'
 import {
   BellRing,
   Clock,
+  Eye,
+  EyeOff,
   Flame,
   Loader2,
   Plus,
@@ -2015,6 +2017,8 @@ function SharedPositionsBoard({
 }: {
   positions: AggregatedMarketEntry[]
 }) {
+  const [showRedeemable, setShowRedeemable] = useState(false)
+
   if (positions.length === 0) {
     return (
       <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-dashed border-slate-800/80 bg-slate-950/60 p-4 sm:p-5 md:p-6 text-center text-xs sm:text-sm text-gray-400">
@@ -2024,62 +2028,140 @@ function SharedPositionsBoard({
   }
 
   return (
-    <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/70 backdrop-blur-sm shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-5">
-      <div className="flex flex-col gap-1">
-        <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
-        <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
-        <p className="text-xs sm:text-sm text-gray-400">
-          Top markets sorted by combined current value. Opposing sides are flagged automatically.
-        </p>
+    <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/70 backdrop-blur-sm shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-5 md:space-y-6">
+      <div className="flex flex-col gap-2 sm:gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-1 flex-1">
+            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
+            <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
+            <p className="text-xs sm:text-sm text-gray-400">
+              Top markets sorted by combined current value. Opposing sides are flagged automatically.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowRedeemable((prev) => !prev)}
+            className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800/80 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-300 hover:border-cyan-400/60 hover:text-cyan-200 transition-colors flex-shrink-0"
+            aria-label={showRedeemable ? 'Hide redeemable positions' : 'Show redeemable positions'}
+          >
+            {showRedeemable ? (
+              <>
+                <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Hide redeemable</span>
+                <span className="sm:hidden">Hide</span>
+              </>
+            ) : (
+              <>
+                <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Show redeemable</span>
+                <span className="sm:hidden">Show</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
-      <div className="space-y-3 sm:space-y-4">
-        {positions.map((market) => {
-          const hasOpposition = market.outcomes.length > 1
-          return (
+      <div className="space-y-4 sm:space-y-5">
+        {positions
+          .map((market) => {
+            // Filter outcomes to only show those with visible wallets
+            const visibleOutcomes = market.outcomes
+              .map((outcome) => {
+                const visibleWallets = outcome.wallets.filter(
+                  (wallet) => showRedeemable || !wallet.redeemable,
+                )
+                return {
+                  ...outcome,
+                  visibleWallets,
+                  visibleTotalValue: visibleWallets.reduce((sum, wallet) => sum + wallet.value, 0),
+                }
+              })
+              .filter((outcome) => outcome.visibleWallets.length > 0)
+
+            // Only show market if it has at least one visible outcome
+            if (visibleOutcomes.length === 0) {
+              return null
+            }
+
+            const hasOpposition = visibleOutcomes.length > 1
+            const visibleMarketTotal = visibleOutcomes.reduce(
+              (sum, outcome) => sum + outcome.visibleTotalValue,
+              0,
+            )
+
+            return { market, visibleOutcomes, hasOpposition, visibleMarketTotal }
+          })
+          .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number }>; hasOpposition: boolean; visibleMarketTotal: number } => item !== null)
+          .map(({ market, visibleOutcomes, hasOpposition, visibleMarketTotal }) => (
             <div
               key={market.id}
-              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-3 py-3 sm:px-4 sm:py-4 md:px-6 md:py-5 shadow-md shadow-black/10 ${
-                hasOpposition ? 'border-rose-400/50 bg-rose-400/8' : 'border-slate-800/80 bg-slate-950/70'
+              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 ${
+                hasOpposition
+                  ? 'border-rose-400/50 bg-rose-400/8'
+                  : 'border-slate-800/80 bg-slate-950/70'
               }`}
             >
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                    {hasOpposition ? 'Opposing action' : 'Shared side'}
-                  </p>
-                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white">{market.title}</h3>
-                </div>
-                <div className="text-right">
-                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Total value</p>
-                  <p className="text-sm sm:text-base md:text-lg font-semibold text-white">
-                    {formatUsdCompact(market.totalValue)}
-                  </p>
+              <div className="flex flex-col gap-2 sm:gap-3 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                        {hasOpposition ? 'Opposing action' : 'Shared side'}
+                      </p>
+                      {hasOpposition && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[0.6rem] font-semibold bg-rose-400/20 text-rose-300 border border-rose-400/30">
+                          Conflict
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
+                      {market.title}
+                    </h3>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
+                      Total
+                    </p>
+                    <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
+                      {formatUsdCompact(visibleMarketTotal)}
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <div className="mt-3 sm:mt-4 grid gap-2 sm:gap-3 md:grid-cols-2">
-                {market.outcomes.map((outcome) => (
+              <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
+                {visibleOutcomes.map((outcome) => (
                   <div
                     key={`${market.id}-${outcome.outcome}`}
-                    className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/50 px-3 py-2 sm:px-4 sm:py-3 space-y-1.5 sm:space-y-2"
+                    className="rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 p-3 sm:p-4"
                   >
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs sm:text-sm font-semibold text-white">{outcome.outcome}</p>
-                      <p className="text-[0.65rem] sm:text-xs text-gray-400">
-                        {formatUsdCompact(outcome.totalValue)}
+                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800/50">
+                      <p className="text-sm sm:text-base font-semibold text-white">{outcome.outcome}</p>
+                      <p className="text-xs sm:text-sm font-semibold text-gray-300">
+                        {formatUsdCompact(outcome.visibleTotalValue)}
                       </p>
                     </div>
-                    <ul className="space-y-1 text-[0.65rem] sm:text-xs text-gray-300">
-                      {outcome.wallets.map((wallet) => {
+                    <ul className="space-y-2">
+                      {outcome.visibleWallets.map((wallet) => {
                         const pnlPositive = wallet.pnl >= 0
                         return (
                           <li
                             key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
-                            className="flex items-center justify-between gap-2 sm:gap-3 rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 px-2 py-1.5 sm:px-3 sm:py-2"
+                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-950/70 px-2.5 py-2 sm:px-3 sm:py-2.5"
                           >
-                            <span className="truncate font-semibold text-white text-xs sm:text-sm">{wallet.label}</span>
-                            <div className="flex flex-col items-end text-right text-[0.65rem] sm:text-xs text-gray-400">
-                              <span>{formatUsdCompact(wallet.value)}</span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs sm:text-sm font-semibold text-white truncate">
+                                {wallet.label}
+                              </p>
+                              {wallet.redeemable && (
+                                <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
+                                  Redeemable
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                              <span className="text-xs sm:text-sm font-semibold text-gray-200">
+                                {formatUsdCompact(wallet.value)}
+                              </span>
                               <span
                                 className={`text-[0.65rem] sm:text-xs font-semibold ${
                                   pnlPositive ? 'text-emerald-300' : 'text-rose-300'
@@ -2088,11 +2170,6 @@ function SharedPositionsBoard({
                                 {pnlPositive ? '+' : '-'}
                                 {formatUsdCompact(Math.abs(wallet.pnl))}
                               </span>
-                              {wallet.redeemable && (
-                                <span className="mt-0.5 sm:mt-1 inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 sm:px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.25em] text-amber-200">
-                                  Redeemable
-                                </span>
-                              )}
                             </div>
                           </li>
                         )
@@ -2102,8 +2179,7 @@ function SharedPositionsBoard({
                 ))}
               </div>
             </div>
-          )
-        })}
+          ))}
       </div>
     </section>
   )
