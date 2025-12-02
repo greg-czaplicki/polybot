@@ -16,6 +16,19 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react'
 
+// Type declaration for Pusher Beams
+declare global {
+  interface Window {
+    PusherPushNotifications?: {
+      Client: new (config: { instanceId: string }) => {
+        start: () => Promise<void>
+        addDeviceInterest: (interest: string) => Promise<void>
+        getDeviceInterests: () => Promise<string[] | { interests: string[] }>
+      }
+    }
+  }
+}
+
 import type { AlertEventRecord, WatcherRule } from '@/lib/alerts/types'
 import { getSportLabel } from '@/lib/sports'
 import {
@@ -30,6 +43,7 @@ import {
   listAlertHistoryFn,
   listWatchersFn,
   runAlertScanFn,
+  testPushNotificationFn,
   upsertWatcherFn,
 } from '../server/api/watchers'
 import { getWalletStatsFn, listWalletResultsFn } from '../server/api/wallet-stats'
@@ -275,10 +289,20 @@ function isWillQuestion(title?: string | null) {
 export const Route = createFileRoute('/')({ component: App })
 
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
   const [selectedWallet, setSelectedWallet] = useState<string | null>(null)
   const [trackingForm, setTrackingForm] = useState<AddWalletFormState>(
     DEFAULT_ADD_WALLET_FORM,
   )
+
+  // Check authentication on mount
+  useEffect(() => {
+    const authStatus = sessionStorage.getItem('polywhaler_authenticated') === 'true'
+    setIsAuthenticated(authStatus)
+    if (!authStatus) {
+      window.location.href = '/login'
+    }
+  }, [])
   const [isAddingWallet, setIsAddingWallet] = useState(false)
   const [trackingError, setTrackingError] = useState<string | null>(null)
   const [insightTab, setInsightTab] = useState<'closed' | 'activity' | 'profile'>('closed')
@@ -296,6 +320,7 @@ function App() {
   const [alertHistory, setAlertHistory] = useState<AlertEventRecord[]>([])
   const [alertCenterError, setAlertCenterError] = useState<string | null>(null)
   const [isScanningAlerts, setIsScanningAlerts] = useState(false)
+  const [isTestingNotification, setIsTestingNotification] = useState(false)
   const [walletStats, setWalletStats] = useState<Record<string, WalletStatsSummary>>({})
   const [walletResults, setWalletResults] = useState<
     Record<string, WalletResultSummary[]>
@@ -726,6 +751,80 @@ useEffect(() => {
     }
   }, [loadAlertHistory, userId])
 
+  const handleTestNotification = useCallback(async () => {
+    setIsTestingNotification(true)
+    setAlertCenterError(null)
+    try {
+      const result = await testPushNotificationFn({ data: undefined })
+      console.log('[Test Notification] Server response:', result)
+      
+      // Check if notification permission is granted
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        setAlertCenterError(
+          'Notification permission not granted. Click "Enable push notifications" first.',
+        )
+        return
+      }
+      
+      // Check service worker
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.ready
+        if (!registration) {
+          setAlertCenterError('Service worker not ready. Please refresh the page.')
+          return
+        }
+      }
+      
+      // Check Pusher Beams subscription
+      if (window.PusherPushNotifications) {
+        try {
+          const client = new window.PusherPushNotifications.Client({
+            instanceId: import.meta.env.VITE_PUSHER_BEAMS_INSTANCE_ID || '',
+          })
+          const interestsResponse = await client.getDeviceInterests()
+          console.log('[Test Notification] Subscribed interests:', interestsResponse)
+          // getDeviceInterests returns {interests: string[]}, not an array directly
+          const interests = Array.isArray(interestsResponse) 
+            ? interestsResponse 
+            : (interestsResponse && interestsResponse.interests ? interestsResponse.interests : [])
+          if (!interests.includes('wallet-alerts')) {
+            setAlertCenterError(
+              'Not subscribed to wallet-alerts interest. Please refresh the page to re-subscribe.',
+            )
+            return
+          }
+        } catch (err) {
+          console.error('[Test Notification] Error checking subscription:', err)
+        }
+      }
+      
+      // If we got here, everything looks good
+      setAlertCenterError(null)
+      console.log('[Test Notification] Notification sent successfully. Check your notifications!')
+      
+      // Check service worker for push event logs
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          registrations.forEach((registration) => {
+            if (registration.active) {
+              registration.active.postMessage({ type: 'CHECK_PUSH_EVENTS' })
+              console.log('[Test Notification] Service worker active, check console for push event logs')
+            }
+          })
+        })
+      }
+    } catch (error) {
+      console.error('Unable to send test notification', error)
+      setAlertCenterError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to send test notification. Check your Pusher Beams configuration.',
+      )
+    } finally {
+      setIsTestingNotification(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (trades.length === 0) {
       setVisibleTradeCount(0)
@@ -886,34 +985,50 @@ useEffect(() => {
     }
   }, [])
 
+  // Show loading or redirect if not authenticated
+  if (isAuthenticated === false) {
+    return null // Will redirect
+  }
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-cyan-400 mx-auto mb-4" />
+          <p className="text-gray-400">Checking authentication...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
-      <div className="px-6 py-10 max-w-6xl mx-auto space-y-10">
-        <div className="space-y-4">
-          <p className="text-sm uppercase tracking-[0.3em] text-cyan-400/80">
+      <div className="px-3 py-4 sm:px-4 sm:py-6 md:px-6 md:py-10 max-w-6xl mx-auto space-y-4 sm:space-y-6 md:space-y-10">
+        <div className="space-y-2 sm:space-y-3 md:space-y-4">
+          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-cyan-400/80">
             Polywhaler
           </p>
-          <h1 className="text-3xl md:text-5xl font-black">
+          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-5xl font-black">
             Polymarket dashboard
           </h1>
-          <p className="text-gray-300 max-w-3xl">
+          <p className="text-xs sm:text-sm md:text-base text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
           </p>
         </div>
-        <div className="space-y-8">
+        <div className="space-y-4 sm:space-y-5 md:space-y-6 lg:space-y-8">
           <div className="lg:hidden">
             <SharedPositionsBoard positions={aggregatedPositions} />
           </div>
-          <div className="grid gap-8 lg:grid-cols-[320px_1fr] items-start">
-            <aside className="space-y-6">
-              <div className="space-y-6 lg:sticky lg:top-10">
-                <section className="rounded-2xl border border-slate-900 bg-slate-950/70 p-5 space-y-4">
+          <div className="grid gap-4 sm:gap-5 md:gap-6 lg:gap-8 lg:grid-cols-[320px_1fr] items-start">
+            <aside className="space-y-4 sm:space-y-5 md:space-y-6">
+              <div className="space-y-4 sm:space-y-5 md:space-y-6 lg:sticky lg:top-10">
+                <section className="rounded-xl sm:rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur-sm shadow-lg shadow-black/20 p-3 sm:p-4 md:p-5 space-y-3 sm:space-y-4">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                       Control center
                     </p>
-                    <h2 className="text-xl font-semibold">Build your board</h2>
-                    <p className="text-sm text-gray-400">
+                    <h2 className="text-base sm:text-lg md:text-xl font-semibold">Build your board</h2>
+                    <p className="text-xs sm:text-sm text-gray-400">
                       Keep a tight list of proxy wallets for instant reads, then drop into deeper research on the right.
                     </p>
                   </div>
@@ -921,17 +1036,17 @@ useEffect(() => {
                     <button
                       type="button"
                       onClick={() => setIsAddWalletModalOpen(true)}
-                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+                      className="inline-flex flex-1 items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-cyan-500 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-slate-950 hover:bg-cyan-400"
                     >
-                      <Plus className="h-4 w-4" />
+                      <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       Add wallet
                     </button>
                     <button
                       type="button"
                       onClick={() => setIsWalletManagerOpen(true)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-800 px-3 py-2 text-sm text-gray-200 hover:border-cyan-400"
+                      className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-200 hover:border-cyan-400"
                     >
-                      <Wallet className="h-4 w-4 text-cyan-300" />
+                      <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
                       Manage
                     </button>
                   </div>
@@ -939,9 +1054,9 @@ useEffect(() => {
                     type="button"
                     onClick={handleNotificationPermission}
                     disabled={notificationStatus === 'requesting'}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-800 px-3 py-2 text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+                    className="inline-flex w-full items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
                   >
-                    <BellRing className="h-4 w-4 text-cyan-300" />
+                    <BellRing className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
                     {notificationStatus === 'granted'
                       ? 'Push enabled'
                       : notificationStatus === 'denied'
@@ -981,68 +1096,70 @@ useEffect(() => {
                   onRunScan={handleAlertScan}
                   isScanning={isScanningAlerts}
                   alertHistory={alertHistory}
+                  onTestNotification={handleTestNotification}
+                  isTestingNotification={isTestingNotification}
                 />
               </div>
             </aside>
-            <main className="space-y-8">
+            <main className="space-y-4 sm:space-y-5 md:space-y-6 lg:space-y-8">
               <div className="hidden lg:block">
                 <SharedPositionsBoard positions={aggregatedPositions} />
               </div>
 
               {selectedWallet ? (
-              <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
+              <section className="bg-slate-950/70 border border-slate-800/80 rounded-xl sm:rounded-2xl shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                       Insights for
                     </p>
-                    <h2 className="text-3xl font-semibold">
+                    <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold">
                       {selectedWalletMeta?.nickname || formatWalletAddress(selectedWallet)}
                     </h2>
-                    <p className="text-sm text-gray-400">{selectedWallet}</p>
+                    <p className="text-xs sm:text-sm text-gray-400">{selectedWallet}</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[0.65rem] sm:text-xs text-gray-400">
                     {lastUpdated && (
-                      <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1">
-                        <Clock className="h-4 w-4 text-cyan-300" />
+                      <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1">
+                        <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
                         Updated {new Date(lastUpdated).toLocaleTimeString()}
                       </span>
                     )}
                     {isAutoRefreshing && (
-                      <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-cyan-300">
-                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-cyan-300">
+                        <RefreshCw className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
                         Auto-refreshing
                       </span>
                     )}
                     <button
                       type="button"
                       onClick={manualRefresh}
-                      className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-[0.65rem] sm:text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
                       disabled={status === 'loading'}
                     >
-                      <RefreshCw className={`h-4 w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
                       Refresh now
                     </button>
                   </div>
                 </div>
 
                 {errorMessage && (
-                  <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-4 py-3 rounded-xl">
+                  <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm">
                     {errorMessage}
                   </div>
                 )}
 
                 {selectedDiagnostics && (
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                  <div className="grid gap-2 sm:gap-3 md:gap-4 md:grid-cols-3">
+                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                         Closed PnL (7d)
                       </p>
-                      <p className="text-lg font-semibold text-white">
+                      <p className="text-base sm:text-lg font-semibold text-white">
                         {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
                       </p>
                       <p
-                        className={`text-sm font-semibold ${
+                        className={`text-xs sm:text-sm font-semibold ${
                           selectedDiagnostics.closed.pnlUsd >= 0
                             ? 'text-emerald-300'
                             : 'text-rose-300'
@@ -1051,60 +1168,60 @@ useEffect(() => {
                         {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
                         {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
                       </p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-[0.65rem] sm:text-xs text-gray-500">
                         {selectedDiagnostics.closed.sampleCount} resolved markets
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                         Open exposure
                       </p>
-                      <p className="text-lg font-semibold text-white">
+                      <p className="text-base sm:text-lg font-semibold text-white">
                         {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
                       </p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-[0.65rem] sm:text-xs text-gray-500">
                         Across {selectedDiagnostics.open.positionCount} positions
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                         Flow (7d)
                       </p>
-                      <p className="text-sm text-gray-300">
+                      <p className="text-xs sm:text-sm text-gray-300">
                         Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
                       </p>
-                      <p className="text-sm text-gray-300">
+                      <p className="text-xs sm:text-sm text-gray-300">
                         Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
                       </p>
                     </div>
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center gap-4">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 md:gap-4">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
-                    <h3 className="text-2xl font-semibold">More context on this trader</h3>
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
+                    <h3 className="text-base sm:text-lg md:text-xl lg:text-2xl font-semibold">More context on this trader</h3>
                   </div>
                   <div className="flex-1" />
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
                     <button
                       type="button"
                       onClick={() => setInsightTab('closed')}
-                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
                     >
                       Closed markets
                     </button>
                     <button
                       type="button"
                       onClick={() => setInsightTab('activity')}
-                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
                     >
                       Live tape
                     </button>
                     <button
                       type="button"
                       onClick={() => setInsightTab('profile')}
-                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
                     >
                       Profile
                     </button>
@@ -1112,41 +1229,41 @@ useEffect(() => {
                 </div>
 
                 {insightTab === 'closed' && (
-                  <div className="space-y-4">
+                  <div className="space-y-3 sm:space-y-4">
                     {selectedStats && selectedStats.bySport.length > 0 && (
-                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-2 sm:space-y-3">
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                               Sports records
                             </p>
-                            <h4 className="text-lg font-semibold">League breakdown</h4>
+                            <h4 className="text-sm sm:text-base md:text-lg font-semibold">League breakdown</h4>
                           </div>
-                          <span className="text-xs text-gray-400">
+                          <span className="text-[0.65rem] sm:text-xs text-gray-400">
                             {selectedStats.bySport.length} league
                             {selectedStats.bySport.length === 1 ? '' : 's'}
                           </span>
                         </div>
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
                           {selectedStats.bySport.map((record) => {
                             const label = getSportLabel(record.sport) ?? record.sport.toUpperCase()
                             const pnlPositive = record.pnlUsd >= 0
                             return (
                               <div
                                 key={`${record.sport}-breakdown`}
-                                className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"
+                                className="rounded-lg sm:rounded-xl border border-slate-800/80 bg-slate-950/60 p-2 sm:p-3"
                               >
                                 <div className="flex items-center justify-between gap-2">
-                                  <p className="text-sm font-semibold text-white">{label}</p>
+                                  <p className="text-xs sm:text-sm font-semibold text-white">{label}</p>
                                   <p className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
                                     Record
                                   </p>
                                 </div>
-                                <p className="text-lg font-semibold text-white">
+                                <p className="text-sm sm:text-base md:text-lg font-semibold text-white">
                                   {record.wins}-{record.losses}-{record.ties}
                                 </p>
                                 <p
-                                  className={`text-xs font-semibold ${
+                                  className={`text-[0.65rem] sm:text-xs font-semibold ${
                                     pnlPositive ? 'text-emerald-300' : 'text-rose-300'
                                   }`}
                                 >
@@ -1160,7 +1277,7 @@ useEffect(() => {
                       </div>
                     )}
                     {selectedResults.length > 0 ? (
-                      <ul className="space-y-4">
+                      <ul className="space-y-2 sm:space-y-3 md:space-y-4">
                         {selectedResults.map((result) => {
                           const sportLabel = getSportLabel(result.sportTag)
                           const marketLabel = sportLabel
@@ -1171,36 +1288,36 @@ useEffect(() => {
                           return (
                             <li
                               key={`${result.asset}-${result.resolvedAt}`}
-                              className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
+                              className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
                             >
                               <div>
-                                <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                                <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                                   {result.result.toUpperCase()}
                                 </p>
-                                <h4 className="text-lg font-semibold">
+                                <h4 className="text-sm sm:text-base md:text-lg font-semibold">
                                   {result.title || result.asset}
                                 </h4>
-                                <p className="text-xs text-gray-500">
+                                <p className="text-[0.65rem] sm:text-xs text-gray-500">
                                   Resolved {new Date(result.resolvedAt * 1000).toLocaleDateString()}
                                 </p>
                               </div>
                               <div className="text-right">
                                 <p
-                                  className={`text-xl font-semibold ${
+                                  className={`text-base sm:text-lg md:text-xl font-semibold ${
                                     result.pnlUsd >= 0 ? 'text-emerald-300' : 'text-rose-300'
                                   }`}
                                 >
                                   {result.pnlUsd >= 0 ? '+' : '-'}
                                   {currencyFormatter.format(Math.abs(result.pnlUsd))}
                                 </p>
-                                <p className="text-sm text-gray-400">{marketLabel}</p>
+                                <p className="text-xs sm:text-sm text-gray-400">{marketLabel}</p>
                               </div>
                             </li>
                           )
                         })}
                       </ul>
                     ) : (
-                      <p className="text-gray-400">
+                      <p className="text-xs sm:text-sm text-gray-400">
                         No closed markets stored yet. Stats will appear here once positions resolve.
                       </p>
                     )}
@@ -1209,82 +1326,82 @@ useEffect(() => {
 
                 {insightTab === 'profile' && (
                     profile ? (
-                      <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row gap-6 items-center">
+                      <div className="bg-slate-900/70 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl p-4 sm:p-5 md:p-6 flex flex-col md:flex-row gap-4 sm:gap-5 md:gap-6 items-center shadow-lg shadow-black/20">
                         <img
                           src={profile.profileImage || profile.profileImageOptimized || '/tanstack-circle-logo.png'}
                           alt={profile.pseudonym ?? profile.name ?? 'profile'}
-                          className="h-24 w-24 rounded-2xl object-cover border border-slate-700"
+                          className="h-16 w-16 sm:h-20 sm:w-20 md:h-24 md:w-24 rounded-lg sm:rounded-xl md:rounded-2xl object-cover border border-slate-700"
                         />
-                        <div className="flex-1 w-full space-y-2">
-                          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Trader profile</p>
-                          <h2 className="text-2xl font-semibold">{profile.name || profile.pseudonym || 'Unnamed'}</h2>
+                        <div className="flex-1 w-full space-y-1.5 sm:space-y-2">
+                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Trader profile</p>
+                          <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">{profile.name || profile.pseudonym || 'Unnamed'}</h2>
                           {profile.pseudonym && (
-                            <p className="text-cyan-300 text-sm">@{profile.pseudonym}</p>
+                            <p className="text-cyan-300 text-xs sm:text-sm">@{profile.pseudonym}</p>
                           )}
                           {profile.bio && (
-                            <p className="text-gray-300 text-sm max-w-3xl">{profile.bio}</p>
+                            <p className="text-gray-300 text-xs sm:text-sm max-w-3xl">{profile.bio}</p>
                           )}
                         </div>
                       </div>
                     ) : (
-                      <p className="text-gray-400">No Polymarket profile metadata on this wallet.</p>
+                      <p className="text-xs sm:text-sm text-gray-400">No Polymarket profile metadata on this wallet.</p>
                     )
                   )}
 
                 {insightTab === 'activity' && (
-                    <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
-                      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-900/70">
+                    <div className="bg-slate-950/50 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden shadow-lg shadow-black/20">
+                      <div className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-2.5 sm:py-3 md:py-4 border-b border-slate-800/80">
                         <div>
-                          <p className="text-sm uppercase tracking-[0.3em] text-gray-500">
+                          <p className="text-[0.65rem] sm:text-xs md:text-sm uppercase tracking-[0.3em] text-gray-500">
                             Live tape
                           </p>
-                          <h3 className="text-xl font-semibold">
+                          <h3 className="text-sm sm:text-base md:text-lg lg:text-xl font-semibold">
                             Recent fills ({trades.length})
                           </h3>
                         </div>
                         {tradeStats.lastTimestamp && (
-                          <p className="text-xs text-gray-400">
+                          <p className="text-[0.65rem] sm:text-xs text-gray-400">
                             Latest fill {formatTradeTimestamp(tradeStats.lastTimestamp)}
                           </p>
                         )}
                       </div>
 
                       {!hasTrades && status === 'success' && (
-                        <div className="p-6 text-gray-400">
+                        <div className="p-4 sm:p-5 md:p-6 text-xs sm:text-sm text-gray-400">
                           No on-chain fills yet for this wallet. Try another proxy address.
                         </div>
                       )}
 
                       {status === 'loading' && (
-                        <div className="p-6 text-gray-400 animate-pulse">
+                        <div className="p-4 sm:p-5 md:p-6 text-xs sm:text-sm text-gray-400 animate-pulse">
                           Pulling fresh fills from Polymarket…
                         </div>
                       )}
 
                       {hasTrades && (
                         <>
-                          <ul className="divide-y divide-slate-900/70">
+                          <ul className="divide-y divide-slate-800/80">
                             {displayedTrades.map((trade) => (
                               <li
                                 key={`${trade.transactionHash}-${trade.timestamp}-${trade.asset}`}
-                                className="px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:gap-6"
+                                className="px-3 sm:px-4 md:px-6 py-2.5 sm:py-3 md:py-4 flex flex-col gap-2 md:flex-row md:items-center md:gap-6"
                               >
-                                <div className="flex items-center gap-3 w-full md:w-56">
+                                <div className="flex items-center gap-2 sm:gap-3 w-full md:w-56">
                                   {trade.icon ? (
                                     <img
                                       src={trade.icon}
                                       alt={trade.title}
-                                      className="h-10 w-10 rounded-lg border border-slate-800 object-cover"
+                                      className="h-8 w-8 sm:h-10 sm:w-10 rounded-lg border border-slate-800 object-cover"
                                     />
                                   ) : (
-                                    <div className="h-10 w-10 rounded-lg border border-slate-800 bg-slate-800" />
+                                    <div className="h-8 w-8 sm:h-10 sm:w-10 rounded-lg border border-slate-800 bg-slate-800" />
                                   )}
-                                  <div className="space-y-1 pb-1">
-                                    <p className="text-sm text-gray-400">
+                                  <div className="space-y-0.5 sm:space-y-1 pb-1">
+                                    <p className="text-xs sm:text-sm text-gray-400">
                                       {formatTradeTimestamp(trade.timestamp)}
                                     </p>
                                     <p
-                                      className={`text-xs font-semibold ${trade.side === 'BUY' ? 'text-emerald-300' : 'text-rose-300'}`}
+                                      className={`text-[0.65rem] sm:text-xs font-semibold ${trade.side === 'BUY' ? 'text-emerald-300' : 'text-rose-300'}`}
                                     >
                                       {trade.side}
                                     </p>
@@ -1292,13 +1409,13 @@ useEffect(() => {
                                 </div>
 
                                 <div className="flex-1">
-                                  <h4 className="font-semibold">{trade.title}</h4>
-                                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                                  <h4 className="text-sm sm:text-base font-semibold">{trade.title}</h4>
+                                  <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
                                     <span className="text-[0.65rem] uppercase tracking-[0.3em] text-gray-500">
                                       Pick
                                     </span>
                                     <span
-                                      className={`inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${trade.side === 'BUY' ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-rose-500/40 bg-rose-500/5 text-rose-200'}`}
+                                      className={`inline-flex max-w-full items-center gap-1.5 sm:gap-2 rounded-full border px-2 sm:px-3 py-0.5 sm:py-1 text-[0.65rem] sm:text-xs font-semibold ${trade.side === 'BUY' ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-200' : 'border-rose-500/40 bg-rose-500/5 text-rose-200'}`}
                                     >
                                       <span
                                         className={`h-1.5 w-1.5 rounded-full ${trade.side === 'BUY' ? 'bg-emerald-300' : 'bg-rose-300'}`}
@@ -1308,9 +1425,9 @@ useEffect(() => {
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-6 text-sm text-gray-300">
+                                <div className="flex items-center gap-3 sm:gap-4 md:gap-6 text-xs sm:text-sm text-gray-300">
                                   <div>
-                                    <p className="text-xs uppercase tracking-wide text-gray-500">
+                                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-wide text-gray-500">
                                       Size
                                     </p>
                                     <p className="font-semibold">
@@ -1318,7 +1435,7 @@ useEffect(() => {
                                     </p>
                                   </div>
                                   <div>
-                                    <p className="text-xs uppercase tracking-wide text-gray-500">
+                                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-wide text-gray-500">
                                       Price
                                     </p>
                                     <p className="font-semibold">
@@ -1326,7 +1443,7 @@ useEffect(() => {
                                     </p>
                                   </div>
                                   <div>
-                                    <p className="text-xs uppercase tracking-wide text-gray-500">
+                                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-wide text-gray-500">
                                       Notional
                                     </p>
                                     <p className="font-semibold">
@@ -1340,7 +1457,7 @@ useEffect(() => {
                                     href={`https://polygonscan.com/tx/${trade.transactionHash}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="text-cyan-400 text-sm hover:underline"
+                                    className="text-cyan-400 text-xs sm:text-sm hover:underline"
                                   >
                                     View tx →
                                   </a>
@@ -1351,14 +1468,14 @@ useEffect(() => {
 
                           {hasMoreTrades && (
                             <>
-                              <div className="px-6 py-4 border-t border-slate-900/70 flex flex-col items-center gap-2">
-                                <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                              <div className="px-3 sm:px-4 md:px-6 py-2.5 sm:py-3 md:py-4 border-t border-slate-800/80 flex flex-col items-center gap-1.5 sm:gap-2">
+                                <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                                   Showing {displayedTrades.length} of {trades.length} fills
                                 </p>
                                 <button
                                   type="button"
                                   onClick={loadMoreTrades}
-                                  className="text-sm text-cyan-300 hover:text-cyan-200 transition-colors"
+                                  className="text-xs sm:text-sm text-cyan-300 hover:text-cyan-200 transition-colors"
                                 >
                                   Load more fills
                                 </button>
@@ -1366,7 +1483,7 @@ useEffect(() => {
                               <div
                                 ref={loadMoreTriggerRef}
                                 aria-hidden="true"
-                                className="h-8"
+                                className="h-6 sm:h-8"
                               />
                             </>
                           )}
@@ -1376,9 +1493,9 @@ useEffect(() => {
                   )}
               </section>
             ) : (
-              <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-8 text-center space-y-3">
-                <h2 className="text-2xl font-semibold">Add a wallet to start tracking</h2>
-                <p className="text-gray-400">
+              <section className="bg-slate-950/70 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 text-center space-y-2 sm:space-y-3 shadow-lg shadow-black/20">
+                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Add a wallet to start tracking</h2>
+                <p className="text-xs sm:text-sm md:text-base text-gray-400">
                   Use the form on the left to add a Polymarket proxy wallet. Once it's tracked, you'll see every open and closed market here.
                 </p>
               </section>
@@ -1436,32 +1553,32 @@ function ManageWalletsModal({
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
-      <div className="w-full max-w-3xl rounded-3xl border border-slate-800 bg-slate-950/95 p-6 shadow-2xl shadow-cyan-500/20">
-        <div className="flex items-center justify-between gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 sm:px-4 py-4 sm:py-8">
+      <div className="w-full max-w-3xl rounded-xl sm:rounded-2xl md:rounded-3xl border border-slate-800/80 bg-slate-950/95 p-4 sm:p-5 md:p-6 shadow-2xl shadow-cyan-500/20">
+        <div className="flex items-center justify-between gap-2 sm:gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Tracked wallets</p>
-            <h2 className="text-2xl font-semibold">Manage the board</h2>
-            <p className="text-sm text-gray-400">
+            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Tracked wallets</p>
+            <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Manage the board</h2>
+            <p className="text-xs sm:text-sm text-gray-400">
               Tap a wallet to inspect it, or remove entries you no longer want to monitor.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={() => {
                 onClose()
                 onOpenAddWallet()
               }}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs font-semibold text-gray-200 hover:border-cyan-400"
+              className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-1 text-[0.65rem] sm:text-xs font-semibold text-gray-200 hover:border-cyan-400"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
               Add
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full border border-slate-800 p-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-200"
+              className="rounded-full border border-slate-800 p-1.5 sm:p-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-200"
               aria-label="Close wallet manager"
             >
               X
@@ -1469,9 +1586,9 @@ function ManageWalletsModal({
           </div>
         </div>
 
-        <div className="mt-6 space-y-3 max-h-[65vh] overflow-y-auto pr-1">
+        <div className="mt-4 sm:mt-5 md:mt-6 space-y-2 sm:space-y-3 max-h-[65vh] overflow-y-auto pr-1">
           {trackedWallets.length === 0 ? (
-            <p className="text-sm text-gray-400">
+            <p className="text-xs sm:text-sm text-gray-400">
               No wallets yet. Use the add button to bring your first trader onto the board.
             </p>
           ) : (
@@ -1490,22 +1607,22 @@ function ManageWalletsModal({
                     onSelectWallet(wallet.walletAddress)
                     onClose()
                   }}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                  className={`w-full rounded-lg sm:rounded-xl md:rounded-2xl border px-3 sm:px-4 py-2 sm:py-3 text-left transition ${
                     isActive
                       ? 'border-cyan-400 bg-cyan-500/10'
-                      : 'border-slate-800 bg-slate-900/50 hover:border-cyan-400/60'
+                      : 'border-slate-800/80 bg-slate-900/60 hover:border-cyan-400/60'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-base font-semibold text-white">
+                      <p className="text-sm sm:text-base font-semibold text-white">
                         {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
                       </p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-[0.65rem] sm:text-xs text-gray-500">
                         {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
                       </p>
                       {highlight && (
-                        <div className="mt-2">
+                        <div className="mt-1.5 sm:mt-2">
                           <WalletHighlightBadge highlight={highlight} />
                         </div>
                       )}
@@ -1519,10 +1636,10 @@ function ManageWalletsModal({
                       className="rounded-full border border-transparent p-1 text-gray-500 hover:border-rose-400 hover:text-rose-300"
                       aria-label="Remove wallet"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trash2 className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                     </button>
                   </div>
-                  <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                  <div className="mt-2 sm:mt-3 flex items-center justify-between text-[0.65rem] sm:text-xs text-gray-400">
                     <span>
                       Record {`${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`}
                     </span>
@@ -1546,6 +1663,8 @@ function AlertCenter({
   onRunScan,
   isScanning,
   alertHistory,
+  onTestNotification,
+  isTestingNotification,
 }: {
   watchers: WatcherRule[]
   canEdit: boolean
@@ -1553,45 +1672,67 @@ function AlertCenter({
   onRunScan: () => void
   isScanning: boolean
   alertHistory: AlertEventRecord[]
+  onTestNotification: () => void
+  isTestingNotification: boolean
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const latestAlert = alertHistory[0]
 
   return (
-    <section className="rounded-2xl border border-slate-900 bg-slate-950/70 p-5 space-y-5">
-      <div className="flex flex-col gap-3">
+    <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur-sm shadow-lg shadow-black/20 p-3 sm:p-4 md:p-5 space-y-3 sm:space-y-4 md:space-y-5">
+      <div className="flex flex-col gap-2 sm:gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Alert center</p>
-          <h2 className="text-xl font-semibold">Push alerts for big swings</h2>
-          <p className="text-sm text-gray-400">
+          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Alert center</p>
+          <h2 className="text-base sm:text-lg md:text-xl font-semibold">Push alerts for big swings</h2>
+          <p className="text-xs sm:text-sm text-gray-400">
             Every tracked wallet auto-pings once its open exposure crosses {DEFAULT_ALERT_THRESHOLD_COPY}.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRunScan}
-          disabled={!canEdit || isScanning || watchers.length === 0}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-800 px-4 py-2 text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
-        >
-          <BellRing className={`h-4 w-4 ${isScanning ? 'animate-pulse' : ''}`} />
-          {isScanning ? 'Scanning…' : 'Manual scan'}
-        </button>
+        <div className="flex flex-wrap gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={onRunScan}
+            disabled={!canEdit || isScanning || watchers.length === 0}
+            className="inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800 px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+          >
+            <BellRing className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${isScanning ? 'animate-pulse' : ''}`} />
+            {isScanning ? 'Scanning…' : 'Manual scan'}
+          </button>
+          <button
+            type="button"
+            onClick={onTestNotification}
+            disabled={isTestingNotification}
+            className="inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50"
+          >
+            {isTestingNotification ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                Sending…
+              </>
+            ) : (
+              <>
+                <BellRing className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                Test notification
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
-      <div className="rounded-xl border border-slate-900/70 bg-slate-950/40 px-4 py-3 text-sm text-gray-300">
+      <div className="rounded-lg sm:rounded-xl border border-slate-800/80 bg-slate-950/50 px-3 sm:px-4 py-2 sm:py-3 text-xs sm:text-sm text-gray-300">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p>
             Tracking{' '}
             <span className="font-semibold text-white">{watchers.length}</span>{' '}
             wallet{watchers.length === 1 ? '' : 's'} for alerts.
           </p>
-          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
-            <Settings className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-1.5 sm:gap-2 text-[0.65rem] sm:text-xs uppercase tracking-[0.2em] text-gray-500">
+            <Settings className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
             Automatic
           </div>
         </div>
         {!canEdit && (
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-[0.65rem] sm:text-xs text-gray-500">
             Select a wallet to enable manual scans from this device.
           </p>
         )}
@@ -1604,19 +1745,19 @@ function AlertCenter({
       )}
 
       {latestAlert ? (
-        <div className="space-y-2 rounded-xl border border-slate-900/70 bg-slate-950/50 p-4">
-          <div className="flex items-center justify-between gap-3">
+        <div className="space-y-1.5 sm:space-y-2 rounded-lg sm:rounded-xl border border-slate-800/80 bg-slate-950/60 p-2.5 sm:p-3 md:p-4">
+          <div className="flex items-center justify-between gap-2 sm:gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Latest alert</p>
-              <p className="text-sm font-semibold text-white">
+              <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Latest alert</p>
+              <p className="text-xs sm:text-sm font-semibold text-white">
                 {latestAlert.nickname || formatWalletAddress(latestAlert.walletAddress)}
               </p>
             </div>
-            <span className="text-xs text-gray-500">
+            <span className="text-[0.65rem] sm:text-xs text-gray-500">
               {new Date(latestAlert.triggeredAt * 1000).toLocaleString()}
             </span>
           </div>
-          <p className="text-sm text-gray-300">
+          <p className="text-xs sm:text-sm text-gray-300">
             {latestAlert.triggerType === 'single'
               ? 'Position threshold'
               : latestAlert.triggerType === 'position_step'
@@ -1627,7 +1768,7 @@ function AlertCenter({
           </p>
         </div>
       ) : (
-        <div className="rounded-xl border border-dashed border-slate-900/70 bg-slate-950/40 px-4 py-3 text-xs text-gray-400">
+        <div className="rounded-lg sm:rounded-xl border border-dashed border-slate-800/80 bg-slate-950/50 px-3 sm:px-4 py-2 sm:py-3 text-[0.65rem] sm:text-xs text-gray-400">
           No alerts sent yet. Once a tracked wallet crosses the threshold we&apos;ll ping you automatically.
         </div>
       )}
@@ -1658,22 +1799,22 @@ function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-[0.65rem] uppercase tracking-[0.3em] text-gray-500">
-        <Clock className="h-4 w-4" />
+        <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
         Recent alerts
       </div>
-      <ul className="divide-y divide-slate-900/70 rounded-2xl border border-slate-900 bg-slate-950/40">
+      <ul className="divide-y divide-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/50">
         {alertHistory.map((alert) => {
           const pricedTrades = alert.trades.filter(
             (trade) => (trade.size ?? 0) * (trade.price ?? 0) > 0,
           )
           return (
-            <li key={alert.id} className="p-4 text-sm text-gray-300 space-y-2">
+            <li key={alert.id} className="p-3 sm:p-4 text-xs sm:text-sm text-gray-300 space-y-1.5 sm:space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs tracking-wide text-gray-500">
+                  <p className="text-[0.65rem] sm:text-xs tracking-wide text-gray-500">
                     {alert.nickname || formatWalletAddress(alert.walletAddress)}
                   </p>
-                  <p className="text-sm font-semibold text-white capitalize">
+                  <p className="text-xs sm:text-sm font-semibold text-white capitalize">
                     {alert.triggerType === 'single'
                       ? 'Position threshold'
                       : alert.triggerType === 'position_step'
@@ -1682,18 +1823,18 @@ function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }
                     · {formatUsdCompact(alert.triggerValue)}
                   </p>
                 </div>
-                <span className="text-xs text-gray-500">
+                <span className="text-[0.65rem] sm:text-xs text-gray-500">
                   {new Date(alert.triggeredAt * 1000).toLocaleString()}
                 </span>
               </div>
-              <div className="text-xs text-gray-400">
+              <div className="text-[0.65rem] sm:text-xs text-gray-400">
                 {alert.tradeCount} trade{alert.tradeCount === 1 ? '' : 's'} in payload.
               </div>
               {pricedTrades.length > 0 && (
-                <div className="rounded-lg border border-slate-900/70 bg-slate-950/30 p-2 text-[0.7rem] uppercase tracking-[0.2em] text-gray-500">
+                <div className="rounded-lg border border-slate-800/80 bg-slate-950/40 p-2 text-[0.65rem] sm:text-[0.7rem] uppercase tracking-[0.2em] text-gray-500">
                   {pricedTrades.slice(0, 3).map((trade, index) => (
                     <p key={`${alert.id}-${trade.transactionHash ?? index}`}>
-                      {trade.title ?? 'Market'} · {trade.outcome ?? 'Outcome'}
+                      {trade.title ?? 'Market'}
                     </p>
                   ))}
                   {pricedTrades.length > 3 && (
@@ -1743,7 +1884,7 @@ function WalletSummaryList({
 
   if (trackedWallets.length === 0) {
     return (
-      <section className="rounded-2xl border border-dashed border-slate-900 bg-slate-950/50 p-6 text-center text-sm text-gray-400">
+      <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-dashed border-slate-800/80 bg-slate-950/60 p-4 sm:p-5 md:p-6 text-center text-xs sm:text-sm text-gray-400">
         No wallets yet. Use the add button above to start building the board.
       </section>
     )
@@ -1763,23 +1904,23 @@ function WalletSummaryList({
   ]
 
   return (
-    <section className="rounded-2xl border border-slate-900 bg-slate-950/70 overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-900/70 px-5 py-4">
+    <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur-sm shadow-lg shadow-black/20 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-800/80 px-3 sm:px-4 md:px-5 py-2.5 sm:py-3 md:py-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Performance board</p>
-          <h2 className="text-xl font-semibold">Tracked wallets</h2>
-          <p className="text-xs text-gray-500">Tap a wallet to load the deep-dive pane.</p>
+          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Performance board</p>
+          <h2 className="text-base sm:text-lg md:text-xl font-semibold">Tracked wallets</h2>
+          <p className="text-[0.65rem] sm:text-xs text-gray-500">Tap a wallet to load the deep-dive pane.</p>
         </div>
         <button
           type="button"
           onClick={() => setCollapsed((previous) => !previous)}
-          className="text-xs font-semibold text-gray-400 hover:text-cyan-200"
+          className="text-[0.65rem] sm:text-xs font-semibold text-gray-400 hover:text-cyan-200"
         >
           {collapsed ? 'Expand' : 'Collapse'}
         </button>
       </div>
       {!collapsed && (
-        <ul className="divide-y divide-slate-900/70">
+        <ul className="divide-y divide-slate-800/80">
           {sortedWallets.map((wallet, index) => {
             const key = wallet.walletAddress.toLowerCase()
             const stats = walletStats[key] ?? EMPTY_WALLET_STATS
@@ -1797,22 +1938,22 @@ function WalletSummaryList({
                 <button
                   type="button"
                   onClick={() => onSelectWallet(wallet.walletAddress)}
-                  className={`w-full px-5 py-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                  className={`w-full px-3 sm:px-4 md:px-5 py-2.5 sm:py-3 md:py-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
                     isSelected
-                      ? 'bg-cyan-500/5 ring-1 ring-cyan-400/50'
-                      : 'hover:bg-slate-900/40'
+                      ? 'bg-cyan-500/8 ring-1 ring-cyan-400/50'
+                      : 'hover:bg-slate-900/50'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between gap-2 sm:gap-3">
+                    <div className="flex items-center gap-2 sm:gap-3">
                       <span className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
                         #{index + 1}
                       </span>
                       <div>
-                        <p className="text-sm font-semibold text-white">
+                        <p className="text-xs sm:text-sm font-semibold text-white">
                           {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
                         </p>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-[0.65rem] sm:text-xs text-gray-500">
                           {wallet.nickname
                             ? formatWalletAddress(wallet.walletAddress)
                             : 'Tracked wallet'}
@@ -1820,10 +1961,10 @@ function WalletSummaryList({
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">All-time</p>
-                      <p className="text-xs text-gray-400">{record}</p>
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">All-time</p>
+                      <p className="text-[0.65rem] sm:text-xs text-gray-400">{record}</p>
                       <p
-                        className={`text-sm font-semibold ${
+                        className={`text-xs sm:text-sm font-semibold ${
                           pnlPositive ? 'text-emerald-300' : 'text-rose-300'
                         }`}
                       >
@@ -1833,18 +1974,18 @@ function WalletSummaryList({
                     </div>
                   </div>
                   {highlight && (
-                    <div className="mt-2">
+                    <div className="mt-1.5 sm:mt-2">
                       <WalletHighlightBadge highlight={highlight} />
                     </div>
                   )}
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2 sm:mt-3 flex flex-wrap gap-1.5 sm:gap-2">
                     {glanceBuckets.map(({ key: bucketKey, label }) => {
                       const bucket = stats[bucketKey]
                       const bucketPositive = bucket.pnlUsd >= 0
                       return (
                         <span
                           key={`${wallet.walletAddress}-${bucketKey}`}
-                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] ${
+                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 sm:px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] ${
                             bucketPositive
                               ? 'border-emerald-400/40 text-emerald-200'
                               : 'border-rose-400/40 text-rose-200'
@@ -1876,71 +2017,71 @@ function SharedPositionsBoard({
 }) {
   if (positions.length === 0) {
     return (
-      <section className="rounded-2xl border border-dashed border-slate-900 bg-slate-950/50 p-6 text-center text-sm text-gray-400">
+      <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-dashed border-slate-800/80 bg-slate-950/60 p-4 sm:p-5 md:p-6 text-center text-xs sm:text-sm text-gray-400">
         No overlapping exposure yet. Once tracked wallets enter the same markets, we&apos;ll summarize the risk here.
       </section>
     )
   }
 
   return (
-    <section className="rounded-2xl border border-slate-900 bg-slate-950/60 p-6 space-y-5">
+    <section className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/70 backdrop-blur-sm shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-5">
       <div className="flex flex-col gap-1">
-        <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
-        <h2 className="text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
-        <p className="text-sm text-gray-400">
+        <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
+        <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
+        <p className="text-xs sm:text-sm text-gray-400">
           Top markets sorted by combined current value. Opposing sides are flagged automatically.
         </p>
       </div>
-      <div className="space-y-4">
+      <div className="space-y-3 sm:space-y-4">
         {positions.map((market) => {
           const hasOpposition = market.outcomes.length > 1
           return (
             <div
               key={market.id}
-              className={`rounded-2xl border px-4 py-4 md:px-6 md:py-5 ${
-                hasOpposition ? 'border-rose-400/40 bg-rose-400/5' : 'border-slate-900 bg-slate-950/60'
+              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-3 py-3 sm:px-4 sm:py-4 md:px-6 md:py-5 shadow-md shadow-black/10 ${
+                hasOpposition ? 'border-rose-400/50 bg-rose-400/8' : 'border-slate-800/80 bg-slate-950/70'
               }`}
             >
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
                     {hasOpposition ? 'Opposing action' : 'Shared side'}
                   </p>
-                  <h3 className="text-xl font-semibold text-white">{market.title}</h3>
+                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white">{market.title}</h3>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Total value</p>
-                  <p className="text-lg font-semibold text-white">
+                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Total value</p>
+                  <p className="text-sm sm:text-base md:text-lg font-semibold text-white">
                     {formatUsdCompact(market.totalValue)}
                   </p>
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="mt-3 sm:mt-4 grid gap-2 sm:gap-3 md:grid-cols-2">
                 {market.outcomes.map((outcome) => (
                   <div
                     key={`${market.id}-${outcome.outcome}`}
-                    className="rounded-2xl border border-slate-900/70 bg-slate-950/40 px-4 py-3 space-y-2"
+                    className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-950/50 px-3 py-2 sm:px-4 sm:py-3 space-y-1.5 sm:space-y-2"
                   >
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-semibold text-white">{outcome.outcome}</p>
-                      <p className="text-xs text-gray-400">
+                      <p className="text-xs sm:text-sm font-semibold text-white">{outcome.outcome}</p>
+                      <p className="text-[0.65rem] sm:text-xs text-gray-400">
                         {formatUsdCompact(outcome.totalValue)}
                       </p>
                     </div>
-                    <ul className="space-y-1 text-xs text-gray-300">
+                    <ul className="space-y-1 text-[0.65rem] sm:text-xs text-gray-300">
                       {outcome.wallets.map((wallet) => {
                         const pnlPositive = wallet.pnl >= 0
                         return (
                           <li
                             key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
-                            className="flex items-center justify-between gap-3 rounded-xl border border-slate-900/60 bg-slate-950/50 px-3 py-2"
+                            className="flex items-center justify-between gap-2 sm:gap-3 rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 px-2 py-1.5 sm:px-3 sm:py-2"
                           >
-                            <span className="truncate font-semibold text-white">{wallet.label}</span>
-                            <div className="flex flex-col items-end text-right text-xs text-gray-400">
+                            <span className="truncate font-semibold text-white text-xs sm:text-sm">{wallet.label}</span>
+                            <div className="flex flex-col items-end text-right text-[0.65rem] sm:text-xs text-gray-400">
                               <span>{formatUsdCompact(wallet.value)}</span>
                               <span
-                                className={`text-xs font-semibold ${
+                                className={`text-[0.65rem] sm:text-xs font-semibold ${
                                   pnlPositive ? 'text-emerald-300' : 'text-rose-300'
                                 }`}
                               >
@@ -1948,7 +2089,7 @@ function SharedPositionsBoard({
                                 {formatUsdCompact(Math.abs(wallet.pnl))}
                               </span>
                               {wallet.redeemable && (
-                                <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.25em] text-amber-200">
+                                <span className="mt-0.5 sm:mt-1 inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 sm:px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.25em] text-amber-200">
                                   Redeemable
                                 </span>
                               )}
@@ -1993,78 +2134,78 @@ function AddWalletModal({
     }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
-      <div className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl shadow-cyan-500/20">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 sm:px-4 py-4 sm:py-8">
+      <div className="w-full max-w-lg rounded-xl sm:rounded-2xl md:rounded-3xl border border-slate-800/80 bg-slate-950/90 p-4 sm:p-5 md:p-6 shadow-2xl shadow-cyan-500/20">
+        <div className="flex items-start justify-between gap-3 sm:gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Track wallet</p>
-            <h2 className="text-2xl font-semibold">Add a Polymarket proxy</h2>
-            <p className="text-sm text-gray-400">
+            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Track wallet</p>
+            <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Add a Polymarket proxy</h2>
+            <p className="text-xs sm:text-sm text-gray-400">
               Paste any proxy address and optionally add a nickname for quick scanning.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-slate-800 p-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-200"
+            className="rounded-full border border-slate-800 p-1.5 sm:p-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-200"
             aria-label="Close"
           >
             X
           </button>
       </div>
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
-        <div className="space-y-2">
+      <form onSubmit={onSubmit} className="mt-4 sm:mt-5 md:mt-6 space-y-3 sm:space-y-4">
+        <div className="space-y-1.5 sm:space-y-2">
           <label
-            className="text-sm font-semibold text-gray-300 flex items-center gap-2"
+            className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
             htmlFor={walletInputId}
           >
-            <Wallet className="h-4 w-4 text-cyan-300" />
+            <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
             Wallet address
           </label>
           <input
             id={walletInputId}
-            className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
             placeholder="0x..."
             value={trackingForm.walletAddress}
             onChange={handleChange('walletAddress')}
           />
         </div>
-        <div className="space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
           <label
-            className="text-sm font-semibold text-gray-300 flex items-center gap-2"
+            className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
             htmlFor={nicknameInputId}
           >
-            <User className="h-4 w-4 text-cyan-300" />
+            <User className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
             Nickname (optional)
           </label>
           <input
             id={nicknameInputId}
-            className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
             placeholder="Sharp, Syndicate, ..."
             value={trackingForm.nickname}
               onChange={handleChange('nickname')}
             />
           </div>
           {error && (
-            <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-4 py-3 rounded-xl text-sm">
+            <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm">
               {error}
             </div>
           )}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               type="submit"
-              className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400 disabled:opacity-50"
+              className="flex-1 inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-cyan-500 px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-slate-900 hover:bg-cyan-400 disabled:opacity-50"
               disabled={isAdding}
             >
               {isAdding ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
                   Adding…
                 </>
               ) : (
                 <>
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   Add to dashboard
                 </>
               )}
@@ -2072,7 +2213,7 @@ function AddWalletModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-800 px-4 py-2 text-sm text-gray-300 hover:border-cyan-400"
+              className="rounded-lg sm:rounded-xl border border-slate-800 px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-300 hover:border-cyan-400"
             >
               Cancel
             </button>

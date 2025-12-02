@@ -5,12 +5,12 @@ export interface Env {
   ALERT_EMAIL_FROM?: string
   PRIMARY_USER_ID?: string
   ALERT_POSITION_THRESHOLD_USD?: string
-  PUSHER_APP_ID?: string
-  PUSHER_KEY?: string
-  PUSHER_SECRET?: string
-  PUSHER_CLUSTER?: string
-  PUSHER_CHANNEL?: string
-  PUSHER_EVENT?: string
+  // Pusher Beams configuration (for push notifications)
+  PUSHER_BEAMS_INSTANCE_ID?: string
+  PUSHER_BEAMS_SECRET_KEY?: string
+  PUSHER_BEAMS_INTEREST?: string
+  // Password protection
+  APP_PASSWORD?: string
 }
 
 export interface RequestContext {

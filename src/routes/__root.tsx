@@ -12,10 +12,26 @@ export const Route = createRootRoute({
       },
       {
         name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
+        content: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
       },
       {
-        title: 'TanStack Start Starter',
+        name: 'description',
+        content: 'Track proxy wallets, monitor positions, and receive alerts for big swings on Polymarket',
+      },
+      {
+        name: 'apple-mobile-web-app-capable',
+        content: 'yes',
+      },
+      {
+        name: 'apple-mobile-web-app-status-bar-style',
+        content: 'black-translucent',
+      },
+      {
+        name: 'apple-mobile-web-app-title',
+        content: 'Polywhaler',
+      },
+      {
+        title: 'Polywhaler - Polymarket Dashboard',
       },
     ],
     links: [
@@ -26,6 +42,10 @@ export const Route = createRootRoute({
       {
         rel: 'manifest',
         href: '/manifest.json',
+      },
+      {
+        rel: 'apple-touch-icon',
+        href: '/logo192.png',
       },
     ],
   }),
@@ -70,12 +90,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                   navigator.serviceWorker
                     .register('/service-worker.js', { scope: '/' })
                     .then(async (registration) => {
+                      console.log('[Pusher Beams] Service worker registered');
                       let serviceWorker = registration.installing || registration.waiting || registration.active;
                       
                       if (serviceWorker && serviceWorker.state !== 'activated') {
                         await new Promise((resolve) => {
                           const stateChangeHandler = () => {
                             if (serviceWorker.state === 'activated') {
+                              console.log('[Pusher Beams] Service worker activated');
                               serviceWorker.removeEventListener('statechange', stateChangeHandler);
                               resolve(undefined);
                             }
@@ -90,13 +112,25 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                       
                       if (!registration.active) {
                         await navigator.serviceWorker.ready;
+                        console.log('[Pusher Beams] Service worker ready');
                       }
                       
                       if ('Notification' in window && Notification.permission === 'default') {
                         try {
                           const permission = await Notification.requestPermission();
-                          if (permission === 'denied') return;
+                          console.log('[Pusher Beams] Notification permission:', permission);
+                          if (permission === 'denied') {
+                            console.warn('[Pusher Beams] Notification permission denied');
+                            return;
+                          }
                         } catch (err) {
+                          console.error('[Pusher Beams] Error requesting permission:', err);
+                          return;
+                        }
+                      } else if ('Notification' in window) {
+                        console.log('[Pusher Beams] Notification permission:', Notification.permission);
+                        if (Notification.permission === 'denied') {
+                          console.warn('[Pusher Beams] Notification permission denied');
                           return;
                         }
                       }
@@ -106,10 +140,22 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                       });
                       
                       return beamsClient.start().then(() => {
-                        return beamsClient.addDeviceInterest('hello');
+                        console.log('[Pusher Beams] Client started');
+                        // Subscribe to the wallet-alerts interest to receive push notifications
+                        return beamsClient.addDeviceInterest('wallet-alerts').then(() => {
+                          console.log('[Pusher Beams] Subscribed to wallet-alerts interest');
+                          return beamsClient.getDeviceInterests().then((interestsResponse) => {
+                            const interests = Array.isArray(interestsResponse) 
+                              ? interestsResponse 
+                              : (interestsResponse && interestsResponse.interests ? interestsResponse.interests : []);
+                            console.log('[Pusher Beams] Current interests:', interests);
+                          });
+                        });
                       });
                     })
-                    .catch(() => {});
+                    .catch((err) => {
+                      console.error('[Pusher Beams] Initialization error:', err);
+                    });
                 }
                 
                 if (document.readyState === 'loading') {

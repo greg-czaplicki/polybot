@@ -10,6 +10,7 @@ import { ensureUser } from '../repositories/users'
 import { getDb } from '../env'
 import { evaluateWatchers } from '../services/alerts'
 import { listAlertsForUser } from '../repositories/alerts'
+import { sendPusherNotification } from '../services/pusher'
 
 const requireString = (value: unknown, label: string) => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -84,5 +85,36 @@ export const listAlertHistoryFn = createServerFn({ method: 'POST' }).handler(
     const userId = requireString((data as { userId?: string })?.userId, 'userId')
     const alerts = await listAlertsForUser(db, userId)
     return { alerts }
+  },
+)
+
+export const testPushNotificationFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context }) => {
+    if (!context?.env) {
+      throw new Error('Environment not available')
+    }
+
+    const interest = context.env.PUSHER_BEAMS_INTEREST ?? 'wallet-alerts'
+    const nowSeconds = Math.floor(Date.now() / 1000)
+
+    await sendPusherNotification(context.env, {
+      interests: [interest],
+      title: 'Test Alert: Polywhaler',
+      body: 'This is a test notification. Push notifications are working! 🎉',
+      data: {
+        walletAddress: '0x0000000000000000000000000000000000000000',
+        nickname: 'Test Wallet',
+        position: {
+          title: 'Test Market',
+          currentValue: 75000,
+          asset: 'test-asset',
+        },
+        threshold: 50000,
+        triggeredAt: nowSeconds,
+        isTest: true,
+      },
+    })
+
+    return { success: true, message: 'Test notification sent' }
   },
 )

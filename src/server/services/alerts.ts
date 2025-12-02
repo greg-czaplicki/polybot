@@ -22,6 +22,13 @@ interface EvaluateResult {
 const DEFAULT_POSITION_ALERT_THRESHOLD = 50_000
 const POSITION_ALERT_COOLDOWN_SECONDS = 60 * 30
 
+function formatWalletAddress(address: string) {
+  if (address.length <= 10) {
+    return address
+  }
+  return `${address.slice(0, 6)}…${address.slice(-4)}`
+}
+
 export async function evaluateWatchers(db: Db, watchers: WatcherRule[], env: Env) {
   const alerts: EvaluateResult['alerts'] = []
 
@@ -132,17 +139,26 @@ async function evaluateWatcherRules(
       currentBucket,
     )
 
-    const channel = env.PUSHER_CHANNEL ?? 'wallet-alerts'
-    const event = env.PUSHER_EVENT ?? 'position.threshold'
+    const interest = env.PUSHER_BEAMS_INTEREST ?? 'wallet-alerts'
+    const walletLabel = watcher.nickname ?? formatWalletAddress(watcher.walletAddress)
+    const positionTitle = position.title ?? position.slug ?? position.asset ?? 'Unknown market'
+    const valueFormatted = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(currentValue)
+
     await sendPusherNotification(env, {
-      channel,
-      event,
+      interests: [interest],
+      title: `Alert: ${walletLabel}`,
+      body: `${positionTitle} - ${valueFormatted} exposure`,
       data: {
         walletAddress: watcher.walletAddress,
         nickname: watcher.nickname ?? watcher.walletAddress,
         position: {
-          title: position.title ?? position.slug ?? position.asset,
+          title: positionTitle,
           currentValue,
+          asset: position.asset,
         },
         threshold,
         triggeredAt: nowSeconds,
