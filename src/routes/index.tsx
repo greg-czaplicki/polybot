@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { LucideIcon } from 'lucide-react'
 import {
+  AlertTriangle,
   BellRing,
   Clock,
   Eye,
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
+  TrendingUp,
   Trash2,
   Trophy,
   User,
@@ -32,7 +34,7 @@ declare global {
 }
 
 import type { AlertEventRecord, WatcherRule } from '@/lib/alerts/types'
-import { getSportLabel } from '@/lib/sports'
+import { getSportLabel, isEsportsMarket, isSportsMarket } from '@/lib/sports'
 import {
   fetchPositionsForUser,
   fetchTradesForUser,
@@ -110,6 +112,7 @@ interface AggregatedMarketEntry {
   id: string
   title: string
   totalValue: number
+  icon?: string
   outcomes: AggregatedOutcomeEntry[]
 }
 
@@ -281,12 +284,44 @@ function formatWalletAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
-function isWillQuestion(title?: string | null) {
+function isFutureWillQuestion(title?: string | null): boolean {
   if (!title) {
     return false
   }
-  return /^will\b/i.test(title.trim())
+  const trimmed = title.trim()
+  // Check if it starts with "Will" (case insensitive)
+  if (!/^will\b/i.test(trimmed)) {
+    return false
+  }
+  
+  // Allow "Will" questions with specific dates (e.g., "Will Arsenal win on 2025-12-03?")
+  // These are current/upcoming game bets, not future championship bets
+  // Check for date patterns: YYYY-MM-DD or YYYY/MM/DD or MM/DD/YYYY
+  const hasSpecificDate = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(trimmed)
+  if (hasSpecificDate) {
+    return false
+  }
+  
+  // Filter out championship/season questions with years
+  // These include: "Will X be the 2025 Drivers Champion?", "Will Chiefs win Super Bowl 2026?", etc.
+  const hasYear = /\b(20\d{2})\b/.test(trimmed)
+  const hasChampionshipKeywords = /\b(champion|championship|champions|winner|super bowl|world series|stanley cup|nba finals|drivers champion|constructors|playoffs|season|title)\b/i.test(trimmed)
+  
+  // If it has a year and championship/winner keywords, it's a future championship bet
+  if (hasYear && hasChampionshipKeywords) {
+    return true
+  }
+  
+  // Also filter if it's just a year far in the future (2026+) without a date
+  // This catches things like "Will X win in 2026?" but allows "Will X win on 2025-12-03?"
+  const hasFutureYear = /\b(202[6-9]|20[3-9]\d)\b/.test(trimmed)
+  if (hasFutureYear && !hasSpecificDate) {
+    return true
+  }
+  
+  return false
 }
+
 
 export const Route = createFileRoute('/')({ component: App })
 
@@ -388,12 +423,26 @@ function App() {
         return
       }
       positions
-        .filter((position) => !isWillQuestion(position.title))
-        .forEach((position) => {
+        .filter((position) => {
           if (!position || position.currentValue <= 0) {
-            return
+            return false
           }
-        const marketKey = position.slug ?? position.eventSlug ?? position.asset
+          // Filter out future "Will" questions
+          if (isFutureWillQuestion(position.title)) {
+            return false
+          }
+          const descriptor = {
+            title: position.title,
+            slug: position.slug,
+            eventSlug: position.eventSlug,
+          }
+          // If it's a "Will" question with a date, it's likely a sports bet even if not detected as sports market
+          // This catches cases like "Will RB Leipzig win on 2025-12-02?" where the team name isn't in keywords
+          const isWillWithDate = /^will\b/i.test(position.title?.trim() ?? '') && /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(position.title?.trim() ?? '')
+          return (isSportsMarket(descriptor) || isWillWithDate) && !isEsportsMarket(descriptor)
+        })
+        .forEach((position) => {
+          const marketKey = position.slug ?? position.eventSlug ?? position.asset
         if (!marketKey) {
           return
         }
@@ -403,6 +452,7 @@ function App() {
             id: marketKey,
             title: position.title ?? position.slug ?? 'Unknown market',
             totalValue: 0,
+            icon: position.icon,
             outcomes: [],
           }
           markets.set(marketKey, market)
@@ -444,10 +494,24 @@ function App() {
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
         const response = await fetchPositionsForUser(walletAddress)
-        const filtered = response.filter(
-          (position) =>
-            position.currentValue > 0 && !isWillQuestion(position.title),
-        )
+        const filtered = response.filter((position) => {
+          if (position.currentValue <= 0) {
+            return false
+          }
+          // Filter out future "Will" questions
+          if (isFutureWillQuestion(position.title)) {
+            return false
+          }
+          const descriptor = {
+            title: position.title,
+            slug: position.slug,
+            eventSlug: position.eventSlug,
+          }
+          // If it's a "Will" question with a date, it's likely a sports bet even if not detected as sports market
+          // This catches cases like "Will RB Leipzig win on 2025-12-02?" where the team name isn't in keywords
+          const isWillWithDate = /^will\b/i.test(position.title?.trim() ?? '') && /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(position.title?.trim() ?? '')
+          return (isSportsMarket(descriptor) || isWillWithDate) && !isEsportsMarket(descriptor)
+        })
       setWalletPositions((previous) => ({
         ...previous,
         [walletAddress.toLowerCase()]: filtered,
@@ -1005,14 +1069,16 @@ useEffect(() => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
-      <div className="px-3 py-4 sm:px-4 sm:py-6 md:px-6 md:py-10 max-w-6xl mx-auto space-y-4 sm:space-y-6 md:space-y-10">
+      <div 
+        className="px-4 py-6 sm:px-5 sm:py-8 md:px-6 md:py-10 lg:px-8 lg:py-12 max-w-6xl mx-auto space-y-4 sm:space-y-6 md:space-y-10"
+        style={{ 
+          paddingTop: 'max(1.5rem, calc(env(safe-area-inset-top, 0px) + 1.5rem))' 
+        }}
+      >
         <div className="space-y-2 sm:space-y-3 md:space-y-4">
-          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-cyan-400/80">
+          <p className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-black uppercase tracking-[0.3em] text-cyan-400/80">
             Polywhaler
           </p>
-          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-5xl font-black">
-            Polymarket dashboard
-          </h1>
           <p className="text-xs sm:text-sm md:text-base text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
           </p>
@@ -2018,6 +2084,8 @@ function SharedPositionsBoard({
   positions: AggregatedMarketEntry[]
 }) {
   const [showRedeemable, setShowRedeemable] = useState(false)
+  const [showSmallBets, setShowSmallBets] = useState(false)
+  const SMALL_BET_THRESHOLD = 50_000
 
   if (positions.length === 0) {
     return (
@@ -2038,26 +2106,48 @@ function SharedPositionsBoard({
               Top markets sorted by combined current value. Opposing sides are flagged automatically.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowRedeemable((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800/80 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-300 hover:border-cyan-400/60 hover:text-cyan-200 transition-colors flex-shrink-0"
-            aria-label={showRedeemable ? 'Hide redeemable positions' : 'Show redeemable positions'}
-          >
-            {showRedeemable ? (
-              <>
-                <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">Hide redeemable</span>
-                <span className="sm:hidden">Hide</span>
-              </>
-            ) : (
-              <>
-                <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">Show redeemable</span>
-                <span className="sm:hidden">Show</span>
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowRedeemable((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800/80 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-300 hover:border-cyan-400/60 hover:text-cyan-200 transition-colors flex-shrink-0"
+              aria-label={showRedeemable ? 'Hide redeemable positions' : 'Show redeemable positions'}
+            >
+              {showRedeemable ? (
+                <>
+                  <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline">Hide redeemable</span>
+                  <span className="sm:hidden">Hide</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline">Show redeemable</span>
+                  <span className="sm:hidden">Show</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSmallBets((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-slate-800/80 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-300 hover:border-cyan-400/60 hover:text-cyan-200 transition-colors flex-shrink-0"
+              aria-label={showSmallBets ? 'Hide small bets' : 'Show small bets'}
+            >
+              {showSmallBets ? (
+                <>
+                  <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline">Hide &lt; $50k</span>
+                  <span className="sm:hidden">Hide</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline">Show &lt; $50k</span>
+                  <span className="sm:hidden">Show</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
       <div className="space-y-4 sm:space-y-5">
@@ -2088,57 +2178,84 @@ function SharedPositionsBoard({
               0,
             )
 
+            // Filter out small bets if toggle is off
+            if (!showSmallBets && visibleMarketTotal < SMALL_BET_THRESHOLD) {
+              return null
+            }
+
             return { market, visibleOutcomes, hasOpposition, visibleMarketTotal }
           })
           .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number }>; hasOpposition: boolean; visibleMarketTotal: number } => item !== null)
           .map(({ market, visibleOutcomes, hasOpposition, visibleMarketTotal }) => (
             <div
               key={market.id}
-              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 ${
+              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${
                 hasOpposition
                   ? 'border-rose-400/50 bg-rose-400/8'
-                  : 'border-slate-800/80 bg-slate-950/70'
+                  : 'border-slate-800/80 bg-slate-950/70 hover:border-slate-700/80'
               }`}
             >
-              <div className="flex flex-col gap-2 sm:gap-3 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                        {hasOpposition ? 'Opposing action' : 'Shared side'}
-                      </p>
-                      {hasOpposition && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[0.6rem] font-semibold bg-rose-400/20 text-rose-300 border border-rose-400/30">
-                          Conflict
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
-                      {market.title}
-                    </h3>
+              <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
+                {market.icon ? (
+                  <img
+                    src={market.icon}
+                    alt={market.title}
+                    className="h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-lg border border-slate-800 object-cover flex-shrink-0"
+                  />
+                ) : (
+                  <div className={`flex-shrink-0 p-2 rounded-lg ${
+                    hasOpposition 
+                      ? 'bg-rose-400/20 text-rose-300' 
+                      : 'bg-cyan-500/10 text-cyan-400'
+                  }`}>
+                    {hasOpposition ? (
+                      <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                    ) : (
+                      <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                    )}
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
-                      Total
-                    </p>
-                    <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
-                      {formatUsdCompact(visibleMarketTotal)}
-                    </p>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    {hasOpposition && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[0.65rem] sm:text-xs font-semibold bg-rose-400/20 text-rose-300 border border-rose-400/30">
+                        <AlertTriangle className="h-3 w-3" />
+                        Opposing action
+                      </span>
+                    )}
                   </div>
+                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight mb-1">
+                    {market.title}
+                  </h3>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
+                    Total
+                  </p>
+                  <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
+                    {formatUsdCompact(visibleMarketTotal)}
+                  </p>
                 </div>
               </div>
 
               <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
-                {visibleOutcomes.map((outcome) => (
+                {visibleOutcomes.map((outcome) => {
+                  const hasMultipleWallets = outcome.visibleWallets.length >= 2
+                  const aggregateTotal = hasMultipleWallets
+                    ? outcome.visibleWallets.reduce((sum, wallet) => sum + wallet.value, 0)
+                    : 0
+                  return (
                   <div
                     key={`${market.id}-${outcome.outcome}`}
-                    className="rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 p-3 sm:p-4"
+                    className="rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 p-3 sm:p-4 hover:border-slate-700/70 transition-colors"
                   >
-                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800/50">
+                    <div className="mb-3 pb-2 border-b border-slate-800/50 flex items-center justify-between gap-2">
                       <p className="text-sm sm:text-base font-semibold text-white">{outcome.outcome}</p>
-                      <p className="text-xs sm:text-sm font-semibold text-gray-300">
-                        {formatUsdCompact(outcome.visibleTotalValue)}
-                      </p>
+                      {hasMultipleWallets && (
+                        <p className="text-xs sm:text-sm font-semibold text-gray-300">
+                          {formatUsdCompact(aggregateTotal)}
+                        </p>
+                      )}
                     </div>
                     <ul className="space-y-2">
                       {outcome.visibleWallets.map((wallet) => {
@@ -2146,17 +2263,22 @@ function SharedPositionsBoard({
                         return (
                           <li
                             key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-950/70 px-2.5 py-2 sm:px-3 sm:py-2.5"
+                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-950/70 px-2.5 py-2 sm:px-3 sm:py-2.5 hover:border-slate-700/60 hover:bg-slate-950/80 transition-colors"
                           >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs sm:text-sm font-semibold text-white truncate">
-                                {wallet.label}
-                              </p>
-                              {wallet.redeemable && (
-                                <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
-                                  Redeemable
-                                </span>
-                              )}
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <div className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
+                                pnlPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'
+                              }`} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs sm:text-sm font-semibold text-white truncate">
+                                  {wallet.label}
+                                </p>
+                                {wallet.redeemable && (
+                                  <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
+                                    Redeemable
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
                               <span className="text-xs sm:text-sm font-semibold text-gray-200">
@@ -2176,7 +2298,8 @@ function SharedPositionsBoard({
                       })}
                     </ul>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ))}

@@ -435,3 +435,48 @@ export function getSportLabel(tag?: string | null): string | undefined {
   }
   return SPORT_LABEL_MAP[tag] ?? tag.toUpperCase()
 }
+
+const ESPORTS_KEYWORDS = [
+  'counter-strike',
+  'cs:go',
+  'csgo',
+  'valorant',
+  'league of legends',
+  'lol',
+  'dota',
+  'dota 2',
+  'overwatch',
+  'rocket league',
+  'rainbow six',
+  'r6',
+  'apex legends',
+  'fortnite',
+  'call of duty',
+  'cod',
+  'cod:',
+  'esports',
+  'egaming',
+  'gaming',
+  'esl',
+  'iem',
+  'blast',
+  'major',
+  'championship',
+  'tournament',
+  'bo3',
+  'bo5',
+  'best of',
+  'map winner',
+  'map 1',
+  'map 2',
+  'map 3',
+]
+
+export function isEsportsMarket(descriptor: SportMarketDescriptor): boolean {
+  const slugSource = normalizeSource(descriptor)
+  const title = normalizeTitle(descriptor)
+  
+  const combined = `${slugSource} ${title}`.toLowerCase()
+  
+  return ESPORTS_KEYWORDS.some((keyword) => combined.includes(keyword))
+}
