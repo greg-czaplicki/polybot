@@ -1,19 +1,23 @@
 import { createFileRoute } from '@tanstack/react-router'
+import type { LucideIcon } from 'lucide-react'
 import {
-  Activity,
   BellRing,
   Clock,
+  Flame,
   Loader2,
   Plus,
   RefreshCw,
   Settings,
+  Sparkles,
   Trash2,
+  Trophy,
   User,
   Wallet,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react'
 
 import type { AlertEventRecord, WatcherRule } from '@/lib/alerts/types'
+import { getSportLabel } from '@/lib/sports'
 import {
   fetchPositionsForUser,
   fetchTradesForUser,
@@ -29,6 +33,7 @@ import {
   upsertWatcherFn,
 } from '../server/api/watchers'
 import { getWalletStatsFn, listWalletResultsFn } from '../server/api/wallet-stats'
+import { getWalletDiagnosticsFn } from '../server/api/diagnostics'
 
 const REFRESH_INTERVAL_MS = 30_000
 const INITIAL_TRADE_BATCH_SIZE = 20
@@ -39,16 +44,6 @@ const ALERT_CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
-interface AlertFormState {
-  nickname: string
-  singleTradeThresholdUsd: string
-}
-
-const DEFAULT_ALERT_FORM: AlertFormState = {
-  nickname: '',
-  singleTradeThresholdUsd: '25000',
-}
-
 interface WalletStatsBucket {
   wins: number
   losses: number
@@ -56,12 +51,19 @@ interface WalletStatsBucket {
   pnlUsd: number
 }
 
+interface WalletSportRecord extends WalletStatsBucket {
+  sport: string
+}
+
 interface WalletStatsSummary {
   allTime: WalletStatsBucket
   daily: WalletStatsBucket
   weekly: WalletStatsBucket
   monthly: WalletStatsBucket
+  bySport: WalletSportRecord[]
 }
+
+type WalletStatsBucketKey = 'daily' | 'weekly' | 'monthly'
 
 interface WalletResultSummary {
   asset: string
@@ -71,6 +73,49 @@ interface WalletResultSummary {
   pnlUsd: number
   result: 'win' | 'loss' | 'tie'
   isSports: boolean
+  sportTag?: string
+}
+
+interface AggregatedWalletPosition {
+  walletAddress: string
+  label: string
+  value: number
+  pnl: number
+  redeemable: boolean
+}
+
+interface AggregatedOutcomeEntry {
+  outcome: string
+  totalValue: number
+  wallets: AggregatedWalletPosition[]
+}
+
+interface AggregatedMarketEntry {
+  id: string
+  title: string
+  totalValue: number
+  outcomes: AggregatedOutcomeEntry[]
+}
+
+interface WalletDiagnosticsSummary {
+  closed: {
+    wins: number
+    losses: number
+    ties: number
+    pnlUsd: number
+    sampleCount: number
+    since: number
+    results: WalletResultSummary[]
+  }
+  open: {
+    pnlUsd: number
+    positionCount: number
+  }
+  trades: {
+    since: number
+    buyVolume: number
+    sellVolume: number
+  }
 }
 
 interface TrackedWalletRow {
@@ -94,6 +139,105 @@ const EMPTY_WALLET_STATS: WalletStatsSummary = {
   daily: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
   weekly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
   monthly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
+  bySport: [],
+}
+
+const WEEKLY_HOT_PNL_THRESHOLD = 500_000
+const WEEKLY_HOT_WIN_DELTA = 5
+const DAILY_HOT_PNL_THRESHOLD = 100_000
+
+type WalletHighlightKind = 'top' | 'weekly' | 'daily'
+
+interface WalletHighlight {
+  kind: WalletHighlightKind
+  label: string
+  detail: string
+  badgeClass: string
+  Icon: LucideIcon
+}
+
+const HIGHLIGHT_META: Record<
+  WalletHighlightKind,
+  { label: string; badgeClass: string; Icon: LucideIcon }
+> = {
+  top: {
+    label: 'Top performer',
+    badgeClass: 'border-amber-400/60 bg-amber-500/10 text-amber-50',
+    Icon: Trophy,
+  },
+  weekly: {
+    label: 'Hot streak',
+    badgeClass: 'border-rose-400/60 bg-rose-500/15 text-rose-100',
+    Icon: Flame,
+  },
+  daily: {
+    label: 'Heater today',
+    badgeClass: 'border-cyan-400/60 bg-cyan-500/10 text-cyan-100',
+    Icon: Sparkles,
+  },
+}
+
+function pickWalletHighlight(
+  stats: WalletStatsSummary,
+  options?: { isTopPerformer?: boolean },
+): WalletHighlight | null {
+  if (options?.isTopPerformer && stats.allTime.pnlUsd > 0) {
+    const meta = HIGHLIGHT_META.top
+    return {
+      kind: 'top',
+      label: meta.label,
+      detail: `+${formatUsdCompact(Math.abs(stats.allTime.pnlUsd))} all-time`,
+      badgeClass: meta.badgeClass,
+      Icon: meta.Icon,
+    }
+  }
+
+  const weeklyEdge = stats.weekly.wins - stats.weekly.losses
+  if (
+    stats.weekly.pnlUsd >= WEEKLY_HOT_PNL_THRESHOLD &&
+    weeklyEdge >= WEEKLY_HOT_WIN_DELTA
+  ) {
+    const meta = HIGHLIGHT_META.weekly
+    return {
+      kind: 'weekly',
+      label: meta.label,
+      detail: `+${formatUsdCompact(Math.abs(stats.weekly.pnlUsd))} last 7d`,
+      badgeClass: meta.badgeClass,
+      Icon: meta.Icon,
+    }
+  }
+
+  if (stats.daily.pnlUsd >= DAILY_HOT_PNL_THRESHOLD && stats.daily.wins >= 1) {
+    const meta = HIGHLIGHT_META.daily
+    return {
+      kind: 'daily',
+      label: meta.label,
+      detail: `+${formatUsdCompact(Math.abs(stats.daily.pnlUsd))} today`,
+      badgeClass: meta.badgeClass,
+      Icon: meta.Icon,
+    }
+  }
+
+  return null
+}
+
+function getTopWalletKey(
+  trackedWallets: TrackedWalletRow[],
+  walletStats: Record<string, WalletStatsSummary>,
+) {
+  let topKey: string | null = null
+  let topScore = Number.NEGATIVE_INFINITY
+
+  for (const wallet of trackedWallets) {
+    const key = wallet.walletAddress.toLowerCase()
+    const pnl = walletStats[key]?.allTime.pnlUsd ?? 0
+    if (pnl > topScore) {
+      topScore = pnl
+      topKey = key
+    }
+  }
+
+  return topKey
 }
 
 function parsePositiveNumber(value: string) {
@@ -105,14 +249,6 @@ function parsePositiveNumber(value: string) {
     return parsed
   }
   return undefined
-}
-
-function parsePositiveInt(value: string, fallback: number) {
-  const parsed = Number.parseInt(value, 10)
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return parsed
-  }
-  return fallback
 }
 
 function formatUsdCompact(value?: number | null) {
@@ -129,6 +265,13 @@ function formatWalletAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
+function isWillQuestion(title?: string | null) {
+  if (!title) {
+    return false
+  }
+  return /^will\b/i.test(title.trim())
+}
+
 export const Route = createFileRoute('/')({ component: App })
 
 function App() {
@@ -142,7 +285,6 @@ function App() {
   const [isAddWalletModalOpen, setIsAddWalletModalOpen] = useState(false)
   const [isWalletManagerOpen, setIsWalletManagerOpen] = useState(false)
   const [trades, setTrades] = useState<PolymarketTrade[]>([])
-  const [positions, setPositions] = useState<PolymarketPosition[]>([])
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
@@ -152,15 +294,19 @@ function App() {
   const [userId, setUserId] = useState<string | null>(null)
   const [watchers, setWatchers] = useState<WatcherRule[]>([])
   const [alertHistory, setAlertHistory] = useState<AlertEventRecord[]>([])
-  const [alertForm, setAlertForm] = useState<AlertFormState>(DEFAULT_ALERT_FORM)
   const [alertCenterError, setAlertCenterError] = useState<string | null>(null)
-  const [isSavingWatcher, setIsSavingWatcher] = useState(false)
   const [isScanningAlerts, setIsScanningAlerts] = useState(false)
   const [walletStats, setWalletStats] = useState<Record<string, WalletStatsSummary>>({})
   const [walletResults, setWalletResults] = useState<
     Record<string, WalletResultSummary[]>
   >({})
+  const [walletDiagnostics, setWalletDiagnostics] = useState<
+    Record<string, WalletDiagnosticsSummary>
+  >({})
   const [walletPositions, setWalletPositions] = useState<Record<string, PolymarketPosition[]>>({})
+  const [notificationStatus, setNotificationStatus] = useState<
+    'idle' | 'requesting' | NotificationPermission | 'unsupported'
+  >('idle')
   const abortControllerRef = useRef<AbortController | null>(null)
   const refreshTimerRef = useRef<ReturnType<typeof setInterval>>()
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null)
@@ -183,6 +329,14 @@ function App() {
     }))
   }, [watchers])
 
+  const walletLabelMap = useMemo(() => {
+    const map = new Map<string, TrackedWalletRow>()
+    trackedWallets.forEach((wallet) => {
+      map.set(wallet.walletAddress.toLowerCase(), wallet)
+    })
+    return map
+  }, [trackedWallets])
+
   const selectedWalletMeta = useMemo(() => {
     if (!selectedWallet) {
       return undefined
@@ -193,8 +347,88 @@ function App() {
     )
   }, [selectedWallet, trackedWallets])
   const selectedWalletKey = selectedWallet?.toLowerCase() ?? null
-  const selectedStats = selectedWalletKey ? walletStats[selectedWalletKey] : undefined
   const selectedResults = selectedWalletKey ? walletResults[selectedWalletKey] ?? [] : []
+  const selectedStats = selectedWalletKey
+    ? walletStats[selectedWalletKey] ?? EMPTY_WALLET_STATS
+    : undefined
+  const selectedDiagnostics = selectedWalletKey
+    ? walletDiagnostics[selectedWalletKey]
+    : undefined
+  const aggregatedPositions = useMemo<AggregatedMarketEntry[]>(() => {
+    const markets = new Map<string, AggregatedMarketEntry>()
+    Object.entries(walletPositions).forEach(([normalizedAddress, positions]) => {
+      if (!positions || positions.length === 0) {
+        return
+      }
+      positions
+        .filter((position) => !isWillQuestion(position.title))
+        .forEach((position) => {
+          if (!position || position.currentValue <= 0) {
+            return
+          }
+        const marketKey = position.slug ?? position.eventSlug ?? position.asset
+        if (!marketKey) {
+          return
+        }
+        let market = markets.get(marketKey)
+        if (!market) {
+          market = {
+            id: marketKey,
+            title: position.title ?? position.slug ?? 'Unknown market',
+            totalValue: 0,
+            outcomes: [],
+          }
+          markets.set(marketKey, market)
+        }
+        market.totalValue += position.currentValue
+        const outcomeLabel = position.outcome ?? 'Outcome'
+        let outcome = market.outcomes.find((entry) => entry.outcome === outcomeLabel)
+        if (!outcome) {
+          outcome = { outcome: outcomeLabel, totalValue: 0, wallets: [] }
+          market.outcomes.push(outcome)
+        }
+        const meta = walletLabelMap.get(normalizedAddress)
+        const originalAddress = meta?.walletAddress ?? normalizedAddress
+        const label = meta?.nickname || formatWalletAddress(originalAddress)
+        outcome.totalValue += position.currentValue
+        outcome.wallets.push({
+          walletAddress: originalAddress,
+          label,
+          value: position.currentValue,
+          pnl: position.cashPnl,
+          redeemable: Boolean(position.redeemable),
+        })
+      })
+    })
+
+    return Array.from(markets.values())
+      .map((market) => ({
+        ...market,
+        outcomes: market.outcomes
+          .map((outcome) => ({
+            ...outcome,
+            wallets: outcome.wallets.sort((a, b) => b.value - a.value),
+          }))
+          .sort((a, b) => b.totalValue - a.totalValue),
+      }))
+      .sort((a, b) => b.totalValue - a.totalValue)
+  }, [walletPositions, walletLabelMap])
+
+  const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
+    try {
+        const response = await fetchPositionsForUser(walletAddress)
+        const filtered = response.filter(
+          (position) =>
+            position.currentValue > 0 && !isWillQuestion(position.title),
+        )
+      setWalletPositions((previous) => ({
+        ...previous,
+        [walletAddress.toLowerCase()]: filtered,
+      }))
+    } catch (error) {
+      console.error('Unable to load positions for overview', walletAddress, error)
+    }
+  }, [])
 
   const loadWalletData = useCallback(
     async (wallet?: string | null, options?: { silent?: boolean }) => {
@@ -202,7 +436,6 @@ function App() {
 
       if (!trimmedWallet) {
         setTrades([])
-        setPositions([])
         setStatus('idle')
         setErrorMessage('Select a wallet from your dashboard to load data.')
         return
@@ -220,17 +453,11 @@ function App() {
       }
 
       try {
-        const [tradesData, positionsData] = await Promise.all([
+        const [tradesData] = await Promise.all([
           fetchTradesForUser(trimmedWallet, controller.signal),
-          fetchPositionsForUser(trimmedWallet, controller.signal),
         ])
         setTrades(tradesData)
-        const filteredPositions = positionsData.filter((position) => position.currentValue > 0)
-        setPositions(filteredPositions)
-        setWalletPositions((previous) => ({
-          ...previous,
-          [trimmedWallet.toLowerCase()]: filteredPositions,
-        }))
+        await loadPositionsForWallet(trimmedWallet)
         setStatus('success')
         setErrorMessage(null)
         setLastUpdated(Date.now())
@@ -251,9 +478,8 @@ function App() {
         }
       }
     },
-    [],
+    [loadPositionsForWallet],
   )
-
   const loadWatchersForUser = useCallback(async (id: string) => {
     try {
       const response = await listWatchersFn({ data: { userId: id } })
@@ -272,7 +498,7 @@ function App() {
     async (walletAddress: string) => {
       try {
         const response = await getWalletStatsFn({
-          data: { walletAddress, sportsOnly: true },
+          data: { walletAddress, sportsOnly: false },
         })
         const normalized = walletAddress.toLowerCase()
         setWalletStats((previous) => ({
@@ -286,6 +512,21 @@ function App() {
     [],
   )
 
+  const loadWalletDiagnostics = useCallback(async (walletAddress: string) => {
+    try {
+      const response = await getWalletDiagnosticsFn({
+        data: { walletAddress, days: 7 },
+      })
+      const normalized = walletAddress.toLowerCase()
+      setWalletDiagnostics((previous) => ({
+        ...previous,
+        [normalized]: response as WalletDiagnosticsSummary,
+      }))
+    } catch (error) {
+      console.error('Unable to load wallet diagnostics', walletAddress, error)
+    }
+  }, [])
+
   const loadWalletResults = useCallback(async (walletAddress: string) => {
     try {
       const response = await listWalletResultsFn({
@@ -298,19 +539,6 @@ function App() {
       }))
     } catch (error) {
       console.error('Unable to load wallet history', walletAddress, error)
-    }
-  }, [])
-
-  const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
-    try {
-      const response = await fetchPositionsForUser(walletAddress)
-      const filtered = response.filter((position) => position.currentValue > 0)
-      setWalletPositions((previous) => ({
-        ...previous,
-        [walletAddress.toLowerCase()]: filtered,
-      }))
-    } catch (error) {
-      console.error('Unable to load positions for overview', walletAddress, error)
     }
   }, [])
 
@@ -392,52 +620,15 @@ useEffect(() => {
   })
 }, [loadPositionsForWallet, trackedWallets, walletPositions])
 
-  const handleAlertFormSubmit = useCallback(
-    async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault()
-
-      if (!userId) {
-        setAlertCenterError('Still preparing your alert workspace. Try again in a moment.')
-        return
-      }
-
-      const wallet = selectedWallet?.trim()
-      if (!wallet) {
-        setAlertCenterError('Select a wallet from your dashboard before saving an alert rule.')
-        return
-      }
-
-      setIsSavingWatcher(true)
-      try {
-        const payload = {
-          walletAddress: wallet,
-          nickname: alertForm.nickname.trim() || undefined,
-          singleTradeThresholdUsd: parsePositiveNumber(
-            alertForm.singleTradeThresholdUsd,
-          ),
-          notifyChannels: ['web_push'] as const,
-        }
-
-        if (!payload.singleTradeThresholdUsd) {
-          setAlertCenterError('Add a position value step before saving.')
-          return
-        }
-
-        await upsertWatcherFn({ data: { userId, watcher: payload } })
-        setAlertCenterError(null)
-        setAlertForm((previous) => ({ ...previous, nickname: '' }))
-        await loadWatchersForUser(userId)
-      } catch (error) {
-        console.error('Unable to save alert rule', error)
-        setAlertCenterError(
-          error instanceof Error ? error.message : 'Unable to save alert rule.',
-        )
-      } finally {
-        setIsSavingWatcher(false)
-      }
-    },
-    [alertForm, loadWatchersForUser, selectedWallet, userId],
-  )
+useEffect(() => {
+  if (!selectedWallet) {
+    return
+  }
+  const key = selectedWallet.toLowerCase()
+  if (!walletDiagnostics[key]) {
+    loadWalletDiagnostics(selectedWallet)
+  }
+}, [loadWalletDiagnostics, selectedWallet, walletDiagnostics])
 
   const handleAddTrackedWallet = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -462,7 +653,7 @@ useEffect(() => {
             watcher: {
               walletAddress,
               nickname: trackingForm.nickname.trim() || undefined,
-              notifyChannels: ['web_push'] as const,
+              notifyChannels: ['pusher'] as const,
             },
           },
         })
@@ -535,41 +726,6 @@ useEffect(() => {
     }
   }, [loadAlertHistory, userId])
 
-  const handleAlertRuleDisable = useCallback(
-    async (watcher: WatcherRule) => {
-      if (!userId) {
-        setAlertCenterError('Still preparing your workspace. Try again in a moment.')
-        return
-      }
-
-      try {
-        await upsertWatcherFn({
-          data: {
-            userId,
-            watcher: {
-              id: watcher.id,
-              walletAddress: watcher.walletAddress,
-              nickname: watcher.nickname,
-              singleTradeThresholdUsd: null,
-              accumulationThresholdUsd: null,
-              accumulationWindowSeconds: watcher.accumulationWindowSeconds,
-              minTrades: watcher.minTrades,
-              notifyChannels: [],
-            },
-          },
-        })
-        setAlertCenterError(null)
-        await loadWatchersForUser(userId)
-      } catch (error) {
-        console.error('Unable to disable alert rule', error)
-        setAlertCenterError(
-          error instanceof Error ? error.message : 'Unable to remove alert rule.',
-        )
-      }
-    },
-    [loadWatchersForUser, userId],
-  )
-
   useEffect(() => {
     if (trades.length === 0) {
       setVisibleTradeCount(0)
@@ -577,27 +733,6 @@ useEffect(() => {
     }
     setVisibleTradeCount(Math.min(INITIAL_TRADE_BATCH_SIZE, trades.length))
   }, [trades])
-
-  useEffect(() => {
-    if (!selectedWallet) {
-      return
-    }
-    const normalized = selectedWallet.toLowerCase()
-    const watcher = watchers.find(
-      (candidate) => candidate.walletAddress.toLowerCase() === normalized,
-    )
-    if (!watcher) {
-      setAlertForm(DEFAULT_ALERT_FORM)
-      return
-    }
-    setAlertForm((previous) => ({
-      ...previous,
-      nickname: watcher.nickname ?? '',
-      singleTradeThresholdUsd: watcher.singleTradeThresholdUsd
-        ? String(watcher.singleTradeThresholdUsd)
-        : '',
-    }))
-  }, [selectedWallet, watchers])
 
   useEffect(() => {
     loadWalletData(selectedWallet)
@@ -645,21 +780,9 @@ useEffect(() => {
   )
 
   const tradeStats = useMemo(() => {
-    const markets = new Set<string>()
-    let buyVolume = 0
-    let sellVolume = 0
-    let totalSize = 0
     let lastTimestamp: number | null = null
 
     trades.forEach((trade) => {
-      const notional = trade.size * trade.price
-      if (trade.side === 'BUY') {
-        buyVolume += notional
-      } else {
-        sellVolume += notional
-      }
-      totalSize += trade.size
-      markets.add(trade.slug ?? trade.title ?? trade.asset)
       lastTimestamp =
         lastTimestamp !== null
           ? Math.max(lastTimestamp, trade.timestamp)
@@ -667,10 +790,6 @@ useEffect(() => {
     })
 
     return {
-      buyVolume,
-      sellVolume,
-      totalSize,
-      markets: markets.size,
       lastTimestamp,
     }
   }, [trades])
@@ -745,15 +864,27 @@ useEffect(() => {
   }, [autoLoadEnabled, hasMoreTrades, loadMoreTrades])
 
   const hasTrades = trades.length > 0
-  const visiblePositions = useMemo(
-    () =>
-      positions.filter(
-        (position) =>
-          position.currentValue > 0 && !/^will\s/i.test(position.title ?? ''),
-      ),
-    [positions],
-  )
-  const hasPositions = visiblePositions.length > 0
+
+  const handleNotificationPermission = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    if (!('Notification' in window)) {
+      setNotificationStatus('unsupported')
+      return
+    }
+    if (Notification.permission === 'granted') {
+      setNotificationStatus('granted')
+      return
+    }
+    setNotificationStatus('requesting')
+    try {
+      const permission = await Notification.requestPermission()
+      setNotificationStatus(permission)
+    } catch {
+      setNotificationStatus('denied')
+    }
+  }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
@@ -768,205 +899,315 @@ useEffect(() => {
           <p className="text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setIsWalletManagerOpen(true)}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-4 py-2 text-sm text-gray-200 hover:border-cyan-400"
-            >
-              <Wallet className="h-4 w-4 text-cyan-300" />
-              Manage tracked wallets
-            </button>
-          </div>
         </div>
         <div className="space-y-8">
-          <PortfolioOverview
-            trackedWallets={trackedWallets}
-            walletStats={walletStats}
-            walletPositions={walletPositions}
-          />
-
-          <main className="space-y-8">
-            <WalletSummaryList
-              trackedWallets={trackedWallets}
-              walletStats={walletStats}
-              walletPositions={walletPositions}
-              onSelectWallet={setSelectedWallet}
-              selectedWallet={selectedWallet}
-            />
-
-            {selectedWallet ? (
-              <>
-                <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Active wallet</p>
-                      <h2 className="text-3xl font-semibold">
-                        {selectedWalletMeta?.nickname || formatWalletAddress(selectedWallet)}
-                      </h2>
-                      <p className="text-sm text-gray-400">{selectedWallet}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                      {lastUpdated && (
-                        <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1">
-                          <Clock className="h-4 w-4 text-cyan-300" />
-                          Updated {new Date(lastUpdated).toLocaleTimeString()}
-                        </span>
-                      )}
-                      {isAutoRefreshing && (
-                        <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-cyan-300">
-                          <RefreshCw className="h-4 w-4 animate-spin" />
-                          Auto-refreshing
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={manualRefresh}
-                        className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
-                        disabled={status === 'loading'}
-                      >
-                        <RefreshCw className={`h-4 w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
-                        Refresh now
-                      </button>
-                    </div>
-                  </div>
-
-                  {errorMessage && (
-                    <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-4 py-3 rounded-xl">
-                      {errorMessage}
-                    </div>
-                  )}
-
-                  {selectedStats ? (
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <PerformanceCard label="Daily" bucket={selectedStats.daily} />
-                      <PerformanceCard label="Weekly" bucket={selectedStats.weekly} />
-                      <PerformanceCard label="Monthly" bucket={selectedStats.monthly} />
-                      <PerformanceCard label="All-time" bucket={selectedStats.allTime} />
-                    </div>
-                  ) : (
+          <div className="lg:hidden">
+            <SharedPositionsBoard positions={aggregatedPositions} />
+          </div>
+          <div className="grid gap-8 lg:grid-cols-[320px_1fr] items-start">
+            <aside className="space-y-6">
+              <div className="space-y-6 lg:sticky lg:top-10">
+                <section className="rounded-2xl border border-slate-900 bg-slate-950/70 p-5 space-y-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                      Control center
+                    </p>
+                    <h2 className="text-xl font-semibold">Build your board</h2>
                     <p className="text-sm text-gray-400">
-                      No closed-market stats yet. Once the cron sees resolved markets for this wallet, the grid will populate automatically.
+                      Keep a tight list of proxy wallets for instant reads, then drop into deeper research on the right.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddWalletModalOpen(true)}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add wallet
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsWalletManagerOpen(true)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-800 px-3 py-2 text-sm text-gray-200 hover:border-cyan-400"
+                    >
+                      <Wallet className="h-4 w-4 text-cyan-300" />
+                      Manage
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleNotificationPermission}
+                    disabled={notificationStatus === 'requesting'}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-800 px-3 py-2 text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+                  >
+                    <BellRing className="h-4 w-4 text-cyan-300" />
+                    {notificationStatus === 'granted'
+                      ? 'Push enabled'
+                      : notificationStatus === 'denied'
+                        ? 'Permission denied'
+                        : notificationStatus === 'unsupported'
+                          ? 'Push unsupported'
+                          : 'Enable push notifications'}
+                  </button>
+                  {notificationStatus === 'denied' && (
+                    <p className="text-[0.65rem] text-rose-300">
+                      Re-enable in iOS Settings ▸ Notifications ▸ Polywhaler.
                     </p>
                   )}
+                  {notificationStatus === 'unsupported' && (
+                    <p className="text-[0.65rem] text-rose-300">
+                      This device or browser does not support web push.
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-500">
+                    Tracking{' '}
+                    <span className="font-semibold text-white">
+                      {trackedWallets.length}
+                    </span>{' '}
+                    wallet{trackedWallets.length === 1 ? '' : 's'} right now.
+                  </p>
                 </section>
+                <WalletSummaryList
+                  trackedWallets={trackedWallets}
+                  walletStats={walletStats}
+                  onSelectWallet={setSelectedWallet}
+                  selectedWallet={selectedWallet}
+                />
+                <AlertCenter
+                  watchers={watchers}
+                  canEdit={Boolean(userId && selectedWallet)}
+                  alertError={alertCenterError}
+                  onRunScan={handleAlertScan}
+                  isScanning={isScanningAlerts}
+                  alertHistory={alertHistory}
+                />
+              </div>
+            </aside>
+            <main className="space-y-8">
+              <div className="hidden lg:block">
+                <SharedPositionsBoard positions={aggregatedPositions} />
+              </div>
 
-                <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Open positions</p>
-                      <h3 className="text-2xl font-semibold">
-                        {hasPositions ? `${visiblePositions.length} active markets` : 'No active markets'}
-                      </h3>
+              {selectedWallet ? (
+              <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                      Insights for
+                    </p>
+                    <h2 className="text-3xl font-semibold">
+                      {selectedWalletMeta?.nickname || formatWalletAddress(selectedWallet)}
+                    </h2>
+                    <p className="text-sm text-gray-400">{selectedWallet}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                    {lastUpdated && (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1">
+                        <Clock className="h-4 w-4 text-cyan-300" />
+                        Updated {new Date(lastUpdated).toLocaleTimeString()}
+                      </span>
+                    )}
+                    {isAutoRefreshing && (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-cyan-300">
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Auto-refreshing
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={manualRefresh}
+                      className="inline-flex items-center gap-2 rounded-full border border-slate-800 px-3 py-1 text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+                      disabled={status === 'loading'}
+                    >
+                      <RefreshCw className={`h-4 w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
+                      Refresh now
+                    </button>
+                  </div>
+                </div>
+
+                {errorMessage && (
+                  <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-4 py-3 rounded-xl">
+                    {errorMessage}
+                  </div>
+                )}
+
+                {selectedDiagnostics && (
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                        Closed PnL (7d)
+                      </p>
+                      <p className="text-lg font-semibold text-white">
+                        {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
+                      </p>
+                      <p
+                        className={`text-sm font-semibold ${
+                          selectedDiagnostics.closed.pnlUsd >= 0
+                            ? 'text-emerald-300'
+                            : 'text-rose-300'
+                        }`}
+                      >
+                        {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
+                        {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {selectedDiagnostics.closed.sampleCount} resolved markets
+                      </p>
                     </div>
-                    <div className="flex-1" />
-                    <div className="flex flex-wrap gap-3 text-xs text-gray-400">
-                      <span className="inline-flex items-center gap-1 rounded-full border border-slate-800 px-3 py-1">
-                        <Activity className="h-4 w-4 text-cyan-300" />
-                        {tradeStats.markets} markets watched
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-slate-800 px-3 py-1">
-                        <Wallet className="h-4 w-4 text-cyan-300" />
-                        {currencyFormatter.format(visiblePositions.reduce((total, position) => total + position.currentValue, 0))}
-                        total value
-                      </span>
+                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                        Open exposure
+                      </p>
+                      <p className="text-lg font-semibold text-white">
+                        {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Across {selectedDiagnostics.open.positionCount} positions
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-900 bg-slate-900/30 p-4 space-y-1">
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                        Flow (7d)
+                      </p>
+                      <p className="text-sm text-gray-300">
+                        Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
+                      </p>
+                      <p className="text-sm text-gray-300">
+                        Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
+                      </p>
                     </div>
                   </div>
+                )}
 
-                  {status === 'loading' && (
-                    <div className="text-gray-400">Pulling fresh /positions from Polymarket…</div>
-                  )}
-
-                  {hasPositions ? (
-                    <ul className="space-y-4">
-                      {visiblePositions.map((position) => (
-                        <li key={position.asset}>
-                          <PositionCard
-                            position={position}
-                            numberFormatter={numberFormatter}
-                            currencyFormatter={currencyFormatter}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    status === 'success' && (
-                      <p className="text-gray-400">This wallet does not hold any active markets right now.</p>
-                    )
-                  )}
-                </section>
-
-                <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
-                      <h3 className="text-2xl font-semibold">More context on this trader</h3>
-                    </div>
-                    <div className="flex-1" />
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setInsightTab('closed')}
-                        className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
-                      >
-                        Closed markets
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setInsightTab('activity')}
-                        className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
-                      >
-                        Live tape
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setInsightTab('profile')}
-                        className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
-                      >
-                        Profile
-                      </button>
-                    </div>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
+                    <h3 className="text-2xl font-semibold">More context on this trader</h3>
                   </div>
+                  <div className="flex-1" />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setInsightTab('closed')}
+                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                    >
+                      Closed markets
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInsightTab('activity')}
+                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                    >
+                      Live tape
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInsightTab('profile')}
+                      className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                    >
+                      Profile
+                    </button>
+                  </div>
+                </div>
 
-                  {insightTab === 'closed' && (
-                    selectedResults.length > 0 ? (
-                      <ul className="space-y-4">
-                        {selectedResults.map((result) => (
-                          <li
-                            key={`${result.asset}-${result.resolvedAt}`}
-                            className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
-                          >
-                            <div>
-                              <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-                                {result.result.toUpperCase()}
-                              </p>
-                              <h4 className="text-lg font-semibold">{result.title || result.asset}</h4>
-                              <p className="text-xs text-gray-500">
-                                Resolved {new Date(result.resolvedAt * 1000).toLocaleDateString()}
-                              </p>
-                            </div>
-                            <div className="text-right">
-                              <p
-                                className={`text-xl font-semibold ${result.pnlUsd >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}
+                {insightTab === 'closed' && (
+                  <div className="space-y-4">
+                    {selectedStats && selectedStats.bySport.length > 0 && (
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                              Sports records
+                            </p>
+                            <h4 className="text-lg font-semibold">League breakdown</h4>
+                          </div>
+                          <span className="text-xs text-gray-400">
+                            {selectedStats.bySport.length} league
+                            {selectedStats.bySport.length === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {selectedStats.bySport.map((record) => {
+                            const label = getSportLabel(record.sport) ?? record.sport.toUpperCase()
+                            const pnlPositive = record.pnlUsd >= 0
+                            return (
+                              <div
+                                key={`${record.sport}-breakdown`}
+                                className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"
                               >
-                                {result.pnlUsd >= 0 ? '+' : '-'}
-                                {currencyFormatter.format(Math.abs(result.pnlUsd))}
-                              </p>
-                              <p className="text-sm text-gray-400">
-                                {result.isSports ? 'Sports market' : 'General market'}
-                              </p>
-                            </div>
-                          </li>
-                        ))}
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-sm font-semibold text-white">{label}</p>
+                                  <p className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
+                                    Record
+                                  </p>
+                                </div>
+                                <p className="text-lg font-semibold text-white">
+                                  {record.wins}-{record.losses}-{record.ties}
+                                </p>
+                                <p
+                                  className={`text-xs font-semibold ${
+                                    pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                  }`}
+                                >
+                                  {pnlPositive ? '+' : '-'}
+                                  {formatUsdCompact(Math.abs(record.pnlUsd))}
+                                </p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {selectedResults.length > 0 ? (
+                      <ul className="space-y-4">
+                        {selectedResults.map((result) => {
+                          const sportLabel = getSportLabel(result.sportTag)
+                          const marketLabel = sportLabel
+                            ? `${sportLabel} market`
+                            : result.isSports
+                              ? 'Sports market'
+                              : 'General market'
+                          return (
+                            <li
+                              key={`${result.asset}-${result.resolvedAt}`}
+                              className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
+                            >
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                                  {result.result.toUpperCase()}
+                                </p>
+                                <h4 className="text-lg font-semibold">
+                                  {result.title || result.asset}
+                                </h4>
+                                <p className="text-xs text-gray-500">
+                                  Resolved {new Date(result.resolvedAt * 1000).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p
+                                  className={`text-xl font-semibold ${
+                                    result.pnlUsd >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                                  }`}
+                                >
+                                  {result.pnlUsd >= 0 ? '+' : '-'}
+                                  {currencyFormatter.format(Math.abs(result.pnlUsd))}
+                                </p>
+                                <p className="text-sm text-gray-400">{marketLabel}</p>
+                              </div>
+                            </li>
+                          )
+                        })}
                       </ul>
                     ) : (
                       <p className="text-gray-400">
                         No closed markets stored yet. Stats will appear here once positions resolve.
                       </p>
-                    )
-                  )}
+                    )}
+                  </div>
+                )}
 
-                  {insightTab === 'profile' && (
+                {insightTab === 'profile' && (
                     profile ? (
                       <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row gap-6 items-center">
                         <img
@@ -990,7 +1231,7 @@ useEffect(() => {
                     )
                   )}
 
-                  {insightTab === 'activity' && (
+                {insightTab === 'activity' && (
                     <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
                       <div className="flex items-center justify-between px-6 py-4 border-b border-slate-900/70">
                         <div>
@@ -1133,8 +1374,7 @@ useEffect(() => {
                       )}
                     </div>
                   )}
-                </section>
-              </>
+              </section>
             ) : (
               <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-8 text-center space-y-3">
                 <h2 className="text-2xl font-semibold">Add a wallet to start tracking</h2>
@@ -1143,22 +1383,8 @@ useEffect(() => {
                 </p>
               </section>
             )}
-
-            <AlertCenter
-              alertForm={alertForm}
-              onFormChange={setAlertForm}
-              onSubmit={handleAlertFormSubmit}
-              watchers={watchers}
-              onDisableAlert={handleAlertRuleDisable}
-              isSaving={isSavingWatcher}
-              canEdit={Boolean(userId && selectedWallet)}
-              alertError={alertCenterError}
-              onRunScan={handleAlertScan}
-              isScanning={isScanningAlerts}
-              alertHistory={alertHistory}
-              walletAddress={selectedWallet ?? ''}
-            />
-          </main>
+            </main>
+          </div>
         </div>
         {isAddWalletModalOpen && (
           <AddWalletModal
@@ -1204,6 +1430,10 @@ function ManageWalletsModal({
   onClose: () => void
 }) {
   const normalizedSelection = selectedWallet?.toLowerCase()
+  const topWalletKey = useMemo(
+    () => getTopWalletKey(trackedWallets, walletStats),
+    [trackedWallets, walletStats],
+  )
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
@@ -1249,6 +1479,9 @@ function ManageWalletsModal({
               const key = wallet.walletAddress.toLowerCase()
               const stats = walletStats[key] ?? EMPTY_WALLET_STATS
               const isActive = normalizedSelection === key
+              const highlight = pickWalletHighlight(stats, {
+                isTopPerformer: topWalletKey === key,
+              })
               return (
                 <button
                   type="button"
@@ -1271,6 +1504,11 @@ function ManageWalletsModal({
                       <p className="text-xs text-gray-500">
                         {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
                       </p>
+                      {highlight && (
+                        <div className="mt-2">
+                          <WalletHighlightBadge highlight={highlight} />
+                        </div>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -1299,240 +1537,165 @@ function ManageWalletsModal({
     </div>
   )
 }
+const DEFAULT_ALERT_THRESHOLD_COPY = formatUsdCompact(50_000)
+
 function AlertCenter({
-  alertForm,
-  onFormChange,
-  onSubmit,
   watchers,
-  onDisableAlert,
-  isSaving,
   canEdit,
   alertError,
   onRunScan,
   isScanning,
   alertHistory,
-  walletAddress,
 }: {
-  alertForm: AlertFormState
-  onFormChange: React.Dispatch<React.SetStateAction<AlertFormState>>
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   watchers: WatcherRule[]
-  onDisableAlert: (watcher: WatcherRule) => void
-  isSaving: boolean
   canEdit: boolean
   alertError: string | null
   onRunScan: () => void
   isScanning: boolean
   alertHistory: AlertEventRecord[]
-  walletAddress: string
 }) {
-  const handleChange = (field: keyof AlertFormState) =>
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const value = event.target.value
-      onFormChange((previous) => ({ ...previous, [field]: value }))
-    }
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const latestAlert = alertHistory[0]
 
   return (
-    <section className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 space-y-6">
-      <div className="flex flex-col gap-1">
-        <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Alert center</p>
-        <h2 className="text-2xl font-semibold">Ping me when the tape gets spicy</h2>
-        <p className="text-gray-400 max-w-2xl">
-          Persist wallets you care about, define position value steps per wallet, and trigger a manual scan whenever you want an immediate read.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="text-sm text-gray-400">
-          Tracking <span className="text-white font-semibold">{watchers.length}</span>{' '}
-          wallet{watchers.length === 1 ? '' : 's'} for alerts.
+    <section className="rounded-2xl border border-slate-900 bg-slate-950/70 p-5 space-y-5">
+      <div className="flex flex-col gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Alert center</p>
+          <h2 className="text-xl font-semibold">Push alerts for big swings</h2>
+          <p className="text-sm text-gray-400">
+            Every tracked wallet auto-pings once its open exposure crosses {DEFAULT_ALERT_THRESHOLD_COPY}.
+          </p>
         </div>
         <button
           type="button"
           onClick={onRunScan}
           disabled={!canEdit || isScanning || watchers.length === 0}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-800 px-4 py-2 text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-800 px-4 py-2 text-sm text-gray-200 hover:border-cyan-400 disabled:opacity-50"
         >
           <BellRing className={`h-4 w-4 ${isScanning ? 'animate-pulse' : ''}`} />
-          {isScanning ? 'Scanning…' : 'Manual scan now'}
+          {isScanning ? 'Scanning…' : 'Manual scan'}
         </button>
       </div>
 
+      <div className="rounded-xl border border-slate-900/70 bg-slate-950/40 px-4 py-3 text-sm text-gray-300">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p>
+            Tracking{' '}
+            <span className="font-semibold text-white">{watchers.length}</span>{' '}
+            wallet{watchers.length === 1 ? '' : 's'} for alerts.
+          </p>
+          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
+            <Settings className="h-3.5 w-3.5" />
+            Automatic
+          </div>
+        </div>
+        {!canEdit && (
+          <p className="mt-1 text-xs text-gray-500">
+            Select a wallet to enable manual scans from this device.
+          </p>
+        )}
+      </div>
+
       {alertError && (
-        <div className="bg-rose-950/40 border border-rose-800 text-rose-200 px-4 py-3 rounded-xl">
+        <div className="rounded-xl border border-rose-800 bg-rose-950/40 px-4 py-3 text-sm text-rose-200">
           {alertError}
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <form
-          onSubmit={onSubmit}
-          className="space-y-4 rounded-2xl border border-slate-900 bg-slate-950/60 p-4"
-        >
-          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-gray-500">
-            <Settings className="h-4 w-4" />
-            Rule for {walletAddress.trim() ? formatWalletAddress(walletAddress) : '—'}
-          </div>
-          <div className="grid gap-3">
-            <label className="text-sm text-gray-300" htmlFor="alert-nickname">
-              Nickname
-            </label>
-            <input
-              id="alert-nickname"
-              className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-              placeholder="Optional label"
-              value={alertForm.nickname}
-              onChange={handleChange('nickname')}
-            />
-          </div>
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <label className="text-sm text-gray-300" htmlFor="alert-single">
-                Position value step (USD)
-              </label>
-              <input
-                id="alert-single"
-                type="number"
-                min="0"
-                inputMode="decimal"
-                className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                placeholder="25000"
-                value={alertForm.singleTradeThresholdUsd}
-                onChange={handleChange('singleTradeThresholdUsd')}
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={!canEdit || isSaving}
-            className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-900 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSaving ? 'Saving…' : 'Save alert rule'}
-          </button>
-        </form>
-
-        <div className="space-y-6">
-          <WatchersList watchers={watchers} onDisableAlert={onDisableAlert} />
-          <AlertHistoryList alertHistory={alertHistory} />
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function WatchersList({
-  watchers,
-  onDisableAlert,
-}: {
-  watchers: WatcherRule[]
-  onDisableAlert: (watcher: WatcherRule) => void
-}) {
-  const activeWatchers = watchers.filter(
-    (watcher) =>
-      !!watcher.singleTradeThresholdUsd ||
-      !!watcher.accumulationThresholdUsd ||
-      watcher.notifyChannels.length > 0,
-  )
-
-  if (activeWatchers.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-slate-800 p-4 text-sm text-gray-400">
-        No alert rules yet. Configure a threshold on the left and Polywhaler will watch that wallet even when this tab is closed.
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-3">
-      {activeWatchers.map((watcher) => (
-        <div
-          key={watcher.id}
-          className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-gray-300"
-        >
-          <div className="flex items-start justify-between gap-3">
+      {latestAlert ? (
+        <div className="space-y-2 rounded-xl border border-slate-900/70 bg-slate-950/50 p-4">
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-                {watcher.nickname || 'Wallet'}
-              </p>
-              <p className="text-lg font-semibold text-white">
-                {formatWalletAddress(watcher.walletAddress)}
+              <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Latest alert</p>
+              <p className="text-sm font-semibold text-white">
+                {latestAlert.nickname || formatWalletAddress(latestAlert.walletAddress)}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => onDisableAlert(watcher)}
-              className="text-gray-500 hover:text-rose-300"
-              aria-label="Disable alert"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <span className="text-xs text-gray-500">
+              {new Date(latestAlert.triggeredAt * 1000).toLocaleString()}
+            </span>
           </div>
-
-          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-            <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
-              Position value step (USD)
-            </p>
-            <p className="text-base font-semibold text-white">
-              {formatUsdCompact(watcher.singleTradeThresholdUsd)}
-            </p>
-          </div>
+          <p className="text-sm text-gray-300">
+            {latestAlert.triggerType === 'single'
+              ? 'Position threshold'
+              : latestAlert.triggerType === 'position_step'
+                ? 'Legacy position step'
+                : 'Rolling window'}{' '}
+            · {formatUsdCompact(latestAlert.triggerValue)} · {latestAlert.tradeCount} trade
+            {latestAlert.tradeCount === 1 ? '' : 's'}
+          </p>
         </div>
-      ))}
-    </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-900/70 bg-slate-950/40 px-4 py-3 text-xs text-gray-400">
+          No alerts sent yet. Once a tracked wallet crosses the threshold we&apos;ll ping you automatically.
+        </div>
+      )}
+
+      {alertHistory.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setHistoryOpen((previous) => !previous)}
+          className="text-xs font-semibold text-cyan-300 hover:text-cyan-200"
+        >
+          {historyOpen ? 'Hide alert history' : `View alert history (${alertHistory.length})`}
+        </button>
+      )}
+      {historyOpen && <AlertHistoryList alertHistory={alertHistory} />}
+    </section>
   )
 }
 
 function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }) {
   if (alertHistory.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-800 p-4 text-sm text-gray-400">
-        No alerts triggered yet. When a rule hits we will stash it here and fan it out via web push/email next.
+      <div className="rounded-xl border border-dashed border-slate-900/70 bg-slate-950/40 px-4 py-3 text-xs text-gray-400">
+        No alerts triggered yet. Once a tracked wallet trips the threshold we&apos;ll log it here and fire a Pusher event automatically.
       </div>
     )
   }
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-gray-500">
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[0.65rem] uppercase tracking-[0.3em] text-gray-500">
         <Clock className="h-4 w-4" />
         Recent alerts
       </div>
-      <ul className="space-y-3">
+      <ul className="divide-y divide-slate-900/70 rounded-2xl border border-slate-900 bg-slate-950/40">
         {alertHistory.map((alert) => {
           const pricedTrades = alert.trades.filter(
             (trade) => (trade.size ?? 0) * (trade.price ?? 0) > 0,
           )
           return (
-            <li key={alert.id} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs tracking-wide text-gray-500">
-                  {alert.nickname || formatWalletAddress(alert.walletAddress)}
-                </p>
-                <p className="text-base font-semibold text-white capitalize">
-                  {alert.triggerType === 'position_step'
-                    ? 'Position value step'
-                    : alert.triggerType === 'single'
-                      ? 'Single fill'
-                      : 'Rolling'} · {formatUsdCompact(alert.triggerValue)}
-                </p>
+            <li key={alert.id} className="p-4 text-sm text-gray-300 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs tracking-wide text-gray-500">
+                    {alert.nickname || formatWalletAddress(alert.walletAddress)}
+                  </p>
+                  <p className="text-sm font-semibold text-white capitalize">
+                    {alert.triggerType === 'single'
+                      ? 'Position threshold'
+                      : alert.triggerType === 'position_step'
+                        ? 'Legacy position step'
+                        : 'Rolling window'}{' '}
+                    · {formatUsdCompact(alert.triggerValue)}
+                  </p>
+                </div>
+                <span className="text-xs text-gray-500">
+                  {new Date(alert.triggeredAt * 1000).toLocaleString()}
+                </span>
               </div>
-              <span className="text-xs text-gray-400">
-                {new Date(alert.triggeredAt * 1000).toLocaleString()}
-              </span>
-            </div>
-            <div className="mt-1 space-y-2 text-xs text-gray-400">
-              <p>
+              <div className="text-xs text-gray-400">
                 {alert.tradeCount} trade{alert.tradeCount === 1 ? '' : 's'} in payload.
-              </p>
+              </div>
               {pricedTrades.length > 0 && (
-                <div className="rounded-lg border border-slate-800/70 bg-slate-950/30 p-2 space-y-1 text-[0.7rem] uppercase tracking-[0.2em] text-gray-500">
+                <div className="rounded-lg border border-slate-900/70 bg-slate-950/30 p-2 text-[0.7rem] uppercase tracking-[0.2em] text-gray-500">
                   {pricedTrades.slice(0, 3).map((trade, index) => (
-                      <p key={`${alert.id}-${trade.transactionHash ?? index}`}>
-                        {trade.title ?? 'Market'} · {trade.outcome ?? 'Outcome'}
-                      </p>
-                    ))}
+                    <p key={`${alert.id}-${trade.transactionHash ?? index}`}>
+                      {trade.title ?? 'Market'} · {trade.outcome ?? 'Outcome'}
+                    </p>
+                  ))}
                   {pricedTrades.length > 3 && (
                     <p className="text-cyan-400">
                       +{pricedTrades.length - 3} more fills
@@ -1540,7 +1703,6 @@ function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }
                   )}
                 </div>
               )}
-            </div>
             </li>
           )
         })}
@@ -1549,152 +1711,256 @@ function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }
   )
 }
 
-function PortfolioOverview({
-  trackedWallets,
-  walletStats,
-  walletPositions,
-}: {
-  trackedWallets: TrackedWalletRow[]
-  walletStats: Record<string, WalletStatsSummary>
-  walletPositions: Record<string, PolymarketPosition[]>
-}) {
-  if (trackedWallets.length === 0) {
-    return null
-  }
-
-  const totalOpenMarkets = trackedWallets.reduce((sum, wallet) => {
-    const positions = walletPositions[wallet.walletAddress.toLowerCase()] ?? []
-    return sum + positions.length
-  }, 0)
-
-  const totalValue = trackedWallets.reduce((sum, wallet) => {
-    const positions = walletPositions[wallet.walletAddress.toLowerCase()] ?? []
-    return sum + positions.reduce((acc, position) => acc + position.currentValue, 0)
-  }, 0)
-
-  const totalPnl = trackedWallets.reduce((sum, wallet) => {
-    const stats = walletStats[wallet.walletAddress.toLowerCase()]
-    return sum + (stats?.allTime.pnlUsd ?? 0)
-  }, 0)
-
+function WalletHighlightBadge({ highlight }: { highlight: WalletHighlight }) {
+  const { Icon, badgeClass, label, detail } = highlight
   return (
-    <section className="rounded-2xl border border-slate-900 bg-slate-950/60 p-6 space-y-4">
-      <div className="flex flex-col gap-1">
-        <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Portfolio overview</p>
-        <h2 className="text-2xl font-semibold text-balance">What&apos;s the board doing?</h2>
-        <p className="text-sm text-gray-400">
-          High-level snapshot of every wallet you&apos;re monitoring.
-        </p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Tracked wallets" value={trackedWallets.length.toString()} />
-        <StatCard title="Open markets" value={totalOpenMarkets.toString()} />
-        <StatCard title="Live exposure" value={formatUsdCompact(totalValue)} />
-        <StatCard title="All-time PnL" value={formatUsdCompact(totalPnl)} />
-      </div>
-    </section>
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] ${badgeClass}`}
+      title={detail}
+    >
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      {label}
+    </span>
   )
 }
 
 function WalletSummaryList({
   trackedWallets,
   walletStats,
-  walletPositions,
   onSelectWallet,
   selectedWallet,
 }: {
   trackedWallets: TrackedWalletRow[]
   walletStats: Record<string, WalletStatsSummary>
-  walletPositions: Record<string, PolymarketPosition[]>
   onSelectWallet: (wallet: string) => void
   selectedWallet: string | null
 }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const topWalletKey = useMemo(
+    () => getTopWalletKey(trackedWallets, walletStats),
+    [trackedWallets, walletStats],
+  )
+
   if (trackedWallets.length === 0) {
     return (
       <section className="rounded-2xl border border-dashed border-slate-900 bg-slate-950/50 p-6 text-center text-sm text-gray-400">
-        No wallets yet. Add a proxy on the left to start building your board.
+        No wallets yet. Use the add button above to start building the board.
+      </section>
+    )
+  }
+
+  const sortedWallets = [...trackedWallets].sort((a, b) => {
+    const aKey = a.walletAddress.toLowerCase()
+    const bKey = b.walletAddress.toLowerCase()
+    const aPnl = walletStats[aKey]?.allTime.pnlUsd ?? 0
+    const bPnl = walletStats[bKey]?.allTime.pnlUsd ?? 0
+    return bPnl - aPnl
+  })
+  const glanceBuckets: Array<{ key: WalletStatsBucketKey; label: string }> = [
+    { key: 'daily', label: 'Daily' },
+    { key: 'weekly', label: 'Weekly' },
+    { key: 'monthly', label: 'Monthly' },
+  ]
+
+  return (
+    <section className="rounded-2xl border border-slate-900 bg-slate-950/70 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-900/70 px-5 py-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Performance board</p>
+          <h2 className="text-xl font-semibold">Tracked wallets</h2>
+          <p className="text-xs text-gray-500">Tap a wallet to load the deep-dive pane.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCollapsed((previous) => !previous)}
+          className="text-xs font-semibold text-gray-400 hover:text-cyan-200"
+        >
+          {collapsed ? 'Expand' : 'Collapse'}
+        </button>
+      </div>
+      {!collapsed && (
+        <ul className="divide-y divide-slate-900/70">
+          {sortedWallets.map((wallet, index) => {
+            const key = wallet.walletAddress.toLowerCase()
+            const stats = walletStats[key] ?? EMPTY_WALLET_STATS
+            const isSelected =
+              selectedWallet?.toLowerCase() === wallet.walletAddress.toLowerCase()
+            const allTimePnl = stats.allTime.pnlUsd
+            const pnlPositive = allTimePnl >= 0
+            const record = `${stats.allTime.wins}-${stats.allTime.losses}-${stats.allTime.ties}`
+            const highlight = pickWalletHighlight(stats, {
+              isTopPerformer: topWalletKey === key,
+            })
+
+            return (
+              <li key={wallet.watcherId}>
+                <button
+                  type="button"
+                  onClick={() => onSelectWallet(wallet.walletAddress)}
+                  className={`w-full px-5 py-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                    isSelected
+                      ? 'bg-cyan-500/5 ring-1 ring-cyan-400/50'
+                      : 'hover:bg-slate-900/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
+                        #{index + 1}
+                      </span>
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {wallet.nickname
+                            ? formatWalletAddress(wallet.walletAddress)
+                            : 'Tracked wallet'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">All-time</p>
+                      <p className="text-xs text-gray-400">{record}</p>
+                      <p
+                        className={`text-sm font-semibold ${
+                          pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                        }`}
+                      >
+                        {pnlPositive ? '+' : '-'}
+                        {formatUsdCompact(Math.abs(allTimePnl))}
+                      </p>
+                    </div>
+                  </div>
+                  {highlight && (
+                    <div className="mt-2">
+                      <WalletHighlightBadge highlight={highlight} />
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {glanceBuckets.map(({ key: bucketKey, label }) => {
+                      const bucket = stats[bucketKey]
+                      const bucketPositive = bucket.pnlUsd >= 0
+                      return (
+                        <span
+                          key={`${wallet.walletAddress}-${bucketKey}`}
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] ${
+                            bucketPositive
+                              ? 'border-emerald-400/40 text-emerald-200'
+                              : 'border-rose-400/40 text-rose-200'
+                          }`}
+                        >
+                          {label}
+                          <span className="font-semibold">
+                            {bucketPositive ? '+' : '-'}
+                            {formatUsdCompact(Math.abs(bucket.pnlUsd))}
+                          </span>
+                        </span>
+                      )
+                    })}
+                  </div>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function SharedPositionsBoard({
+  positions,
+}: {
+  positions: AggregatedMarketEntry[]
+}) {
+  if (positions.length === 0) {
+    return (
+      <section className="rounded-2xl border border-dashed border-slate-900 bg-slate-950/50 p-6 text-center text-sm text-gray-400">
+        No overlapping exposure yet. Once tracked wallets enter the same markets, we&apos;ll summarize the risk here.
       </section>
     )
   }
 
   return (
-    <section className="rounded-2xl border border-slate-900 bg-slate-950/60 p-6 space-y-4">
+    <section className="rounded-2xl border border-slate-900 bg-slate-950/60 p-6 space-y-5">
       <div className="flex flex-col gap-1">
-        <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Tracked traders</p>
-        <h2 className="text-2xl font-semibold">Active positions by wallet</h2>
+        <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
+        <h2 className="text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
+        <p className="text-sm text-gray-400">
+          Top markets sorted by combined current value. Opposing sides are flagged automatically.
+        </p>
       </div>
       <div className="space-y-4">
-        {trackedWallets.map((wallet) => {
-          const key = wallet.walletAddress.toLowerCase()
-          const stats = walletStats[key] ?? EMPTY_WALLET_STATS
-          const positions = walletPositions[key]
-          const sortedPositions =
-            positions
-              ?.filter((position) => !/^will\s/i.test(position.title ?? ''))
-              .sort((a, b) => b.currentValue - a.currentValue) ?? []
-          const isSelected =
-            selectedWallet?.toLowerCase() === wallet.walletAddress.toLowerCase()
-
+        {positions.map((market) => {
+          const hasOpposition = market.outcomes.length > 1
           return (
-            <button
-              type="button"
-              key={wallet.watcherId}
-              onClick={() => onSelectWallet(wallet.walletAddress)}
-              className={`w-full rounded-2xl border p-5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
-                isSelected
-                  ? 'border-cyan-400 bg-cyan-500/10'
-                  : 'border-slate-900 bg-slate-950/60 hover:border-cyan-400/60'
+            <div
+              key={market.id}
+              className={`rounded-2xl border px-4 py-4 md:px-6 md:py-5 ${
+                hasOpposition ? 'border-rose-400/40 bg-rose-400/5' : 'border-slate-900 bg-slate-950/60'
               }`}
             >
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-gray-500">
+                    {hasOpposition ? 'Opposing action' : 'Shared side'}
+                  </p>
+                  <h3 className="text-xl font-semibold text-white">{market.title}</h3>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Total value</p>
                   <p className="text-lg font-semibold text-white">
-                    {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    {stats ? 'Active positions' : 'Compiling stats…'}
+                    {formatUsdCompact(market.totalValue)}
                   </p>
                 </div>
               </div>
 
-              <div className="mt-4">
-                {sortedPositions.length === 0 ? (
-                  <p className="text-xs text-gray-500">No open risk right now.</p>
-                ) : (
-                  <div className="space-y-2 rounded-2xl border border-slate-900/70 bg-slate-950/40 p-3">
-                    {sortedPositions.map((position) => (
-                      <div
-                        key={position.asset}
-                        className="flex flex-col gap-1 rounded-xl border border-slate-900 bg-slate-950/60 px-4 py-3 text-sm text-gray-300"
-                      >
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <p className="font-semibold text-white break-words">
-                            {position.title}
-                          </p>
-                          <span
-                            className="inline-flex items-center justify-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1 text-base font-semibold text-cyan-100 sm:text-sm"
-                            title="Current value"
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {market.outcomes.map((outcome) => (
+                  <div
+                    key={`${market.id}-${outcome.outcome}`}
+                    className="rounded-2xl border border-slate-900/70 bg-slate-950/40 px-4 py-3 space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-semibold text-white">{outcome.outcome}</p>
+                      <p className="text-xs text-gray-400">
+                        {formatUsdCompact(outcome.totalValue)}
+                      </p>
+                    </div>
+                    <ul className="space-y-1 text-xs text-gray-300">
+                      {outcome.wallets.map((wallet) => {
+                        const pnlPositive = wallet.pnl >= 0
+                        return (
+                          <li
+                            key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-slate-900/60 bg-slate-950/50 px-3 py-2"
                           >
-                            {formatUsdCompact(position.currentValue)}
-                          </span>
-                        </div>
-                        <p
-                          className={`text-sm ${
-                            position.cashPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'
-                          }`}
-                        >
-                          {describeOutcome(position)} · {formatUsdCompact(position.cashPnl)} (
-                          {position.percentPnl.toFixed(1)}%)
-                        </p>
-                      </div>
-                    ))}
+                            <span className="truncate font-semibold text-white">{wallet.label}</span>
+                            <div className="flex flex-col items-end text-right text-xs text-gray-400">
+                              <span>{formatUsdCompact(wallet.value)}</span>
+                              <span
+                                className={`text-xs font-semibold ${
+                                  pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                }`}
+                              >
+                                {pnlPositive ? '+' : '-'}
+                                {formatUsdCompact(Math.abs(wallet.pnl))}
+                              </span>
+                              {wallet.redeemable && (
+                                <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.25em] text-amber-200">
+                                  Redeemable
+                                </span>
+                              )}
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
                   </div>
-                )}
+                ))}
               </div>
-            </button>
+            </div>
           )
         })}
       </div>
@@ -1717,6 +1983,8 @@ function AddWalletModal({
   error: string | null
   onClose: () => void
 }) {
+  const walletInputId = useId()
+  const nicknameInputId = useId()
   const handleChange =
     (field: keyof AddWalletFormState) =>
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1743,31 +2011,38 @@ function AddWalletModal({
           >
             X
           </button>
-        </div>
+      </div>
 
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-gray-300 flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-cyan-300" />
-              Wallet address
-            </label>
-            <input
-              className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
-              placeholder="0x..."
-              value={trackingForm.walletAddress}
-              onChange={handleChange('walletAddress')}
-              autoFocus
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-gray-300 flex items-center gap-2">
-              <User className="h-4 w-4 text-cyan-300" />
-              Nickname (optional)
-            </label>
-            <input
-              className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
-              placeholder="Sharp, Syndicate, ..."
-              value={trackingForm.nickname}
+      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        <div className="space-y-2">
+          <label
+            className="text-sm font-semibold text-gray-300 flex items-center gap-2"
+            htmlFor={walletInputId}
+          >
+            <Wallet className="h-4 w-4 text-cyan-300" />
+            Wallet address
+          </label>
+          <input
+            id={walletInputId}
+            className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            placeholder="0x..."
+            value={trackingForm.walletAddress}
+            onChange={handleChange('walletAddress')}
+          />
+        </div>
+        <div className="space-y-2">
+          <label
+            className="text-sm font-semibold text-gray-300 flex items-center gap-2"
+            htmlFor={nicknameInputId}
+          >
+            <User className="h-4 w-4 text-cyan-300" />
+            Nickname (optional)
+          </label>
+          <input
+            id={nicknameInputId}
+            className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            placeholder="Sharp, Syndicate, ..."
+            value={trackingForm.nickname}
               onChange={handleChange('nickname')}
             />
           </div>
@@ -1808,113 +2083,6 @@ function AddWalletModal({
   )
 }
 
-function PerformanceCard({ label, bucket }: { label: string; bucket: WalletStatsBucket }) {
-  const pnlPositive = bucket.pnlUsd >= 0
-  return (
-    <div className="rounded-2xl border border-slate-900 bg-slate-900/50 p-4 space-y-1">
-      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">{label}</p>
-      <p className="text-2xl font-semibold">
-        {bucket.wins}-{bucket.losses}-{bucket.ties}
-      </p>
-      <p className={`text-sm font-semibold ${pnlPositive ? 'text-emerald-300' : 'text-rose-300'}`}>
-        {pnlPositive ? '+' : '-'}
-        {formatUsdCompact(Math.abs(bucket.pnlUsd))}
-        <span className="text-gray-400 font-normal"> PnL</span>
-      </p>
-    </div>
-  )
-}
-
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-900 bg-slate-900/50 p-4 min-w-[160px]">
-      <p className="text-xs uppercase tracking-[0.3em] text-gray-500">{title}</p>
-      <p className="mt-2 text-2xl font-semibold text-white whitespace-nowrap">{value}</p>
-    </div>
-  )
-}
-
 function formatTradeTimestamp(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString()
-}
-
-function describeOutcome(position: PolymarketPosition) {
-  if (position.title?.toLowerCase().startsWith('spread:') && position.outcome) {
-    const match = position.title.match(/\(([^)]+)\)/)
-    if (match?.[1]) {
-      const line = match[1]
-      const isFavorite = position.outcome && position.title.toLowerCase().includes(position.outcome.toLowerCase())
-      const adjusted = isFavorite
-        ? line
-        : line.replace(/^[+-]/, (sign) => (sign === '-' ? '+' : '-'))
-      return `${position.outcome} ${adjusted}`
-    }
-  }
-  return position.outcome ?? 'Outcome'
-}
-
-function PositionCard({
-  position,
-  numberFormatter,
-  currencyFormatter,
-}: {
-  position: PolymarketPosition
-  numberFormatter: Intl.NumberFormat
-  currencyFormatter: Intl.NumberFormat
-}) {
-
-  const formatPrice = (price: number) =>
-    `${numberFormatter.format(price * 100).replace(/\.00$/, '')}¢`
-  const pnlPositive = position.cashPnl >= 0
-  const pnlClass = pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-  const percentLabel = `${pnlPositive ? '+' : ''}${position.percentPnl.toFixed(2)}%`
-
-  return (
-    <div className="border border-slate-800 rounded-2xl p-4 bg-slate-900/60 flex flex-col gap-4 md:flex-row md:items-center">
-      <div className="flex items-center gap-4 flex-1">
-        {position.icon ? (
-          <img
-            src={position.icon}
-            alt={position.title}
-            className="h-14 w-14 rounded-xl border border-slate-800 object-cover"
-          />
-        ) : (
-          <div className="h-14 w-14 rounded-xl border border-slate-800 bg-slate-800" />
-        )}
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Market</p>
-          <h3 className="text-lg font-semibold">{position.title}</h3>
-          <p className="text-sm text-cyan-300">{describeOutcome(position)}</p>
-          <p className="text-sm text-gray-400">
-            {numberFormatter.format(position.size)} shares at {formatPrice(position.avgPrice)}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap md:flex-nowrap gap-6 text-sm text-gray-300">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-500">Avg</p>
-          <p className="text-base font-semibold">{formatPrice(position.avgPrice)}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-500">Current</p>
-          <p className="text-base font-semibold">{formatPrice(position.curPrice)}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-500">Value</p>
-          <p className="text-base font-semibold">
-            {currencyFormatter.format(position.currentValue)}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-500">P&amp;L</p>
-          <p className={`text-base font-semibold ${pnlClass}`}>
-            {pnlPositive ? '+' : '-'}
-            {currencyFormatter.format(Math.abs(position.cashPnl))}{' '}
-            <span className="text-gray-400">({percentLabel})</span>
-          </p>
-        </div>
-      </div>
-    </div>
-  )
 }

@@ -73,7 +73,7 @@ export const runAlertScanFn = createServerFn({ method: 'POST' }).handler(
     const db = getDb(context)
     const userId = requireString((data as { userId?: string })?.userId, 'userId')
     const watchers = await listWatchers(db, userId)
-    const result = await evaluateWatchers(db, watchers)
+    const result = await evaluateWatchers(db, watchers, context?.env)
     return { alerts: result.alerts }
   },
 )

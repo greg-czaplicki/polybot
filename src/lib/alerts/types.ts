@@ -1,4 +1,4 @@
-export type AlertChannel = 'web_push' | 'email'
+export type AlertChannel = 'web_push' | 'email' | 'pusher'
 
 export interface WatcherRule {
   id: string

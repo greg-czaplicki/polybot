@@ -1,5 +1,6 @@
 import type { Db } from '../db/client'
 import { all, first, run } from '../db/client'
+import { detectSportTag } from '@/lib/sports'
 import { nowUnixSeconds } from '../env'
 
 export interface WalletPositionSnapshotRow {
@@ -9,10 +10,13 @@ export interface WalletPositionSnapshotRow {
   title?: string | null
   event_slug?: string | null
   is_sports: number
+  sport_tag?: string | null
   last_size: number
   last_current_value: number
   last_cash_pnl: number
   last_percent_pnl: number
+  last_avg_price: number
+  last_realized_pnl: number
   last_seen_at: number
 }
 
@@ -26,6 +30,7 @@ export interface WalletResultRow {
   pnl_usd: number
   result: 'win' | 'loss' | 'tie'
   is_sports: number
+  sport_tag?: string | null
 }
 
 export interface WalletResultSummary {
@@ -36,6 +41,32 @@ export interface WalletResultSummary {
   pnlUsd: number
   result: 'win' | 'loss' | 'tie'
   isSports: boolean
+  sportTag?: string
+}
+
+function buildSportDescriptor(row: { title?: string | null; event_slug?: string | null }) {
+  return {
+    title: row.title ?? undefined,
+    slug: row.event_slug ?? undefined,
+    eventSlug: row.event_slug ?? undefined,
+  }
+}
+
+async function ensureSportTagForResult(
+  db: Db,
+  row: WalletResultRow,
+): Promise<string | undefined> {
+  if (row.sport_tag || row.is_sports !== 1) {
+    return row.sport_tag ?? undefined
+  }
+
+  const inferred = detectSportTag(buildSportDescriptor(row))
+  if (!inferred) {
+    return undefined
+  }
+
+  await run(db, `UPDATE wallet_results SET sport_tag = ? WHERE id = ?`, inferred, row.id)
+  return inferred
 }
 
 export async function upsertPositionSnapshot(
@@ -58,19 +89,25 @@ export async function upsertPositionSnapshot(
        SET title = ?,
            event_slug = ?,
            is_sports = ?,
+           sport_tag = ?,
            last_size = ?,
            last_current_value = ?,
            last_cash_pnl = ?,
            last_percent_pnl = ?,
+           last_avg_price = ?,
+           last_realized_pnl = ?,
            last_seen_at = ?
        WHERE id = ?`,
       input.title ?? null,
       input.event_slug ?? null,
       input.is_sports,
+      input.sport_tag ?? null,
       input.last_size,
       input.last_current_value,
       input.last_cash_pnl,
       input.last_percent_pnl,
+      input.last_avg_price,
+      input.last_realized_pnl,
       now,
       existing.id,
     )
@@ -87,22 +124,28 @@ export async function upsertPositionSnapshot(
        title,
        event_slug,
        is_sports,
+       sport_tag,
        last_size,
        last_current_value,
        last_cash_pnl,
        last_percent_pnl,
+       last_avg_price,
+       last_realized_pnl,
        last_seen_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.wallet_address,
     input.asset,
     input.title ?? null,
     input.event_slug ?? null,
     input.is_sports,
+    input.sport_tag ?? null,
     input.last_size,
     input.last_current_value,
     input.last_cash_pnl,
     input.last_percent_pnl,
+    input.last_avg_price,
+    input.last_realized_pnl,
     now,
   )
 }
@@ -140,6 +183,11 @@ export interface WalletStats {
   daily: WalletStatsBucket
   weekly: WalletStatsBucket
   monthly: WalletStatsBucket
+  bySport: WalletSportRecord[]
+}
+
+export interface WalletSportRecord extends WalletStatsBucket {
+  sport: string
 }
 
 export async function insertWalletResult(
@@ -159,8 +207,9 @@ export async function insertWalletResult(
        resolved_at,
        pnl_usd,
        result,
-       is_sports
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       is_sports,
+       sport_tag
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.wallet_address,
     input.asset,
@@ -170,7 +219,83 @@ export async function insertWalletResult(
     input.pnl_usd,
     input.result,
     input.is_sports,
+    input.sport_tag ?? null,
   )
+}
+
+interface WalletPnlSnapshotRow {
+  id: string
+  wallet_address: string
+  captured_at: number
+  open_cash_pnl: number
+  open_position_value: number
+}
+
+export async function insertWalletPnlSnapshot(
+  db: Db,
+  input: {
+    wallet_address: string
+    captured_at: number
+    open_cash_pnl: number
+    open_position_value: number
+  },
+) {
+  const id = crypto.randomUUID()
+  await run(
+    db,
+    `INSERT INTO wallet_pnl_snapshots (
+       id,
+       wallet_address,
+       captured_at,
+       open_cash_pnl,
+       open_position_value
+     ) VALUES (?, ?, ?, ?, ?)`,
+    id,
+    input.wallet_address,
+    input.captured_at,
+    input.open_cash_pnl,
+    input.open_position_value,
+  )
+}
+
+async function getOpenPnlDelta(
+  db: Db,
+  walletAddress: string,
+  since?: number,
+): Promise<number> {
+  const latest = await first<WalletPnlSnapshotRow>(
+    db,
+    `SELECT * FROM wallet_pnl_snapshots
+     WHERE wallet_address = ?
+     ORDER BY captured_at DESC
+     LIMIT 1`,
+    walletAddress,
+  )
+
+  if (!latest) {
+    return 0
+  }
+
+  if (typeof since !== 'number') {
+    return latest.open_cash_pnl
+  }
+
+  const baseline = await first<WalletPnlSnapshotRow>(
+    db,
+    `SELECT * FROM wallet_pnl_snapshots
+     WHERE wallet_address = ?
+       AND captured_at <= ?
+     ORDER BY captured_at DESC
+     LIMIT 1`,
+    walletAddress,
+    since,
+  )
+
+  if (!baseline) {
+    return 0
+  }
+
+  return latest.open_cash_pnl - baseline.open_cash_pnl
 }
 
 export async function listWalletResults(
@@ -195,15 +320,22 @@ export async function listWalletResults(
     limit,
   )
 
-  return rows.map((row) => ({
-    asset: row.asset,
-    title: row.title ?? undefined,
-    eventSlug: row.event_slug ?? undefined,
-    resolvedAt: row.resolved_at,
-    pnlUsd: row.pnl_usd,
-    result: row.result,
-    isSports: row.is_sports === 1,
-  }))
+  const summaries: WalletResultSummary[] = []
+  for (const row of rows) {
+    const sportTag = await ensureSportTagForResult(db, row)
+    summaries.push({
+      asset: row.asset,
+      title: row.title ?? undefined,
+      eventSlug: row.event_slug ?? undefined,
+      resolvedAt: row.resolved_at,
+      pnlUsd: row.pnl_usd,
+      result: row.result,
+      isSports: row.is_sports === 1,
+      sportTag: sportTag ?? undefined,
+    })
+  }
+
+  return summaries
 }
 
 async function getBucket(
@@ -242,12 +374,56 @@ async function getBucket(
   )
 
   const row = rows[0]
+  const openDelta = await getOpenPnlDelta(db, walletAddress, since)
   return {
     wins: row?.wins ?? 0,
     losses: row?.losses ?? 0,
     ties: row?.ties ?? 0,
-    pnlUsd: row?.pnlUsd ?? 0,
+    pnlUsd: (row?.pnlUsd ?? 0) + openDelta,
   }
+}
+
+async function listSportBreakdown(
+  db: Db,
+  walletAddress: string,
+): Promise<WalletSportRecord[]> {
+  const rows = await all<WalletResultRow>(
+    db,
+    `SELECT * FROM wallet_results
+     WHERE wallet_address = ?
+       AND is_sports = 1`,
+    walletAddress,
+  )
+
+  const summary = new Map<string, WalletSportRecord>()
+
+  for (const row of rows) {
+    const sportTag = await ensureSportTagForResult(db, row)
+    if (!sportTag) {
+      continue
+    }
+
+    let record = summary.get(sportTag)
+    if (!record) {
+      record = { sport: sportTag, wins: 0, losses: 0, ties: 0, pnlUsd: 0 }
+      summary.set(sportTag, record)
+    }
+    if (row.result === 'win') {
+      record.wins += 1
+    } else if (row.result === 'loss') {
+      record.losses += 1
+    } else {
+      record.ties += 1
+    }
+    record.pnlUsd += row.pnl_usd
+  }
+
+  return Array.from(summary.values()).sort((a, b) => {
+    if (a.wins !== b.wins) {
+      return b.wins - a.wins
+    }
+    return b.pnlUsd - a.pnlUsd
+  })
 }
 
 export async function getWalletStats(
@@ -259,13 +435,14 @@ export async function getWalletStats(
   const dayAgo = now - 60 * 60 * 24
   const weekAgo = now - 60 * 60 * 24 * 7
   const monthAgo = now - 60 * 60 * 24 * 30
-  const sportsOnly = options?.sportsOnly ?? true
+  const sportsOnly = options?.sportsOnly ?? false
 
-  const [allTime, daily, weekly, monthly] = await Promise.all([
+  const [allTime, daily, weekly, monthly, bySport] = await Promise.all([
     getBucket(db, walletAddress, undefined, sportsOnly),
     getBucket(db, walletAddress, dayAgo, sportsOnly),
     getBucket(db, walletAddress, weekAgo, sportsOnly),
     getBucket(db, walletAddress, monthAgo, sportsOnly),
+    listSportBreakdown(db, walletAddress),
   ])
 
   return {
@@ -273,5 +450,6 @@ export async function getWalletStats(
     daily,
     weekly,
     monthly,
+    bySport,
   }
 }

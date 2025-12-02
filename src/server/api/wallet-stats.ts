@@ -19,7 +19,7 @@ export const getWalletStatsFn = createServerFn({ method: 'POST' }).handler(
     }
     const walletAddress = requireString(payload.walletAddress, 'walletAddress')
     const stats = await getWalletStats(db, walletAddress, {
-      sportsOnly: payload.sportsOnly ?? true,
+      sportsOnly: payload.sportsOnly ?? false,
     })
     return { stats }
   },

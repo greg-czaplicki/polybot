@@ -18,7 +18,7 @@ const serverEntry = {
 
     return startFetch(request, { context })
   },
-  scheduled(event: ScheduledEvent, env: Env, executionCtx: ExecutionContext) {
+  scheduled(_event: ScheduledEvent, env: Env, executionCtx: ExecutionContext) {
     executionCtx.waitUntil(
       Promise.all([
         runAlertCron(env).catch((error) => {

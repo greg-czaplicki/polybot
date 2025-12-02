@@ -56,7 +56,7 @@ function deserializeWatcher(row: WatcherRow): WatcherRule {
 
 function safeParseChannels(raw: string | null): AlertChannel[] {
   if (!raw) {
-    return ['web_push']
+    return ['pusher']
   }
 
   try {
@@ -68,7 +68,7 @@ function safeParseChannels(raw: string | null): AlertChannel[] {
     console.warn('Unable to parse notify channels', error)
   }
 
-  return ['web_push']
+  return ['pusher']
 }
 
 export async function listWatchers(db: Db, userId: string) {
@@ -76,15 +76,6 @@ export async function listWatchers(db: Db, userId: string) {
     db,
     `SELECT * FROM wallet_watchers WHERE user_id = ? ORDER BY created_at DESC`,
     userId,
-  )
-
-  return rows.map(deserializeWatcher)
-}
-
-export async function listAllWatchers(db: Db) {
-  const rows = await all<WatcherRow>(
-    db,
-    `SELECT * FROM wallet_watchers ORDER BY created_at DESC`,
   )
 
   return rows.map(deserializeWatcher)
@@ -103,7 +94,7 @@ export async function getWatcherById(db: Db, watcherId: string, userId: string) 
 export async function upsertWatcher(db: Db, userId: string, input: WatcherInput) {
   const now = nowUnixSeconds()
   const walletAddress = normalizeWalletAddress(input.walletAddress)
-  const notifyChannels = JSON.stringify(input.notifyChannels ?? ['web_push'])
+  const notifyChannels = JSON.stringify(input.notifyChannels ?? ['pusher'])
 
   if (input.id) {
     await run(
@@ -247,4 +238,49 @@ export async function updateWatcherPositionBaseline(
     watcherId,
     userId,
   )
+}
+
+export async function listDistinctWatcherWallets(
+  db: Db,
+  options?: { after?: string | null; limit?: number },
+) {
+  const limit = options?.limit ?? 5
+  const params: Array<unknown> = []
+  let where = ''
+
+  if (options?.after) {
+    where = 'WHERE wallet_address > ?'
+    params.push(options.after)
+  }
+
+  const rows = await all<{ wallet_address: string }>(
+    db,
+    `SELECT wallet_address
+     FROM wallet_watchers
+     ${where}
+     GROUP BY wallet_address
+     ORDER BY wallet_address ASC
+     LIMIT ?`,
+    ...params,
+    limit,
+  )
+
+  return rows.map((row) => row.wallet_address)
+}
+
+export async function listWatchersByWallets(db: Db, wallets: string[]) {
+  if (wallets.length === 0) {
+    return []
+  }
+
+  const placeholders = wallets.map(() => '?').join(', ')
+  const rows = await all<WatcherRow>(
+    db,
+    `SELECT * FROM wallet_watchers
+     WHERE wallet_address IN (${placeholders})
+     ORDER BY wallet_address ASC`,
+    ...wallets,
+  )
+
+  return rows.map(deserializeWatcher)
 }

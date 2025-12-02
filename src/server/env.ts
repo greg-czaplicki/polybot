@@ -4,6 +4,13 @@ export interface Env {
   ALERT_PUSH_VAPID_PRIVATE_KEY?: string
   ALERT_EMAIL_FROM?: string
   PRIMARY_USER_ID?: string
+  ALERT_POSITION_THRESHOLD_USD?: string
+  PUSHER_APP_ID?: string
+  PUSHER_KEY?: string
+  PUSHER_SECRET?: string
+  PUSHER_CLUSTER?: string
+  PUSHER_CHANNEL?: string
+  PUSHER_EVENT?: string
 }
 
 export interface RequestContext {

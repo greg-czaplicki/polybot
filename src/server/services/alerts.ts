@@ -7,23 +7,31 @@ import {
   markWatcherTriggered,
   updateWatcherPositionBaseline,
 } from '../repositories/watchers'
+import {
+  clearMissingAlertStates,
+  getPositionAlertState,
+  setPositionAlertState,
+} from '../repositories/position-alert-state'
+import type { Env } from '../env'
+import { sendPusherNotification } from './pusher'
 
 interface EvaluateResult {
   alerts: Awaited<ReturnType<typeof insertAlertEvent>>[]
 }
 
-export async function evaluateWatchers(db: Db, watchers: WatcherRule[]) {
+const DEFAULT_POSITION_ALERT_THRESHOLD = 50_000
+const POSITION_ALERT_COOLDOWN_SECONDS = 60 * 30
+
+export async function evaluateWatchers(db: Db, watchers: WatcherRule[], env: Env) {
   const alerts: EvaluateResult['alerts'] = []
 
-  const byWallet = watchers.reduce<Record<string, WatcherRule[]>>(
-    (acc, watcher) => {
-      const key = watcher.walletAddress
-      acc[key] = acc[key] ?? []
-      acc[key]!.push(watcher)
-      return acc
-    },
-    {},
-  )
+  const byWallet = watchers.reduce<Record<string, WatcherRule[]>>((acc, watcher) => {
+    const key = watcher.walletAddress
+    const bucket = acc[key] ?? []
+    bucket.push(watcher)
+    acc[key] = bucket
+    return acc
+  }, {})
 
   for (const [walletAddress, walletWatchers] of Object.entries(byWallet)) {
     let positions: PolymarketPosition[] = []
@@ -39,6 +47,7 @@ export async function evaluateWatchers(db: Db, watchers: WatcherRule[]) {
     }
 
     if (positions.length === 0) {
+      await clearMissingAlertStates(db, walletAddress, [])
       continue
     }
 
@@ -48,6 +57,7 @@ export async function evaluateWatchers(db: Db, watchers: WatcherRule[]) {
         watcher,
         positions,
         alerts,
+        env,
       )
 
       if (triggered) {
@@ -64,59 +74,92 @@ async function evaluateWatcherRules(
   watcher: WatcherRule,
   positions: PolymarketPosition[],
   alerts: EvaluateResult['alerts'],
+  env: Env,
 ) {
-  const threshold = watcher.singleTradeThresholdUsd
-  if (!threshold || threshold <= 0) {
-    return false
-  }
+  const threshold =
+    watcher.singleTradeThresholdUsd ?? Number(env.ALERT_POSITION_THRESHOLD_USD ?? DEFAULT_POSITION_ALERT_THRESHOLD)
 
-  const totalPositionValue = positions.reduce(
-    (sum, position) => sum + position.currentValue,
-    0,
-  )
-
-  if (totalPositionValue <= 0) {
-    return false
-  }
-
-  const previousBaseline = watcher.lastPositionValueNotified ?? 0
-  const delta = totalPositionValue - previousBaseline
-
-  if (delta < threshold) {
+  if (threshold <= 0) {
     return false
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000)
-  const alert = await insertAlertEvent(
-    db,
-    watcher.id,
-    watcher.walletAddress,
-    'position_step',
-    totalPositionValue,
-    positions.length,
-    positions.map((position) =>
-      summarizePosition(position, nowSeconds),
-    ).slice(0, 15),
-  )
-  alerts.push({ ...alert, nickname: watcher.nickname ?? undefined })
+  let triggered = false
+  const activeAssets = positions.map((position) => position.asset)
+  for (const position of positions) {
+    const currentValue = position.currentValue
+    if (currentValue < threshold) {
+      continue
+    }
+    const state = await getPositionAlertState(
+      db,
+      watcher.walletAddress,
+      position.asset,
+    )
+    const currentBucket = Math.floor(currentValue / threshold)
+    const lastBucket = state?.last_alerted_bucket ?? 0
+    if (currentBucket <= lastBucket) {
+      continue
+    }
 
-  await updateWatcherPositionBaseline(
-    db,
-    watcher.id,
-    watcher.userId,
-    totalPositionValue,
-  )
+    const alert = await insertAlertEvent(
+      db,
+      watcher.id,
+      watcher.walletAddress,
+      'single',
+      currentValue,
+      1,
+      [
+        {
+          transactionHash: undefined,
+          timestamp: nowSeconds,
+          size: position.size,
+          price: position.curPrice,
+          side: 'BUY',
+          title: position.title ?? position.slug ?? position.asset,
+        },
+      ],
+    )
+    alerts.push({ ...alert, nickname: watcher.nickname ?? undefined })
+    triggered = true
 
-  return true
-}
+    await setPositionAlertState(
+      db,
+      watcher.walletAddress,
+      position.asset,
+      currentValue,
+      nowSeconds,
+      currentBucket,
+    )
 
-function summarizePosition(position: PolymarketPosition, timestamp: number) {
-  return {
-    transactionHash: undefined,
-    timestamp,
-    size: position.currentValue,
-    price: position.curPrice,
-    side: 'BUY' as const,
-    title: position.title,
+    const channel = env.PUSHER_CHANNEL ?? 'wallet-alerts'
+    const event = env.PUSHER_EVENT ?? 'position.threshold'
+    await sendPusherNotification(env, {
+      channel,
+      event,
+      data: {
+        walletAddress: watcher.walletAddress,
+        nickname: watcher.nickname ?? watcher.walletAddress,
+        position: {
+          title: position.title ?? position.slug ?? position.asset,
+          currentValue,
+        },
+        threshold,
+        triggeredAt: nowSeconds,
+      },
+    })
   }
+
+  await clearMissingAlertStates(db, watcher.walletAddress, activeAssets)
+
+  if (triggered) {
+    await updateWatcherPositionBaseline(
+      db,
+      watcher.id,
+      watcher.userId,
+      positions.reduce((total, position) => total + position.currentValue, 0),
+    )
+  }
+
+  return triggered
 }

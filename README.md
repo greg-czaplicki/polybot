@@ -29,6 +29,22 @@ pnpm test
 
 This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
 
+## Alerts
+
+Polywhaler now emits Pusher push notifications whenever a tracked wallet opens a position worth at least \$50K (configurable). Configure the following environment variables before running the alert cron:
+
+| Variable | Description |
+| --- | --- |
+| `ALERT_POSITION_THRESHOLD_USD` | Optional override for the default USD threshold (defaults to `50000`). |
+| `PUSHER_APP_ID` | Your Pusher Channels application id. |
+| `PUSHER_KEY` | The Pusher API key. |
+| `PUSHER_SECRET` | The Pusher API secret used for signing requests. |
+| `PUSHER_CLUSTER` | Cluster slug (for example, `us2`). |
+| `PUSHER_CHANNEL` | Channel to publish alerts to (defaults to `wallet-alerts`). |
+| `PUSHER_EVENT` | Event name that carries the alert payload (defaults to `position.threshold`). |
+| `VITE_PUSHER_BEAMS_INSTANCE_ID` | Frontend-only value used to register browsers with Pusher Beams. |
+
+If Pusher keys are missing Polywhaler will skip the push call and log a warning.
 
 ## Linting & Formatting
 

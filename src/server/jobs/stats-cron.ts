@@ -1,38 +1,116 @@
-import type { PolymarketPosition } from '@/lib/polymarket'
+import type { PolymarketPosition, PolymarketTrade } from '@/lib/polymarket'
+import { detectSportTag, isSportsMarket } from '@/lib/sports'
 
 import type { Env } from '../env'
 import { nowUnixSeconds } from '../env'
-import { fetchPositionsForUser } from '../../lib/polymarket'
-import { listAllWatchers } from '../repositories/watchers'
+import { fetchPositionsForUser, fetchTradesForUser } from '../../lib/polymarket'
+import { getCronCursor, setCronCursor } from '../repositories/cron-state'
+import { listDistinctWatcherWallets } from '../repositories/watchers'
 import {
   deletePositionSnapshot,
+  insertWalletPnlSnapshot,
   insertWalletResult,
   listPositionSnapshotsForWallet,
   upsertPositionSnapshot,
   type WalletPositionSnapshotRow,
 } from '../repositories/wallet-stats'
 
-function isSportsMarket(position: PolymarketPosition) {
-  const source = `${position.title ?? ''} ${position.eventSlug ?? ''}`.toLowerCase()
-  if (!source) {
-    return false
+const STATS_WALLET_BATCH = 5
+const STATS_CURSOR_KEY = 'stats_wallet_cursor'
+
+const EPSILON = 1e-6
+
+interface ClosingPnlResult {
+  pnl: number
+  resolvedAt: number
+}
+
+function calculateClosingPnl(
+  snapshot: WalletPositionSnapshotRow,
+  trades: PolymarketTrade[] | null,
+): ClosingPnlResult | null {
+  if (!trades || trades.length === 0 || Math.abs(snapshot.last_size) < EPSILON) {
+    return null
   }
-  const keywords = ['nfl', 'nba', 'mlb', 'nhl', 'premier league', 'ufc', 'tennis', 'golf', 'soccer', 'football', 'basketball', 'baseball', 'hockey']
-  return keywords.some((keyword) => source.includes(keyword))
+
+  const relevantTrades = trades
+    .filter(
+      (trade) =>
+        trade.asset === snapshot.asset &&
+        typeof trade.timestamp === 'number' &&
+        trade.timestamp >= snapshot.last_seen_at,
+    )
+    .sort((a, b) => a.timestamp - b.timestamp)
+
+  if (relevantTrades.length === 0) {
+    return null
+  }
+
+  let remaining = snapshot.last_size
+  let avgPrice = snapshot.last_avg_price
+  let realizedDelta = 0
+  let resolvedAt = snapshot.last_seen_at
+
+  for (const trade of relevantTrades) {
+    if (Math.abs(remaining) < EPSILON) {
+      break
+    }
+
+    const tradeSize = trade.size
+    if (remaining > 0) {
+      if (trade.side === 'SELL') {
+        const closingSize = Math.min(remaining, tradeSize)
+        realizedDelta += closingSize * (trade.price - avgPrice)
+        remaining -= closingSize
+        resolvedAt = Math.max(resolvedAt, trade.timestamp)
+      } else if (trade.side === 'BUY') {
+        const newSize = remaining + tradeSize
+        avgPrice = newSize === 0 ? 0 : ((avgPrice * remaining) + (trade.price * tradeSize)) / newSize
+        remaining = newSize
+      }
+    } else if (remaining < 0) {
+      if (trade.side === 'BUY') {
+        const closingSize = Math.min(-remaining, tradeSize)
+        realizedDelta += closingSize * (avgPrice - trade.price)
+        remaining += closingSize
+        resolvedAt = Math.max(resolvedAt, trade.timestamp)
+      } else if (trade.side === 'SELL') {
+        const newSize = remaining - tradeSize
+        const absRemaining = Math.abs(remaining)
+        const newAbs = Math.abs(newSize)
+        avgPrice = newAbs === 0 ? 0 : ((avgPrice * absRemaining) + (trade.price * tradeSize)) / newAbs
+        remaining = newSize
+      }
+    }
+  }
+
+  if (Math.abs(remaining) > EPSILON) {
+    return null
+  }
+
+  return {
+    pnl: snapshot.last_realized_pnl + realizedDelta,
+    resolvedAt,
+  }
 }
 
 export async function runStatsCron(env: Env) {
   const db = env.POLYWHALER_DB
-  const watchers = await listAllWatchers(db)
+  const lastCursor = await getCronCursor(db, STATS_CURSOR_KEY)
+  const wallets = await listDistinctWatcherWallets(db, {
+    after: lastCursor,
+    limit: STATS_WALLET_BATCH,
+  })
 
-  if (watchers.length === 0) {
-    console.log('[stats] No watchers configured, skipping stats cron.')
+  if (wallets.length === 0) {
+    await setCronCursor(db, STATS_CURSOR_KEY, null)
+    console.log('[stats] No wallets to process, skipping stats cron.')
     return
   }
 
-  const wallets = Array.from(
-    new Set(watchers.map((watcher) => watcher.walletAddress)),
-  )
+  const nextCursor =
+    wallets.length === STATS_WALLET_BATCH ? wallets[wallets.length - 1] : null
+  await setCronCursor(db, STATS_CURSOR_KEY, nextCursor)
 
   for (const walletAddress of wallets) {
     let positions: PolymarketPosition[] = []
@@ -50,33 +128,76 @@ export async function runStatsCron(env: Env) {
     })
 
     const now = nowUnixSeconds()
-
-    const openAssets = new Set<string>()
+    const closedSnapshots: WalletPositionSnapshotRow[] = []
+    let openCashPnl = 0
+    let openPositionValue = 0
     for (const position of positions) {
       const assetKey = position.asset
-      openAssets.add(assetKey)
+
+      // Some resolved markets stick around in the Polymarket positions response with
+      // zero value or a redeemable flag, so treat them as closed instead of updating.
+      const resolved =
+        position.redeemable ||
+        Math.abs(position.currentValue) < EPSILON ||
+        Math.abs(position.size) < EPSILON
+      if (resolved) {
+        const snapshot = snapshotByAsset.get(assetKey)
+        if (snapshot) {
+          closedSnapshots.push(snapshot)
+          snapshotByAsset.delete(assetKey)
+        }
+        continue
+      }
+
+      const descriptor = {
+        title: position.title,
+        slug: position.slug,
+        eventSlug: position.eventSlug,
+      }
+      const sportTag = detectSportTag(descriptor)
+      const sportsFlag = isSportsMarket(descriptor) ? 1 : 0
+
+      openCashPnl += position.cashPnl ?? 0
+      openPositionValue += position.currentValue ?? 0
       await upsertPositionSnapshot(db, {
         wallet_address: walletAddress,
         asset: assetKey,
         title: position.title,
         event_slug: position.eventSlug ?? position.slug,
-        is_sports: isSportsMarket(position) ? 1 : 0,
+        is_sports: sportsFlag,
+        sport_tag: sportTag ?? null,
         last_size: position.size,
         last_current_value: position.currentValue,
         last_cash_pnl: position.cashPnl,
         last_percent_pnl: position.percentPnl,
+        last_avg_price: position.avgPrice,
+        last_realized_pnl: position.realizedPnl,
       })
       snapshotByAsset.delete(assetKey)
     }
 
-    // Any remaining snapshots represent markets that have closed since last run
     for (const snapshot of snapshotByAsset.values()) {
-      const pnl = snapshot.last_cash_pnl
-      const epsilon = 1e-6
+      closedSnapshots.push(snapshot)
+    }
+
+    let trades: PolymarketTrade[] | null = null
+    if (closedSnapshots.length > 0) {
+      try {
+        trades = await fetchTradesForUser(walletAddress)
+      } catch (error) {
+        console.error('[stats] Unable to fetch trades for wallet', walletAddress, error)
+      }
+    }
+
+    // Any remaining snapshots represent markets that have closed since last run
+    for (const snapshot of closedSnapshots) {
+      const closing = calculateClosingPnl(snapshot, trades)
+      const pnl = closing?.pnl ?? snapshot.last_cash_pnl
+      const resolvedAt = closing?.resolvedAt ?? now
       let result: 'win' | 'loss' | 'tie'
-      if (pnl > epsilon) {
+      if (pnl > EPSILON) {
         result = 'win'
-      } else if (pnl < -epsilon) {
+      } else if (pnl < -EPSILON) {
         result = 'loss'
       } else {
         result = 'tie'
@@ -87,16 +208,23 @@ export async function runStatsCron(env: Env) {
         asset: snapshot.asset,
         title: snapshot.title ?? undefined,
         event_slug: snapshot.event_slug ?? undefined,
-        resolved_at: now,
+        resolved_at: resolvedAt,
         pnl_usd: pnl,
         result,
         is_sports: snapshot.is_sports,
+        sport_tag: snapshot.sport_tag ?? null,
       })
 
       await deletePositionSnapshot(db, snapshot.wallet_address, snapshot.asset)
     }
+
+    await insertWalletPnlSnapshot(db, {
+      wallet_address: walletAddress,
+      captured_at: now,
+      open_cash_pnl: openCashPnl,
+      open_position_value: openPositionValue,
+    })
   }
 
   console.log('[stats] Cron scan complete', { wallets: wallets.length })
 }
-
