@@ -98,6 +98,7 @@ interface AggregatedWalletPosition {
   walletAddress: string
   label: string
   value: number
+  initialValue: number
   pnl: number
   redeemable: boolean
 }
@@ -472,6 +473,7 @@ function App() {
           walletAddress: originalAddress,
           label,
           value: position.currentValue,
+          initialValue: position.initialValue,
           pnl: position.cashPnl,
           redeemable: Boolean(position.redeemable),
         })
@@ -2163,6 +2165,7 @@ function SharedPositionsBoard({
                   ...outcome,
                   visibleWallets,
                   visibleTotalValue: visibleWallets.reduce((sum, wallet) => sum + wallet.value, 0),
+                  visibleTotalInitialValue: visibleWallets.reduce((sum, wallet) => sum + wallet.initialValue, 0),
                 }
               })
               .filter((outcome) => outcome.visibleWallets.length > 0)
@@ -2177,16 +2180,21 @@ function SharedPositionsBoard({
               (sum, outcome) => sum + outcome.visibleTotalValue,
               0,
             )
+            // Calculate total original bet amount for filtering and display
+            const originalBetTotal = visibleOutcomes.reduce(
+              (sum, outcome) => sum + outcome.visibleTotalInitialValue,
+              0,
+            )
 
-            // Filter out small bets if toggle is off
-            if (!showSmallBets && visibleMarketTotal < SMALL_BET_THRESHOLD) {
+            // Filter out small bets if toggle is off (use original bet amount for filtering)
+            if (!showSmallBets && originalBetTotal < SMALL_BET_THRESHOLD) {
               return null
             }
 
-            return { market, visibleOutcomes, hasOpposition, visibleMarketTotal }
+            return { market, visibleOutcomes, hasOpposition, visibleMarketTotal, originalBetTotal }
           })
-          .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number }>; hasOpposition: boolean; visibleMarketTotal: number } => item !== null)
-          .map(({ market, visibleOutcomes, hasOpposition, visibleMarketTotal }) => (
+          .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number; visibleTotalInitialValue: number }>; hasOpposition: boolean; visibleMarketTotal: number; originalBetTotal: number } => item !== null)
+          .map(({ market, visibleOutcomes, hasOpposition, originalBetTotal }) => (
             <div
               key={market.id}
               className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${
@@ -2233,7 +2241,7 @@ function SharedPositionsBoard({
                     Total
                   </p>
                   <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
-                    {formatUsdCompact(visibleMarketTotal)}
+                    {formatUsdCompact(originalBetTotal)}
                   </p>
                 </div>
               </div>
@@ -2242,7 +2250,7 @@ function SharedPositionsBoard({
                 {visibleOutcomes.map((outcome) => {
                   const hasMultipleWallets = outcome.visibleWallets.length >= 2
                   const aggregateTotal = hasMultipleWallets
-                    ? outcome.visibleWallets.reduce((sum, wallet) => sum + wallet.value, 0)
+                    ? outcome.visibleWallets.reduce((sum, wallet) => sum + wallet.initialValue, 0)
                     : 0
                   return (
                   <div
@@ -2282,7 +2290,10 @@ function SharedPositionsBoard({
                             </div>
                             <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
                               <span className="text-xs sm:text-sm font-semibold text-gray-200">
-                                {formatUsdCompact(wallet.value)}
+                                {formatUsdCompact(wallet.initialValue)}
+                              </span>
+                              <span className="text-[0.65rem] text-gray-500">
+                                Now: {formatUsdCompact(wallet.value)}
                               </span>
                               <span
                                 className={`text-[0.65rem] sm:text-xs font-semibold ${
