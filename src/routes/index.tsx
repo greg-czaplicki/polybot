@@ -2046,25 +2046,25 @@ function WalletSummaryList({
                       <WalletHighlightBadge highlight={highlight} />
                     </div>
                   )}
-                  <div className="mt-2 sm:mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+                  <div className="mt-2 sm:mt-3 flex flex-col gap-1 sm:gap-1.5">
                     {glanceBuckets.map(({ key: bucketKey, label }) => {
                       const bucket = stats[bucketKey]
                       const bucketPositive = bucket.pnlUsd >= 0
                       return (
-                        <span
+                        <div
                           key={`${wallet.walletAddress}-${bucketKey}`}
-                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 sm:px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] ${
+                          className={`flex items-center gap-1.5 text-[0.65rem] sm:text-xs ${
                             bucketPositive
-                              ? 'border-emerald-400/40 text-emerald-200'
-                              : 'border-rose-400/40 text-rose-200'
+                              ? 'text-emerald-200'
+                              : 'text-rose-200'
                           }`}
                         >
-                          {label}
+                          <span className="uppercase tracking-[0.2em] text-gray-500">{label}:</span>
                           <span className="font-semibold">
                             {bucketPositive ? '+' : '-'}
                             {formatUsdCompact(Math.abs(bucket.pnlUsd))}
                           </span>
-                        </span>
+                        </div>
                       )
                     })}
                   </div>
