@@ -31,14 +31,12 @@ This starts Vite’s dev server and spins up workerd via `@cloudflare/vite-plugi
 
 ## 4. Remote database access (optional)
 
-If you want your local worker to talk to a remote D1 instance:
+If you want local dev to hit the same Cloudflare D1 database that production uses (no local seeding required):
 
-1. Create a remote DB (preview recommended): `npx wrangler d1 create <name>`
-2. Add its ID to `wrangler.jsonc` as `"preview_database_id"` under the `POLYWHALER_DB` binding.
-3. Seed it once: `npx wrangler d1 migrations apply polywhaler --remote`
-4. Run dev with `CLOUDFLARE_ENV=preview pnpm run dev` so the plugin proxies bindings remotely.
+1. Add a `[env.preview]` section in `wrangler.jsonc` that mirrors the production binding (the preview ID can point at the prod DB if you want to share it).
+2. Run dev with `CLOUDFLARE_ENV=preview pnpm run dev` (or `pnpm run dev:remote`). The Vite plugin forwards all worker calls to the hosted DB.
 
-Leave `preview_database_id` unset to use the local SQLite copy instead.
+This means you are editing live data, so only use it when that’s acceptable. To go back to the local SQLite copy, switch back to `pnpm run dev`.
 
 ## 5. Deploying to Cloudflare
 

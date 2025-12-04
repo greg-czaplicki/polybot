@@ -6,6 +6,7 @@ import {
   Clock,
   Eye,
   EyeOff,
+  ExternalLink,
   Flame,
   Loader2,
   Plus,
@@ -115,6 +116,8 @@ interface AggregatedMarketEntry {
   totalValue: number
   icon?: string
   outcomes: AggregatedOutcomeEntry[]
+  eventSlug?: string
+  slug?: string
 }
 
 interface WalletDiagnosticsSummary {
@@ -455,6 +458,8 @@ function App() {
             totalValue: 0,
             icon: position.icon,
             outcomes: [],
+            eventSlug: position.eventSlug,
+            slug: position.slug,
           }
           markets.set(marketKey, market)
         }
@@ -1072,13 +1077,13 @@ useEffect(() => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div 
-        className="px-4 py-6 sm:px-5 sm:py-8 md:px-6 md:py-10 lg:px-8 lg:py-12 max-w-6xl mx-auto space-y-4 sm:space-y-6 md:space-y-10"
+        className="px-4 py-6 sm:px-5 sm:py-8 md:px-6 md:py-10 lg:px-8 lg:py-12 container mx-auto space-y-4 sm:space-y-6 md:space-y-10"
         style={{ 
           paddingTop: 'max(1.5rem, calc(env(safe-area-inset-top, 0px) + 1.5rem))' 
         }}
       >
         <div className="space-y-2 sm:space-y-3 md:space-y-4">
-          <p className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-black uppercase tracking-[0.3em] text-cyan-400/80">
+          <p className="text-4xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.3em] text-cyan-400/80">
             Polywhaler
           </p>
           <p className="text-xs sm:text-sm md:text-base text-gray-300 max-w-3xl">
@@ -1946,7 +1951,13 @@ function WalletSummaryList({
   onSelectWallet: (wallet: string) => void
   selectedWallet: string | null
 }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => {
+    // Collapse by default on mobile (below sm breakpoint which is 640px)
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 640
+    }
+    return false
+  })
   const topWalletKey = useMemo(
     () => getTopWalletKey(trackedWallets, walletStats),
     [trackedWallets, walletStats],
@@ -2078,6 +2089,25 @@ function WalletSummaryList({
       )}
     </section>
   )
+}
+
+function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
+  if (!eventSlug && !slug) {
+    return null
+  }
+  // If we have both, use the full path: /event/{eventSlug}/{slug}
+  if (eventSlug && slug) {
+    return `https://polymarket.com/event/${eventSlug}/${slug}`
+  }
+  // If we only have eventSlug, link to the event page
+  if (eventSlug) {
+    return `https://polymarket.com/event/${eventSlug}`
+  }
+  // If we only have slug, try to construct a link (less common)
+  if (slug) {
+    return `https://polymarket.com/event/${slug}`
+  }
+  return null
 }
 
 function SharedPositionsBoard({
@@ -2232,17 +2262,33 @@ function SharedPositionsBoard({
                       </span>
                     )}
                   </div>
-                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight mb-1">
+                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
                     {market.title}
                   </h3>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
-                    Total
-                  </p>
-                  <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
-                    {formatUsdCompact(originalBetTotal)}
-                  </p>
+                <div className="text-right flex-shrink-0 flex flex-col items-end gap-1.5">
+                  {(() => {
+                    const polymarketUrl = buildPolymarketUrl(market.eventSlug, market.slug)
+                    return polymarketUrl ? (
+                      <a
+                        href={polymarketUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 rounded-md hover:bg-slate-800/60 transition-colors text-gray-400 hover:text-white"
+                        aria-label="Open on Polymarket"
+                      >
+                        <ExternalLink className="h-4 w-4 sm:h-5 sm:w-5" />
+                      </a>
+                    ) : null
+                  })()}
+                  <div>
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
+                      Total
+                    </p>
+                    <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
+                      {formatUsdCompact(originalBetTotal)}
+                    </p>
+                  </div>
                 </div>
               </div>
 
