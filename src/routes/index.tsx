@@ -54,7 +54,11 @@ import {
   testPushNotificationFn,
   upsertWatcherFn,
 } from '../server/api/watchers'
-import { getWalletStatsFn, listWalletResultsFn } from '../server/api/wallet-stats'
+import {
+  getWalletSizingFn,
+  getWalletStatsFn,
+  listWalletResultsFn,
+} from '../server/api/wallet-stats'
 import { getWalletDiagnosticsFn } from '../server/api/diagnostics'
 
 const REFRESH_INTERVAL_MS = 30_000
@@ -91,6 +95,14 @@ interface WalletStatsSummary {
   weekly: WalletStatsBucket
   monthly: WalletStatsBucket
   bySport: WalletSportRecord[]
+  byEdge: WalletEdgePocket[]
+}
+
+interface WalletEdgePocket extends WalletStatsBucket {
+  sport?: string
+  betType?: string
+  horizon?: string
+  sampleSize: number
 }
 
 type WalletStatsBucketKey = 'daily' | 'weekly' | 'monthly'
@@ -145,6 +157,12 @@ interface OppositionBalanceSnapshot {
   secondaryShare: number
   totalAmount: number
   severity: 'balanced' | 'tilted' | 'lopsided'
+  primaryUnitShare: number
+  secondaryUnitShare: number
+  primaryConfidence: number
+  secondaryConfidence: number
+  primaryMaxClipCount: number
+  secondaryMaxClipCount: number
 }
 
 interface WalletDiagnosticsSummary {
@@ -166,6 +184,12 @@ interface WalletDiagnosticsSummary {
     buyVolume: number
     sellVolume: number
   }
+}
+
+interface WalletSizingSnapshot {
+  averageSize: number
+  positionCount: number
+  updatedAt: number
 }
 
 interface TrackedWalletRow {
@@ -190,6 +214,7 @@ const EMPTY_WALLET_STATS: WalletStatsSummary = {
   weekly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
   monthly: { wins: 0, losses: 0, ties: 0, pnlUsd: 0 },
   bySport: [],
+  byEdge: [],
 }
 
 const WEEKLY_HOT_PNL_THRESHOLD = 500_000
@@ -512,6 +537,37 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
 }
 
+const BET_TYPE_LABELS: Record<string, string> = {
+  moneyline: 'Moneyline',
+  spread: 'Spread',
+  total: 'Totals',
+  future: 'Futures',
+  prop: 'Props',
+  parlay: 'Parlays',
+}
+
+const HORIZON_LABELS: Record<string, string> = {
+  intraday: 'Same day',
+  short: 'Within week',
+  medium: 'Within month',
+  long: 'Multi-month',
+  season: 'Season-long',
+}
+
+function getBetTypeLabel(value?: string | null) {
+  if (!value) {
+    return 'Any bet'
+  }
+  return BET_TYPE_LABELS[value] ?? value.replace(/_/g, ' ')
+}
+
+function getHorizonLabel(value?: string | null) {
+  if (!value) {
+    return 'Any duration'
+  }
+  return HORIZON_LABELS[value] ?? value.replace(/_/g, ' ')
+}
+
 function formatSizingRatio(ratio: number) {
   if (!Number.isFinite(ratio) || ratio <= 0) {
     return '1.0x'
@@ -669,6 +725,9 @@ function App() {
   const [walletDiagnostics, setWalletDiagnostics] = useState<
     Record<string, WalletDiagnosticsSummary>
   >({})
+  const [walletSizing, setWalletSizing] = useState<
+    Record<string, WalletSizingSnapshot | null>
+  >({})
   const [walletPositions, setWalletPositions] = useState<Record<string, PolymarketPosition[]>>({})
   const walletSportEdges = useMemo<WalletSportEdgeMap>(
     () => buildWalletSportEdgeMap(walletStats),
@@ -731,8 +790,14 @@ function App() {
 
   const walletAverageSize = useMemo(() => {
     const map = new Map<string, number>()
+    Object.entries(walletSizing).forEach(([wallet, sizing]) => {
+      if (!sizing || sizing.averageSize <= 0 || !Number.isFinite(sizing.averageSize)) {
+        return
+      }
+      map.set(wallet, sizing.averageSize)
+    })
     Object.entries(walletPositions).forEach(([wallet, positions]) => {
-      if (!positions || positions.length === 0) {
+      if (map.has(wallet) || !positions || positions.length === 0) {
         return
       }
       const total = positions.reduce((sum, position) => {
@@ -746,7 +811,7 @@ function App() {
       }
     })
     return map
-  }, [walletPositions])
+  }, [walletPositions, walletSizing])
 
   const selectedWalletMeta = useMemo(() => {
     if (!selectedWallet) {
@@ -765,12 +830,19 @@ function App() {
   const selectedDiagnostics = selectedWalletKey
     ? walletDiagnostics[selectedWalletKey]
     : undefined
-  const selectedWalletAverageSize = selectedWalletKey
+  const selectedWalletSizing = selectedWalletKey
+    ? walletSizing[selectedWalletKey] ?? null
+    : null
+  const selectedWalletAverageSize = selectedWalletSizing?.averageSize ?? (selectedWalletKey
     ? walletAverageSize.get(selectedWalletKey)
-    : undefined
+    : undefined)
   const selectedWalletOpenPositions = selectedWalletKey
     ? walletPositions[selectedWalletKey] ?? []
     : []
+  const sizingSampleCount = selectedWalletSizing?.positionCount
+    ?? (selectedWalletOpenPositions.length > 0
+      ? selectedWalletOpenPositions.length
+      : undefined)
   const aggregatedPositions = useMemo<AggregatedMarketEntry[]>(() => {
     const markets = new Map<string, AggregatedMarketEntry>()
     Object.entries(walletPositions).forEach(([normalizedAddress, positions]) => {
@@ -1016,6 +1088,27 @@ function App() {
     }
   }, [])
 
+  const loadWalletSizing = useCallback(async (walletAddress: string) => {
+    try {
+      const response = await getWalletSizingFn({
+        data: { walletAddress },
+      })
+      const normalized = walletAddress.toLowerCase()
+      setWalletSizing((previous) => ({
+        ...previous,
+        [normalized]: response.sizing
+          ? {
+              averageSize: response.sizing.averageSize,
+              positionCount: response.sizing.positionCount,
+              updatedAt: response.sizing.updatedAt,
+            }
+          : null,
+      }))
+    } catch (error) {
+      console.error('Unable to load wallet sizing snapshot', walletAddress, error)
+    }
+  }, [])
+
   const loadAlertHistory = useCallback(async (id: string) => {
     try {
       const response = await listAlertHistoryFn({ data: { userId: id } })
@@ -1084,6 +1177,15 @@ useEffect(() => {
     }
   })
 }, [loadWalletResults, trackedWallets, walletResults])
+
+useEffect(() => {
+  trackedWallets.forEach((wallet) => {
+    const key = wallet.walletAddress.toLowerCase()
+    if (!(key in walletSizing)) {
+      loadWalletSizing(wallet.walletAddress)
+    }
+  })
+}, [loadWalletSizing, trackedWallets, walletSizing])
 
 useEffect(() => {
   trackedWallets.forEach((wallet) => {
@@ -1671,9 +1773,9 @@ useEffect(() => {
                         <p className="text-base sm:text-lg font-semibold text-white">
                           {formatUsdCompact(selectedWalletAverageSize)}
                         </p>
-                        {selectedWalletOpenPositions.length > 0 && (
+                        {typeof sizingSampleCount === 'number' && sizingSampleCount > 0 && (
                           <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                            Avg of {selectedWalletOpenPositions.length} open position{selectedWalletOpenPositions.length === 1 ? '' : 's'}
+                            Avg of {sizingSampleCount} open position{sizingSampleCount === 1 ? '' : 's'}
                           </p>
                         )}
                       </div>
@@ -1754,6 +1856,56 @@ useEffect(() => {
                                   {pnlPositive ? '+' : '-'}
                                   {formatUsdCompact(Math.abs(record.pnlUsd))}
                                 </p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {selectedStats && selectedStats.byEdge.length > 0 && (
+                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-cyan-500/20 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-cyan-300">
+                              Edge pockets
+                            </p>
+                            <h4 className="text-sm sm:text-base md:text-lg font-semibold">
+                              Where this wallet crushes
+                            </h4>
+                          </div>
+                          <span className="text-[0.65rem] sm:text-xs text-gray-400">
+                            Top {Math.min(4, selectedStats.byEdge.length)} of {selectedStats.byEdge.length}
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {selectedStats.byEdge.slice(0, 4).map((edge, index) => {
+                            const sportLabel = edge.sport
+                              ? getSportLabel(edge.sport) ?? edge.sport.toUpperCase()
+                              : 'Any sport'
+                            const recordLabel = `${edge.wins}-${edge.losses}-${edge.ties}`
+                            const pnlPositive = edge.pnlUsd >= 0
+                            return (
+                              <div
+                                key={`${edge.sport ?? 'any'}-${edge.betType ?? 'any'}-${edge.horizon ?? 'any'}-${index}`}
+                                className="rounded-lg border border-slate-800/70 bg-slate-950/60 p-2.5 sm:p-3 flex flex-wrap items-center gap-2"
+                              >
+                                <div className="flex-1 min-w-[180px]">
+                                  <p className="text-xs sm:text-sm font-semibold text-white">{sportLabel}</p>
+                                  <p className="text-[0.65rem] sm:text-xs text-gray-400">
+                                    {getBetTypeLabel(edge.betType)} · {getHorizonLabel(edge.horizon)} · {edge.sampleSize} plays
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs sm:text-sm font-semibold text-white">{recordLabel}</p>
+                                  <p
+                                    className={`text-[0.65rem] sm:text-xs font-semibold ${
+                                      pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                    }`}
+                                  >
+                                    {pnlPositive ? '+' : '-'}
+                                    {formatUsdCompact(Math.abs(edge.pnlUsd))}
+                                  </p>
+                                </div>
                               </div>
                             )
                           })}
@@ -2594,12 +2746,17 @@ function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
 }
 
 function calculateOppositionBalance(
-  outcomes: Array<{ outcome: string; visibleTotalInitialValue: number }>,
+  outcomes: Array<{
+    outcome: string
+    visibleTotalInitialValue: number
+    visibleWallets: AggregatedWalletPosition[]
+  }>,
 ): OppositionBalanceSnapshot | null {
   const totals = outcomes
     .map((outcome) => ({
       label: outcome.outcome,
       amount: Math.max(outcome.visibleTotalInitialValue, 0),
+      wallets: outcome.visibleWallets,
     }))
     .filter((entry) => entry.amount > 0)
 
@@ -2612,14 +2769,43 @@ function calculateOppositionBalance(
     return null
   }
 
-  // Use array order instead of sorting - first outcome is primary (left), second is secondary (right)
-  // This ensures alignment with the grid below which uses the same order
   const primary = totals[0]
   const restAmount = Math.max(totalAmount - primary.amount, 0)
   const hasOnlyTwoSides = totals.length === 2
   const secondaryAmount = hasOnlyTwoSides ? totals[1].amount : restAmount
   const secondaryLabel = hasOnlyTwoSides ? totals[1].label : 'Others'
+  const secondaryWallets = hasOnlyTwoSides ? totals[1].wallets : totals.slice(1).flatMap((entry) => entry.wallets)
 
+  const aggregateSide = (wallets: AggregatedWalletPosition[]) => {
+    let unitSum = 0
+    let confidenceSum = 0
+    let maxClipCount = 0
+    wallets.forEach((wallet) => {
+      if (wallet.averageSize && wallet.averageSize > 0) {
+        const ratio = wallet.initialValue / wallet.averageSize
+        if (Number.isFinite(ratio)) {
+          unitSum += ratio
+          if (ratio >= 2.5) {
+            maxClipCount += 1
+          }
+        }
+      }
+      if (wallet.confidence) {
+        confidenceSum += wallet.confidence.score
+      }
+    })
+    return {
+      unitSum,
+      confidenceAverage: wallets.length > 0 ? confidenceSum / wallets.length : 0,
+      maxClipCount,
+    }
+  }
+
+  const primaryAgg = aggregateSide(primary.wallets)
+  const secondaryAgg = aggregateSide(secondaryWallets)
+  const totalUnits = primaryAgg.unitSum + secondaryAgg.unitSum
+  const primaryUnitShare = totalUnits > 0 ? primaryAgg.unitSum / totalUnits : 0
+  const secondaryUnitShare = totalUnits > 0 ? secondaryAgg.unitSum / totalUnits : 0
   const primaryShare = Math.round((primary.amount / totalAmount) * 100) / 100
   const secondaryShare = Math.round((secondaryAmount / totalAmount) * 100) / 100
   const imbalance = Math.abs(primaryShare - secondaryShare)
@@ -2642,6 +2828,12 @@ function calculateOppositionBalance(
     secondaryShare,
     totalAmount,
     severity,
+    primaryUnitShare,
+    secondaryUnitShare,
+    primaryConfidence: primaryAgg.confidenceAverage,
+    secondaryConfidence: secondaryAgg.confidenceAverage,
+    primaryMaxClipCount: primaryAgg.maxClipCount,
+    secondaryMaxClipCount: secondaryAgg.maxClipCount,
   }
 }
 
@@ -2769,7 +2961,13 @@ function SharedPositionsBoard({
           .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number; visibleTotalInitialValue: number }>; hasOpposition: boolean; visibleMarketTotal: number; originalBetTotal: number } => item !== null)
           .map(({ market, visibleOutcomes, hasOpposition, originalBetTotal }) => {
             const oppositionBalance = hasOpposition
-              ? calculateOppositionBalance(visibleOutcomes)
+              ? calculateOppositionBalance(
+                  visibleOutcomes.map((outcome) => ({
+                    outcome: outcome.outcome,
+                    visibleTotalInitialValue: outcome.visibleTotalInitialValue,
+                    visibleWallets: outcome.visibleWallets,
+                  })),
+                )
               : null
             return (
               <div
@@ -2966,11 +3164,11 @@ const OPPOSITION_SEVERITY_STYLES: Record<
 
 function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSnapshot }) {
   const severityMeta = OPPOSITION_SEVERITY_STYLES[balance.severity]
+  const confidenceMeta = (score: number) =>
+    score >= 0.75 ? CONFIDENCE_META.high : score >= 0.5 ? CONFIDENCE_META.medium : CONFIDENCE_META.low
   return (
-    <div
-      className={`w-full rounded-lg border px-2.5 py-2 text-[0.6rem] sm:text-[0.65rem] font-semibold uppercase tracking-[0.2em] ${severityMeta.containerClass}`}
-    >
-      <div className="flex items-center justify-between gap-2">
+    <div className={`w-full rounded-lg border px-2.5 py-2 space-y-2 ${severityMeta.containerClass}`}>
+      <div className="flex items-center justify-between text-[0.6rem] sm:text-[0.65rem] font-semibold uppercase tracking-[0.2em]">
         <span className="inline-flex items-center gap-1">
           <Scale className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
           {severityMeta.label}
@@ -2979,27 +3177,126 @@ function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSna
           {formatPercent(balance.primaryShare)} · {formatPercent(balance.secondaryShare)}
         </span>
       </div>
-      <div className="mt-1 text-[0.55rem] sm:text-[0.6rem] tracking-[0.15em] text-white/80 flex items-center justify-between">
+      <div className="text-[0.55rem] sm:text-[0.6rem] tracking-[0.15em] text-white/80 flex items-center justify-between">
         <span className="truncate">{balance.primaryLabel}</span>
         <span className="truncate text-right">{balance.secondaryLabel}</span>
       </div>
-      <div className="mt-1.5 h-1.5 w-full rounded-full bg-slate-950/70 overflow-hidden border border-white/5">
-        <div
-          className={`h-full ${severityMeta.barClass}`}
-          style={{ width: `${Math.min(balance.primaryShare, 1) * 100}%` }}
-          aria-hidden="true"
+      <div className="space-y-1.5">
+        <BalanceBar
+          label="Bankroll"
+          primaryShare={balance.primaryShare}
+          secondaryShare={balance.secondaryShare}
+          primaryAmount={balance.primaryAmount}
+          secondaryAmount={balance.secondaryAmount}
+          barClass={severityMeta.barClass}
         />
-      </div>
-      <div className="mt-1.5 flex items-center justify-between text-[0.55rem] sm:text-[0.6rem] font-normal tracking-normal text-gray-200">
-        <span>
-          {formatUsdCompact(balance.primaryAmount)} · {formatPercent(balance.primaryShare)}
-        </span>
-        <span className="text-right">
-          {formatUsdCompact(balance.secondaryAmount)} · {formatPercent(balance.secondaryShare)}
-        </span>
+        <BalanceBar
+          label="Unit sizing"
+          primaryShare={balance.primaryUnitShare}
+          secondaryShare={balance.secondaryUnitShare}
+          primaryAmount={balance.primaryUnitShare}
+          secondaryAmount={balance.secondaryUnitShare}
+          barClass="bg-gradient-to-r from-cyan-400/70 via-sky-400/70 to-blue-500/70"
+          isRatio
+        />
+        <ConfidenceBar
+          label="Conviction"
+          primaryScore={balance.primaryConfidence}
+          secondaryScore={balance.secondaryConfidence}
+          primaryClips={balance.primaryMaxClipCount}
+          secondaryClips={balance.secondaryMaxClipCount}
+        />
       </div>
     </div>
   )
+}
+
+function BalanceBar({
+  label,
+  primaryShare,
+  secondaryShare,
+  primaryAmount,
+  secondaryAmount,
+  barClass,
+  isRatio,
+}: {
+  label: string
+  primaryShare: number
+  secondaryShare: number
+  primaryAmount: number
+  secondaryAmount: number
+  barClass: string
+  isRatio?: boolean
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between text-[0.55rem] sm:text-[0.6rem] uppercase tracking-[0.2em] text-gray-300">
+        <span>{label}</span>
+        {!isRatio && (
+          <span>
+            {formatUsdCompact(primaryAmount)} · {formatUsdCompact(secondaryAmount)}
+          </span>
+        )}
+        {isRatio && (
+          <span>
+            {formatPercent(primaryShare)} · {formatPercent(secondaryShare)}
+          </span>
+        )}
+      </div>
+      <div className="mt-1 h-1.5 w-full rounded-full bg-slate-950/70 overflow-hidden border border-white/5">
+        <div
+          className={`h-full ${barClass}`}
+          style={{ width: `${Math.min(primaryShare, 1) * 100}%` }}
+          aria-hidden="true"
+        />
+      </div>
+    </div>
+  )
+}
+
+function ConfidenceBar({
+  label,
+  primaryScore,
+  secondaryScore,
+  primaryClips,
+  secondaryClips,
+}: {
+  label: string
+  primaryScore: number
+  secondaryScore: number
+  primaryClips: number
+  secondaryClips: number
+}) {
+  const primaryMeta = confidenceMeta(primaryScore)
+  const secondaryMeta = confidenceMeta(secondaryScore)
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[0.55rem] sm:text-[0.6rem] uppercase tracking-[0.2em] text-gray-300">
+        <span>{label}</span>
+        <span>
+          Max clip {primaryClips} · {secondaryClips}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        <div className={`rounded-full px-2 py-0.5 text-center text-[0.55rem] ${primaryMeta.textClass}`}>
+          {Math.round(primaryScore * 100)}%
+        </div>
+        <div className={`rounded-full px-2 py-0.5 text-center text-[0.55rem] ${secondaryMeta.textClass}`}>
+          {Math.round(secondaryScore * 100)}%
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function confidenceMeta(score: number) {
+  if (score >= 0.75) {
+    return CONFIDENCE_META.high
+  }
+  if (score >= 0.5) {
+    return CONFIDENCE_META.medium
+  }
+  return CONFIDENCE_META.low
 }
 
 function AddWalletModal({

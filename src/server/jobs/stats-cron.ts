@@ -1,5 +1,6 @@
 import type { PolymarketPosition, PolymarketTrade } from '@/lib/polymarket'
 import { detectSportTag, isSportsMarket } from '@/lib/sports'
+import { bucketSettlementHorizon, detectBetType } from '@/lib/markets'
 
 import type { Env } from '../env'
 import { nowUnixSeconds } from '../env'
@@ -8,10 +9,12 @@ import { getCronCursor, setCronCursor } from '../repositories/cron-state'
 import { listDistinctWatcherWallets } from '../repositories/watchers'
 import {
   deletePositionSnapshot,
+  deleteWalletSizingSnapshot,
   insertWalletPnlSnapshot,
   insertWalletResult,
   listPositionSnapshotsForWallet,
   upsertPositionSnapshot,
+  upsertWalletSizingSnapshot,
   type WalletPositionSnapshotRow,
 } from '../repositories/wallet-stats'
 
@@ -19,6 +22,17 @@ const STATS_WALLET_BATCH = 5
 const STATS_CURSOR_KEY = 'stats_wallet_cursor'
 
 const EPSILON = 1e-6
+
+function parseEventEndTimestamp(value?: string | null) {
+  if (!value) {
+    return null
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+  return Math.floor(parsed.getTime() / 1000)
+}
 
 interface ClosingPnlResult {
   pnl: number
@@ -131,6 +145,8 @@ export async function runStatsCron(env: Env) {
     const closedSnapshots: WalletPositionSnapshotRow[] = []
     let openCashPnl = 0
     let openPositionValue = 0
+    let openPositionCount = 0
+    let totalInitialValue = 0
     for (const position of positions) {
       const assetKey = position.asset
 
@@ -156,9 +172,14 @@ export async function runStatsCron(env: Env) {
       }
       const sportTag = detectSportTag(descriptor)
       const sportsFlag = isSportsMarket(descriptor) ? 1 : 0
+      const eventEndTimestamp = parseEventEndTimestamp(position.endDate)
 
       openCashPnl += position.cashPnl ?? 0
       openPositionValue += position.currentValue ?? 0
+      openPositionCount += 1
+      const initialValue =
+        typeof position.initialValue === 'number' ? Math.max(position.initialValue, 0) : 0
+      totalInitialValue += initialValue
       await upsertPositionSnapshot(db, {
         wallet_address: walletAddress,
         asset: assetKey,
@@ -172,8 +193,21 @@ export async function runStatsCron(env: Env) {
         last_percent_pnl: position.percentPnl,
         last_avg_price: position.avgPrice,
         last_realized_pnl: position.realizedPnl,
+        event_end_timestamp: eventEndTimestamp,
+        opened_at: now,
       })
       snapshotByAsset.delete(assetKey)
+    }
+
+    if (openPositionCount > 0) {
+      const averageSize =
+        openPositionCount > 0 ? totalInitialValue / openPositionCount : 0
+      await upsertWalletSizingSnapshot(db, walletAddress, {
+        averageSize,
+        positionCount: openPositionCount,
+      })
+    } else {
+      await deleteWalletSizingSnapshot(db, walletAddress)
     }
 
     for (const snapshot of snapshotByAsset.values()) {
@@ -203,6 +237,18 @@ export async function runStatsCron(env: Env) {
         result = 'tie'
       }
 
+      const marketDescriptor = {
+        title: snapshot.title ?? undefined,
+        eventSlug: snapshot.event_slug ?? undefined,
+      }
+      const betType = detectBetType(marketDescriptor)
+      const horizonBucket = bucketSettlementHorizon(
+        snapshot.opened_at,
+        snapshot.event_end_timestamp,
+        resolvedAt,
+        betType,
+      )
+
       await insertWalletResult(db, {
         wallet_address: snapshot.wallet_address,
         asset: snapshot.asset,
@@ -213,6 +259,10 @@ export async function runStatsCron(env: Env) {
         result,
         is_sports: snapshot.is_sports,
         sport_tag: snapshot.sport_tag ?? null,
+        bet_type: betType,
+        horizon_bucket: horizonBucket === 'unknown' ? null : horizonBucket,
+        event_end_timestamp: snapshot.event_end_timestamp ?? null,
+        opened_at: snapshot.opened_at,
       })
 
       await deletePositionSnapshot(db, snapshot.wallet_address, snapshot.asset)

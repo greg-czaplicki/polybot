@@ -1,7 +1,11 @@
 import { createServerFn } from '@tanstack/react-start'
 
 import { getDb } from '../env'
-import { getWalletStats, listWalletResults } from '../repositories/wallet-stats'
+import {
+  getWalletSizingSnapshot,
+  getWalletStats,
+  listWalletResults,
+} from '../repositories/wallet-stats'
 
 const requireString = (value: unknown, label: string) => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -39,5 +43,24 @@ export const listWalletResultsFn = createServerFn({ method: 'POST' }).handler(
       limit: payload.limit ?? 20,
     })
     return { results }
+  },
+)
+
+export const getWalletSizingFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data, context }) => {
+    const db = getDb(context)
+    const payload = data as { walletAddress?: string }
+    const walletAddress = requireString(payload.walletAddress, 'walletAddress')
+    const sizing = await getWalletSizingSnapshot(db, walletAddress)
+    if (!sizing) {
+      return { sizing: null }
+    }
+    return {
+      sizing: {
+        averageSize: sizing.avg_initial_size,
+        positionCount: sizing.position_count,
+        updatedAt: sizing.updated_at,
+      },
+    }
   },
 )

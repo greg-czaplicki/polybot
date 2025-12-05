@@ -18,6 +18,8 @@ export interface WalletPositionSnapshotRow {
   last_avg_price: number
   last_realized_pnl: number
   last_seen_at: number
+  opened_at: number
+  event_end_timestamp?: number | null
 }
 
 export interface WalletResultRow {
@@ -31,6 +33,10 @@ export interface WalletResultRow {
   result: 'win' | 'loss' | 'tie'
   is_sports: number
   sport_tag?: string | null
+  bet_type?: string | null
+  horizon_bucket?: string | null
+  event_end_timestamp?: number | null
+  opened_at?: number | null
 }
 
 export interface WalletResultSummary {
@@ -42,6 +48,13 @@ export interface WalletResultSummary {
   result: 'win' | 'loss' | 'tie'
   isSports: boolean
   sportTag?: string
+}
+
+export interface WalletSizingSnapshotRow {
+  wallet_address: string
+  avg_initial_size: number
+  position_count: number
+  updated_at: number
 }
 
 function buildSportDescriptor(row: { title?: string | null; event_slug?: string | null }) {
@@ -71,7 +84,9 @@ async function ensureSportTagForResult(
 
 export async function upsertPositionSnapshot(
   db: Db,
-  input: Omit<WalletPositionSnapshotRow, 'id' | 'last_seen_at'>,
+  input: Omit<WalletPositionSnapshotRow, 'id' | 'last_seen_at' | 'opened_at'> & {
+    opened_at?: number
+  },
 ) {
   const existing = await first<WalletPositionSnapshotRow>(
     db,
@@ -81,6 +96,9 @@ export async function upsertPositionSnapshot(
   )
 
   const now = nowUnixSeconds()
+  const openedAt = existing?.opened_at ?? input.opened_at ?? now
+  const eventEndTimestamp =
+    input.event_end_timestamp ?? existing?.event_end_timestamp ?? null
 
   if (existing) {
     await run(
@@ -96,7 +114,8 @@ export async function upsertPositionSnapshot(
            last_percent_pnl = ?,
            last_avg_price = ?,
            last_realized_pnl = ?,
-           last_seen_at = ?
+           last_seen_at = ?,
+           event_end_timestamp = ?
        WHERE id = ?`,
       input.title ?? null,
       input.event_slug ?? null,
@@ -109,6 +128,7 @@ export async function upsertPositionSnapshot(
       input.last_avg_price,
       input.last_realized_pnl,
       now,
+      eventEndTimestamp,
       existing.id,
     )
     return
@@ -131,8 +151,10 @@ export async function upsertPositionSnapshot(
        last_percent_pnl,
        last_avg_price,
        last_realized_pnl,
-       last_seen_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       last_seen_at,
+       opened_at,
+       event_end_timestamp
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.wallet_address,
     input.asset,
@@ -147,6 +169,8 @@ export async function upsertPositionSnapshot(
     input.last_avg_price,
     input.last_realized_pnl,
     now,
+    openedAt,
+    eventEndTimestamp,
   )
 }
 
@@ -171,6 +195,43 @@ export async function deletePositionSnapshot(
   )
 }
 
+export async function upsertWalletSizingSnapshot(
+  db: Db,
+  walletAddress: string,
+  params: { averageSize: number; positionCount: number },
+) {
+  const now = nowUnixSeconds()
+  await run(
+    db,
+    `INSERT INTO wallet_sizing_snapshot (wallet_address, avg_initial_size, position_count, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(wallet_address)
+     DO UPDATE SET avg_initial_size = excluded.avg_initial_size,
+                   position_count = excluded.position_count,
+                   updated_at = excluded.updated_at`,
+    walletAddress,
+    params.averageSize,
+    params.positionCount,
+    now,
+  )
+}
+
+export async function deleteWalletSizingSnapshot(db: Db, walletAddress: string) {
+  await run(
+    db,
+    `DELETE FROM wallet_sizing_snapshot WHERE wallet_address = ?`,
+    walletAddress,
+  )
+}
+
+export async function getWalletSizingSnapshot(db: Db, walletAddress: string) {
+  return await first<WalletSizingSnapshotRow>(
+    db,
+    `SELECT * FROM wallet_sizing_snapshot WHERE wallet_address = ?`,
+    walletAddress,
+  )
+}
+
 export interface WalletStatsBucket {
   wins: number
   losses: number
@@ -184,10 +245,18 @@ export interface WalletStats {
   weekly: WalletStatsBucket
   monthly: WalletStatsBucket
   bySport: WalletSportRecord[]
+  byEdge: WalletEdgeRecord[]
 }
 
 export interface WalletSportRecord extends WalletStatsBucket {
   sport: string
+}
+
+export interface WalletEdgeRecord extends WalletStatsBucket {
+  sport?: string | null
+  betType?: string | null
+  horizon?: string | null
+  sampleSize: number
 }
 
 export async function insertWalletResult(
@@ -208,8 +277,12 @@ export async function insertWalletResult(
        pnl_usd,
        result,
        is_sports,
-       sport_tag
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       sport_tag,
+       bet_type,
+       horizon_bucket,
+       event_end_timestamp,
+       opened_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.wallet_address,
     input.asset,
@@ -220,6 +293,10 @@ export async function insertWalletResult(
     input.result,
     input.is_sports,
     input.sport_tag ?? null,
+    input.bet_type ?? null,
+    input.horizon_bucket ?? null,
+    input.event_end_timestamp ?? null,
+    input.opened_at ?? null,
   )
 }
 
@@ -426,6 +503,53 @@ async function listSportBreakdown(
   })
 }
 
+async function listEdgeBreakdown(
+  db: Db,
+  walletAddress: string,
+): Promise<WalletEdgeRecord[]> {
+  const rows = await all<{
+    sport_tag?: string | null
+    bet_type?: string | null
+    horizon_bucket?: string | null
+    wins: number
+    losses: number
+    ties: number
+    pnlUsd: number
+    sampleSize: number
+  }>(
+    db,
+    `SELECT
+       sport_tag,
+       bet_type,
+       horizon_bucket,
+       COUNT(*) AS sampleSize,
+       SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+       SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
+       SUM(CASE WHEN result = 'tie' THEN 1 ELSE 0 END) AS ties,
+       COALESCE(SUM(pnl_usd), 0) AS pnlUsd
+     FROM wallet_results
+     WHERE wallet_address = ?
+       AND sport_tag IS NOT NULL
+       AND bet_type IS NOT NULL
+     GROUP BY sport_tag, bet_type, horizon_bucket
+     HAVING sampleSize >= 2
+     ORDER BY sampleSize DESC, pnlUsd DESC
+     LIMIT 25`,
+    walletAddress,
+  )
+
+  return rows.map((row) => ({
+    sport: row.sport_tag ?? undefined,
+    betType: row.bet_type ?? undefined,
+    horizon: row.horizon_bucket ?? undefined,
+    wins: row.wins ?? 0,
+    losses: row.losses ?? 0,
+    ties: row.ties ?? 0,
+    pnlUsd: row.pnlUsd ?? 0,
+    sampleSize: row.sampleSize ?? 0,
+  }))
+}
+
 export async function getWalletStats(
   db: Db,
   walletAddress: string,
@@ -444,6 +568,7 @@ export async function getWalletStats(
     getBucket(db, walletAddress, monthAgo, sportsOnly),
     listSportBreakdown(db, walletAddress),
   ])
+  const byEdge = await listEdgeBreakdown(db, walletAddress)
 
   return {
     allTime,
@@ -451,5 +576,6 @@ export async function getWalletStats(
     weekly,
     monthly,
     bySport,
+    byEdge,
   }
 }
