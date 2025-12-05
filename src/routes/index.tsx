@@ -8,6 +8,7 @@ import {
   EyeOff,
   ExternalLink,
   Flame,
+  Skull,
   Loader2,
   Plus,
   Scale,
@@ -113,6 +114,8 @@ interface AggregatedWalletPosition {
   pnl: number
   redeemable: boolean
   highlight?: WalletHighlight
+  endDate?: string
+  confidence?: WalletPositionConfidence
 }
 
 interface AggregatedOutcomeEntry {
@@ -191,12 +194,17 @@ const EMPTY_WALLET_STATS: WalletStatsSummary = {
 const WEEKLY_HOT_PNL_THRESHOLD = 500_000
 const WEEKLY_HOT_WIN_DELTA = 5
 const DAILY_HOT_PNL_THRESHOLD = 100_000
+const WEEKLY_TILT_PNL_THRESHOLD = -250_000
+const WEEKLY_TILT_LOSS_DELTA = 3
+const DAILY_TILT_PNL_THRESHOLD = -100_000
+const SHOW_TILT_BADGE = false
+const MS_PER_DAY = 86_400_000
 
 const SPORT_EDGE_MIN_DECISIONS = 6
 const SPORT_EDGE_MIN_WIN_RATE = 0.6
 const SPORT_EDGE_MIN_PNL = 50_000
 
-type WalletHighlightKind = 'top' | 'weekly' | 'daily'
+type WalletHighlightKind = 'top' | 'weekly' | 'daily' | 'tilt'
 
 interface WalletHighlight {
   kind: WalletHighlightKind
@@ -204,6 +212,14 @@ interface WalletHighlight {
   detail: string
   badgeClass: string
   Icon: LucideIcon
+}
+
+type ConfidenceLevel = 'low' | 'medium' | 'high'
+
+interface WalletPositionConfidence {
+  score: number
+  level: ConfidenceLevel
+  reasons: string[]
 }
 
 const HIGHLIGHT_META: Record<
@@ -225,12 +241,48 @@ const HIGHLIGHT_META: Record<
     badgeClass: 'border-cyan-400/60 bg-cyan-500/10 text-cyan-100',
     Icon: Sparkles,
   },
+  tilt: {
+    label: 'On tilt',
+    badgeClass: 'border-fuchsia-500/70 bg-fuchsia-600/15 text-fuchsia-100',
+    Icon: Skull,
+  },
 }
 
 function pickWalletHighlight(
   stats: WalletStatsSummary,
   options?: { isTopPerformer?: boolean },
 ): WalletHighlight | null {
+  const weeklyLossEdge = stats.weekly.losses - stats.weekly.wins
+  if (
+    SHOW_TILT_BADGE &&
+    stats.weekly.pnlUsd <= WEEKLY_TILT_PNL_THRESHOLD &&
+    weeklyLossEdge >= WEEKLY_TILT_LOSS_DELTA
+  ) {
+    const meta = HIGHLIGHT_META.tilt
+    return {
+      kind: 'tilt',
+      label: meta.label,
+      detail: `-${formatUsdCompact(Math.abs(stats.weekly.pnlUsd))} last 7d`,
+      badgeClass: meta.badgeClass,
+      Icon: meta.Icon,
+    }
+  }
+
+  if (
+    SHOW_TILT_BADGE &&
+    stats.daily.pnlUsd <= DAILY_TILT_PNL_THRESHOLD &&
+    stats.daily.losses >= Math.max(1, stats.daily.wins)
+  ) {
+    const meta = HIGHLIGHT_META.tilt
+    return {
+      kind: 'tilt',
+      label: meta.label,
+      detail: `-${formatUsdCompact(Math.abs(stats.daily.pnlUsd))} today`,
+      badgeClass: meta.badgeClass,
+      Icon: meta.Icon,
+    }
+  }
+
   if (options?.isTopPerformer && stats.allTime.pnlUsd > 0) {
     const meta = HIGHLIGHT_META.top
     return {
@@ -242,10 +294,9 @@ function pickWalletHighlight(
     }
   }
 
-  const weeklyEdge = stats.weekly.wins - stats.weekly.losses
   if (
     stats.weekly.pnlUsd >= WEEKLY_HOT_PNL_THRESHOLD &&
-    weeklyEdge >= WEEKLY_HOT_WIN_DELTA
+    weeklyLossEdge <= -WEEKLY_HOT_WIN_DELTA
   ) {
     const meta = HIGHLIGHT_META.weekly
     return {
@@ -315,6 +366,105 @@ function buildWalletSportEdgeMap(
     }
   })
   return walletMap
+}
+
+const CONFIDENCE_META: Record<
+  ConfidenceLevel,
+  { label: string; barClass: string; textClass: string }
+> = {
+  high: {
+    label: 'High confidence',
+    barClass: 'from-emerald-400 via-emerald-500 to-emerald-600',
+    textClass: 'text-emerald-200',
+  },
+  medium: {
+    label: 'Steady confidence',
+    barClass: 'from-cyan-400 via-blue-500 to-blue-600',
+    textClass: 'text-cyan-200',
+  },
+  low: {
+    label: 'Low confidence',
+    barClass: 'from-amber-400 via-amber-500 to-amber-600',
+    textClass: 'text-amber-200',
+  },
+}
+
+function computePositionConfidence({
+  sportTag,
+  sportEdge,
+  highlight,
+  initialValue,
+  averageSize,
+  endDate,
+}: {
+  sportTag?: string | null
+  sportEdge?: WalletSportEdge
+  highlight?: WalletHighlight
+  initialValue: number
+  averageSize?: number
+  endDate?: string | null
+}): WalletPositionConfidence | undefined {
+  if (!Number.isFinite(initialValue) || initialValue <= 0) {
+    return undefined
+  }
+
+  const reasons: string[] = []
+  let score = 0.45
+
+  if (sportTag && sportEdge) {
+    score += 0.3
+    reasons.push(`Proven edge in ${sportEdge.label}`)
+  } else if (sportTag) {
+    score -= 0.05
+    reasons.push(`Limited data in ${getSportLabel(sportTag) ?? sportTag.toUpperCase()}`)
+  }
+
+  if (highlight?.kind === 'top' || highlight?.kind === 'weekly') {
+    score += 0.05
+    reasons.push('Recent performance momentum')
+  } else if (highlight?.kind === 'tilt' && SHOW_TILT_BADGE) {
+    score -= 0.08
+    reasons.push('In active drawdown')
+  }
+
+  if (averageSize && averageSize > 0) {
+    const ratio = initialValue / averageSize
+    if (ratio >= 1.5) {
+      score += 0.12
+      reasons.push('Sizing up vs typical exposure')
+    } else if (ratio <= 0.5) {
+      score -= 0.08
+      reasons.push('Small probe vs usual size')
+    } else {
+      reasons.push('Bet size near normal range')
+    }
+  } else {
+    reasons.push('No historical sizing data')
+  }
+
+  if (endDate) {
+    const parsed = new Date(endDate)
+    if (Number.isFinite(parsed.getTime())) {
+      const daysOut = (parsed.getTime() - Date.now()) / MS_PER_DAY
+      if (daysOut <= 14) {
+        score += 0.05
+        reasons.push('Near-term resolution')
+      } else if (daysOut > 60) {
+        score -= 0.05
+        reasons.push('Long resolution horizon')
+      }
+    }
+  }
+
+  const clamped = Math.min(Math.max(score, 0), 1)
+  const level: ConfidenceLevel =
+    clamped >= 0.75 ? 'high' : clamped >= 0.5 ? 'medium' : 'low'
+
+  return {
+    score: clamped,
+    level,
+    reasons,
+  }
 }
 
 function getTopWalletKey(
@@ -509,6 +659,25 @@ function App() {
     return map
   }, [trackedWallets, topWalletKey, walletStats])
 
+  const walletAverageSize = useMemo(() => {
+    const map = new Map<string, number>()
+    Object.entries(walletPositions).forEach(([wallet, positions]) => {
+      if (!positions || positions.length === 0) {
+        return
+      }
+      const total = positions.reduce((sum, position) => {
+        const value =
+          typeof position.initialValue === 'number' ? position.initialValue : 0
+        return sum + Math.max(value, 0)
+      }, 0)
+      const avg = total / positions.length
+      if (avg > 0) {
+        map.set(wallet, avg)
+      }
+    })
+    return map
+  }, [walletPositions])
+
   const selectedWalletMeta = useMemo(() => {
     if (!selectedWallet) {
       return undefined
@@ -590,6 +759,17 @@ function App() {
           const label = meta?.nickname || formatWalletAddress(originalAddress)
           outcome.totalValue += position.currentValue
           const highlight = walletHighlightMap.get(normalizedAddress)
+          const sportEdge = sportTag
+            ? walletSportEdges.get(normalizedAddress)?.get(sportTag)
+            : undefined
+          const confidence = computePositionConfidence({
+            sportTag,
+            sportEdge,
+            highlight,
+            initialValue: position.initialValue,
+            averageSize: walletAverageSize.get(normalizedAddress),
+            endDate: position.endDate,
+          })
           outcome.wallets.push({
             walletAddress: originalAddress,
             label,
@@ -598,6 +778,8 @@ function App() {
             pnl: position.cashPnl,
             redeemable: Boolean(position.redeemable),
             highlight,
+            endDate: position.endDate,
+            confidence,
           })
         })
     })
@@ -613,7 +795,7 @@ function App() {
           .sort((a, b) => b.totalValue - a.totalValue),
       }))
       .sort((a, b) => b.totalValue - a.totalValue)
-  }, [walletPositions, walletLabelMap, walletHighlightMap])
+  }, [walletPositions, walletLabelMap, walletHighlightMap, walletSportEdges, walletAverageSize])
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
@@ -2092,6 +2274,30 @@ function SportEdgeIndicator({
   )
 }
 
+function ConfidenceMeter({ confidence }: { confidence: WalletPositionConfidence }) {
+  const meta = CONFIDENCE_META[confidence.level]
+  const pct = Math.round(confidence.score * 100)
+  return (
+    <div className="mt-1.5">
+      <div className={`flex items-center justify-between text-[0.6rem] uppercase tracking-[0.2em] ${meta.textClass}`}>
+        <span className="font-semibold">{meta.label}</span>
+        <span>{pct}%</span>
+      </div>
+      <div className="mt-0.5 h-1.5 w-full rounded-full bg-slate-900/60">
+        <div
+          className={`h-full rounded-full bg-gradient-to-r ${meta.barClass}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {confidence.reasons.length > 0 && (
+        <p className="mt-0.5 text-[0.6rem] text-gray-500">
+          {confidence.reasons[0]}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function WalletSummaryList({
   trackedWallets,
   walletStats,
@@ -2564,6 +2770,9 @@ function SharedPositionsBoard({
                                     )}
                                     {sportEdge && (
                                       <SportEdgeIndicator edge={sportEdge} />
+                                    )}
+                                    {wallet.confidence && (
+                                      <ConfidenceMeter confidence={wallet.confidence} />
                                     )}
                                   </div>
                                 </div>
