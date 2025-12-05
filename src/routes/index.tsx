@@ -116,6 +116,7 @@ interface AggregatedWalletPosition {
   highlight?: WalletHighlight
   endDate?: string
   confidence?: WalletPositionConfidence
+  averageSize?: number
 }
 
 interface AggregatedOutcomeEntry {
@@ -511,6 +512,75 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
 }
 
+function formatSizingRatio(ratio: number) {
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return '1.0x'
+  }
+  if (ratio >= 10) {
+    return `${Math.round(ratio)}x`
+  }
+  return `${ratio.toFixed(1)}x`
+}
+
+function getSizingSignal(initialValue: number, averageSize?: number) {
+  if (!Number.isFinite(initialValue) || initialValue <= 0) {
+    return null
+  }
+  if (!Number.isFinite(averageSize ?? 0) || !averageSize || averageSize <= 0) {
+    return null
+  }
+
+  const ratio = initialValue / averageSize
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return null
+  }
+
+  const detail = `${formatSizingRatio(ratio)} avg`
+
+  if (ratio >= 2.5) {
+    return {
+      label: 'Max clip',
+      badgeClass: 'border-emerald-400/60 bg-emerald-500/10 text-emerald-100',
+      detail,
+      ratio,
+    }
+  }
+
+  if (ratio >= 1.5) {
+    return {
+      label: 'Sizing up',
+      badgeClass: 'border-cyan-400/60 bg-cyan-500/10 text-cyan-100',
+      detail,
+      ratio,
+    }
+  }
+
+  if (ratio <= 0.4) {
+    return {
+      label: 'Tiny probe',
+      badgeClass: 'border-amber-400/70 bg-amber-500/10 text-amber-100',
+      detail,
+      ratio,
+    }
+  }
+
+  if (ratio <= 0.75) {
+    return {
+      label: 'Half stake',
+      badgeClass: 'border-rose-400/70 bg-rose-500/10 text-rose-100',
+      detail,
+      ratio,
+    }
+  }
+
+  return {
+    label: 'Standard unit',
+    badgeClass: 'border-slate-800/80 bg-slate-900/60 text-gray-200',
+    detail,
+    ratio,
+  }
+}
+
 function formatWalletAddress(address: string) {
   if (address.length <= 10) {
     return address
@@ -695,6 +765,12 @@ function App() {
   const selectedDiagnostics = selectedWalletKey
     ? walletDiagnostics[selectedWalletKey]
     : undefined
+  const selectedWalletAverageSize = selectedWalletKey
+    ? walletAverageSize.get(selectedWalletKey)
+    : undefined
+  const selectedWalletOpenPositions = selectedWalletKey
+    ? walletPositions[selectedWalletKey] ?? []
+    : []
   const aggregatedPositions = useMemo<AggregatedMarketEntry[]>(() => {
     const markets = new Map<string, AggregatedMarketEntry>()
     Object.entries(walletPositions).forEach(([normalizedAddress, positions]) => {
@@ -780,6 +856,7 @@ function App() {
             highlight,
             endDate: position.endDate,
             confidence,
+            averageSize: walletAverageSize.get(normalizedAddress),
           })
         })
     })
@@ -1529,51 +1606,78 @@ useEffect(() => {
                   </div>
                 )}
 
-                {selectedDiagnostics && (
-                  <div className="grid gap-2 sm:gap-3 md:gap-4 md:grid-cols-3">
-                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                        Closed PnL (7d)
-                      </p>
-                      <p className="text-base sm:text-lg font-semibold text-white">
-                        {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
-                      </p>
-                      <p
-                        className={`text-xs sm:text-sm font-semibold ${
-                          selectedDiagnostics.closed.pnlUsd >= 0
-                            ? 'text-emerald-300'
-                            : 'text-rose-300'
-                        }`}
-                      >
-                        {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
-                        {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
-                      </p>
-                      <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                        {selectedDiagnostics.closed.sampleCount} resolved markets
-                      </p>
-                    </div>
-                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                        Open exposure
-                      </p>
-                      <p className="text-base sm:text-lg font-semibold text-white">
-                        {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
-                      </p>
-                      <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                        Across {selectedDiagnostics.open.positionCount} positions
-                      </p>
-                    </div>
-                    <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                        Flow (7d)
-                      </p>
-                      <p className="text-xs sm:text-sm text-gray-300">
-                        Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
-                      </p>
-                      <p className="text-xs sm:text-sm text-gray-300">
-                        Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
-                      </p>
-                    </div>
+                {(selectedDiagnostics || selectedWalletAverageSize) && (
+                  <div
+                    className={`grid gap-2 sm:gap-3 md:gap-4 ${
+                      selectedDiagnostics
+                        ? selectedWalletAverageSize
+                          ? 'md:grid-cols-4'
+                          : 'md:grid-cols-3'
+                        : 'md:grid-cols-1'
+                    }`}
+                  >
+                    {selectedDiagnostics && (
+                      <>
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                            Closed PnL (7d)
+                          </p>
+                          <p className="text-base sm:text-lg font-semibold text-white">
+                            {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
+                          </p>
+                          <p
+                            className={`text-xs sm:text-sm font-semibold ${
+                              selectedDiagnostics.closed.pnlUsd >= 0
+                                ? 'text-emerald-300'
+                                : 'text-rose-300'
+                            }`}
+                          >
+                            {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
+                            {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
+                          </p>
+                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                            {selectedDiagnostics.closed.sampleCount} resolved markets
+                          </p>
+                        </div>
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                            Open exposure
+                          </p>
+                          <p className="text-base sm:text-lg font-semibold text-white">
+                            {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
+                          </p>
+                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                            Across {selectedDiagnostics.open.positionCount} positions
+                          </p>
+                        </div>
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                            Flow (7d)
+                          </p>
+                          <p className="text-xs sm:text-sm text-gray-300">
+                            Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
+                          </p>
+                          <p className="text-xs sm:text-sm text-gray-300">
+                            Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    {selectedWalletAverageSize && (
+                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                        <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                          Typical unit size
+                        </p>
+                        <p className="text-base sm:text-lg font-semibold text-white">
+                          {formatUsdCompact(selectedWalletAverageSize)}
+                        </p>
+                        {selectedWalletOpenPositions.length > 0 && (
+                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                            Avg of {selectedWalletOpenPositions.length} open position{selectedWalletOpenPositions.length === 1 ? '' : 's'}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2283,7 +2387,7 @@ function ConfidenceMeter({ confidence }: { confidence: WalletPositionConfidence 
         <span className="font-semibold">{meta.label}</span>
         <span>{pct}%</span>
       </div>
-      <div className="mt-0.5 h-1.5 w-full rounded-full bg-slate-900/60">
+      <div className="mt-0.5 h-1.5 md:h-1 w-full rounded-full bg-slate-900/60">
         <div
           className={`h-full rounded-full bg-gradient-to-r ${meta.barClass}`}
           style={{ width: `${pct}%` }}
@@ -2295,6 +2399,29 @@ function ConfidenceMeter({ confidence }: { confidence: WalletPositionConfidence 
         </p>
       )}
     </div>
+  )
+}
+
+function SizingBadge({
+  initialValue,
+  averageSize,
+}: {
+  initialValue: number
+  averageSize?: number
+}) {
+  const sizing = getSizingSignal(initialValue, averageSize)
+  if (!sizing) {
+    return null
+  }
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.2em] ${sizing.badgeClass}`}
+      title={`${sizing.label} · ${sizing.detail}`}
+    >
+      <Target className="h-3 w-3" aria-hidden="true" />
+      <span>{sizing.label}</span>
+      <span className="tracking-[0.15em] text-white/80">{sizing.detail}</span>
+    </span>
   )
 }
 
@@ -2763,6 +2890,17 @@ function SharedPositionsBoard({
                                         <WalletHighlightBadge highlight={wallet.highlight} />
                                       )}
                                     </p>
+                                    {wallet.averageSize && (
+                                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-800/70 bg-slate-900/70 px-1.5 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.2em] text-gray-300">
+                                          Avg {formatUsdCompact(wallet.averageSize)}
+                                        </span>
+                                        <SizingBadge
+                                          initialValue={wallet.initialValue}
+                                          averageSize={wallet.averageSize}
+                                        />
+                                      </div>
+                                    )}
                                     {wallet.redeemable && (
                                       <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
                                         Redeemable
@@ -2779,9 +2917,6 @@ function SharedPositionsBoard({
                                 <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
                                   <span className="text-xs sm:text-sm font-semibold text-gray-200">
                                     {formatUsdCompact(wallet.initialValue)}
-                                  </span>
-                                  <span className="text-[0.65rem] text-gray-500">
-                                    Now: {formatUsdCompact(wallet.value)}
                                   </span>
                                   <span
                                     className={`text-[0.65rem] sm:text-xs font-semibold ${
