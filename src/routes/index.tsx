@@ -10,9 +10,11 @@ import {
   Flame,
   Loader2,
   Plus,
+  Scale,
   RefreshCw,
   Settings,
   Sparkles,
+  Target,
   TrendingUp,
   Trash2,
   Trophy,
@@ -35,7 +37,7 @@ declare global {
 }
 
 import type { AlertEventRecord, WatcherRule } from '@/lib/alerts/types'
-import { getSportLabel, isEsportsMarket, isSportsMarket } from '@/lib/sports'
+import { detectSportTag, getSportLabel, isEsportsMarket, isSportsMarket } from '@/lib/sports'
 import {
   fetchPositionsForUser,
   fetchTradesForUser,
@@ -74,6 +76,14 @@ interface WalletSportRecord extends WalletStatsBucket {
   sport: string
 }
 
+interface WalletSportEdge extends WalletSportRecord {
+  label: string
+  sampleSize: number
+  winRate: number
+}
+
+type WalletSportEdgeMap = Map<string, Map<string, WalletSportEdge>>
+
 interface WalletStatsSummary {
   allTime: WalletStatsBucket
   daily: WalletStatsBucket
@@ -102,6 +112,7 @@ interface AggregatedWalletPosition {
   initialValue: number
   pnl: number
   redeemable: boolean
+  highlight?: WalletHighlight
 }
 
 interface AggregatedOutcomeEntry {
@@ -118,6 +129,18 @@ interface AggregatedMarketEntry {
   outcomes: AggregatedOutcomeEntry[]
   eventSlug?: string
   slug?: string
+  sportTag?: string | null
+}
+
+interface OppositionBalanceSnapshot {
+  primaryLabel: string
+  secondaryLabel: string
+  primaryAmount: number
+  secondaryAmount: number
+  primaryShare: number
+  secondaryShare: number
+  totalAmount: number
+  severity: 'balanced' | 'tilted' | 'lopsided'
 }
 
 interface WalletDiagnosticsSummary {
@@ -168,6 +191,10 @@ const EMPTY_WALLET_STATS: WalletStatsSummary = {
 const WEEKLY_HOT_PNL_THRESHOLD = 500_000
 const WEEKLY_HOT_WIN_DELTA = 5
 const DAILY_HOT_PNL_THRESHOLD = 100_000
+
+const SPORT_EDGE_MIN_DECISIONS = 6
+const SPORT_EDGE_MIN_WIN_RATE = 0.6
+const SPORT_EDGE_MIN_PNL = 50_000
 
 type WalletHighlightKind = 'top' | 'weekly' | 'daily'
 
@@ -244,6 +271,52 @@ function pickWalletHighlight(
   return null
 }
 
+function evaluateSportEdge(record: WalletSportRecord): WalletSportEdge | null {
+  const decisions = record.wins + record.losses
+  if (decisions < SPORT_EDGE_MIN_DECISIONS) {
+    return null
+  }
+
+  if (record.pnlUsd <= 0) {
+    return null
+  }
+
+  const winRate = decisions > 0 ? record.wins / decisions : 0
+  const strongWinRate = winRate >= SPORT_EDGE_MIN_WIN_RATE
+  const strongPnl = record.pnlUsd >= SPORT_EDGE_MIN_PNL
+
+  if (!strongWinRate && !strongPnl) {
+    return null
+  }
+
+  return {
+    ...record,
+    label: getSportLabel(record.sport) ?? record.sport.toUpperCase(),
+    sampleSize: decisions,
+    winRate,
+  }
+}
+
+function buildWalletSportEdgeMap(
+  statsByWallet: Record<string, WalletStatsSummary>,
+): WalletSportEdgeMap {
+  const walletMap: WalletSportEdgeMap = new Map()
+  Object.entries(statsByWallet).forEach(([walletKey, summary]) => {
+    const sportEntries = summary?.bySport ?? []
+    const edges = new Map<string, WalletSportEdge>()
+    sportEntries.forEach((record) => {
+      const edge = evaluateSportEdge(record)
+      if (edge) {
+        edges.set(record.sport, edge)
+      }
+    })
+    if (edges.size > 0) {
+      walletMap.set(walletKey, edges)
+    }
+  })
+  return walletMap
+}
+
 function getTopWalletKey(
   trackedWallets: TrackedWalletRow[],
   walletStats: Record<string, WalletStatsSummary>,
@@ -279,6 +352,13 @@ function formatUsdCompact(value?: number | null) {
     return '—'
   }
   return ALERT_CURRENCY_FORMATTER.format(value)
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value) || value === 0) {
+    return '0%'
+  }
+  return `${Math.round(value * 100)}%`
 }
 
 function formatWalletAddress(address: string) {
@@ -370,6 +450,10 @@ function App() {
     Record<string, WalletDiagnosticsSummary>
   >({})
   const [walletPositions, setWalletPositions] = useState<Record<string, PolymarketPosition[]>>({})
+  const walletSportEdges = useMemo<WalletSportEdgeMap>(
+    () => buildWalletSportEdgeMap(walletStats),
+    [walletStats],
+  )
   const [notificationStatus, setNotificationStatus] = useState<
     'idle' | 'requesting' | NotificationPermission | 'unsupported'
   >('idle')
@@ -402,6 +486,28 @@ function App() {
     })
     return map
   }, [trackedWallets])
+  const topWalletKey = useMemo(
+    () => getTopWalletKey(trackedWallets, walletStats),
+    [trackedWallets, walletStats],
+  )
+
+  const walletHighlightMap = useMemo(() => {
+    const map = new Map<string, WalletHighlight>()
+    trackedWallets.forEach((wallet) => {
+      const key = wallet.walletAddress.toLowerCase()
+      const stats = walletStats[key]
+      if (!stats) {
+        return
+      }
+      const highlight = pickWalletHighlight(stats, {
+        isTopPerformer: topWalletKey === key,
+      })
+      if (highlight) {
+        map.set(key, highlight)
+      }
+    })
+    return map
+  }, [trackedWallets, topWalletKey, walletStats])
 
   const selectedWalletMeta = useMemo(() => {
     if (!selectedWallet) {
@@ -447,42 +553,53 @@ function App() {
         })
         .forEach((position) => {
           const marketKey = position.slug ?? position.eventSlug ?? position.asset
-        if (!marketKey) {
-          return
-        }
-        let market = markets.get(marketKey)
-        if (!market) {
-          market = {
-            id: marketKey,
-            title: position.title ?? position.slug ?? 'Unknown market',
-            totalValue: 0,
-            icon: position.icon,
-            outcomes: [],
-            eventSlug: position.eventSlug,
-            slug: position.slug,
+          if (!marketKey) {
+            return
           }
-          markets.set(marketKey, market)
-        }
-        market.totalValue += position.currentValue
-        const outcomeLabel = position.outcome ?? 'Outcome'
-        let outcome = market.outcomes.find((entry) => entry.outcome === outcomeLabel)
-        if (!outcome) {
-          outcome = { outcome: outcomeLabel, totalValue: 0, wallets: [] }
-          market.outcomes.push(outcome)
-        }
-        const meta = walletLabelMap.get(normalizedAddress)
-        const originalAddress = meta?.walletAddress ?? normalizedAddress
-        const label = meta?.nickname || formatWalletAddress(originalAddress)
-        outcome.totalValue += position.currentValue
-        outcome.wallets.push({
-          walletAddress: originalAddress,
-          label,
-          value: position.currentValue,
-          initialValue: position.initialValue,
-          pnl: position.cashPnl,
-          redeemable: Boolean(position.redeemable),
+          const descriptor = {
+            title: position.title,
+            slug: position.slug,
+            eventSlug: position.eventSlug,
+          }
+          const sportTag = detectSportTag(descriptor)
+          let market = markets.get(marketKey)
+          if (!market) {
+            market = {
+              id: marketKey,
+              title: position.title ?? position.slug ?? 'Unknown market',
+              totalValue: 0,
+              icon: position.icon,
+              outcomes: [],
+              eventSlug: position.eventSlug,
+              slug: position.slug,
+              sportTag: sportTag ?? undefined,
+            }
+            markets.set(marketKey, market)
+          } else if (!market.sportTag && sportTag) {
+            market.sportTag = sportTag
+          }
+          market.totalValue += position.currentValue
+          const outcomeLabel = position.outcome ?? 'Outcome'
+          let outcome = market.outcomes.find((entry) => entry.outcome === outcomeLabel)
+          if (!outcome) {
+            outcome = { outcome: outcomeLabel, totalValue: 0, wallets: [] }
+            market.outcomes.push(outcome)
+          }
+          const meta = walletLabelMap.get(normalizedAddress)
+          const originalAddress = meta?.walletAddress ?? normalizedAddress
+          const label = meta?.nickname || formatWalletAddress(originalAddress)
+          outcome.totalValue += position.currentValue
+          const highlight = walletHighlightMap.get(normalizedAddress)
+          outcome.wallets.push({
+            walletAddress: originalAddress,
+            label,
+            value: position.currentValue,
+            initialValue: position.initialValue,
+            pnl: position.cashPnl,
+            redeemable: Boolean(position.redeemable),
+            highlight,
+          })
         })
-      })
     })
 
     return Array.from(markets.values())
@@ -496,7 +613,7 @@ function App() {
           .sort((a, b) => b.totalValue - a.totalValue),
       }))
       .sort((a, b) => b.totalValue - a.totalValue)
-  }, [walletPositions, walletLabelMap])
+  }, [walletPositions, walletLabelMap, walletHighlightMap])
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
@@ -1092,7 +1209,10 @@ useEffect(() => {
         </div>
         <div className="space-y-4 sm:space-y-5 md:space-y-6 lg:space-y-8">
           <div className="lg:hidden">
-            <SharedPositionsBoard positions={aggregatedPositions} />
+            <SharedPositionsBoard
+              positions={aggregatedPositions}
+              walletSportEdges={walletSportEdges}
+            />
           </div>
           <div className="grid gap-4 sm:gap-5 md:gap-6 lg:gap-8 lg:grid-cols-[320px_1fr] items-start">
             <aside className="space-y-4 sm:space-y-5 md:space-y-6">
@@ -1178,7 +1298,10 @@ useEffect(() => {
             </aside>
             <main className="space-y-4 sm:space-y-5 md:space-y-6 lg:space-y-8">
               <div className="hidden lg:block">
-                <SharedPositionsBoard positions={aggregatedPositions} />
+                <SharedPositionsBoard
+                  positions={aggregatedPositions}
+                  walletSportEdges={walletSportEdges}
+                />
               </div>
 
               {selectedWallet ? (
@@ -1690,17 +1813,15 @@ function ManageWalletsModal({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-sm sm:text-base font-semibold text-white">
-                        {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
+                      <p className="text-sm sm:text-base font-semibold text-white flex items-center gap-1.5">
+                        <span>
+                          {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
+                        </span>
+                        {highlight && <WalletHighlightBadge highlight={highlight} />}
                       </p>
                       <p className="text-[0.65rem] sm:text-xs text-gray-500">
                         {wallet.nickname ? formatWalletAddress(wallet.walletAddress) : 'Tracked wallet'}
                       </p>
-                      {highlight && (
-                        <div className="mt-1.5 sm:mt-2">
-                          <WalletHighlightBadge highlight={highlight} />
-                        </div>
-                      )}
                     </div>
                     <button
                       type="button"
@@ -1836,7 +1957,7 @@ function AlertCenter({
             {latestAlert.triggerType === 'single'
               ? 'Position threshold'
               : latestAlert.triggerType === 'position_step'
-                ? 'Legacy position step'
+                ? 'Position step'
                 : 'Rolling window'}{' '}
             · {formatUsdCompact(latestAlert.triggerValue)} · {latestAlert.tradeCount} trade
             {latestAlert.tradeCount === 1 ? '' : 's'}
@@ -1893,7 +2014,7 @@ function AlertHistoryList({ alertHistory }: { alertHistory: AlertEventRecord[] }
                     {alert.triggerType === 'single'
                       ? 'Position threshold'
                       : alert.triggerType === 'position_step'
-                        ? 'Legacy position step'
+                        ? 'Position step'
                         : 'Rolling window'}{' '}
                     · {formatUsdCompact(alert.triggerValue)}
                   </p>
@@ -1931,12 +2052,43 @@ function WalletHighlightBadge({ highlight }: { highlight: WalletHighlight }) {
   const { Icon, badgeClass, label, detail } = highlight
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] ${badgeClass}`}
+      className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[0.65rem] ${badgeClass}`}
+      title={`${label}: ${detail}`}
+      aria-label={`${label}: ${detail}`}
+    >
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+    </span>
+  )
+}
+
+function SportEdgeBadge({ edge }: { edge: WalletSportEdge }) {
+  const detail = `${edge.label} edge · ${edge.wins}-${edge.losses}-${edge.ties} · ${Math.round(edge.winRate * 100)}% WR · ${formatUsdCompact(edge.pnlUsd)}`
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-emerald-400/60 bg-emerald-500/10 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200"
       title={detail}
     >
-      <Icon className="h-3 w-3" aria-hidden="true" />
-      {label}
+      <Target className="h-3 w-3" aria-hidden="true" />
+      {edge.label} edge
     </span>
+  )
+}
+
+function SportEdgeIndicator({
+  edge,
+  align = 'left',
+}: {
+  edge: WalletSportEdge
+  align?: 'left' | 'right'
+}) {
+  const detail = `${edge.wins}-${edge.losses}-${edge.ties} · ${Math.round(
+    edge.winRate * 100,
+  )}% WR · ${formatUsdCompact(edge.pnlUsd)}`
+  return (
+    <div className={`mt-1.5 ${align === 'right' ? 'text-right' : ''}`}>
+      <SportEdgeBadge edge={edge} />
+      <p className="mt-0.5 text-[0.55rem] text-emerald-100 tracking-wide">{detail}</p>
+    </div>
   )
 }
 
@@ -2031,8 +2183,11 @@ function WalletSummaryList({
                         #{index + 1}
                       </span>
                       <div>
-                        <p className="text-xs sm:text-sm font-semibold text-white">
-                          {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
+                        <p className="text-xs sm:text-sm font-semibold text-white flex items-center gap-1.5">
+                          <span>
+                            {wallet.nickname || formatWalletAddress(wallet.walletAddress)}
+                          </span>
+                          {highlight && <WalletHighlightBadge highlight={highlight} />}
                         </p>
                         <p className="text-[0.65rem] sm:text-xs text-gray-500">
                           {wallet.nickname
@@ -2054,11 +2209,6 @@ function WalletSummaryList({
                       </p>
                     </div>
                   </div>
-                  {highlight && (
-                    <div className="mt-1.5 sm:mt-2">
-                      <WalletHighlightBadge highlight={highlight} />
-                    </div>
-                  )}
                   <div className="mt-2 sm:mt-3 flex flex-col gap-1 sm:gap-1.5">
                     {glanceBuckets.map(({ key: bucketKey, label }) => {
                       const bucket = stats[bucketKey]
@@ -2110,10 +2260,64 @@ function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
   return null
 }
 
+function calculateOppositionBalance(
+  outcomes: Array<{ outcome: string; visibleTotalInitialValue: number }>,
+): OppositionBalanceSnapshot | null {
+  const totals = outcomes
+    .map((outcome) => ({
+      label: outcome.outcome,
+      amount: Math.max(outcome.visibleTotalInitialValue, 0),
+    }))
+    .filter((entry) => entry.amount > 0)
+
+  if (totals.length < 2) {
+    return null
+  }
+
+  const totalAmount = totals.reduce((sum, entry) => sum + entry.amount, 0)
+  if (totalAmount <= 0) {
+    return null
+  }
+
+  // Use array order instead of sorting - first outcome is primary (left), second is secondary (right)
+  // This ensures alignment with the grid below which uses the same order
+  const primary = totals[0]
+  const restAmount = Math.max(totalAmount - primary.amount, 0)
+  const hasOnlyTwoSides = totals.length === 2
+  const secondaryAmount = hasOnlyTwoSides ? totals[1].amount : restAmount
+  const secondaryLabel = hasOnlyTwoSides ? totals[1].label : 'Others'
+
+  const primaryShare = Math.round((primary.amount / totalAmount) * 100) / 100
+  const secondaryShare = Math.round((secondaryAmount / totalAmount) * 100) / 100
+  const imbalance = Math.abs(primaryShare - secondaryShare)
+
+  let severity: OppositionBalanceSnapshot['severity']
+  if (imbalance >= 0.35) {
+    severity = 'lopsided'
+  } else if (imbalance >= 0.2) {
+    severity = 'tilted'
+  } else {
+    severity = 'balanced'
+  }
+
+  return {
+    primaryLabel: primary.label,
+    secondaryLabel,
+    primaryAmount: primary.amount,
+    secondaryAmount,
+    primaryShare,
+    secondaryShare,
+    totalAmount,
+    severity,
+  }
+}
+
 function SharedPositionsBoard({
   positions,
+  walletSportEdges,
 }: {
   positions: AggregatedMarketEntry[]
+  walletSportEdges: WalletSportEdgeMap
 }) {
   const [showRedeemable, setShowRedeemable] = useState(false)
   const [showSmallBets, setShowSmallBets] = useState(false)
@@ -2221,147 +2425,236 @@ function SharedPositionsBoard({
               return null
             }
 
-            return { market, visibleOutcomes, hasOpposition, visibleMarketTotal, originalBetTotal }
+            // Sort outcomes by initial value descending to ensure consistent order
+            // This ensures the balance indicator aligns with the grid below
+            const sortedVisibleOutcomes = [...visibleOutcomes].sort(
+              (a, b) => b.visibleTotalInitialValue - a.visibleTotalInitialValue
+            )
+
+            return { market, visibleOutcomes: sortedVisibleOutcomes, hasOpposition, visibleMarketTotal, originalBetTotal }
           })
           .filter((item): item is { market: AggregatedMarketEntry; visibleOutcomes: Array<AggregatedOutcomeEntry & { visibleWallets: AggregatedWalletPosition[]; visibleTotalValue: number; visibleTotalInitialValue: number }>; hasOpposition: boolean; visibleMarketTotal: number; originalBetTotal: number } => item !== null)
-          .map(({ market, visibleOutcomes, hasOpposition, originalBetTotal }) => (
-            <div
-              key={market.id}
-              className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${
-                hasOpposition
-                  ? 'border-rose-400/50 bg-rose-400/8'
-                  : 'border-slate-800/80 bg-slate-950/70 hover:border-slate-700/80'
-              }`}
-            >
-              <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
-                {market.icon ? (
-                  <img
-                    src={market.icon}
-                    alt={market.title}
-                    className="h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-lg border border-slate-800 object-cover flex-shrink-0"
-                  />
-                ) : (
-                  <div className={`flex-shrink-0 p-2 rounded-lg ${
-                    hasOpposition 
-                      ? 'bg-rose-400/20 text-rose-300' 
-                      : 'bg-cyan-500/10 text-cyan-400'
-                  }`}>
-                    {hasOpposition ? (
-                      <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
-                    ) : (
-                      <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
-                    )}
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-2">
-                    {hasOpposition && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[0.65rem] sm:text-xs font-semibold bg-rose-400/20 text-rose-300 border border-rose-400/30">
-                        <AlertTriangle className="h-3 w-3" />
-                        Opposing action
+          .map(({ market, visibleOutcomes, hasOpposition, originalBetTotal }) => {
+            const oppositionBalance = hasOpposition
+              ? calculateOppositionBalance(visibleOutcomes)
+              : null
+            return (
+              <div
+                key={market.id}
+                className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${
+                  hasOpposition
+                    ? 'border-rose-400/50 bg-rose-400/5'
+                    : 'border-slate-800/80 bg-slate-950/70 hover:border-slate-700/80'
+                }`}
+              >
+                <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
+                  {market.icon ? (
+                    <img
+                      src={market.icon}
+                      alt={market.title}
+                      className="h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-lg border border-slate-800 object-cover flex-shrink-0"
+                    />
+                  ) : (
+                    <div
+                      className={`flex-shrink-0 p-2 rounded-lg ${
+                        hasOpposition
+                          ? 'bg-rose-400/20 text-rose-300'
+                          : 'bg-cyan-500/10 text-cyan-400'
+                      }`}
+                    >
+                      {hasOpposition ? (
+                        <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                      ) : (
+                        <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                      )}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
+                      {market.title}
+                    </h3>
+                    {market.sportTag && (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-slate-800/70 bg-slate-900/70 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-gray-300">
+                        {getSportLabel(market.sportTag) ?? market.sportTag.toUpperCase()}
                       </span>
                     )}
                   </div>
-                  <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
-                    {market.title}
-                  </h3>
-                </div>
-                <div className="text-right flex-shrink-0 flex flex-col items-end gap-1.5">
-                  {(() => {
-                    const polymarketUrl = buildPolymarketUrl(market.eventSlug, market.slug)
-                    return polymarketUrl ? (
-                      <a
-                        href={polymarketUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 rounded-md hover:bg-slate-800/60 transition-colors text-gray-400 hover:text-white"
-                        aria-label="Open on Polymarket"
-                      >
-                        <ExternalLink className="h-4 w-4 sm:h-5 sm:w-5" />
-                      </a>
-                    ) : null
-                  })()}
-                  <div>
-                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
-                      Total
-                    </p>
-                    <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
-                      {formatUsdCompact(originalBetTotal)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
-                {visibleOutcomes.map((outcome) => {
-                  const hasMultipleWallets = outcome.visibleWallets.length >= 2
-                  const aggregateTotal = hasMultipleWallets
-                    ? outcome.visibleWallets.reduce((sum, wallet) => sum + wallet.initialValue, 0)
-                    : 0
-                  return (
-                  <div
-                    key={`${market.id}-${outcome.outcome}`}
-                    className="rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 p-3 sm:p-4 hover:border-slate-700/70 transition-colors"
-                  >
-                    <div className="mb-3 pb-2 border-b border-slate-800/50 flex items-center justify-between gap-2">
-                      <p className="text-sm sm:text-base font-semibold text-white">{outcome.outcome}</p>
-                      {hasMultipleWallets && (
-                        <p className="text-xs sm:text-sm font-semibold text-gray-300">
-                          {formatUsdCompact(aggregateTotal)}
-                        </p>
-                      )}
+                  <div className="text-right flex-shrink-0 flex flex-col items-end gap-1.5">
+                    {(() => {
+                      const polymarketUrl = buildPolymarketUrl(market.eventSlug, market.slug)
+                      return polymarketUrl ? (
+                        <a
+                          href={polymarketUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 rounded-md hover:bg-slate-800/60 transition-colors text-gray-400 hover:text-white"
+                          aria-label="Open on Polymarket"
+                        >
+                          <ExternalLink className="h-4 w-4 sm:h-5 sm:w-5" />
+                        </a>
+                      ) : null
+                    })()}
+                    <div>
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
+                        Total
+                      </p>
+                      <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
+                        {formatUsdCompact(originalBetTotal)}
+                      </p>
                     </div>
-                    <ul className="space-y-2">
-                      {outcome.visibleWallets.map((wallet) => {
-                        const pnlPositive = wallet.pnl >= 0
-                        return (
-                          <li
-                            key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-950/70 px-2.5 py-2 sm:px-3 sm:py-2.5 hover:border-slate-700/60 hover:bg-slate-950/80 transition-colors"
-                          >
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <div className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
-                                pnlPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'
-                              }`} />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs sm:text-sm font-semibold text-white truncate">
-                                  {wallet.label}
-                                </p>
-                                {wallet.redeemable && (
-                                  <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
-                                    Redeemable
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
-                              <span className="text-xs sm:text-sm font-semibold text-gray-200">
-                                {formatUsdCompact(wallet.initialValue)}
-                              </span>
-                              <span className="text-[0.65rem] text-gray-500">
-                                Now: {formatUsdCompact(wallet.value)}
-                              </span>
-                              <span
-                                className={`text-[0.65rem] sm:text-xs font-semibold ${
-                                  pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-                                }`}
-                              >
-                                {pnlPositive ? '+' : '-'}
-                                {formatUsdCompact(Math.abs(wallet.pnl))}
-                              </span>
-                            </div>
-                          </li>
-                        )
-                      })}
-                    </ul>
                   </div>
-                  )
-                })}
+                </div>
+                {oppositionBalance && (
+                  <div className="mb-4 sm:mb-5">
+                    <OppositionBalanceIndicator balance={oppositionBalance} />
+                  </div>
+                )}
+
+                <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
+                  {visibleOutcomes.map((outcome) => {
+                    const hasMultipleWallets = outcome.visibleWallets.length >= 2
+                    const aggregateTotal = hasMultipleWallets
+                      ? outcome.visibleWallets.reduce((sum, wallet) => sum + wallet.initialValue, 0)
+                      : 0
+                    return (
+                      <div
+                        key={`${market.id}-${outcome.outcome}`}
+                        className="rounded-lg sm:rounded-xl border border-slate-800/70 bg-slate-950/60 p-3 sm:p-4 hover:border-slate-700/70 transition-colors"
+                      >
+                        <div className="mb-3 pb-2 border-b border-slate-800/50 flex items-center justify-between gap-2">
+                          <p className="text-sm sm:text-base font-semibold text-white">{outcome.outcome}</p>
+                          {hasMultipleWallets && (
+                            <p className="text-xs sm:text-sm font-semibold text-gray-300">
+                              {formatUsdCompact(aggregateTotal)}
+                            </p>
+                          )}
+                        </div>
+                        <ul className="space-y-2">
+                          {outcome.visibleWallets.map((wallet) => {
+                            const pnlPositive = wallet.pnl >= 0
+                            const normalizedWalletAddress = wallet.walletAddress.toLowerCase()
+                            const sportEdge =
+                              market.sportTag
+                                ? walletSportEdges
+                                    .get(normalizedWalletAddress)
+                                    ?.get(market.sportTag)
+                                : undefined
+                            return (
+                              <li
+                                key={`${wallet.walletAddress}-${market.id}-${outcome.outcome}`}
+                                className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-950/70 px-2.5 py-2 sm:px-3 sm:py-2.5 hover:border-slate-700/60 hover:bg-slate-950/80 transition-colors"
+                              >
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <div
+                                    className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
+                                      pnlPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'
+                                    }`}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs sm:text-sm font-semibold text-white truncate flex items-center gap-1.5">
+                                      <span className="truncate">{wallet.label}</span>
+                                      {wallet.highlight && (
+                                        <WalletHighlightBadge highlight={wallet.highlight} />
+                                      )}
+                                    </p>
+                                    {wallet.redeemable && (
+                                      <span className="inline-flex items-center gap-1 mt-1 rounded-full border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-amber-200">
+                                        Redeemable
+                                      </span>
+                                    )}
+                                    {sportEdge && (
+                                      <SportEdgeIndicator edge={sportEdge} />
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                                  <span className="text-xs sm:text-sm font-semibold text-gray-200">
+                                    {formatUsdCompact(wallet.initialValue)}
+                                  </span>
+                                  <span className="text-[0.65rem] text-gray-500">
+                                    Now: {formatUsdCompact(wallet.value)}
+                                  </span>
+                                  <span
+                                    className={`text-[0.65rem] sm:text-xs font-semibold ${
+                                      pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                    }`}
+                                  >
+                                    {pnlPositive ? '+' : '-'}
+                                    {formatUsdCompact(Math.abs(wallet.pnl))}
+                                  </span>
+                                </div>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
       </div>
     </section>
+  )
+}
+
+const OPPOSITION_SEVERITY_STYLES: Record<
+  OppositionBalanceSnapshot['severity'],
+  { label: string; containerClass: string; barClass: string }
+> = {
+  balanced: {
+    label: 'Balanced split',
+    containerClass: 'border-rose-400/60 bg-rose-400/10 text-rose-200',
+    barClass: 'bg-gradient-to-r from-rose-400/80 via-rose-500/80 to-rose-600/80',
+  },
+  tilted: {
+    label: 'Tilted action',
+    containerClass: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
+    barClass: 'bg-gradient-to-r from-amber-300/80 via-amber-400/80 to-amber-500/80',
+  },
+  lopsided: {
+    label: 'One-sided flow',
+    containerClass: 'border-emerald-400/40 bg-emerald-400/5 text-emerald-200',
+    barClass: 'bg-gradient-to-r from-emerald-400/80 via-cyan-400/70 to-cyan-500/70',
+  },
+}
+
+function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSnapshot }) {
+  const severityMeta = OPPOSITION_SEVERITY_STYLES[balance.severity]
+  return (
+    <div
+      className={`w-full rounded-lg border px-2.5 py-2 text-[0.6rem] sm:text-[0.65rem] font-semibold uppercase tracking-[0.2em] ${severityMeta.containerClass}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1">
+          <Scale className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
+          {severityMeta.label}
+        </span>
+        <span className="tracking-[0.15em]">
+          {formatPercent(balance.primaryShare)} · {formatPercent(balance.secondaryShare)}
+        </span>
+      </div>
+      <div className="mt-1 text-[0.55rem] sm:text-[0.6rem] tracking-[0.15em] text-white/80 flex items-center justify-between">
+        <span className="truncate">{balance.primaryLabel}</span>
+        <span className="truncate text-right">{balance.secondaryLabel}</span>
+      </div>
+      <div className="mt-1.5 h-1.5 w-full rounded-full bg-slate-950/70 overflow-hidden border border-white/5">
+        <div
+          className={`h-full ${severityMeta.barClass}`}
+          style={{ width: `${Math.min(balance.primaryShare, 1) * 100}%` }}
+          aria-hidden="true"
+        />
+      </div>
+      <div className="mt-1.5 flex items-center justify-between text-[0.55rem] sm:text-[0.6rem] font-normal tracking-normal text-gray-200">
+        <span>
+          {formatUsdCompact(balance.primaryAmount)} · {formatPercent(balance.primaryShare)}
+        </span>
+        <span className="text-right">
+          {formatUsdCompact(balance.secondaryAmount)} · {formatPercent(balance.secondaryShare)}
+        </span>
+      </div>
+    </div>
   )
 }
 
