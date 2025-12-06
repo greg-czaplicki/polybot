@@ -156,7 +156,7 @@ interface OppositionBalanceSnapshot {
   primaryShare: number
   secondaryShare: number
   totalAmount: number
-  severity: 'balanced' | 'tilted' | 'lopsided'
+  callout: 'money' | 'units' | 'conviction' | 'mixed'
   primaryUnitShare: number
   secondaryUnitShare: number
   primaryConfidence: number
@@ -2808,15 +2808,19 @@ function calculateOppositionBalance(
   const secondaryUnitShare = totalUnits > 0 ? secondaryAgg.unitSum / totalUnits : 0
   const primaryShare = Math.round((primary.amount / totalAmount) * 100) / 100
   const secondaryShare = Math.round((secondaryAmount / totalAmount) * 100) / 100
-  const imbalance = Math.abs(primaryShare - secondaryShare)
+  const moneyEdge = primaryShare - secondaryShare
+  const unitEdge = primaryUnitShare - secondaryUnitShare
+  const confidenceEdge = primaryAgg.confidenceAverage - secondaryAgg.confidenceAverage
 
-  let severity: OppositionBalanceSnapshot['severity']
-  if (imbalance >= 0.35) {
-    severity = 'lopsided'
-  } else if (imbalance >= 0.2) {
-    severity = 'tilted'
-  } else {
-    severity = 'balanced'
+  let callout: OppositionBalanceSnapshot['callout'] = 'mixed'
+  if (moneyEdge >= 0.15 && unitEdge >= 0.1 && confidenceEdge >= 0.1) {
+    callout = 'money'
+  } else if (unitEdge >= 0.15 && moneyEdge < 0.1) {
+    callout = 'units'
+  } else if (confidenceEdge >= 0.1 && moneyEdge < 0.1) {
+    callout = 'conviction'
+  } else if (moneyEdge >= 0.15) {
+    callout = 'money'
   }
 
   return {
@@ -2827,7 +2831,7 @@ function calculateOppositionBalance(
     primaryShare,
     secondaryShare,
     totalAmount,
-    severity,
+    callout,
     primaryUnitShare,
     secondaryUnitShare,
     primaryConfidence: primaryAgg.confidenceAverage,
@@ -3142,33 +3146,32 @@ function SharedPositionsBoard({
 }
 
 const OPPOSITION_SEVERITY_STYLES: Record<
-  OppositionBalanceSnapshot['severity'],
-  { label: string; containerClass: string; barClass: string }
+  OppositionBalanceSnapshot['callout'],
+  { label: string; containerClass: string }
 > = {
-  balanced: {
-    label: 'Balanced split',
-    containerClass: 'border-rose-400/60 bg-rose-400/10 text-rose-200',
-    barClass: 'bg-gradient-to-r from-rose-400/80 via-rose-500/80 to-rose-600/80',
+  money: {
+    label: 'Bankroll favors primary',
+    containerClass: 'border-cyan-400/40 bg-cyan-500/5 text-cyan-200',
   },
-  tilted: {
-    label: 'Tilted action',
-    containerClass: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
-    barClass: 'bg-gradient-to-r from-amber-300/80 via-amber-400/80 to-amber-500/80',
+  units: {
+    label: 'Unit sizing favors primary',
+    containerClass: 'border-amber-400/40 bg-amber-500/5 text-amber-200',
   },
-  lopsided: {
-    label: 'One-sided flow',
-    containerClass: 'border-emerald-400/40 bg-emerald-400/5 text-emerald-200',
-    barClass: 'bg-gradient-to-r from-emerald-400/80 via-cyan-400/70 to-cyan-500/70',
+  conviction: {
+    label: 'Conviction favors primary',
+    containerClass: 'border-emerald-400/40 bg-emerald-500/5 text-emerald-200',
+  },
+  mixed: {
+    label: 'Mixed signals',
+    containerClass: 'border-slate-700/70 bg-slate-900/60 text-gray-200',
   },
 }
 
 function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSnapshot }) {
-  const severityMeta = OPPOSITION_SEVERITY_STYLES[balance.severity]
-  const confidenceMeta = (score: number) =>
-    score >= 0.75 ? CONFIDENCE_META.high : score >= 0.5 ? CONFIDENCE_META.medium : CONFIDENCE_META.low
+  const severityMeta = OPPOSITION_SEVERITY_STYLES[balance.callout]
   return (
     <div className={`w-full rounded-lg border px-2.5 py-2 space-y-2 ${severityMeta.containerClass}`}>
-      <div className="flex items-center justify-between text-[0.6rem] sm:text-[0.65rem] font-semibold uppercase tracking-[0.2em]">
+      <div className="flex items-center justify-between text-[0.6rem] sm:text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-gray-100">
         <span className="inline-flex items-center gap-1">
           <Scale className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
           {severityMeta.label}
@@ -3188,7 +3191,7 @@ function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSna
           secondaryShare={balance.secondaryShare}
           primaryAmount={balance.primaryAmount}
           secondaryAmount={balance.secondaryAmount}
-          barClass={severityMeta.barClass}
+          barClass="bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-500"
         />
         <BalanceBar
           label="Unit sizing"
@@ -3196,7 +3199,7 @@ function OppositionBalanceIndicator({ balance }: { balance: OppositionBalanceSna
           secondaryShare={balance.secondaryUnitShare}
           primaryAmount={balance.primaryUnitShare}
           secondaryAmount={balance.secondaryUnitShare}
-          barClass="bg-gradient-to-r from-cyan-400/70 via-sky-400/70 to-blue-500/70"
+          barClass="bg-gradient-to-r from-amber-300 via-amber-400 to-amber-500"
           isRatio
         />
         <ConfidenceBar
