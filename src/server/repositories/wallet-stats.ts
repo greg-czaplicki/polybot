@@ -282,7 +282,20 @@ export async function insertWalletResult(
        horizon_bucket,
        event_end_timestamp,
        opened_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(wallet_address, asset)
+     DO UPDATE SET
+       title = COALESCE(excluded.title, title),
+       event_slug = COALESCE(excluded.event_slug, event_slug),
+       resolved_at = excluded.resolved_at,
+       pnl_usd = excluded.pnl_usd,
+       result = excluded.result,
+       is_sports = excluded.is_sports,
+       sport_tag = COALESCE(excluded.sport_tag, sport_tag),
+       bet_type = COALESCE(excluded.bet_type, bet_type),
+       horizon_bucket = COALESCE(excluded.horizon_bucket, horizon_bucket),
+       event_end_timestamp = COALESCE(excluded.event_end_timestamp, event_end_timestamp),
+       opened_at = COALESCE(excluded.opened_at, opened_at)`,
     id,
     input.wallet_address,
     input.asset,
@@ -298,6 +311,18 @@ export async function insertWalletResult(
     input.event_end_timestamp ?? null,
     input.opened_at ?? null,
   )
+}
+
+export async function listRecordedResultAssets(
+  db: Db,
+  walletAddress: string,
+): Promise<Set<string>> {
+  const rows = await all<{ asset: string }>(
+    db,
+    `SELECT asset FROM wallet_results WHERE wallet_address = ?`,
+    walletAddress,
+  )
+  return new Set(rows.map((row) => row.asset))
 }
 
 interface WalletPnlSnapshotRow {

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 3000",
+    "dev": "CLOUDFLARE_ENV=preview vite dev --port 3000",
+    "dev:local": "vite dev --port 3000",
     "dev:remote": "CLOUDFLARE_ENV=preview vite dev --port 3000",
     "build": "vite build",
     "serve": "vite preview",
@@ -12,7 +13,8 @@
     "lint": "biome lint",
     "check": "biome check",
     "deploy": "wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "backfill:events": "node scripts/backfill-event-timestamps.mjs"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.16.1",

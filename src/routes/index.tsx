@@ -44,7 +44,9 @@ import {
   fetchTradesForUser,
   type PolymarketPosition,
   type PolymarketTrade,
+  type MarketMetrics,
 } from '../lib/polymarket'
+import { fetchMarketMetricsFn } from '../server/api/market-metrics'
 import {
   deleteWatcherFn,
   ensureUserFn,
@@ -61,7 +63,7 @@ import {
 } from '../server/api/wallet-stats'
 import { getWalletDiagnosticsFn } from '../server/api/diagnostics'
 
-const REFRESH_INTERVAL_MS = 30_000
+const GLOBAL_POSITIONS_REFRESH_MS = 5 * 60 * 1000
 const INITIAL_TRADE_BATCH_SIZE = 20
 const TRADE_BATCH_INCREMENT = 20
 const ALERT_CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
@@ -146,6 +148,9 @@ interface AggregatedMarketEntry {
   eventSlug?: string
   slug?: string
   sportTag?: string | null
+  conditionId?: string
+  eventId?: string
+  metrics?: MarketMetrics
 }
 
 interface OppositionBalanceSnapshot {
@@ -644,7 +649,51 @@ function formatWalletAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
-function isFutureWillQuestion(title?: string | null): boolean {
+const FAR_FUTURE_EVENT_THRESHOLD_DAYS = 150
+const FAR_FUTURE_EVENT_THRESHOLD_MS =
+  FAR_FUTURE_EVENT_THRESHOLD_DAYS * 24 * 60 * 60 * 1000
+const STALE_POSITION_GRACE_PERIOD_DAYS = 2
+const STALE_POSITION_GRACE_PERIOD_MS =
+  STALE_POSITION_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000
+
+function parseDateFromWillTitle(title: string): number | null {
+  const dateMatch = title.match(
+    /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/,
+  )
+  if (!dateMatch) {
+    return null
+  }
+  let normalized = dateMatch[0].replace(/\//g, '-')
+  if (/^\d{2}-\d{2}-\d{4}$/.test(normalized)) {
+    const [month, day, year] = normalized.split('-')
+    normalized = `${year}-${month}-${day}`
+  }
+  const timestamp = Date.parse(normalized)
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
+function isStalePosition(position?: { endDate?: string | null }): boolean {
+  if (!position?.endDate) {
+    return false
+  }
+  const endTimestamp = Date.parse(position.endDate)
+  if (Number.isNaN(endTimestamp)) {
+    return false
+  }
+  return endTimestamp + STALE_POSITION_GRACE_PERIOD_MS < Date.now()
+}
+
+function isFutureWillQuestion(title?: string | null, endDate?: string | null): boolean {
+  const now = Date.now()
+  const farFutureCutoff = now + FAR_FUTURE_EVENT_THRESHOLD_MS
+
+  if (endDate) {
+    const parsedEndDate = Date.parse(endDate)
+    if (!Number.isNaN(parsedEndDate) && parsedEndDate > farFutureCutoff) {
+      return true
+    }
+  }
+
   if (!title) {
     return false
   }
@@ -653,32 +702,31 @@ function isFutureWillQuestion(title?: string | null): boolean {
   if (!/^will\b/i.test(trimmed)) {
     return false
   }
-  
-  // Allow "Will" questions with specific dates (e.g., "Will Arsenal win on 2025-12-03?")
-  // These are current/upcoming game bets, not future championship bets
-  // Check for date patterns: YYYY-MM-DD or YYYY/MM/DD or MM/DD/YYYY
-  const hasSpecificDate = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(trimmed)
-  if (hasSpecificDate) {
-    return false
+
+  const explicitDate = parseDateFromWillTitle(trimmed)
+  if (explicitDate && explicitDate > farFutureCutoff) {
+    return true
   }
-  
+
   // Filter out championship/season questions with years
   // These include: "Will X be the 2025 Drivers Champion?", "Will Chiefs win Super Bowl 2026?", etc.
   const hasYear = /\b(20\d{2})\b/.test(trimmed)
-  const hasChampionshipKeywords = /\b(champion|championship|champions|winner|super bowl|world series|stanley cup|nba finals|drivers champion|constructors|playoffs|season|title)\b/i.test(trimmed)
-  
+  const hasChampionshipKeywords = /\b(champion|championship|champions|winner|super bowl|world series|stanley cup|nba finals|drivers champion|constructors|playoffs|season|title)\b/i.test(
+    trimmed,
+  )
+
   // If it has a year and championship/winner keywords, it's a future championship bet
   if (hasYear && hasChampionshipKeywords) {
     return true
   }
-  
+
   // Also filter if it's just a year far in the future (2026+) without a date
   // This catches things like "Will X win in 2026?" but allows "Will X win on 2025-12-03?"
   const hasFutureYear = /\b(202[6-9]|20[3-9]\d)\b/.test(trimmed)
-  if (hasFutureYear && !hasSpecificDate) {
+  if (hasFutureYear) {
     return true
   }
-  
+
   return false
 }
 
@@ -700,6 +748,23 @@ function App() {
       window.location.href = '/login'
     }
   }, [])
+
+  // Load Polymarket embed script
+  useEffect(() => {
+    const script = document.createElement('script')
+    script.type = 'module'
+    script.src = 'https://unpkg.com/@polymarket/embeds@latest/dist/index.js'
+    script.async = true
+    document.head.appendChild(script)
+
+    return () => {
+      // Cleanup: remove script on unmount
+      const existingScript = document.querySelector('script[src="https://unpkg.com/@polymarket/embeds@latest/dist/index.js"]')
+      if (existingScript) {
+        document.head.removeChild(existingScript)
+      }
+    }
+  }, [])
   const [isAddingWallet, setIsAddingWallet] = useState(false)
   const [trackingError, setTrackingError] = useState<string | null>(null)
   const [insightTab, setInsightTab] = useState<'closed' | 'activity' | 'profile'>('closed')
@@ -718,6 +783,7 @@ function App() {
   const [alertCenterError, setAlertCenterError] = useState<string | null>(null)
   const [isScanningAlerts, setIsScanningAlerts] = useState(false)
   const [isTestingNotification, setIsTestingNotification] = useState(false)
+  const [isGlobalRefreshing, setIsGlobalRefreshing] = useState(false)
   const [walletStats, setWalletStats] = useState<Record<string, WalletStatsSummary>>({})
   const [walletResults, setWalletResults] = useState<
     Record<string, WalletResultSummary[]>
@@ -729,6 +795,9 @@ function App() {
     Record<string, WalletSizingSnapshot | null>
   >({})
   const [walletPositions, setWalletPositions] = useState<Record<string, PolymarketPosition[]>>({})
+  const [marketMetricsCache, setMarketMetricsCache] = useState<
+    Map<string, { metrics: MarketMetrics; fetchedAt: number }>
+  >(new Map())
   const walletSportEdges = useMemo<WalletSportEdgeMap>(
     () => buildWalletSportEdgeMap(walletStats),
     [walletStats],
@@ -737,7 +806,7 @@ function App() {
     'idle' | 'requesting' | NotificationPermission | 'unsupported'
   >('idle')
   const abortControllerRef = useRef<AbortController | null>(null)
-  const refreshTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const globalPositionsTimerRef = useRef<ReturnType<typeof setInterval>>()
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null)
 
   const trackedWallets = useMemo<TrackedWalletRow[]>(() => {
@@ -855,7 +924,10 @@ function App() {
             return false
           }
           // Filter out future "Will" questions
-          if (isFutureWillQuestion(position.title)) {
+          if (isFutureWillQuestion(position.title, position.endDate)) {
+            return false
+          }
+          if (isStalePosition(position)) {
             return false
           }
           const descriptor = {
@@ -890,10 +962,21 @@ function App() {
               eventSlug: position.eventSlug,
               slug: position.slug,
               sportTag: sportTag ?? undefined,
+              conditionId: position.conditionId,
+              eventId: position.eventId,
             }
             markets.set(marketKey, market)
-          } else if (!market.sportTag && sportTag) {
-            market.sportTag = sportTag
+          } else {
+            // Update conditionId and eventId if we have them and market doesn't
+            if (!market.conditionId && position.conditionId) {
+              market.conditionId = position.conditionId
+            }
+            if (!market.eventId && position.eventId) {
+              market.eventId = position.eventId
+            }
+            if (!market.sportTag && sportTag) {
+              market.sportTag = sportTag
+            }
           }
           market.totalValue += position.currentValue
           const outcomeLabel = position.outcome ?? 'Outcome'
@@ -934,17 +1017,94 @@ function App() {
     })
 
     return Array.from(markets.values())
-      .map((market) => ({
-        ...market,
-        outcomes: market.outcomes
-          .map((outcome) => ({
-            ...outcome,
-            wallets: outcome.wallets.sort((a, b) => b.value - a.value),
-          }))
-          .sort((a, b) => b.totalValue - a.totalValue),
-      }))
+      .map((market) => {
+        // Attach cached metrics if available
+        const cached = market.conditionId
+          ? marketMetricsCache.get(market.conditionId)
+          : undefined
+        return {
+          ...market,
+          metrics: cached?.metrics,
+          outcomes: market.outcomes
+            .map((outcome) => ({
+              ...outcome,
+              wallets: outcome.wallets.sort((a, b) => b.value - a.value),
+            }))
+            .sort((a, b) => b.totalValue - a.totalValue),
+        }
+      })
       .sort((a, b) => b.totalValue - a.totalValue)
-  }, [walletPositions, walletLabelMap, walletHighlightMap, walletSportEdges, walletAverageSize])
+  }, [
+    walletPositions,
+    walletLabelMap,
+    walletHighlightMap,
+    walletSportEdges,
+    walletAverageSize,
+    marketMetricsCache,
+  ])
+
+  // Fetch volume and OI metrics for markets
+  useEffect(() => {
+    const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+    const now = Date.now()
+
+    // Collect unique conditionIds from aggregated positions
+    const conditionIdsToFetch = new Set<string>()
+    aggregatedPositions.forEach((market) => {
+      if (market.conditionId) {
+        const cached = marketMetricsCache.get(market.conditionId)
+        // Only fetch if not cached or cache is stale
+        if (!cached || now - cached.fetchedAt > CACHE_TTL_MS) {
+          conditionIdsToFetch.add(market.conditionId)
+        }
+      }
+    })
+
+    if (conditionIdsToFetch.size === 0) {
+      return
+    }
+
+    // Batch requests to avoid overwhelming the API
+    const BATCH_SIZE = 5
+    const conditionIdsArray = Array.from(conditionIdsToFetch)
+    const batches: string[][] = []
+    for (let i = 0; i < conditionIdsArray.length; i += BATCH_SIZE) {
+      batches.push(conditionIdsArray.slice(i, i + BATCH_SIZE))
+    }
+
+    // Process batches with a small delay between them
+    batches.forEach((batch, batchIndex) => {
+      setTimeout(() => {
+        batch.forEach((conditionId) => {
+          // Find the market to get eventId and slug
+          const market = aggregatedPositions.find((m) => m.conditionId === conditionId)
+          fetchMarketMetricsFn({ 
+            data: { 
+              conditionId, 
+              eventId: market?.eventId,
+              slug: market?.slug
+            } as { conditionId: string; eventId?: string; slug?: string }
+          })
+            .then((response) => {
+              const metrics = response.metrics
+              console.log('[CLIENT DEBUG] Metrics response for', conditionId, ':', metrics)
+              if (metrics && (metrics.volume || metrics.openInterest)) {
+                setMarketMetricsCache((prev) => {
+                  const next = new Map(prev)
+                  next.set(conditionId, { metrics, fetchedAt: Date.now() })
+                  return next
+                })
+              } else {
+                console.warn('[CLIENT DEBUG] No metrics data for', conditionId, '- response:', response)
+              }
+            })
+            .catch((error) => {
+              console.warn('[CLIENT DEBUG] Failed to fetch metrics for conditionId:', conditionId, error)
+            })
+        })
+      }, batchIndex * 200) // 200ms delay between batches
+    })
+  }, [aggregatedPositions, marketMetricsCache])
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
@@ -954,7 +1114,10 @@ function App() {
             return false
           }
           // Filter out future "Will" questions
-          if (isFutureWillQuestion(position.title)) {
+          if (isFutureWillQuestion(position.title, position.endDate)) {
+            return false
+          }
+          if (isStalePosition(position)) {
             return false
           }
           const descriptor = {
@@ -1118,6 +1281,64 @@ function App() {
     }
   }, [])
 
+  const refreshAllPositions = useCallback(async () => {
+    if (trackedWallets.length === 0) {
+      return
+    }
+    await Promise.all(
+      trackedWallets.map(async (wallet) => {
+        try {
+          await loadPositionsForWallet(wallet.walletAddress)
+        } catch (error) {
+          console.error('Unable to refresh positions for', wallet.walletAddress, error)
+        }
+      }),
+    )
+  }, [loadPositionsForWallet, trackedWallets])
+
+  const refreshAllData = useCallback(async () => {
+    setIsGlobalRefreshing(true)
+    try {
+      if (userId) {
+        await Promise.all([
+          loadWatchersForUser(userId),
+          loadAlertHistory(userId),
+        ])
+      }
+      await Promise.all(
+        trackedWallets.map(async (wallet) => {
+          await Promise.all([
+            loadWalletStats(wallet.walletAddress),
+            loadWalletResults(wallet.walletAddress),
+            loadWalletSizing(wallet.walletAddress),
+            loadPositionsForWallet(wallet.walletAddress),
+          ])
+        }),
+      )
+      if (selectedWallet) {
+        await loadWalletDiagnostics(selectedWallet)
+        await loadWalletData(selectedWallet, { silent: true })
+      }
+      setLastUpdated(Date.now())
+    } catch (error) {
+      console.error('Unable to refresh all data', error)
+    } finally {
+      setIsGlobalRefreshing(false)
+    }
+  }, [
+    loadAlertHistory,
+    loadPositionsForWallet,
+    loadWalletData,
+    loadWalletDiagnostics,
+    loadWalletResults,
+    loadWalletSizing,
+    loadWalletStats,
+    loadWatchersForUser,
+    selectedWallet,
+    trackedWallets,
+    userId,
+  ])
+
   useEffect(() => {
     let isMounted = true
 
@@ -1195,6 +1416,21 @@ useEffect(() => {
     }
   })
 }, [loadPositionsForWallet, trackedWallets, walletPositions])
+
+useEffect(() => {
+  if (trackedWallets.length === 0) {
+    return
+  }
+  globalPositionsTimerRef.current && clearInterval(globalPositionsTimerRef.current)
+  globalPositionsTimerRef.current = setInterval(() => {
+    refreshAllPositions()
+  }, GLOBAL_POSITIONS_REFRESH_MS)
+  return () => {
+    if (globalPositionsTimerRef.current) {
+      clearInterval(globalPositionsTimerRef.current)
+    }
+  }
+}, [refreshAllPositions, trackedWallets.length])
 
 useEffect(() => {
   if (!selectedWallet) {
@@ -1401,33 +1637,12 @@ useEffect(() => {
     }
   }, [])
 
-  useEffect(() => {
-    if (!selectedWallet) {
-      return
-    }
-
-    refreshTimerRef.current && clearInterval(refreshTimerRef.current)
-
-    refreshTimerRef.current = setInterval(() => {
-      loadWalletData(selectedWallet, { silent: true })
-    }, REFRESH_INTERVAL_MS)
-
-    return () => {
-      if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current)
-      }
-    }
-  }, [loadWalletData, selectedWallet])
-
-  useEffect(
-    () => () => {
-      abortControllerRef.current?.abort()
-      if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current)
-      }
-    },
-    [],
-  )
+useEffect(
+  () => () => {
+    abortControllerRef.current?.abort()
+  },
+  [],
+)
 
   const tradeStats = useMemo(() => {
     let lastTimestamp: number | null = null
@@ -1561,9 +1776,12 @@ useEffect(() => {
         }}
       >
         <div className="space-y-2 sm:space-y-3 md:space-y-4">
-          <p className="text-4xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.3em] text-cyan-400/80">
-            Polywhaler
-          </p>
+          <div className="flex items-center gap-3">
+            <WhaleMark className="h-10 w-10 md:h-12 md:w-12 text-cyan-300" />
+            <p className="text-4xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.2em] text-cyan-400/80">
+              Polywhaler
+            </p>
+          </div>
           <p className="text-xs sm:text-sm md:text-base text-gray-300 max-w-3xl">
             Track as many proxy wallets as you want, see their open and closed positions, and monitor PnL plus win/loss records across every timeframe.
           </p>
@@ -1573,6 +1791,8 @@ useEffect(() => {
             <SharedPositionsBoard
               positions={aggregatedPositions}
               walletSportEdges={walletSportEdges}
+              onRefreshBoard={refreshAllData}
+              isRefreshing={isGlobalRefreshing}
             />
           </div>
           <div className="grid gap-4 sm:gap-5 md:gap-6 lg:gap-8 lg:grid-cols-[320px_1fr] items-start">
@@ -1662,6 +1882,8 @@ useEffect(() => {
                 <SharedPositionsBoard
                   positions={aggregatedPositions}
                   walletSportEdges={walletSportEdges}
+                  onRefreshBoard={refreshAllData}
+                  isRefreshing={isGlobalRefreshing}
                 />
               </div>
 
@@ -2554,6 +2776,49 @@ function ConfidenceMeter({ confidence }: { confidence: WalletPositionConfidence 
   )
 }
 
+function WhaleMark({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 64 32"
+      className={className}
+      role="img"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id="whaleBody" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#22d3ee" />
+          <stop offset="50%" stopColor="#38bdf8" />
+          <stop offset="100%" stopColor="#818cf8" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M6 18c0-6 5-11 13-11h16c9 0 17 6 17 13s-8 12-17 12H22C13 32 6 27 6 21v-3z"
+        fill="url(#whaleBody)"
+        opacity="0.85"
+      />
+      <path
+        d="M52 12c4 0 6-2 10-2-2 4-2 8 0 12-4 0-6-2-10-2"
+        fill="url(#whaleBody)"
+        opacity="0.85"
+      />
+      <path
+        d="M24 9c0-2 2-4 4-4-1 1-1 3 1 4"
+        stroke="#a5f3fc"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <circle cx="23" cy="18" r="1" fill="#0f172a" />
+      <path
+        d="M18 22c3 3 10 4 16 1"
+        stroke="#0f172a"
+        strokeOpacity="0.35"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 function SizingBadge({
   initialValue,
   averageSize,
@@ -2844,9 +3109,13 @@ function calculateOppositionBalance(
 function SharedPositionsBoard({
   positions,
   walletSportEdges,
+  onRefreshBoard,
+  isRefreshing,
 }: {
   positions: AggregatedMarketEntry[]
   walletSportEdges: WalletSportEdgeMap
+  onRefreshBoard?: () => void
+  isRefreshing?: boolean
 }) {
   const [showRedeemable, setShowRedeemable] = useState(false)
   const [showSmallBets, setShowSmallBets] = useState(false)
@@ -2866,10 +3135,6 @@ function SharedPositionsBoard({
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col gap-1 flex-1">
             <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Shared exposure</p>
-            <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-balance">Where tracked wallets overlap</h2>
-            <p className="text-xs sm:text-sm text-gray-400">
-              Top markets sorted by combined current value. Opposing sides are flagged automatically.
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -2881,14 +3146,12 @@ function SharedPositionsBoard({
               {showRedeemable ? (
                 <>
                   <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  <span className="hidden sm:inline">Hide redeemable</span>
-                  <span className="sm:hidden">Hide</span>
+                  <span>Hide redeemable</span>
                 </>
               ) : (
                 <>
                   <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  <span className="hidden sm:inline">Show redeemable</span>
-                  <span className="sm:hidden">Show</span>
+                  <span>Show redeemable</span>
                 </>
               )}
             </button>
@@ -2901,14 +3164,12 @@ function SharedPositionsBoard({
               {showSmallBets ? (
                 <>
                   <EyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  <span className="hidden sm:inline">Hide &lt; $50k</span>
-                  <span className="sm:hidden">Hide</span>
+                  <span>Hide &lt; $50k</span>
                 </>
               ) : (
                 <>
                   <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  <span className="hidden sm:inline">Show &lt; $50k</span>
-                  <span className="sm:hidden">Show</span>
+                  <span>Show &lt; $50k</span>
                 </>
               )}
             </button>
@@ -2982,62 +3243,90 @@ function SharedPositionsBoard({
                     : 'border-slate-800/80 bg-slate-950/70 hover:border-slate-700/80'
                 }`}
               >
-                <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
-                  {market.icon ? (
-                    <img
-                      src={market.icon}
-                      alt={market.title}
-                      className="h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-lg border border-slate-800 object-cover flex-shrink-0"
+                {market.slug ? (
+                  <div className="mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
+                    {/* @ts-ignore - Polymarket web component */}
+                    <polymarket-market-embed
+                      market={market.slug}
+                      volume="true"
+                      chart="false"
+                      theme="dark"
+                      style={{ width: '100%', minHeight: '180px' }}
                     />
-                  ) : (
-                    <div
-                      className={`flex-shrink-0 p-2 rounded-lg ${
-                        hasOpposition
-                          ? 'bg-rose-400/20 text-rose-300'
-                          : 'bg-cyan-500/10 text-cyan-400'
-                      }`}
-                    >
-                      {hasOpposition ? (
-                        <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
-                      ) : (
-                        <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                  </div>
+                ) : (
+                  // Fallback header if no slug available
+                  <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
+                    {market.icon ? (
+                      <img
+                        src={market.icon}
+                        alt={market.title}
+                        className="h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-lg border border-slate-800 object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      <div
+                        className={`flex-shrink-0 p-2 rounded-lg ${
+                          hasOpposition
+                            ? 'bg-rose-400/20 text-rose-300'
+                            : 'bg-cyan-500/10 text-cyan-400'
+                        }`}
+                      >
+                        {hasOpposition ? (
+                          <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                        ) : (
+                          <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
+                        )}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
+                        {market.title}
+                      </h3>
+                      {market.sportTag && (
+                        <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-slate-800/70 bg-slate-900/70 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-gray-300">
+                          {getSportLabel(market.sportTag) ?? market.sportTag.toUpperCase()}
+                        </span>
                       )}
                     </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-base sm:text-lg md:text-xl font-semibold text-white leading-tight">
-                      {market.title}
-                    </h3>
-                    {market.sportTag && (
-                      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-slate-800/70 bg-slate-900/70 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-gray-300">
-                        {getSportLabel(market.sportTag) ?? market.sportTag.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-right flex-shrink-0 flex flex-col items-end gap-1.5">
-                    {(() => {
-                      const polymarketUrl = buildPolymarketUrl(market.eventSlug, market.slug)
-                      return polymarketUrl ? (
-                        <a
-                          href={polymarketUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-1.5 rounded-md hover:bg-slate-800/60 transition-colors text-gray-400 hover:text-white"
-                          aria-label="Open on Polymarket"
-                        >
-                          <ExternalLink className="h-4 w-4 sm:h-5 sm:w-5" />
-                        </a>
-                      ) : null
-                    })()}
-                    <div>
-                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
-                        Total
-                      </p>
-                      <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
-                        {formatUsdCompact(originalBetTotal)}
-                      </p>
+                    <div className="text-right flex-shrink-0">
+                      {(() => {
+                        const polymarketUrl = buildPolymarketUrl(market.eventSlug, market.slug)
+                        return polymarketUrl ? (
+                          <a
+                            href={polymarketUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 rounded-md hover:bg-slate-800/60 transition-colors text-gray-400 hover:text-white"
+                            aria-label="Open on Polymarket"
+                          >
+                            <ExternalLink className="h-4 w-4 sm:h-5 sm:w-5" />
+                          </a>
+                        ) : null
+                      })()}
                     </div>
                   </div>
+                )}
+                {/* Show our wallet's total bet amount */}
+                <div className="mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60 flex items-center justify-between">
+                  <div>
+                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500 mb-0.5">
+                      Your Total Position
+                    </p>
+                    <p className="text-base sm:text-lg md:text-xl font-semibold text-white">
+                      {formatUsdCompact(originalBetTotal)}
+                    </p>
+                  </div>
+                  {onRefreshBoard && (
+                    <button
+                      type="button"
+                      onClick={onRefreshBoard}
+                      className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.2em] text-gray-300 hover:border-cyan-400 hover:text-cyan-200"
+                      disabled={isRefreshing}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                      {isRefreshing ? 'Refreshing' : 'Refresh'}
+                    </button>
+                  )}
                 </div>
                 {oppositionBalance && (
                   <div className="mb-4 sm:mb-5">

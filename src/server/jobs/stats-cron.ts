@@ -12,6 +12,7 @@ import {
   deleteWalletSizingSnapshot,
   insertWalletPnlSnapshot,
   insertWalletResult,
+  listRecordedResultAssets,
   listPositionSnapshotsForWallet,
   upsertPositionSnapshot,
   upsertWalletSizingSnapshot,
@@ -136,6 +137,7 @@ export async function runStatsCron(env: Env) {
     }
 
     const snapshots = await listPositionSnapshotsForWallet(db, walletAddress)
+    const recordedResultAssets = await listRecordedResultAssets(db, walletAddress)
     const snapshotByAsset = new Map<string, WalletPositionSnapshotRow>()
     snapshots.forEach((snapshot) => {
       snapshotByAsset.set(snapshot.asset, snapshot)
@@ -152,6 +154,15 @@ export async function runStatsCron(env: Env) {
 
       // Some resolved markets stick around in the Polymarket positions response with
       // zero value or a redeemable flag, so treat them as closed instead of updating.
+      const descriptor = {
+        title: position.title,
+        slug: position.slug,
+        eventSlug: position.eventSlug,
+      }
+      const sportTag = detectSportTag(descriptor)
+      const sportsFlag = isSportsMarket(descriptor) ? 1 : 0
+      const eventEndTimestamp = parseEventEndTimestamp(position.endDate)
+
       const resolved =
         position.redeemable ||
         Math.abs(position.currentValue) < EPSILON ||
@@ -161,18 +172,31 @@ export async function runStatsCron(env: Env) {
         if (snapshot) {
           closedSnapshots.push(snapshot)
           snapshotByAsset.delete(assetKey)
+        } else {
+          if (recordedResultAssets.has(assetKey)) {
+            continue
+          }
+          closedSnapshots.push({
+            id: `synthetic-${walletAddress}-${assetKey}`,
+            wallet_address: walletAddress,
+            asset: assetKey,
+            title: position.title ?? null,
+            event_slug: position.eventSlug ?? position.slug ?? null,
+            is_sports: sportsFlag,
+            sport_tag: sportTag ?? null,
+            last_size: position.size,
+            last_current_value: position.currentValue ?? 0,
+            last_cash_pnl: position.cashPnl ?? 0,
+            last_percent_pnl: position.percentPnl ?? 0,
+            last_avg_price: position.avgPrice ?? 0,
+            last_realized_pnl: position.realizedPnl ?? 0,
+            last_seen_at: now,
+            opened_at: now,
+            event_end_timestamp: eventEndTimestamp ?? null,
+          })
         }
         continue
       }
-
-      const descriptor = {
-        title: position.title,
-        slug: position.slug,
-        eventSlug: position.eventSlug,
-      }
-      const sportTag = detectSportTag(descriptor)
-      const sportsFlag = isSportsMarket(descriptor) ? 1 : 0
-      const eventEndTimestamp = parseEventEndTimestamp(position.endDate)
 
       openCashPnl += position.cashPnl ?? 0
       openPositionValue += position.currentValue ?? 0
@@ -227,7 +251,9 @@ export async function runStatsCron(env: Env) {
     for (const snapshot of closedSnapshots) {
       const closing = calculateClosingPnl(snapshot, trades)
       const pnl = closing?.pnl ?? snapshot.last_cash_pnl
-      const resolvedAt = closing?.resolvedAt ?? now
+      const fallbackResolvedAt =
+        snapshot.event_end_timestamp ?? snapshot.last_seen_at ?? now
+      const resolvedAt = Math.min(closing?.resolvedAt ?? fallbackResolvedAt, now)
       let result: 'win' | 'loss' | 'tie'
       if (pnl > EPSILON) {
         result = 'win'
@@ -265,6 +291,7 @@ export async function runStatsCron(env: Env) {
         opened_at: snapshot.opened_at,
       })
 
+      recordedResultAssets.add(snapshot.asset)
       await deletePositionSnapshot(db, snapshot.wallet_address, snapshot.asset)
     }
 
