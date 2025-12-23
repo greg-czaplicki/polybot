@@ -1078,9 +1078,9 @@ function App() {
         batch.forEach((conditionId) => {
           // Find the market to get eventId and slug
           const market = aggregatedPositions.find((m) => m.conditionId === conditionId)
-          fetchMarketMetricsFn({ 
-            data: { 
-              conditionId, 
+          fetchMarketMetricsFn({
+            data: {
+              conditionId,
               eventId: market?.eventId,
               slug: market?.slug
             } as { conditionId: string; eventId?: string; slug?: string }
@@ -1108,28 +1108,28 @@ function App() {
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
-        const response = await fetchPositionsForUser(walletAddress)
-        const filtered = response.filter((position) => {
-          if (position.currentValue <= 0) {
-            return false
-          }
-          // Filter out future "Will" questions
-          if (isFutureWillQuestion(position.title, position.endDate)) {
-            return false
-          }
-          if (isStalePosition(position)) {
-            return false
-          }
-          const descriptor = {
-            title: position.title,
-            slug: position.slug,
-            eventSlug: position.eventSlug,
-          }
-          // If it's a "Will" question with a date, it's likely a sports bet even if not detected as sports market
-          // This catches cases like "Will RB Leipzig win on 2025-12-02?" where the team name isn't in keywords
-          const isWillWithDate = /^will\b/i.test(position.title?.trim() ?? '') && /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(position.title?.trim() ?? '')
-          return (isSportsMarket(descriptor) || isWillWithDate) && !isEsportsMarket(descriptor)
-        })
+      const response = await fetchPositionsForUser(walletAddress)
+      const filtered = response.filter((position) => {
+        if (position.currentValue <= 0) {
+          return false
+        }
+        // Filter out future "Will" questions
+        if (isFutureWillQuestion(position.title, position.endDate)) {
+          return false
+        }
+        if (isStalePosition(position)) {
+          return false
+        }
+        const descriptor = {
+          title: position.title,
+          slug: position.slug,
+          eventSlug: position.eventSlug,
+        }
+        // If it's a "Will" question with a date, it's likely a sports bet even if not detected as sports market
+        // This catches cases like "Will RB Leipzig win on 2025-12-02?" where the team name isn't in keywords
+        const isWillWithDate = /^will\b/i.test(position.title?.trim() ?? '') && /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/.test(position.title?.trim() ?? '')
+        return (isSportsMarket(descriptor) || isWillWithDate) && !isEsportsMarket(descriptor)
+      })
       setWalletPositions((previous) => ({
         ...previous,
         [walletAddress.toLowerCase()]: filtered,
@@ -1207,7 +1207,7 @@ function App() {
     async (walletAddress: string) => {
       try {
         const response = await getWalletStatsFn({
-          data: { walletAddress, sportsOnly: false },
+          data: { walletAddress, sportsOnly: true },
         })
         const normalized = walletAddress.toLowerCase()
         setWalletStats((previous) => ({
@@ -1239,7 +1239,7 @@ function App() {
   const loadWalletResults = useCallback(async (walletAddress: string) => {
     try {
       const response = await listWalletResultsFn({
-        data: { walletAddress, sportsOnly: false, limit: 25 },
+        data: { walletAddress, sportsOnly: true, limit: 25 },
       })
       const normalized = walletAddress.toLowerCase()
       setWalletResults((previous) => ({
@@ -1261,10 +1261,10 @@ function App() {
         ...previous,
         [normalized]: response.sizing
           ? {
-              averageSize: response.sizing.averageSize,
-              positionCount: response.sizing.positionCount,
-              updatedAt: response.sizing.updatedAt,
-            }
+            averageSize: response.sizing.averageSize,
+            positionCount: response.sizing.positionCount,
+            updatedAt: response.sizing.updatedAt,
+          }
           : null,
       }))
     } catch (error) {
@@ -1381,66 +1381,66 @@ function App() {
     setSelectedWallet(trackedWallets[0].walletAddress)
   }, [selectedWallet, trackedWallets])
 
-useEffect(() => {
-  trackedWallets.forEach((wallet) => {
-    const key = wallet.walletAddress.toLowerCase()
-    if (!walletStats[key]) {
-      loadWalletStats(wallet.walletAddress)
-    }
-  })
-}, [loadWalletStats, trackedWallets, walletStats])
+  useEffect(() => {
+    trackedWallets.forEach((wallet) => {
+      const key = wallet.walletAddress.toLowerCase()
+      if (!walletStats[key]) {
+        loadWalletStats(wallet.walletAddress)
+      }
+    })
+  }, [loadWalletStats, trackedWallets, walletStats])
 
-useEffect(() => {
-  trackedWallets.forEach((wallet) => {
-    const key = wallet.walletAddress.toLowerCase()
-    if (!walletResults[key]) {
-      loadWalletResults(wallet.walletAddress)
-    }
-  })
-}, [loadWalletResults, trackedWallets, walletResults])
+  useEffect(() => {
+    trackedWallets.forEach((wallet) => {
+      const key = wallet.walletAddress.toLowerCase()
+      if (!walletResults[key]) {
+        loadWalletResults(wallet.walletAddress)
+      }
+    })
+  }, [loadWalletResults, trackedWallets, walletResults])
 
-useEffect(() => {
-  trackedWallets.forEach((wallet) => {
-    const key = wallet.walletAddress.toLowerCase()
-    if (!(key in walletSizing)) {
-      loadWalletSizing(wallet.walletAddress)
-    }
-  })
-}, [loadWalletSizing, trackedWallets, walletSizing])
+  useEffect(() => {
+    trackedWallets.forEach((wallet) => {
+      const key = wallet.walletAddress.toLowerCase()
+      if (!(key in walletSizing)) {
+        loadWalletSizing(wallet.walletAddress)
+      }
+    })
+  }, [loadWalletSizing, trackedWallets, walletSizing])
 
-useEffect(() => {
-  trackedWallets.forEach((wallet) => {
-    const key = wallet.walletAddress.toLowerCase()
-    if (!walletPositions[key]) {
-      loadPositionsForWallet(wallet.walletAddress)
-    }
-  })
-}, [loadPositionsForWallet, trackedWallets, walletPositions])
+  useEffect(() => {
+    trackedWallets.forEach((wallet) => {
+      const key = wallet.walletAddress.toLowerCase()
+      if (!walletPositions[key]) {
+        loadPositionsForWallet(wallet.walletAddress)
+      }
+    })
+  }, [loadPositionsForWallet, trackedWallets, walletPositions])
 
-useEffect(() => {
-  if (trackedWallets.length === 0) {
-    return
-  }
-  globalPositionsTimerRef.current && clearInterval(globalPositionsTimerRef.current)
-  globalPositionsTimerRef.current = setInterval(() => {
-    refreshAllPositions()
-  }, GLOBAL_POSITIONS_REFRESH_MS)
-  return () => {
-    if (globalPositionsTimerRef.current) {
-      clearInterval(globalPositionsTimerRef.current)
+  useEffect(() => {
+    if (trackedWallets.length === 0) {
+      return
     }
-  }
-}, [refreshAllPositions, trackedWallets.length])
+    globalPositionsTimerRef.current && clearInterval(globalPositionsTimerRef.current)
+    globalPositionsTimerRef.current = setInterval(() => {
+      refreshAllPositions()
+    }, GLOBAL_POSITIONS_REFRESH_MS)
+    return () => {
+      if (globalPositionsTimerRef.current) {
+        clearInterval(globalPositionsTimerRef.current)
+      }
+    }
+  }, [refreshAllPositions, trackedWallets.length])
 
-useEffect(() => {
-  if (!selectedWallet) {
-    return
-  }
-  const key = selectedWallet.toLowerCase()
-  if (!walletDiagnostics[key]) {
-    loadWalletDiagnostics(selectedWallet)
-  }
-}, [loadWalletDiagnostics, selectedWallet, walletDiagnostics])
+  useEffect(() => {
+    if (!selectedWallet) {
+      return
+    }
+    const key = selectedWallet.toLowerCase()
+    if (!walletDiagnostics[key]) {
+      loadWalletDiagnostics(selectedWallet)
+    }
+  }, [loadWalletDiagnostics, selectedWallet, walletDiagnostics])
 
   const handleAddTrackedWallet = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1544,7 +1544,7 @@ useEffect(() => {
     try {
       const result = await testPushNotificationFn({ data: undefined })
       console.log('[Test Notification] Server response:', result)
-      
+
       // Check if notification permission is granted
       if ('Notification' in window && Notification.permission !== 'granted') {
         setAlertCenterError(
@@ -1552,7 +1552,7 @@ useEffect(() => {
         )
         return
       }
-      
+
       // Check service worker
       if ('serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.ready
@@ -1561,7 +1561,7 @@ useEffect(() => {
           return
         }
       }
-      
+
       // Check Pusher Beams subscription
       if (window.PusherPushNotifications) {
         try {
@@ -1571,8 +1571,8 @@ useEffect(() => {
           const interestsResponse = await client.getDeviceInterests()
           console.log('[Test Notification] Subscribed interests:', interestsResponse)
           // getDeviceInterests returns {interests: string[]}, not an array directly
-          const interests = Array.isArray(interestsResponse) 
-            ? interestsResponse 
+          const interests = Array.isArray(interestsResponse)
+            ? interestsResponse
             : (interestsResponse && interestsResponse.interests ? interestsResponse.interests : [])
           if (!interests.includes('wallet-alerts')) {
             setAlertCenterError(
@@ -1584,11 +1584,11 @@ useEffect(() => {
           console.error('[Test Notification] Error checking subscription:', err)
         }
       }
-      
+
       // If we got here, everything looks good
       setAlertCenterError(null)
       console.log('[Test Notification] Notification sent successfully. Check your notifications!')
-      
+
       // Check service worker for push event logs
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then((registrations) => {
@@ -1637,12 +1637,12 @@ useEffect(() => {
     }
   }, [])
 
-useEffect(
-  () => () => {
-    abortControllerRef.current?.abort()
-  },
-  [],
-)
+  useEffect(
+    () => () => {
+      abortControllerRef.current?.abort()
+    },
+    [],
+  )
 
   const tradeStats = useMemo(() => {
     let lastTimestamp: number | null = null
@@ -1769,10 +1769,10 @@ useEffect(
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
-      <div 
+      <div
         className="px-4 py-6 sm:px-5 sm:py-8 md:px-6 md:py-10 lg:px-8 lg:py-12 container mx-auto space-y-4 sm:space-y-6 md:space-y-10"
-        style={{ 
-          paddingTop: 'max(1.5rem, calc(env(safe-area-inset-top, 0px) + 1.5rem))' 
+        style={{
+          paddingTop: 'max(1.5rem, calc(env(safe-area-inset-top, 0px) + 1.5rem))'
         }}
       >
         <div className="space-y-2 sm:space-y-3 md:space-y-4">
@@ -1888,301 +1888,296 @@ useEffect(
               </div>
 
               {selectedWallet ? (
-              <section className="bg-slate-950/70 border border-slate-800/80 rounded-xl sm:rounded-2xl shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                      Insights for
-                    </p>
-                    <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold">
-                      {selectedWalletMeta?.nickname || formatWalletAddress(selectedWallet)}
-                    </h2>
-                    <p className="text-xs sm:text-sm text-gray-400">{selectedWallet}</p>
+                <section className="bg-slate-950/70 border border-slate-800/80 rounded-xl sm:rounded-2xl shadow-lg shadow-black/20 p-3 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                        Insights for
+                      </p>
+                      <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold">
+                        {selectedWalletMeta?.nickname || formatWalletAddress(selectedWallet)}
+                      </h2>
+                      <p className="text-xs sm:text-sm text-gray-400">{selectedWallet}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[0.65rem] sm:text-xs text-gray-400">
+                      {lastUpdated && (
+                        <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1">
+                          <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
+                          Updated {new Date(lastUpdated).toLocaleTimeString()}
+                        </span>
+                      )}
+                      {isAutoRefreshing && (
+                        <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-cyan-300">
+                          <RefreshCw className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                          Auto-refreshing
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={manualRefresh}
+                        className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-[0.65rem] sm:text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
+                        disabled={status === 'loading'}
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
+                        Refresh now
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[0.65rem] sm:text-xs text-gray-400">
-                    {lastUpdated && (
-                      <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1">
-                        <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
-                        Updated {new Date(lastUpdated).toLocaleTimeString()}
-                      </span>
-                    )}
-                    {isAutoRefreshing && (
-                      <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-cyan-300">
-                        <RefreshCw className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
-                        Auto-refreshing
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={manualRefresh}
-                      className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-slate-800 px-2 sm:px-3 py-0.5 sm:py-1 text-[0.65rem] sm:text-xs text-gray-200 hover:border-cyan-400 disabled:opacity-50"
-                      disabled={status === 'loading'}
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
-                      Refresh now
-                    </button>
-                  </div>
-                </div>
 
-                {errorMessage && (
-                  <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm">
-                    {errorMessage}
-                  </div>
-                )}
+                  {errorMessage && (
+                    <div className="bg-rose-950/40 border border-rose-900 text-rose-200 px-3 sm:px-4 py-2 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm">
+                      {errorMessage}
+                    </div>
+                  )}
 
-                {(selectedDiagnostics || selectedWalletAverageSize) && (
-                  <div
-                    className={`grid gap-2 sm:gap-3 md:gap-4 ${
-                      selectedDiagnostics
-                        ? selectedWalletAverageSize
-                          ? 'md:grid-cols-4'
-                          : 'md:grid-cols-3'
-                        : 'md:grid-cols-1'
-                    }`}
-                  >
-                    {selectedDiagnostics && (
-                      <>
-                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                            Closed PnL (7d)
-                          </p>
-                          <p className="text-base sm:text-lg font-semibold text-white">
-                            {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
-                          </p>
-                          <p
-                            className={`text-xs sm:text-sm font-semibold ${
-                              selectedDiagnostics.closed.pnlUsd >= 0
-                                ? 'text-emerald-300'
-                                : 'text-rose-300'
-                            }`}
-                          >
-                            {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
-                            {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
-                          </p>
-                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                            {selectedDiagnostics.closed.sampleCount} resolved markets
-                          </p>
-                        </div>
-                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                            Open exposure
-                          </p>
-                          <p className="text-base sm:text-lg font-semibold text-white">
-                            {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
-                          </p>
-                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                            Across {selectedDiagnostics.open.positionCount} positions
-                          </p>
-                        </div>
-                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                            Flow (7d)
-                          </p>
-                          <p className="text-xs sm:text-sm text-gray-300">
-                            Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
-                          </p>
-                          <p className="text-xs sm:text-sm text-gray-300">
-                            Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
-                          </p>
-                        </div>
-                      </>
-                    )}
-                    {selectedWalletAverageSize && (
-                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
-                        <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                          Typical unit size
-                        </p>
-                        <p className="text-base sm:text-lg font-semibold text-white">
-                          {formatUsdCompact(selectedWalletAverageSize)}
-                        </p>
-                        {typeof sizingSampleCount === 'number' && sizingSampleCount > 0 && (
-                          <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                            Avg of {sizingSampleCount} open position{sizingSampleCount === 1 ? '' : 's'}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 md:gap-4">
-                  <div>
-                    <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
-                    <h3 className="text-base sm:text-lg md:text-xl lg:text-2xl font-semibold">More context on this trader</h3>
-                  </div>
-                  <div className="flex-1" />
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setInsightTab('closed')}
-                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                  {(selectedDiagnostics || selectedWalletAverageSize) && (
+                    <div
+                      className={`grid gap-2 sm:gap-3 md:gap-4 ${selectedDiagnostics
+                          ? selectedWalletAverageSize
+                            ? 'md:grid-cols-4'
+                            : 'md:grid-cols-3'
+                          : 'md:grid-cols-1'
+                        }`}
                     >
-                      Closed markets
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setInsightTab('activity')}
-                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
-                    >
-                      Live tape
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setInsightTab('profile')}
-                      className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
-                    >
-                      Profile
-                    </button>
-                  </div>
-                </div>
-
-                {insightTab === 'closed' && (
-                  <div className="space-y-3 sm:space-y-4">
-                    {selectedStats && selectedStats.bySport.length > 0 && (
-                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-2 sm:space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
+                      {selectedDiagnostics && (
+                        <>
+                          <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
                             <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                              Sports records
+                              Closed PnL (7d)
                             </p>
-                            <h4 className="text-sm sm:text-base md:text-lg font-semibold">League breakdown</h4>
+                            <p className="text-base sm:text-lg font-semibold text-white">
+                              {selectedDiagnostics.closed.wins}-{selectedDiagnostics.closed.losses}-{selectedDiagnostics.closed.ties}
+                            </p>
+                            <p
+                              className={`text-xs sm:text-sm font-semibold ${selectedDiagnostics.closed.pnlUsd >= 0
+                                  ? 'text-emerald-300'
+                                  : 'text-rose-300'
+                                }`}
+                            >
+                              {selectedDiagnostics.closed.pnlUsd >= 0 ? '+' : '-'}
+                              {formatUsdCompact(Math.abs(selectedDiagnostics.closed.pnlUsd))}
+                            </p>
+                            <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                              {selectedDiagnostics.closed.sampleCount} resolved markets
+                            </p>
                           </div>
-                          <span className="text-[0.65rem] sm:text-xs text-gray-400">
-                            {selectedStats.bySport.length} league
-                            {selectedStats.bySport.length === 1 ? '' : 's'}
-                          </span>
+                          <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                              Open exposure
+                            </p>
+                            <p className="text-base sm:text-lg font-semibold text-white">
+                              {formatUsdCompact(selectedDiagnostics.open.pnlUsd)}
+                            </p>
+                            <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                              Across {selectedDiagnostics.open.positionCount} positions
+                            </p>
+                          </div>
+                          <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                              Flow (7d)
+                            </p>
+                            <p className="text-xs sm:text-sm text-gray-300">
+                              Buy {formatUsdCompact(selectedDiagnostics.trades.buyVolume)}
+                            </p>
+                            <p className="text-xs sm:text-sm text-gray-300">
+                              Sell {formatUsdCompact(selectedDiagnostics.trades.sellVolume)}
+                            </p>
+                          </div>
+                        </>
+                      )}
+                      {selectedWalletAverageSize && (
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm p-2.5 sm:p-3 md:p-4 space-y-1">
+                          <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                            Typical unit size
+                          </p>
+                          <p className="text-base sm:text-lg font-semibold text-white">
+                            {formatUsdCompact(selectedWalletAverageSize)}
+                          </p>
+                          {typeof sizingSampleCount === 'number' && sizingSampleCount > 0 && (
+                            <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                              Avg of {sizingSampleCount} open position{sizingSampleCount === 1 ? '' : 's'}
+                            </p>
+                          )}
                         </div>
-                        <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
-                          {selectedStats.bySport.map((record) => {
-                            const label = getSportLabel(record.sport) ?? record.sport.toUpperCase()
-                            const pnlPositive = record.pnlUsd >= 0
-                            return (
-                              <div
-                                key={`${record.sport}-breakdown`}
-                                className="rounded-lg sm:rounded-xl border border-slate-800/80 bg-slate-950/60 p-2 sm:p-3"
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="text-xs sm:text-sm font-semibold text-white">{label}</p>
-                                  <p className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
-                                    Record
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 md:gap-4">
+                    <div>
+                      <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">Deep dives</p>
+                      <h3 className="text-base sm:text-lg md:text-xl lg:text-2xl font-semibold">More context on this trader</h3>
+                    </div>
+                    <div className="flex-1" />
+                    <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setInsightTab('closed')}
+                        className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'closed' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      >
+                        Closed markets
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInsightTab('activity')}
+                        className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'activity' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      >
+                        Live tape
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInsightTab('profile')}
+                        className={`rounded-full border px-2.5 sm:px-3 md:px-4 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs font-semibold transition ${insightTab === 'profile' ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-slate-800 text-gray-400 hover:border-cyan-400/60'}`}
+                      >
+                        Profile
+                      </button>
+                    </div>
+                  </div>
+
+                  {insightTab === 'closed' && (
+                    <div className="space-y-3 sm:space-y-4">
+                      {selectedStats && selectedStats.bySport.length > 0 && (
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-2 sm:space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                                Sports records
+                              </p>
+                              <h4 className="text-sm sm:text-base md:text-lg font-semibold">League breakdown</h4>
+                            </div>
+                            <span className="text-[0.65rem] sm:text-xs text-gray-400">
+                              {selectedStats.bySport.length} league
+                              {selectedStats.bySport.length === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                          <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
+                            {selectedStats.bySport.map((record) => {
+                              const label = getSportLabel(record.sport) ?? record.sport.toUpperCase()
+                              const pnlPositive = record.pnlUsd >= 0
+                              return (
+                                <div
+                                  key={`${record.sport}-breakdown`}
+                                  className="rounded-lg sm:rounded-xl border border-slate-800/80 bg-slate-950/60 p-2 sm:p-3"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs sm:text-sm font-semibold text-white">{label}</p>
+                                    <p className="text-[0.6rem] uppercase tracking-[0.3em] text-gray-500">
+                                      Record
+                                    </p>
+                                  </div>
+                                  <p className="text-sm sm:text-base md:text-lg font-semibold text-white">
+                                    {record.wins}-{record.losses}-{record.ties}
+                                  </p>
+                                  <p
+                                    className={`text-[0.65rem] sm:text-xs font-semibold ${pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                      }`}
+                                  >
+                                    {pnlPositive ? '+' : '-'}
+                                    {formatUsdCompact(Math.abs(record.pnlUsd))}
                                   </p>
                                 </div>
-                                <p className="text-sm sm:text-base md:text-lg font-semibold text-white">
-                                  {record.wins}-{record.losses}-{record.ties}
-                                </p>
-                                <p
-                                  className={`text-[0.65rem] sm:text-xs font-semibold ${
-                                    pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-                                  }`}
-                                >
-                                  {pnlPositive ? '+' : '-'}
-                                  {formatUsdCompact(Math.abs(record.pnlUsd))}
-                                </p>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                    {selectedStats && selectedStats.byEdge.length > 0 && (
-                      <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-cyan-500/20 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-cyan-300">
-                              Edge pockets
-                            </p>
-                            <h4 className="text-sm sm:text-base md:text-lg font-semibold">
-                              Where this wallet crushes
-                            </h4>
+                              )
+                            })}
                           </div>
-                          <span className="text-[0.65rem] sm:text-xs text-gray-400">
-                            Top {Math.min(4, selectedStats.byEdge.length)} of {selectedStats.byEdge.length}
-                          </span>
                         </div>
-                        <div className="space-y-2">
-                          {selectedStats.byEdge.slice(0, 4).map((edge, index) => {
-                            const sportLabel = edge.sport
-                              ? getSportLabel(edge.sport) ?? edge.sport.toUpperCase()
-                              : 'Any sport'
-                            const recordLabel = `${edge.wins}-${edge.losses}-${edge.ties}`
-                            const pnlPositive = edge.pnlUsd >= 0
+                      )}
+                      {selectedStats && selectedStats.byEdge.length > 0 && (
+                        <div className="rounded-lg sm:rounded-xl md:rounded-2xl border border-cyan-500/20 bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-cyan-300">
+                                Edge pockets
+                              </p>
+                              <h4 className="text-sm sm:text-base md:text-lg font-semibold">
+                                Where this wallet crushes
+                              </h4>
+                            </div>
+                            <span className="text-[0.65rem] sm:text-xs text-gray-400">
+                              Top {Math.min(4, selectedStats.byEdge.length)} of {selectedStats.byEdge.length}
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            {selectedStats.byEdge.slice(0, 4).map((edge, index) => {
+                              const sportLabel = edge.sport
+                                ? getSportLabel(edge.sport) ?? edge.sport.toUpperCase()
+                                : 'Any sport'
+                              const recordLabel = `${edge.wins}-${edge.losses}-${edge.ties}`
+                              const pnlPositive = edge.pnlUsd >= 0
+                              return (
+                                <div
+                                  key={`${edge.sport ?? 'any'}-${edge.betType ?? 'any'}-${edge.horizon ?? 'any'}-${index}`}
+                                  className="rounded-lg border border-slate-800/70 bg-slate-950/60 p-2.5 sm:p-3 flex flex-wrap items-center gap-2"
+                                >
+                                  <div className="flex-1 min-w-[180px]">
+                                    <p className="text-xs sm:text-sm font-semibold text-white">{sportLabel}</p>
+                                    <p className="text-[0.65rem] sm:text-xs text-gray-400">
+                                      {getBetTypeLabel(edge.betType)} · {getHorizonLabel(edge.horizon)} · {edge.sampleSize} plays
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-xs sm:text-sm font-semibold text-white">{recordLabel}</p>
+                                    <p
+                                      className={`text-[0.65rem] sm:text-xs font-semibold ${pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                        }`}
+                                    >
+                                      {pnlPositive ? '+' : '-'}
+                                      {formatUsdCompact(Math.abs(edge.pnlUsd))}
+                                    </p>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {selectedResults.length > 0 ? (
+                        <ul className="space-y-2 sm:space-y-3 md:space-y-4">
+                          {selectedResults.map((result) => {
+                            const sportLabel = getSportLabel(result.sportTag)
+                            const marketLabel = sportLabel
+                              ? `${sportLabel} market`
+                              : result.isSports
+                                ? 'Sports market'
+                                : 'General market'
                             return (
-                              <div
-                                key={`${edge.sport ?? 'any'}-${edge.betType ?? 'any'}-${edge.horizon ?? 'any'}-${index}`}
-                                className="rounded-lg border border-slate-800/70 bg-slate-950/60 p-2.5 sm:p-3 flex flex-wrap items-center gap-2"
+                              <li
+                                key={`${result.asset}-${result.resolvedAt}`}
+                                className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
                               >
-                                <div className="flex-1 min-w-[180px]">
-                                  <p className="text-xs sm:text-sm font-semibold text-white">{sportLabel}</p>
-                                  <p className="text-[0.65rem] sm:text-xs text-gray-400">
-                                    {getBetTypeLabel(edge.betType)} · {getHorizonLabel(edge.horizon)} · {edge.sampleSize} plays
+                                <div>
+                                  <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
+                                    {result.result.toUpperCase()}
+                                  </p>
+                                  <h4 className="text-sm sm:text-base md:text-lg font-semibold">
+                                    {result.title || result.asset}
+                                  </h4>
+                                  <p className="text-[0.65rem] sm:text-xs text-gray-500">
+                                    Resolved {new Date(result.resolvedAt * 1000).toLocaleDateString()}
                                   </p>
                                 </div>
                                 <div className="text-right">
-                                  <p className="text-xs sm:text-sm font-semibold text-white">{recordLabel}</p>
                                   <p
-                                    className={`text-[0.65rem] sm:text-xs font-semibold ${
-                                      pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-                                    }`}
+                                    className={`text-base sm:text-lg md:text-xl font-semibold ${result.pnlUsd >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                                      }`}
                                   >
-                                    {pnlPositive ? '+' : '-'}
-                                    {formatUsdCompact(Math.abs(edge.pnlUsd))}
+                                    {result.pnlUsd >= 0 ? '+' : '-'}
+                                    {currencyFormatter.format(Math.abs(result.pnlUsd))}
                                   </p>
+                                  <p className="text-xs sm:text-sm text-gray-400">{marketLabel}</p>
                                 </div>
-                              </div>
+                              </li>
                             )
                           })}
-                        </div>
-                      </div>
-                    )}
-                    {selectedResults.length > 0 ? (
-                      <ul className="space-y-2 sm:space-y-3 md:space-y-4">
-                        {selectedResults.map((result) => {
-                          const sportLabel = getSportLabel(result.sportTag)
-                          const marketLabel = sportLabel
-                            ? `${sportLabel} market`
-                            : result.isSports
-                              ? 'Sports market'
-                              : 'General market'
-                          return (
-                            <li
-                              key={`${result.asset}-${result.resolvedAt}`}
-                              className="rounded-lg sm:rounded-xl md:rounded-2xl border border-slate-800/80 bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
-                            >
-                              <div>
-                                <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">
-                                  {result.result.toUpperCase()}
-                                </p>
-                                <h4 className="text-sm sm:text-base md:text-lg font-semibold">
-                                  {result.title || result.asset}
-                                </h4>
-                                <p className="text-[0.65rem] sm:text-xs text-gray-500">
-                                  Resolved {new Date(result.resolvedAt * 1000).toLocaleDateString()}
-                                </p>
-                              </div>
-                              <div className="text-right">
-                                <p
-                                  className={`text-base sm:text-lg md:text-xl font-semibold ${
-                                    result.pnlUsd >= 0 ? 'text-emerald-300' : 'text-rose-300'
-                                  }`}
-                                >
-                                  {result.pnlUsd >= 0 ? '+' : '-'}
-                                  {currencyFormatter.format(Math.abs(result.pnlUsd))}
-                                </p>
-                                <p className="text-xs sm:text-sm text-gray-400">{marketLabel}</p>
-                              </div>
-                            </li>
-                          )
-                        })}
-                      </ul>
-                    ) : (
-                      <p className="text-xs sm:text-sm text-gray-400">
-                        No closed markets stored yet. Stats will appear here once positions resolve.
-                      </p>
-                    )}
-                  </div>
-                )}
+                        </ul>
+                      ) : (
+                        <p className="text-xs sm:text-sm text-gray-400">
+                          No closed markets stored yet. Stats will appear here once positions resolve.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
-                {insightTab === 'profile' && (
+                  {insightTab === 'profile' && (
                     profile ? (
                       <div className="bg-slate-900/70 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl p-4 sm:p-5 md:p-6 flex flex-col md:flex-row gap-4 sm:gap-5 md:gap-6 items-center shadow-lg shadow-black/20">
                         <img
@@ -2206,7 +2201,7 @@ useEffect(
                     )
                   )}
 
-                {insightTab === 'activity' && (
+                  {insightTab === 'activity' && (
                     <div className="bg-slate-950/50 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden shadow-lg shadow-black/20">
                       <div className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-2.5 sm:py-3 md:py-4 border-b border-slate-800/80">
                         <div>
@@ -2349,15 +2344,15 @@ useEffect(
                       )}
                     </div>
                   )}
-              </section>
-            ) : (
-              <section className="bg-slate-950/70 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 text-center space-y-2 sm:space-y-3 shadow-lg shadow-black/20">
-                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Add a wallet to start tracking</h2>
-                <p className="text-xs sm:text-sm md:text-base text-gray-400">
-                  Use the form on the left to add a Polymarket proxy wallet. Once it's tracked, you'll see every open and closed market here.
-                </p>
-              </section>
-            )}
+                </section>
+              ) : (
+                <section className="bg-slate-950/70 border border-slate-800/80 rounded-lg sm:rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 text-center space-y-2 sm:space-y-3 shadow-lg shadow-black/20">
+                  <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Add a wallet to start tracking</h2>
+                  <p className="text-xs sm:text-sm md:text-base text-gray-400">
+                    Use the form on the left to add a Polymarket proxy wallet. Once it's tracked, you'll see every open and closed market here.
+                  </p>
+                </section>
+              )}
             </main>
           </div>
         </div>
@@ -2465,11 +2460,10 @@ function ManageWalletsModal({
                     onSelectWallet(wallet.walletAddress)
                     onClose()
                   }}
-                  className={`w-full rounded-lg sm:rounded-xl md:rounded-2xl border px-3 sm:px-4 py-2 sm:py-3 text-left transition ${
-                    isActive
+                  className={`w-full rounded-lg sm:rounded-xl md:rounded-2xl border px-3 sm:px-4 py-2 sm:py-3 text-left transition ${isActive
                       ? 'border-cyan-400 bg-cyan-500/10'
                       : 'border-slate-800/80 bg-slate-900/60 hover:border-cyan-400/60'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -2921,11 +2915,10 @@ function WalletSummaryList({
                 <button
                   type="button"
                   onClick={() => onSelectWallet(wallet.walletAddress)}
-                  className={`w-full px-3 sm:px-4 md:px-5 py-2.5 sm:py-3 md:py-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
-                    isSelected
+                  className={`w-full px-3 sm:px-4 md:px-5 py-2.5 sm:py-3 md:py-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${isSelected
                       ? 'bg-cyan-500/8 ring-1 ring-cyan-400/50'
                       : 'hover:bg-slate-900/50'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center justify-between gap-2 sm:gap-3">
                     <div className="flex items-center gap-2 sm:gap-3">
@@ -2950,9 +2943,8 @@ function WalletSummaryList({
                       <p className="text-[0.65rem] sm:text-xs uppercase tracking-[0.3em] text-gray-500">All-time</p>
                       <p className="text-[0.65rem] sm:text-xs text-gray-400">{record}</p>
                       <p
-                        className={`text-xs sm:text-sm font-semibold ${
-                          pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-                        }`}
+                        className={`text-xs sm:text-sm font-semibold ${pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                          }`}
                       >
                         {pnlPositive ? '+' : '-'}
                         {formatUsdCompact(Math.abs(allTimePnl))}
@@ -2966,11 +2958,10 @@ function WalletSummaryList({
                       return (
                         <div
                           key={`${wallet.walletAddress}-${bucketKey}`}
-                          className={`flex items-center gap-1.5 text-[0.65rem] sm:text-xs ${
-                            bucketPositive
+                          className={`flex items-center gap-1.5 text-[0.65rem] sm:text-xs ${bucketPositive
                               ? 'text-emerald-200'
                               : 'text-rose-200'
-                          }`}
+                            }`}
                         >
                           <span className="uppercase tracking-[0.2em] text-gray-500">{label}:</span>
                           <span className="font-semibold">
@@ -3227,21 +3218,20 @@ function SharedPositionsBoard({
           .map(({ market, visibleOutcomes, hasOpposition, originalBetTotal }) => {
             const oppositionBalance = hasOpposition
               ? calculateOppositionBalance(
-                  visibleOutcomes.map((outcome) => ({
-                    outcome: outcome.outcome,
-                    visibleTotalInitialValue: outcome.visibleTotalInitialValue,
-                    visibleWallets: outcome.visibleWallets,
-                  })),
-                )
+                visibleOutcomes.map((outcome) => ({
+                  outcome: outcome.outcome,
+                  visibleTotalInitialValue: outcome.visibleTotalInitialValue,
+                  visibleWallets: outcome.visibleWallets,
+                })),
+              )
               : null
             return (
               <div
                 key={market.id}
-                className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${
-                  hasOpposition
+                className={`rounded-lg sm:rounded-xl md:rounded-2xl border px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 shadow-md shadow-black/10 transition-all ${hasOpposition
                     ? 'border-rose-400/50 bg-rose-400/5'
                     : 'border-slate-800/80 bg-slate-950/70 hover:border-slate-700/80'
-                }`}
+                  }`}
               >
                 {market.slug ? (
                   <div className="mb-4 sm:mb-5 pb-4 sm:pb-5 border-b border-slate-800/60">
@@ -3265,11 +3255,10 @@ function SharedPositionsBoard({
                       />
                     ) : (
                       <div
-                        className={`flex-shrink-0 p-2 rounded-lg ${
-                          hasOpposition
+                        className={`flex-shrink-0 p-2 rounded-lg ${hasOpposition
                             ? 'bg-rose-400/20 text-rose-300'
                             : 'bg-cyan-500/10 text-cyan-400'
-                        }`}
+                          }`}
                       >
                         {hasOpposition ? (
                           <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
@@ -3360,8 +3349,8 @@ function SharedPositionsBoard({
                             const sportEdge =
                               market.sportTag
                                 ? walletSportEdges
-                                    .get(normalizedWalletAddress)
-                                    ?.get(market.sportTag)
+                                  .get(normalizedWalletAddress)
+                                  ?.get(market.sportTag)
                                 : undefined
                             return (
                               <li
@@ -3370,9 +3359,8 @@ function SharedPositionsBoard({
                               >
                                 <div className="flex items-center gap-2 flex-1 min-w-0">
                                   <div
-                                    className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
-                                      pnlPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'
-                                    }`}
+                                    className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${pnlPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'
+                                      }`}
                                   />
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs sm:text-sm font-semibold text-white truncate flex items-center gap-1.5">
@@ -3410,9 +3398,8 @@ function SharedPositionsBoard({
                                     {formatUsdCompact(wallet.initialValue)}
                                   </span>
                                   <span
-                                    className={`text-[0.65rem] sm:text-xs font-semibold ${
-                                      pnlPositive ? 'text-emerald-300' : 'text-rose-300'
-                                    }`}
+                                    className={`text-[0.65rem] sm:text-xs font-semibold ${pnlPositive ? 'text-emerald-300' : 'text-rose-300'
+                                      }`}
                                   >
                                     {pnlPositive ? '+' : '-'}
                                     {formatUsdCompact(Math.abs(wallet.pnl))}
@@ -3610,10 +3597,10 @@ function AddWalletModal({
   const nicknameInputId = useId()
   const handleChange =
     (field: keyof AddWalletFormState) =>
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const value = event.target.value
-      onTrackingFormChange((previous) => ({ ...previous, [field]: value }))
-    }
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        const value = event.target.value
+        onTrackingFormChange((previous) => ({ ...previous, [field]: value }))
+      }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 sm:px-4 py-4 sm:py-8">
@@ -3634,38 +3621,38 @@ function AddWalletModal({
           >
             X
           </button>
-      </div>
-
-      <form onSubmit={onSubmit} className="mt-4 sm:mt-5 md:mt-6 space-y-3 sm:space-y-4">
-        <div className="space-y-1.5 sm:space-y-2">
-          <label
-            className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
-            htmlFor={walletInputId}
-          >
-            <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
-            Wallet address
-          </label>
-          <input
-            id={walletInputId}
-            className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
-            placeholder="0x..."
-            value={trackingForm.walletAddress}
-            onChange={handleChange('walletAddress')}
-          />
         </div>
-        <div className="space-y-1.5 sm:space-y-2">
-          <label
-            className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
-            htmlFor={nicknameInputId}
-          >
-            <User className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
-            Nickname (optional)
-          </label>
-          <input
-            id={nicknameInputId}
-            className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
-            placeholder="Sharp, Syndicate, ..."
-            value={trackingForm.nickname}
+
+        <form onSubmit={onSubmit} className="mt-4 sm:mt-5 md:mt-6 space-y-3 sm:space-y-4">
+          <div className="space-y-1.5 sm:space-y-2">
+            <label
+              className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
+              htmlFor={walletInputId}
+            >
+              <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
+              Wallet address
+            </label>
+            <input
+              id={walletInputId}
+              className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
+              placeholder="0x..."
+              value={trackingForm.walletAddress}
+              onChange={handleChange('walletAddress')}
+            />
+          </div>
+          <div className="space-y-1.5 sm:space-y-2">
+            <label
+              className="text-xs sm:text-sm font-semibold text-gray-300 flex items-center gap-1.5 sm:gap-2"
+              htmlFor={nicknameInputId}
+            >
+              <User className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-cyan-300" />
+              Nickname (optional)
+            </label>
+            <input
+              id={nicknameInputId}
+              className="w-full rounded-lg sm:rounded-xl border border-slate-800 bg-slate-950/50 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm focus:border-cyan-400 focus:outline-none"
+              placeholder="Sharp, Syndicate, ..."
+              value={trackingForm.nickname}
               onChange={handleChange('nickname')}
             />
           </div>

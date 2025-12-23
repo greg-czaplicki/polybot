@@ -325,12 +325,36 @@ export async function listRecordedResultAssets(
   return new Set(rows.map((row) => row.asset))
 }
 
+/**
+ * Clear all wallet results and snapshots for a wallet so it can be re-processed.
+ * This is useful when fixing bugs in the result recording logic.
+ */
+export async function clearWalletData(db: Db, walletAddress: string) {
+  await run(db, `DELETE FROM wallet_results WHERE wallet_address = ?`, walletAddress)
+  await run(db, `DELETE FROM wallet_positions_snapshot WHERE wallet_address = ?`, walletAddress)
+  await run(db, `DELETE FROM wallet_pnl_snapshots WHERE wallet_address = ?`, walletAddress)
+  await run(db, `DELETE FROM wallet_sizing_snapshot WHERE wallet_address = ?`, walletAddress)
+}
+
+/**
+ * Clear ALL wallet stats data across all wallets.
+ * This is a nuclear option for when the recording logic has been fundamentally fixed.
+ */
+export async function clearAllWalletData(db: Db) {
+  await run(db, `DELETE FROM wallet_results`)
+  await run(db, `DELETE FROM wallet_positions_snapshot`)
+  await run(db, `DELETE FROM wallet_pnl_snapshots`)
+  await run(db, `DELETE FROM wallet_sizing_snapshot`)
+}
+
 interface WalletPnlSnapshotRow {
   id: string
   wallet_address: string
   captured_at: number
   open_cash_pnl: number
   open_position_value: number
+  open_sports_cash_pnl: number
+  open_sports_position_value: number
 }
 
 export async function insertWalletPnlSnapshot(
@@ -340,6 +364,8 @@ export async function insertWalletPnlSnapshot(
     captured_at: number
     open_cash_pnl: number
     open_position_value: number
+    open_sports_cash_pnl: number
+    open_sports_position_value: number
   },
 ) {
   const id = crypto.randomUUID()
@@ -350,13 +376,17 @@ export async function insertWalletPnlSnapshot(
        wallet_address,
        captured_at,
        open_cash_pnl,
-       open_position_value
-     ) VALUES (?, ?, ?, ?, ?)`,
+       open_position_value,
+       open_sports_cash_pnl,
+       open_sports_position_value
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.wallet_address,
     input.captured_at,
     input.open_cash_pnl,
     input.open_position_value,
+    input.open_sports_cash_pnl,
+    input.open_sports_position_value,
   )
 }
 
@@ -364,6 +394,7 @@ async function getOpenPnlDelta(
   db: Db,
   walletAddress: string,
   since?: number,
+  sportsOnly?: boolean,
 ): Promise<number> {
   const latest = await first<WalletPnlSnapshotRow>(
     db,
@@ -378,8 +409,13 @@ async function getOpenPnlDelta(
     return 0
   }
 
+  // Use sports-specific PnL when sportsOnly is true
+  const latestPnl = sportsOnly
+    ? (latest.open_sports_cash_pnl ?? 0)
+    : latest.open_cash_pnl
+
   if (typeof since !== 'number') {
-    return latest.open_cash_pnl
+    return latestPnl
   }
 
   const baseline = await first<WalletPnlSnapshotRow>(
@@ -397,7 +433,11 @@ async function getOpenPnlDelta(
     return 0
   }
 
-  return latest.open_cash_pnl - baseline.open_cash_pnl
+  const baselinePnl = sportsOnly
+    ? (baseline.open_sports_cash_pnl ?? 0)
+    : baseline.open_cash_pnl
+
+  return latestPnl - baselinePnl
 }
 
 export async function listWalletResults(
@@ -476,7 +516,7 @@ async function getBucket(
   )
 
   const row = rows[0]
-  const openDelta = await getOpenPnlDelta(db, walletAddress, since)
+  const openDelta = await getOpenPnlDelta(db, walletAddress, since, sportsOnly)
   return {
     wins: row?.wins ?? 0,
     losses: row?.losses ?? 0,

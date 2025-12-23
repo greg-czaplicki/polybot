@@ -24,6 +24,17 @@ const STATS_CURSOR_KEY = 'stats_wallet_cursor'
 
 const EPSILON = 1e-6
 
+/**
+ * Resolution status for a closed position.
+ * 'won' = shares redeemed at $1, 'lost' = shares worthless at $0, 'unknown' = use fallback
+ */
+type ResolutionOutcome = 'won' | 'lost' | 'unknown'
+
+interface ClosedSnapshotWithOutcome {
+  snapshot: WalletPositionSnapshotRow
+  resolution: ResolutionOutcome
+}
+
 function parseEventEndTimestamp(value?: string | null) {
   if (!value) {
     return null
@@ -136,6 +147,18 @@ export async function runStatsCron(env: Env) {
       continue
     }
 
+    // Log summary of positions for debugging
+    const redeemableCount = positions.filter((p) => p.redeemable).length
+    const zeroValueCount = positions.filter((p) => Math.abs(p.currentValue) < EPSILON).length
+    const zeroPriceCount = positions.filter((p) => Math.abs(p.curPrice) < EPSILON).length
+    console.log('[stats] Fetched positions', {
+      wallet: walletAddress,
+      total: positions.length,
+      redeemable: redeemableCount,
+      zeroValue: zeroValueCount,
+      zeroPrice: zeroPriceCount,
+    })
+
     const snapshots = await listPositionSnapshotsForWallet(db, walletAddress)
     const recordedResultAssets = await listRecordedResultAssets(db, walletAddress)
     const snapshotByAsset = new Map<string, WalletPositionSnapshotRow>()
@@ -144,9 +167,11 @@ export async function runStatsCron(env: Env) {
     })
 
     const now = nowUnixSeconds()
-    const closedSnapshots: WalletPositionSnapshotRow[] = []
+    const closedSnapshots: ClosedSnapshotWithOutcome[] = []
     let openCashPnl = 0
     let openPositionValue = 0
+    let openSportsCashPnl = 0
+    let openSportsPositionValue = 0
     let openPositionCount = 0
     let totalInitialValue = 0
     for (const position of positions) {
@@ -163,36 +188,83 @@ export async function runStatsCron(env: Env) {
       const sportsFlag = isSportsMarket(descriptor) ? 1 : 0
       const eventEndTimestamp = parseEventEndTimestamp(position.endDate)
 
-      const resolved =
-        position.redeemable ||
-        Math.abs(position.currentValue) < EPSILON ||
-        Math.abs(position.size) < EPSILON
+      // Determine if position is resolved and how
+      const isRedeemable = position.redeemable === true
+      const isSizeZero = Math.abs(position.size) < EPSILON
+      const isValueZero = Math.abs(position.currentValue) < EPSILON
+      // curPrice indicates the current market price (0 = worthless, 1 = won)
+      const curPrice = position.curPrice ?? 0
+      const isPriceWin = curPrice > 0.5 // Price > 50% means this outcome won
+      const isPriceLoss = curPrice < 0.05 // Price < 5% means this outcome lost
+
+      // Position is resolved if redeemable (market has concluded) or fully closed
+      const resolved = isRedeemable || isSizeZero
+
+      // Determine resolution outcome based on curPrice, NOT redeemable flag!
+      // redeemable=true just means market resolved, both wins AND losses are redeemable
+      // The actual outcome is determined by curPrice:
+      // - curPrice ≈ 1 means your shares are worth $1 (you WON)
+      // - curPrice ≈ 0 means your shares are worthless (you LOST)
+      let resolution: ResolutionOutcome = 'unknown'
+      if (isRedeemable && isPriceWin) {
+        // Market resolved, shares worth ~$1 - you won
+        resolution = 'won'
+      } else if (isRedeemable && isPriceLoss) {
+        // Market resolved, shares worthless - you lost
+        resolution = 'lost'
+      } else if (isSizeZero) {
+        // Position was fully closed - could be sold early, already redeemed
+        // We'll determine the actual outcome using trade data later
+        resolution = 'unknown'
+      } else if (!isRedeemable && isPriceLoss && !isSizeZero) {
+        // Not yet redeemable but price crashed - likely lost
+        resolution = 'lost'
+      }
+
       if (resolved) {
+        console.log('[stats] Position resolved', {
+          wallet: walletAddress,
+          asset: assetKey,
+          title: position.title,
+          resolution,
+          isRedeemable,
+          isSizeZero,
+          isValueZero,
+          curPrice,
+          isPriceWin,
+          isPriceLoss,
+          size: position.size,
+          currentValue: position.currentValue,
+          cashPnl: position.cashPnl,
+        })
         const snapshot = snapshotByAsset.get(assetKey)
         if (snapshot) {
-          closedSnapshots.push(snapshot)
+          closedSnapshots.push({ snapshot, resolution })
           snapshotByAsset.delete(assetKey)
         } else {
           if (recordedResultAssets.has(assetKey)) {
             continue
           }
           closedSnapshots.push({
-            id: `synthetic-${walletAddress}-${assetKey}`,
-            wallet_address: walletAddress,
-            asset: assetKey,
-            title: position.title ?? null,
-            event_slug: position.eventSlug ?? position.slug ?? null,
-            is_sports: sportsFlag,
-            sport_tag: sportTag ?? null,
-            last_size: position.size,
-            last_current_value: position.currentValue ?? 0,
-            last_cash_pnl: position.cashPnl ?? 0,
-            last_percent_pnl: position.percentPnl ?? 0,
-            last_avg_price: position.avgPrice ?? 0,
-            last_realized_pnl: position.realizedPnl ?? 0,
-            last_seen_at: now,
-            opened_at: now,
-            event_end_timestamp: eventEndTimestamp ?? null,
+            snapshot: {
+              id: `synthetic-${walletAddress}-${assetKey}`,
+              wallet_address: walletAddress,
+              asset: assetKey,
+              title: position.title ?? null,
+              event_slug: position.eventSlug ?? position.slug ?? null,
+              is_sports: sportsFlag,
+              sport_tag: sportTag ?? null,
+              last_size: position.size,
+              last_current_value: position.currentValue ?? 0,
+              last_cash_pnl: position.cashPnl ?? 0,
+              last_percent_pnl: position.percentPnl ?? 0,
+              last_avg_price: position.avgPrice ?? 0,
+              last_realized_pnl: position.realizedPnl ?? 0,
+              last_seen_at: now,
+              opened_at: now,
+              event_end_timestamp: eventEndTimestamp ?? null,
+            },
+            resolution,
           })
         }
         continue
@@ -200,6 +272,10 @@ export async function runStatsCron(env: Env) {
 
       openCashPnl += position.cashPnl ?? 0
       openPositionValue += position.currentValue ?? 0
+      if (sportsFlag === 1) {
+        openSportsCashPnl += position.cashPnl ?? 0
+        openSportsPositionValue += position.currentValue ?? 0
+      }
       openPositionCount += 1
       const initialValue =
         typeof position.initialValue === 'number' ? Math.max(position.initialValue, 0) : 0
@@ -235,7 +311,17 @@ export async function runStatsCron(env: Env) {
     }
 
     for (const snapshot of snapshotByAsset.values()) {
-      closedSnapshots.push(snapshot)
+      // Orphaned snapshots (no longer in positions API)
+      // These are positions we tracked that have disappeared - could be sold, won, or lost
+      closedSnapshots.push({ snapshot, resolution: 'unknown' })
+      console.log('[stats] Orphaned snapshot detected', {
+        wallet: walletAddress,
+        asset: snapshot.asset,
+        title: snapshot.title,
+        lastSize: snapshot.last_size,
+        lastCashPnl: snapshot.last_cash_pnl,
+        lastAvgPrice: snapshot.last_avg_price,
+      })
     }
 
     let trades: PolymarketTrade[] | null = null
@@ -248,20 +334,56 @@ export async function runStatsCron(env: Env) {
     }
 
     // Any remaining snapshots represent markets that have closed since last run
-    for (const snapshot of closedSnapshots) {
+    for (const { snapshot, resolution } of closedSnapshots) {
       const closing = calculateClosingPnl(snapshot, trades)
-      const pnl = closing?.pnl ?? snapshot.last_cash_pnl
+
+      // Determine the result (win/loss/tie) based on MARKET OUTCOME, not PnL
+      // This tracks prediction accuracy, not trading profit
+      let result: 'win' | 'loss' | 'tie'
+      let pnl: number
+
+      if (resolution === 'won') {
+        // Market resolved in our favor - this is a WIN regardless of PnL
+        result = 'win'
+        // Calculate PnL: shares resolved at $1
+        if (closing?.pnl !== undefined) {
+          pnl = closing.pnl
+        } else {
+          const resolvedValue = snapshot.last_size * 1.0
+          const costBasis = snapshot.last_size * snapshot.last_avg_price
+          pnl = resolvedValue - costBasis + (snapshot.last_realized_pnl ?? 0)
+        }
+      } else if (resolution === 'lost') {
+        // Market resolved against us - this is a LOSS regardless of PnL
+        result = 'loss'
+        // Calculate PnL: shares resolved at $0
+        if (closing?.pnl !== undefined) {
+          pnl = closing.pnl
+        } else {
+          const costBasis = Math.abs(snapshot.last_size) * snapshot.last_avg_price
+          pnl = -costBasis + (snapshot.last_realized_pnl ?? 0)
+        }
+      } else {
+        // Unknown resolution (position disappeared from API without clear outcome)
+        // Try to use trade data if available, otherwise use last known cashPnl
+        if (closing?.pnl !== undefined) {
+          pnl = closing.pnl
+        } else {
+          pnl = snapshot.last_cash_pnl
+        }
+        // For unknown resolution, determine result by PnL (early exit/sold position)
+        if (pnl > EPSILON) {
+          result = 'win'
+        } else if (pnl < -EPSILON) {
+          result = 'loss'
+        } else {
+          result = 'tie'
+        }
+      }
+
       const fallbackResolvedAt =
         snapshot.event_end_timestamp ?? snapshot.last_seen_at ?? now
       const resolvedAt = Math.min(closing?.resolvedAt ?? fallbackResolvedAt, now)
-      let result: 'win' | 'loss' | 'tie'
-      if (pnl > EPSILON) {
-        result = 'win'
-      } else if (pnl < -EPSILON) {
-        result = 'loss'
-      } else {
-        result = 'tie'
-      }
 
       const marketDescriptor = {
         title: snapshot.title ?? undefined,
@@ -274,6 +396,17 @@ export async function runStatsCron(env: Env) {
         resolvedAt,
         betType,
       )
+
+      console.log('[stats] Recording result', {
+        wallet: snapshot.wallet_address,
+        asset: snapshot.asset,
+        title: snapshot.title,
+        resolution,
+        result,
+        pnl,
+        isSports: snapshot.is_sports === 1,
+        sportTag: snapshot.sport_tag,
+      })
 
       await insertWalletResult(db, {
         wallet_address: snapshot.wallet_address,
@@ -300,6 +433,8 @@ export async function runStatsCron(env: Env) {
       captured_at: now,
       open_cash_pnl: openCashPnl,
       open_position_value: openPositionValue,
+      open_sports_cash_pnl: openSportsCashPnl,
+      open_sports_position_value: openSportsPositionValue,
     })
   }
 

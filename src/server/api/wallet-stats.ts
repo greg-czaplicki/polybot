@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 
 import { getDb } from '../env'
 import {
+  clearWalletData,
   getWalletSizingSnapshot,
   getWalletStats,
   listWalletResults,
@@ -62,5 +63,20 @@ export const getWalletSizingFn = createServerFn({ method: 'POST' }).handler(
         updatedAt: sizing.updated_at,
       },
     }
+  },
+)
+
+/**
+ * Clear all recorded stats data for a wallet so it can be re-processed.
+ * This is useful when fixing bugs in the result recording logic.
+ */
+export const clearWalletDataFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data, context }) => {
+    const db = getDb(context)
+    const payload = data as { walletAddress?: string }
+    const walletAddress = requireString(payload.walletAddress, 'walletAddress')
+    await clearWalletData(db, walletAddress)
+    console.log('[wallet-stats] Cleared all data for wallet', walletAddress)
+    return { success: true, walletAddress }
   },
 )
