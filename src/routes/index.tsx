@@ -3160,6 +3160,43 @@ function getHolderStyle(rank: number, amount: number): {
 }
 
 /**
+ * Get sizing context for a holder's position relative to their trading volume
+ * Volume is a much better baseline than PnL since PnL can be near zero for active traders
+ */
+function getHolderSizingContext(
+  positionAmount: number,
+  volume: number | undefined,
+): {
+  volumePercent: number
+  totalVolume: number
+  conviction: 'whale' | 'high' | 'medium' | 'notable' | null
+} | null {
+  if (!positionAmount || positionAmount <= 0) return null
+  if (!volume || volume <= 0) return null
+
+  const volumePercent = (positionAmount / volume) * 100
+
+  // Conviction based on % of all-time volume
+  // Higher % = this is a bigger bet relative to their typical activity
+  let conviction: 'whale' | 'high' | 'medium' | 'notable' | null = null
+  if (volumePercent >= 15) {
+    conviction = 'whale' // Massive position for them
+  } else if (volumePercent >= 8) {
+    conviction = 'high' // Very significant bet
+  } else if (volumePercent >= 4) {
+    conviction = 'medium' // Notable bet
+  } else if (volumePercent >= 2) {
+    conviction = 'notable' // Worth noting
+  }
+
+  return {
+    volumePercent,
+    totalVolume: volume,
+    conviction,
+  }
+}
+
+/**
  * Component to display top holders for a market
  */
 function TopHoldersDisplay({
@@ -3280,18 +3317,19 @@ function TopHoldersDisplay({
                 <p className="text-xs font-semibold text-cyan-400">{formatUsdCompact(totalValue)}</p>
               </div>
               <p className="text-xs text-gray-500">
-                {outcomeHolders.length} top holders
+                Top {Math.min(outcomeHolders.length, 10)} holders
                 {loadingPnl && <span className="ml-2 text-cyan-400">• Loading stats...</span>}
               </p>
             </div>
             <ul className="space-y-1.5">
-              {outcomeHolders.slice(0, 20).map((holder, idx) => {
+              {outcomeHolders.slice(0, 10).map((holder, idx) => {
                 const style = getHolderStyle(idx, holder.amount)
                 const pnlData = holderPnl[holder.proxyWallet]
                 const showPnl = idx < 5 // Only show PnL for top 5
                 const hasPnl = showPnl && pnlData?.pnl !== null && pnlData?.pnl !== undefined
                 const pnlValue = pnlData?.pnl ?? 0
                 const isProfitable = pnlValue >= 0
+                const sizingContext = showPnl ? getHolderSizingContext(holder.amount, pnlData?.volume) : null
 
                 return (
                   <li
@@ -3339,9 +3377,9 @@ function TopHoldersDisplay({
                           return displayName
                         })()}
                       </p>
-                      {/* Show PnL badge for top 5 */}
+                      {/* Show PnL and sizing context for top 5 */}
                       {showPnl && (
-                        <div className="mt-0.5">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1">
                           {hasPnl ? (
                             <span
                               className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${
@@ -3358,6 +3396,28 @@ function TopHoldersDisplay({
                             </span>
                           ) : (
                             <span className="text-[0.6rem] text-gray-600">No PnL data</span>
+                          )}
+                          {/* Sizing context - position relative to their total volume */}
+                          {sizingContext?.conviction && (
+                            <span
+                              className={`inline-flex items-center text-[0.55rem] font-medium px-1.5 py-0.5 rounded ${
+                                sizingContext.conviction === 'whale'
+                                  ? 'bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/30'
+                                  : sizingContext.conviction === 'high'
+                                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                  : sizingContext.conviction === 'medium'
+                                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                  : 'bg-slate-500/20 text-slate-300 border border-slate-500/30'
+                              }`}
+                              title={`${sizingContext.volumePercent.toFixed(1)}% of ${formatUsdCompact(sizingContext.totalVolume)} total volume`}
+                            >
+                              {sizingContext.conviction === 'whale' && '🐋 '}
+                              {sizingContext.volumePercent >= 10
+                                ? `${Math.round(sizingContext.volumePercent)}%`
+                                : `${sizingContext.volumePercent.toFixed(1)}%`}
+                              {' of '}
+                              {formatUsdCompact(sizingContext.totalVolume)}
+                            </span>
                           )}
                         </div>
                       )}
