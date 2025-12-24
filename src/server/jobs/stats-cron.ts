@@ -197,8 +197,17 @@ export async function runStatsCron(env: Env) {
       const isPriceWin = curPrice > 0.5 // Price > 50% means this outcome won
       const isPriceLoss = curPrice < 0.05 // Price < 5% means this outcome lost
 
-      // Position is resolved if redeemable (market has concluded) or fully closed
-      const resolved = isRedeemable || isSizeZero
+      // Check if the event has already ended (for sports markets especially)
+      const eventHasEnded = eventEndTimestamp !== null && eventEndTimestamp < now
+
+      // A position is "de facto resolved" if:
+      // 1. It's marked redeemable by Polymarket
+      // 2. Size is zero (already sold/redeemed)
+      // 3. Price has crashed to near-zero (the outcome lost, even if not marked redeemable)
+      // 4. Event has ended AND price is decisive (win or loss)
+      const isDeFactoLoss = isPriceLoss && (isValueZero || eventHasEnded)
+      const isDeFactoWin = isPriceWin && eventHasEnded
+      const resolved = isRedeemable || isSizeZero || isDeFactoLoss || isDeFactoWin
 
       // Determine resolution outcome based on curPrice, NOT redeemable flag!
       // redeemable=true just means market resolved, both wins AND losses are redeemable
@@ -206,19 +215,16 @@ export async function runStatsCron(env: Env) {
       // - curPrice ≈ 1 means your shares are worth $1 (you WON)
       // - curPrice ≈ 0 means your shares are worthless (you LOST)
       let resolution: ResolutionOutcome = 'unknown'
-      if (isRedeemable && isPriceWin) {
-        // Market resolved, shares worth ~$1 - you won
+      if (isPriceWin && (isRedeemable || eventHasEnded)) {
+        // Market resolved or event ended, shares worth ~$1 - you won
         resolution = 'won'
-      } else if (isRedeemable && isPriceLoss) {
-        // Market resolved, shares worthless - you lost
+      } else if (isPriceLoss && (isRedeemable || eventHasEnded || isValueZero)) {
+        // Market resolved, event ended, or value crashed to $0 - you lost
         resolution = 'lost'
       } else if (isSizeZero) {
         // Position was fully closed - could be sold early, already redeemed
         // We'll determine the actual outcome using trade data later
         resolution = 'unknown'
-      } else if (!isRedeemable && isPriceLoss && !isSizeZero) {
-        // Not yet redeemable but price crashed - likely lost
-        resolution = 'lost'
       }
 
       if (resolved) {
@@ -230,6 +236,9 @@ export async function runStatsCron(env: Env) {
           isRedeemable,
           isSizeZero,
           isValueZero,
+          eventHasEnded,
+          isDeFactoLoss,
+          isDeFactoWin,
           curPrice,
           isPriceWin,
           isPriceLoss,
