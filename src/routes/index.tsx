@@ -3110,6 +3110,54 @@ function calculateOppositionBalance(
 }
 
 /**
+ * Get styling for holder based on rank and amount
+ */
+function getHolderStyle(rank: number, amount: number): {
+  rowClass: string
+  amountClass: string
+  rankBadge: { emoji: string; class: string } | null
+} {
+  // Rank badges for top 3
+  const rankBadges: Record<number, { emoji: string; class: string }> = {
+    0: { emoji: '🥇', class: 'bg-amber-500/20 border-amber-400/50' },
+    1: { emoji: '🥈', class: 'bg-slate-400/20 border-slate-300/50' },
+    2: { emoji: '🥉', class: 'bg-orange-600/20 border-orange-400/50' },
+  }
+
+  // Amount-based color coding
+  let amountClass = 'text-gray-400' // Default
+  if (amount >= 100_000) {
+    amountClass = 'text-cyan-300 font-bold'
+  } else if (amount >= 50_000) {
+    amountClass = 'text-emerald-300 font-bold'
+  } else if (amount >= 25_000) {
+    amountClass = 'text-amber-300 font-semibold'
+  } else if (amount >= 10_000) {
+    amountClass = 'text-gray-200 font-semibold'
+  }
+
+  // Row highlight for top holders
+  let rowClass = 'hover:bg-slate-800/40'
+  if (rank === 0) {
+    rowClass = 'bg-amber-500/10 hover:bg-amber-500/15 border border-amber-400/30'
+  } else if (rank === 1) {
+    rowClass = 'bg-slate-400/10 hover:bg-slate-400/15 border border-slate-400/20'
+  } else if (rank === 2) {
+    rowClass = 'bg-orange-500/10 hover:bg-orange-500/15 border border-orange-400/20'
+  } else if (amount >= 100_000) {
+    rowClass = 'bg-cyan-500/5 hover:bg-cyan-500/10'
+  } else if (amount >= 50_000) {
+    rowClass = 'bg-emerald-500/5 hover:bg-emerald-500/10'
+  }
+
+  return {
+    rowClass,
+    amountClass,
+    rankBadge: rankBadges[rank] ?? null,
+  }
+}
+
+/**
  * Component to display top holders for a market
  */
 function TopHoldersDisplay({
@@ -3159,19 +3207,18 @@ function TopHoldersDisplay({
 
   // Map outcome indices to labels - try to match with market outcomes
   const getOutcomeLabel = (index: number): string => {
-    // Common mapping: 0 = No, 1 = Yes for binary markets
-    // But some markets might have different outcomes
+    // Polymarket mapping: outcomeIndex 0 = Yes (first outcome), 1 = No (second outcome)
     if (outcomes.length > 0) {
-      // Try to match - index 0 often maps to "No" or first outcome
-      // index 1 often maps to "Yes" or second outcome
       if (index === 0) {
-        return outcomes.find((o) => o.toLowerCase() === 'no') ?? outcomes[1] ?? 'No'
-      }
-      if (index === 1) {
+        // outcomeIndex 0 is typically "Yes" or the primary outcome
         return outcomes.find((o) => o.toLowerCase() === 'yes') ?? outcomes[0] ?? 'Yes'
       }
+      if (index === 1) {
+        // outcomeIndex 1 is typically "No" or the secondary outcome
+        return outcomes.find((o) => o.toLowerCase() === 'no') ?? outcomes[1] ?? 'No'
+      }
     }
-    return index === 0 ? 'No' : 'Yes'
+    return index === 0 ? 'Yes' : 'No'
   }
 
   const outcomeIndices = Array.from(holdersByOutcome.keys()).sort()
@@ -3181,6 +3228,7 @@ function TopHoldersDisplay({
       {outcomeIndices.map((outcomeIdx) => {
         const outcomeHolders = holdersByOutcome.get(outcomeIdx) ?? []
         const outcomeLabel = getOutcomeLabel(outcomeIdx)
+        const totalValue = outcomeHolders.reduce((sum, h) => sum + h.amount, 0)
 
         return (
           <div
@@ -3188,36 +3236,71 @@ function TopHoldersDisplay({
             className="rounded-lg sm:rounded-xl border border-slate-800/50 bg-slate-900/30 p-3 sm:p-4"
           >
             <div className="mb-3 pb-2 border-b border-slate-800/40">
-              <p className="text-sm font-semibold text-gray-300">{outcomeLabel} Holders</p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-300">{outcomeLabel} Holders</p>
+                <p className="text-xs font-semibold text-cyan-400">{formatUsdCompact(totalValue)}</p>
+              </div>
               <p className="text-xs text-gray-500">{outcomeHolders.length} top holders</p>
             </div>
             <ul className="space-y-1.5">
-              {outcomeHolders.slice(0, 20).map((holder, idx) => (
-                <li
-                  key={`${holder.proxyWallet}-${idx}`}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-800/40 transition-colors"
-                >
-                  {holder.profileImageOptimized || holder.profileImage ? (
-                    <img
-                      src={holder.profileImageOptimized || holder.profileImage}
-                      alt=""
-                      className="h-6 w-6 rounded-full object-cover flex-shrink-0 border border-slate-700"
-                    />
-                  ) : (
-                    <div className="h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0">
-                      <User className="h-3 w-3 text-gray-400" />
+              {outcomeHolders.slice(0, 20).map((holder, idx) => {
+                const style = getHolderStyle(idx, holder.amount)
+                return (
+                  <li
+                    key={`${holder.proxyWallet}-${idx}`}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors ${style.rowClass}`}
+                  >
+                    {/* Rank badge or profile image */}
+                    {style.rankBadge ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">{style.rankBadge.emoji}</span>
+                        {holder.profileImageOptimized || holder.profileImage ? (
+                          <img
+                            src={holder.profileImageOptimized || holder.profileImage}
+                            alt=""
+                            className={`h-6 w-6 rounded-full object-cover flex-shrink-0 border ${style.rankBadge.class}`}
+                          />
+                        ) : (
+                          <div className={`h-6 w-6 rounded-full flex items-center justify-center flex-shrink-0 border ${style.rankBadge.class}`}>
+                            <User className="h-3 w-3 text-gray-300" />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      holder.profileImageOptimized || holder.profileImage ? (
+                        <img
+                          src={holder.profileImageOptimized || holder.profileImage}
+                          alt=""
+                          className="h-6 w-6 rounded-full object-cover flex-shrink-0 border border-slate-700"
+                        />
+                      ) : (
+                        <div className="h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0">
+                          <User className="h-3 w-3 text-gray-400" />
+                        </div>
+                      )
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-gray-200 truncate">
+                        {(() => {
+                          // Get the display name, preferring name when public
+                          const displayName = holder.displayUsernamePublic && holder.name
+                            ? holder.name
+                            : holder.pseudonym || holder.name
+                          
+                          // If no name, or if it looks like a wallet address, format it
+                          if (!displayName || displayName.startsWith('0x')) {
+                            return formatWalletAddress(holder.proxyWallet)
+                          }
+                          return displayName
+                        })()}
+                      </p>
                     </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-gray-200 truncate">
-                      {holder.pseudonym || holder.name || formatWalletAddress(holder.proxyWallet)}
-                    </p>
-                  </div>
-                  <span className="text-xs font-semibold text-gray-300 flex-shrink-0">
-                    {formatUsdCompact(holder.amount)}
-                  </span>
-                </li>
-              ))}
+                    <span className={`text-xs flex-shrink-0 ${style.amountClass}`}>
+                      {formatUsdCompact(holder.amount)}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           </div>
         )
