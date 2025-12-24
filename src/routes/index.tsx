@@ -51,8 +51,10 @@ import {
 import {
   fetchMarketMetricsFn,
   fetchMarketHoldersFn,
+  fetchBatchUserPnlFn,
   type MarketHolder,
   type MarketHoldersResponse,
+  type UserPnlStats,
 } from '../server/api/market-metrics'
 import {
   deleteWatcherFn,
@@ -3169,6 +3171,64 @@ function TopHoldersDisplay({
   isLoading: boolean
   outcomes: string[]
 }) {
+  const [holderPnl, setHolderPnl] = useState<Record<string, UserPnlStats>>({})
+  const [loadingPnl, setLoadingPnl] = useState(false)
+  const fetchedPnlRef = useRef<Set<string>>(new Set())
+
+  // Group holders by outcome index
+  const holdersByOutcome = useMemo(() => {
+    if (!holders || holders.length === 0) return new Map<number, MarketHolder[]>()
+    
+    const grouped = new Map<number, MarketHolder[]>()
+    for (const tokenData of holders) {
+      for (const holder of tokenData.holders) {
+        const outcomeIdx = holder.outcomeIndex ?? 0
+        if (!grouped.has(outcomeIdx)) {
+          grouped.set(outcomeIdx, [])
+        }
+        grouped.get(outcomeIdx)!.push(holder)
+      }
+    }
+    // Sort holders by amount descending within each outcome
+    grouped.forEach((holderList) => {
+      holderList.sort((a, b) => b.amount - a.amount)
+    })
+    return grouped
+  }, [holders])
+
+  // Fetch PnL for top 5 holders on each side
+  useEffect(() => {
+    if (!holders || holders.length === 0 || loadingPnl) return
+
+    // Get top 5 wallet addresses from each side
+    const walletsToFetch: string[] = []
+    holdersByOutcome.forEach((holderList) => {
+      const top5 = holderList.slice(0, 5)
+      for (const holder of top5) {
+        if (!fetchedPnlRef.current.has(holder.proxyWallet)) {
+          walletsToFetch.push(holder.proxyWallet)
+          fetchedPnlRef.current.add(holder.proxyWallet)
+        }
+      }
+    })
+
+    if (walletsToFetch.length === 0) return
+
+    setLoadingPnl(true)
+    fetchBatchUserPnlFn({ data: { walletAddresses: walletsToFetch } })
+      .then((response) => {
+        if (response.results) {
+          setHolderPnl((prev) => ({ ...prev, ...response.results }))
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch holder PnL:', error)
+      })
+      .finally(() => {
+        setLoadingPnl(false)
+      })
+  }, [holders, holdersByOutcome, loadingPnl])
+
   if (isLoading) {
     return (
       <div className="mt-4 flex items-center justify-center py-6">
@@ -3186,35 +3246,14 @@ function TopHoldersDisplay({
     )
   }
 
-  // Group holders by outcome index
-  // outcomeIndex: 0 = first outcome (usually No), 1 = second outcome (usually Yes)
-  const holdersByOutcome = new Map<number, MarketHolder[]>()
-
-  for (const tokenData of holders) {
-    for (const holder of tokenData.holders) {
-      const outcomeIdx = holder.outcomeIndex ?? 0
-      if (!holdersByOutcome.has(outcomeIdx)) {
-        holdersByOutcome.set(outcomeIdx, [])
-      }
-      holdersByOutcome.get(outcomeIdx)!.push(holder)
-    }
-  }
-
-  // Sort holders by amount descending within each outcome
-  holdersByOutcome.forEach((holderList) => {
-    holderList.sort((a, b) => b.amount - a.amount)
-  })
-
   // Map outcome indices to labels - try to match with market outcomes
   const getOutcomeLabel = (index: number): string => {
     // Polymarket mapping: outcomeIndex 0 = Yes (first outcome), 1 = No (second outcome)
     if (outcomes.length > 0) {
       if (index === 0) {
-        // outcomeIndex 0 is typically "Yes" or the primary outcome
         return outcomes.find((o) => o.toLowerCase() === 'yes') ?? outcomes[0] ?? 'Yes'
       }
       if (index === 1) {
-        // outcomeIndex 1 is typically "No" or the secondary outcome
         return outcomes.find((o) => o.toLowerCase() === 'no') ?? outcomes[1] ?? 'No'
       }
     }
@@ -3240,11 +3279,20 @@ function TopHoldersDisplay({
                 <p className="text-sm font-semibold text-gray-300">{outcomeLabel} Holders</p>
                 <p className="text-xs font-semibold text-cyan-400">{formatUsdCompact(totalValue)}</p>
               </div>
-              <p className="text-xs text-gray-500">{outcomeHolders.length} top holders</p>
+              <p className="text-xs text-gray-500">
+                {outcomeHolders.length} top holders
+                {loadingPnl && <span className="ml-2 text-cyan-400">• Loading stats...</span>}
+              </p>
             </div>
             <ul className="space-y-1.5">
               {outcomeHolders.slice(0, 20).map((holder, idx) => {
                 const style = getHolderStyle(idx, holder.amount)
+                const pnlData = holderPnl[holder.proxyWallet]
+                const showPnl = idx < 5 // Only show PnL for top 5
+                const hasPnl = showPnl && pnlData?.pnl !== null && pnlData?.pnl !== undefined
+                const pnlValue = pnlData?.pnl ?? 0
+                const isProfitable = pnlValue >= 0
+
                 return (
                   <li
                     key={`${holder.proxyWallet}-${idx}`}
@@ -3282,18 +3330,37 @@ function TopHoldersDisplay({
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-gray-200 truncate">
                         {(() => {
-                          // Get the display name, preferring name when public
                           const displayName = holder.displayUsernamePublic && holder.name
                             ? holder.name
                             : holder.pseudonym || holder.name
-                          
-                          // If no name, or if it looks like a wallet address, format it
                           if (!displayName || displayName.startsWith('0x')) {
                             return formatWalletAddress(holder.proxyWallet)
                           }
                           return displayName
                         })()}
                       </p>
+                      {/* Show PnL badge for top 5 */}
+                      {showPnl && (
+                        <div className="mt-0.5">
+                          {hasPnl ? (
+                            <span
+                              className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${
+                                isProfitable
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                              }`}
+                            >
+                              {isProfitable ? '↑' : '↓'} {isProfitable ? '+' : ''}{formatUsdCompact(pnlValue)}
+                            </span>
+                          ) : loadingPnl ? (
+                            <span className="inline-flex items-center gap-1 text-[0.6rem] text-gray-500">
+                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            </span>
+                          ) : (
+                            <span className="text-[0.6rem] text-gray-600">No PnL data</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <span className={`text-xs flex-shrink-0 ${style.amountClass}`}>
                       {formatUsdCompact(holder.amount)}

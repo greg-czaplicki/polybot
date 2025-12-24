@@ -375,3 +375,116 @@ export const fetchMarketHoldersFn = createServerFn({ method: 'POST' }).handler(
   },
 )
 
+/**
+ * User PnL stats from leaderboard API
+ */
+export interface UserPnlStats {
+  pnl: number | null
+  volume?: number
+  error?: string
+}
+
+/**
+ * Server-side function to fetch PnL for a user
+ * Uses the /v1/leaderboard endpoint which has accurate PnL data
+ */
+export const fetchUserPnlFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const payload = data as { walletAddress: string }
+    const walletAddress = payload.walletAddress
+
+    if (!walletAddress) {
+      return { pnl: null, error: 'No wallet address provided' } as UserPnlStats
+    }
+
+    try {
+      // Use leaderboard endpoint which has accurate PnL
+      const url = new URL('/v1/leaderboard', POLYMARKET_DATA_API)
+      url.searchParams.set('user', walletAddress)
+      url.searchParams.set('timePeriod', 'ALL')
+
+      const response = await fetch(url)
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return { pnl: null } as UserPnlStats
+        }
+        return { pnl: null, error: `Request failed: ${response.status}` } as UserPnlStats
+      }
+
+      const leaderboardData = await response.json() as Array<{
+        pnl?: number
+        vol?: number
+        proxyWallet?: string
+      }>
+
+      if (!Array.isArray(leaderboardData) || leaderboardData.length === 0) {
+        return { pnl: null } as UserPnlStats
+      }
+
+      const userData = leaderboardData[0]
+      return {
+        pnl: userData.pnl ?? null,
+        volume: userData.vol,
+      } as UserPnlStats
+    } catch (error) {
+      console.warn('Error fetching user PnL', walletAddress, error)
+      return { pnl: null, error: 'Failed to fetch' } as UserPnlStats
+    }
+  },
+)
+
+/**
+ * Batch fetch PnL for multiple users using leaderboard API
+ */
+export const fetchBatchUserPnlFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const payload = data as { walletAddresses: string[] }
+    const walletAddresses = payload.walletAddresses
+
+    if (!walletAddresses || walletAddresses.length === 0) {
+      return { results: {} as Record<string, UserPnlStats> }
+    }
+
+    const results: Record<string, UserPnlStats> = {}
+
+    // Fetch in parallel using leaderboard endpoint
+    const fetchPromises = walletAddresses.map(async (walletAddress) => {
+      try {
+        const url = new URL('/v1/leaderboard', POLYMARKET_DATA_API)
+        url.searchParams.set('user', walletAddress)
+        url.searchParams.set('timePeriod', 'ALL')
+
+        const response = await fetch(url)
+
+        if (!response.ok) {
+          results[walletAddress] = { pnl: null }
+          return
+        }
+
+        const leaderboardData = await response.json() as Array<{
+          pnl?: number
+          vol?: number
+        }>
+
+        if (!Array.isArray(leaderboardData) || leaderboardData.length === 0) {
+          results[walletAddress] = { pnl: null }
+          return
+        }
+
+        const userData = leaderboardData[0]
+        results[walletAddress] = {
+          pnl: userData.pnl ?? null,
+          volume: userData.vol,
+        }
+      } catch (error) {
+        results[walletAddress] = { pnl: null }
+      }
+    })
+
+    await Promise.all(fetchPromises)
+
+    return { results }
+  },
+)
+
