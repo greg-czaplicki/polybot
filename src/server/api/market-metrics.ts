@@ -23,6 +23,24 @@ export interface MarketMetrics {
   openInterest?: MarketOpenInterest
 }
 
+export interface MarketHolder {
+  proxyWallet: string
+  pseudonym?: string
+  name?: string
+  bio?: string
+  amount: number
+  outcomeIndex: number
+  asset?: string
+  displayUsernamePublic?: boolean
+  profileImage?: string
+  profileImageOptimized?: string
+}
+
+export interface MarketHoldersResponse {
+  token: string
+  holders: MarketHolder[]
+}
+
 /**
  * Server-side function to fetch market volume
  */
@@ -311,6 +329,48 @@ export const fetchMarketMetricsFn = createServerFn({ method: 'POST' }).handler(
     } catch (error) {
       console.warn('Error fetching market metrics', conditionId, error)
       return { metrics: {} as MarketMetrics }
+    }
+  },
+)
+
+/**
+ * Server-side function to fetch top holders for a market
+ * Uses the /holders endpoint from Polymarket Data API
+ */
+export const fetchMarketHoldersFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const payload = data as { conditionId?: string; limit?: number; minBalance?: number }
+    const conditionId = payload.conditionId
+    const limit = payload.limit ?? 20 // Max allowed by API
+    const minBalance = payload.minBalance ?? 1
+
+    if (!conditionId) {
+      return { holders: null }
+    }
+
+    try {
+      const url = new URL('/holders', POLYMARKET_DATA_API)
+      url.searchParams.set('market', conditionId)
+      url.searchParams.set('limit', limit.toString())
+      url.searchParams.set('minBalance', minBalance.toString())
+
+      const response = await fetch(url)
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return { holders: null }
+        }
+        console.warn(
+          `Holders request failed (${response.status}) for conditionId: ${conditionId}`,
+        )
+        return { holders: null }
+      }
+
+      const holdersData = (await response.json()) as MarketHoldersResponse[]
+      return { holders: holdersData }
+    } catch (error) {
+      console.warn('Error fetching market holders', conditionId, error)
+      return { holders: null }
     }
   },
 )

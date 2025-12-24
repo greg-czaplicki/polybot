@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   AlertTriangle,
   BellRing,
+  ChevronDown,
   Clock,
   Eye,
   EyeOff,
@@ -20,6 +21,7 @@ import {
   Trash2,
   Trophy,
   User,
+  Users,
   Wallet,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react'
@@ -46,7 +48,12 @@ import {
   type PolymarketTrade,
   type MarketMetrics,
 } from '../lib/polymarket'
-import { fetchMarketMetricsFn } from '../server/api/market-metrics'
+import {
+  fetchMarketMetricsFn,
+  fetchMarketHoldersFn,
+  type MarketHolder,
+  type MarketHoldersResponse,
+} from '../server/api/market-metrics'
 import {
   deleteWatcherFn,
   ensureUserFn,
@@ -1043,68 +1050,73 @@ function App() {
     marketMetricsCache,
   ])
 
-  // Fetch volume and OI metrics for markets
+  // Track which condition IDs we've already fetched (with timestamp) to prevent duplicate requests
+  const fetchedMetricsRef = useRef<Map<string, number>>(new Map())
+  const METRICS_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+  // Fetch volume and OI metrics for markets - only when aggregatedPositions changes
   useEffect(() => {
-    const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
     const now = Date.now()
 
-    // Collect unique conditionIds from aggregated positions
-    const conditionIdsToFetch = new Set<string>()
-    aggregatedPositions.forEach((market) => {
-      if (market.conditionId) {
-        const cached = marketMetricsCache.get(market.conditionId)
-        // Only fetch if not cached or cache is stale
-        if (!cached || now - cached.fetchedAt > CACHE_TTL_MS) {
-          conditionIdsToFetch.add(market.conditionId)
-        }
+    // Collect unique conditionIds from aggregated positions that need fetching
+    const conditionIdsToFetch: Array<{ conditionId: string; eventId?: string; slug?: string }> = []
+    
+    for (const market of aggregatedPositions) {
+      if (!market.conditionId) continue
+      
+      // Check if we've already fetched this recently
+      const lastFetched = fetchedMetricsRef.current.get(market.conditionId)
+      if (lastFetched && now - lastFetched < METRICS_CACHE_TTL_MS) {
+        continue
       }
-    })
+      
+      conditionIdsToFetch.push({
+        conditionId: market.conditionId,
+        eventId: market.eventId,
+        slug: market.slug,
+      })
+    }
 
-    if (conditionIdsToFetch.size === 0) {
+    if (conditionIdsToFetch.length === 0) {
       return
     }
 
-    // Batch requests to avoid overwhelming the API
-    const BATCH_SIZE = 5
-    const conditionIdsArray = Array.from(conditionIdsToFetch)
-    const batches: string[][] = []
-    for (let i = 0; i < conditionIdsArray.length; i += BATCH_SIZE) {
-      batches.push(conditionIdsArray.slice(i, i + BATCH_SIZE))
+    // Mark these as being fetched now to prevent duplicate requests
+    for (const item of conditionIdsToFetch) {
+      fetchedMetricsRef.current.set(item.conditionId, now)
     }
 
-    // Process batches with a small delay between them
-    batches.forEach((batch, batchIndex) => {
+    // Limit to first 10 markets to prevent resource exhaustion
+    const limitedItems = conditionIdsToFetch.slice(0, 10)
+    
+    // Process each request with a delay to prevent ERR_INSUFFICIENT_RESOURCES
+    limitedItems.forEach((item, index) => {
       setTimeout(() => {
-        batch.forEach((conditionId) => {
-          // Find the market to get eventId and slug
-          const market = aggregatedPositions.find((m) => m.conditionId === conditionId)
-          fetchMarketMetricsFn({
-            data: {
-              conditionId,
-              eventId: market?.eventId,
-              slug: market?.slug
-            } as { conditionId: string; eventId?: string; slug?: string }
-          })
-            .then((response) => {
-              const metrics = response.metrics
-              console.log('[CLIENT DEBUG] Metrics response for', conditionId, ':', metrics)
-              if (metrics && (metrics.volume || metrics.openInterest)) {
-                setMarketMetricsCache((prev) => {
-                  const next = new Map(prev)
-                  next.set(conditionId, { metrics, fetchedAt: Date.now() })
-                  return next
-                })
-              } else {
-                console.warn('[CLIENT DEBUG] No metrics data for', conditionId, '- response:', response)
-              }
-            })
-            .catch((error) => {
-              console.warn('[CLIENT DEBUG] Failed to fetch metrics for conditionId:', conditionId, error)
-            })
+        fetchMarketMetricsFn({
+          data: {
+            conditionId: item.conditionId,
+            eventId: item.eventId,
+            slug: item.slug,
+          }
         })
-      }, batchIndex * 200) // 200ms delay between batches
+          .then((response) => {
+            const metrics = response.metrics
+            if (metrics && (metrics.volume || metrics.openInterest)) {
+              setMarketMetricsCache((prev) => {
+                const next = new Map(prev)
+                next.set(item.conditionId, { metrics, fetchedAt: Date.now() })
+                return next
+              })
+            }
+          })
+          .catch((error) => {
+            console.warn('[CLIENT] Failed to fetch metrics for conditionId:', item.conditionId, error)
+            // Clear the fetched timestamp so we can retry later
+            fetchedMetricsRef.current.delete(item.conditionId)
+          })
+      }, index * 500) // 500ms delay between each request
     })
-  }, [aggregatedPositions, marketMetricsCache])
+  }, [aggregatedPositions]) // Only depend on aggregatedPositions, not marketMetricsCache
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
     try {
@@ -3097,6 +3109,123 @@ function calculateOppositionBalance(
   }
 }
 
+/**
+ * Component to display top holders for a market
+ */
+function TopHoldersDisplay({
+  holders,
+  isLoading,
+  outcomes,
+}: {
+  holders: MarketHoldersResponse[] | undefined
+  isLoading: boolean
+  outcomes: string[]
+}) {
+  if (isLoading) {
+    return (
+      <div className="mt-4 flex items-center justify-center py-6">
+        <Loader2 className="h-5 w-5 animate-spin text-cyan-400" />
+        <span className="ml-2 text-sm text-gray-400">Loading holders...</span>
+      </div>
+    )
+  }
+
+  if (!holders || holders.length === 0) {
+    return (
+      <div className="mt-4 text-center py-4 text-sm text-gray-500">
+        No holder data available for this market.
+      </div>
+    )
+  }
+
+  // Group holders by outcome index
+  // outcomeIndex: 0 = first outcome (usually No), 1 = second outcome (usually Yes)
+  const holdersByOutcome = new Map<number, MarketHolder[]>()
+
+  for (const tokenData of holders) {
+    for (const holder of tokenData.holders) {
+      const outcomeIdx = holder.outcomeIndex ?? 0
+      if (!holdersByOutcome.has(outcomeIdx)) {
+        holdersByOutcome.set(outcomeIdx, [])
+      }
+      holdersByOutcome.get(outcomeIdx)!.push(holder)
+    }
+  }
+
+  // Sort holders by amount descending within each outcome
+  holdersByOutcome.forEach((holderList) => {
+    holderList.sort((a, b) => b.amount - a.amount)
+  })
+
+  // Map outcome indices to labels - try to match with market outcomes
+  const getOutcomeLabel = (index: number): string => {
+    // Common mapping: 0 = No, 1 = Yes for binary markets
+    // But some markets might have different outcomes
+    if (outcomes.length > 0) {
+      // Try to match - index 0 often maps to "No" or first outcome
+      // index 1 often maps to "Yes" or second outcome
+      if (index === 0) {
+        return outcomes.find((o) => o.toLowerCase() === 'no') ?? outcomes[1] ?? 'No'
+      }
+      if (index === 1) {
+        return outcomes.find((o) => o.toLowerCase() === 'yes') ?? outcomes[0] ?? 'Yes'
+      }
+    }
+    return index === 0 ? 'No' : 'Yes'
+  }
+
+  const outcomeIndices = Array.from(holdersByOutcome.keys()).sort()
+
+  return (
+    <div className="mt-4 grid gap-3 sm:gap-4 md:grid-cols-2">
+      {outcomeIndices.map((outcomeIdx) => {
+        const outcomeHolders = holdersByOutcome.get(outcomeIdx) ?? []
+        const outcomeLabel = getOutcomeLabel(outcomeIdx)
+
+        return (
+          <div
+            key={outcomeIdx}
+            className="rounded-lg sm:rounded-xl border border-slate-800/50 bg-slate-900/30 p-3 sm:p-4"
+          >
+            <div className="mb-3 pb-2 border-b border-slate-800/40">
+              <p className="text-sm font-semibold text-gray-300">{outcomeLabel} Holders</p>
+              <p className="text-xs text-gray-500">{outcomeHolders.length} top holders</p>
+            </div>
+            <ul className="space-y-1.5">
+              {outcomeHolders.slice(0, 20).map((holder, idx) => (
+                <li
+                  key={`${holder.proxyWallet}-${idx}`}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-800/40 transition-colors"
+                >
+                  {holder.profileImageOptimized || holder.profileImage ? (
+                    <img
+                      src={holder.profileImageOptimized || holder.profileImage}
+                      alt=""
+                      className="h-6 w-6 rounded-full object-cover flex-shrink-0 border border-slate-700"
+                    />
+                  ) : (
+                    <div className="h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0">
+                      <User className="h-3 w-3 text-gray-400" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-gray-200 truncate">
+                      {holder.pseudonym || holder.name || formatWalletAddress(holder.proxyWallet)}
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold text-gray-300 flex-shrink-0">
+                    {formatUsdCompact(holder.amount)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SharedPositionsBoard({
   positions,
   walletSportEdges,
@@ -3111,6 +3240,44 @@ function SharedPositionsBoard({
   const [showRedeemable, setShowRedeemable] = useState(false)
   const [showSmallBets, setShowSmallBets] = useState(false)
   const SMALL_BET_THRESHOLD = 50_000
+
+  // State for top holders feature
+  const [expandedHolders, setExpandedHolders] = useState<Set<string>>(new Set())
+  const [holdersCache, setHoldersCache] = useState<Map<string, MarketHoldersResponse[]>>(new Map())
+  const [loadingHolders, setLoadingHolders] = useState<Set<string>>(new Set())
+
+  const toggleHolders = useCallback(async (marketId: string, conditionId: string | undefined) => {
+    if (!conditionId) return
+
+    setExpandedHolders((prev) => {
+      const next = new Set(prev)
+      if (next.has(marketId)) {
+        next.delete(marketId)
+      } else {
+        next.add(marketId)
+      }
+      return next
+    })
+
+    // Fetch holders if not cached and we're expanding
+    if (!holdersCache.has(marketId) && !loadingHolders.has(marketId)) {
+      setLoadingHolders((prev) => new Set(prev).add(marketId))
+      try {
+        const response = await fetchMarketHoldersFn({ data: { conditionId, limit: 20 } })
+        if (response.holders) {
+          setHoldersCache((prev) => new Map(prev).set(marketId, response.holders!))
+        }
+      } catch (error) {
+        console.warn('Failed to fetch holders for market:', marketId, error)
+      } finally {
+        setLoadingHolders((prev) => {
+          const next = new Set(prev)
+          next.delete(marketId)
+          return next
+        })
+      }
+    }
+  }, [holdersCache, loadingHolders])
 
   if (positions.length === 0) {
     return (
@@ -3413,6 +3580,37 @@ function SharedPositionsBoard({
                     )
                   })}
                 </div>
+
+                {/* Top Holders Section */}
+                {market.conditionId && (
+                  <div className="mt-4 sm:mt-5 pt-4 sm:pt-5 border-t border-slate-800/60">
+                    <button
+                      type="button"
+                      onClick={() => toggleHolders(market.id, market.conditionId)}
+                      className="w-full flex items-center justify-between gap-2 text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Users className="h-4 w-4 text-cyan-400" />
+                        <span className="text-sm font-semibold text-gray-200">Top Holders</span>
+                        {loadingHolders.has(market.id) && (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />
+                        )}
+                      </div>
+                      <ChevronDown
+                        className={`h-4 w-4 text-gray-400 transition-transform ${expandedHolders.has(market.id) ? 'rotate-180' : ''
+                          }`}
+                      />
+                    </button>
+
+                    {expandedHolders.has(market.id) && (
+                      <TopHoldersDisplay
+                        holders={holdersCache.get(market.id)}
+                        isLoading={loadingHolders.has(market.id)}
+                        outcomes={market.outcomes.map((o) => o.outcome)}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
             )
           })}
