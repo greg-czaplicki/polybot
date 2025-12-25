@@ -3197,35 +3197,57 @@ function getHolderSizingContext(
 }
 
 /**
+ * Extract team names from a market title for sports markets
+ * Handles formats like "Cowboys vs Commanders", "Team A @ Team B", etc.
+ */
+function extractTeamNames(title: string): [string, string] | null {
+  // Try "Team A vs Team B" or "Team A vs. Team B"
+  const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*\?.*)?$/i)
+  if (vsMatch) {
+    return [vsMatch[1].trim(), vsMatch[2].trim()]
+  }
+  // Try "Team A @ Team B" (away @ home)
+  const atMatch = title.match(/^(.+?)\s+@\s+(.+?)(?:\s*\?.*)?$/i)
+  if (atMatch) {
+    return [atMatch[1].trim(), atMatch[2].trim()]
+  }
+  return null
+}
+
+/**
  * Component to display top holders for a market
  */
 function TopHoldersDisplay({
   holders,
   isLoading,
   outcomes,
+  marketTitle,
 }: {
   holders: MarketHoldersResponse[] | undefined
   isLoading: boolean
   outcomes: string[]
+  marketTitle?: string
 }) {
   const [holderPnl, setHolderPnl] = useState<Record<string, UserPnlStats>>({})
   const [loadingPnl, setLoadingPnl] = useState(false)
   const fetchedPnlRef = useRef<Set<string>>(new Set())
 
-  // Group holders by outcome index
+  // Group holders by token index from the API response
+  // Polymarket returns [YesTokenHolders, NoTokenHolders] - use array position
   const holdersByOutcome = useMemo(() => {
     if (!holders || holders.length === 0) return new Map<number, MarketHolder[]>()
     
     const grouped = new Map<number, MarketHolder[]>()
-    for (const tokenData of holders) {
-      for (const holder of tokenData.holders) {
-        const outcomeIdx = holder.outcomeIndex ?? 0
-        if (!grouped.has(outcomeIdx)) {
-          grouped.set(outcomeIdx, [])
-        }
-        grouped.get(outcomeIdx)!.push(holder)
+    // Use the index in the holders array (0 = first token, 1 = second token)
+    // Polymarket convention: first token (index 0) = Yes, second token (index 1) = No
+    holders.forEach((tokenData, tokenIndex) => {
+      if (!grouped.has(tokenIndex)) {
+        grouped.set(tokenIndex, [])
       }
-    }
+      for (const holder of tokenData.holders) {
+        grouped.get(tokenIndex)!.push(holder)
+      }
+    })
     // Sort holders by amount descending within each outcome
     grouped.forEach((holderList) => {
       holderList.sort((a, b) => b.amount - a.amount)
@@ -3283,18 +3305,27 @@ function TopHoldersDisplay({
     )
   }
 
-  // Map outcome indices to labels - try to match with market outcomes
+  // Try to extract team names from market title for sports markets
+  const teamNames = marketTitle ? extractTeamNames(marketTitle) : null
+
+  // Map token indices to labels using the market outcomes or extracted team names
+  // Polymarket API returns: index 0 = second team (from title), index 1 = first team
   const getOutcomeLabel = (index: number): string => {
-    // Polymarket mapping: outcomeIndex 0 = Yes (first outcome), 1 = No (second outcome)
-    if (outcomes.length > 0) {
-      if (index === 0) {
-        return outcomes.find((o) => o.toLowerCase() === 'yes') ?? outcomes[0] ?? 'Yes'
-      }
-      if (index === 1) {
-        return outcomes.find((o) => o.toLowerCase() === 'no') ?? outcomes[1] ?? 'No'
+    // First, try to use team names extracted from the title (reversed order)
+    if (teamNames && index < 2) {
+      // Swap: index 0 → second team, index 1 → first team
+      return teamNames[index === 0 ? 1 : 0]
+    }
+    // Then try the outcomes array
+    if (outcomes.length > index) {
+      // Skip generic "Yes"/"No" if we have team names
+      const outcome = outcomes[index]
+      if (outcome.toLowerCase() !== 'yes' && outcome.toLowerCase() !== 'no') {
+        return outcome
       }
     }
-    return index === 0 ? 'Yes' : 'No'
+    // Fallback for binary markets
+    return index === 0 ? 'No' : 'Yes'
   }
 
   const outcomeIndices = Array.from(holdersByOutcome.keys()).sort()
@@ -3817,6 +3848,7 @@ function SharedPositionsBoard({
                         holders={holdersCache.get(market.id)}
                         isLoading={loadingHolders.has(market.id)}
                         outcomes={market.outcomes.map((o) => o.outcome)}
+                        marketTitle={market.title}
                       />
                     )}
                   </div>
