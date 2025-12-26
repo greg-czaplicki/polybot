@@ -172,42 +172,81 @@ function SharpMoneyPage() {
     loadCache()
   }, [loadCache])
 
-  // Manual refresh - fetches fresh data from APIs
+  // Manual refresh - behavior depends on cache state:
+  // - If cache is empty: full refresh - fetch and analyze all markets
+  // - If cache has data: partial refresh - only re-fetch data for imminent cached events
   const handleRefresh = async () => {
     setIsRefreshing(true)
     try {
-      // Fetch trending markets
-      console.log('[sharp] Fetching with selectedSport:', selectedSport)
-      const { markets } = await fetchTrendingSportsMarketsFn({
-        data: {
-          limit: 50,
-          sportTags: selectedSport === 'all' ? undefined : [selectedSport],
-        },
-      })
+      const isFullRefresh = entries.length === 0
+      
+      if (isFullRefresh) {
+        // Cache is empty - do a full refresh of all markets
+        console.log('[sharp] Cache empty - doing full refresh')
+        const { markets } = await fetchTrendingSportsMarketsFn({
+          data: {
+            limit: 50,
+            sportTags: selectedSport === 'all' ? undefined : [selectedSport],
+          },
+        })
 
-      if (markets && markets.length > 0) {
-        // Analyze more markets to get variety across all sports (up to 25)
-        const marketsToAnalyze = markets.slice(0, 25)
-        console.log(`[sharp] Analyzing ${marketsToAnalyze.length} markets...`)
-        
-        for (const market of marketsToAnalyze) {
-          try {
-            await refreshMarketSharpnessFn({
-              data: {
-                conditionId: market.conditionId,
-                marketTitle: market.title,
-                marketSlug: market.slug,
-                eventSlug: market.eventSlug,
-                sportTag: market.sportTag ?? undefined,
-                outcomes: market.outcomes,
-                endDate: market.endDate,
-              },
-            })
-          } catch (error) {
-            console.error('Failed to refresh market:', market.title, error)
+        if (markets && markets.length > 0) {
+          const marketsToAnalyze = markets.slice(0, 25)
+          console.log(`[sharp] Analyzing ${marketsToAnalyze.length} markets...`)
+          
+          for (const market of marketsToAnalyze) {
+            try {
+              await refreshMarketSharpnessFn({
+                data: {
+                  conditionId: market.conditionId,
+                  marketTitle: market.title,
+                  marketSlug: market.slug,
+                  eventSlug: market.eventSlug,
+                  sportTag: market.sportTag ?? undefined,
+                  outcomes: market.outcomes,
+                  endDate: market.endDate,
+                },
+              })
+            } catch (error) {
+              console.error('Failed to refresh market:', market.title, error)
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300))
           }
-          // Small delay between markets
-          await new Promise((resolve) => setTimeout(resolve, 300))
+        }
+      } else {
+        // Cache has data - partial refresh: re-fetch stale data for imminent events only
+        const now = new Date()
+        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000)
+        
+        const imminentCachedEntries = entries.filter((entry) => {
+          if (!entry.eventTime) return false
+          const eventDate = new Date(entry.eventTime)
+          // Include if: already started (live) OR starting within 1 hour
+          return eventDate <= oneHourFromNow
+        })
+        
+        if (imminentCachedEntries.length === 0) {
+          console.log('[sharp] No imminent events to refresh')
+        } else {
+          console.log(`[sharp] Partial refresh: updating ${imminentCachedEntries.length} imminent/live events`)
+          
+          for (const entry of imminentCachedEntries) {
+            try {
+              await refreshMarketSharpnessFn({
+                data: {
+                  conditionId: entry.conditionId,
+                  marketTitle: entry.marketTitle,
+                  marketSlug: entry.marketSlug,
+                  eventSlug: entry.eventSlug,
+                  sportTag: entry.sportTag ?? undefined,
+                  endDate: entry.eventTime,
+                },
+              })
+            } catch (error) {
+              console.error('Failed to refresh:', entry.marketTitle, error)
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300))
+          }
         }
       }
 
@@ -289,9 +328,10 @@ function SharpMoneyPage() {
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="flex items-center gap-2 rounded-lg bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
+                title={entries.length === 0 ? "Full refresh - analyze all markets" : "Quick refresh - only live/imminent events"}
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                {isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh Live'}
               </button>
             </div>
           </div>
