@@ -146,6 +146,7 @@ export interface SharpAnalysisResult {
   sharpSide: 'A' | 'B' | 'EVEN'
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   scoreDifferential: number
+  sharpSideValueRatio?: number // 0-1, what % of total value is on the sharp side
 }
 
 /**
@@ -567,12 +568,13 @@ function calculateSharpScore(holders: TopHolderPnlData[], totalValue: number): n
 }
 
 /**
- * Determine confidence level based on score differential
+ * Determine confidence level based on score differential and conviction
  */
 function determineConfidence(
   scoreDiff: number,
   sideAHolderCount: number,
   sideBHolderCount: number,
+  sharpSideValueRatio: number, // 0-1, what % of total value is on the sharp side
 ): 'HIGH' | 'MEDIUM' | 'LOW' {
   const minHolders = Math.min(sideAHolderCount, sideBHolderCount)
 
@@ -581,17 +583,27 @@ function determineConfidence(
     return 'LOW'
   }
 
-  // High confidence: >15 point differential with good holder count
+  // Calculate base confidence from score differential
+  let baseConfidence: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW'
+  
   if (scoreDiff >= 15 && minHolders >= 5) {
-    return 'HIGH'
+    baseConfidence = 'HIGH'
+  } else if (scoreDiff >= 8) {
+    baseConfidence = 'MEDIUM'
   }
 
-  // Medium confidence: >8 point differential
-  if (scoreDiff >= 8) {
+  // Downgrade confidence if sharp side has very low conviction (< 15% of total value)
+  // This catches cases like Jets: $8.8K vs Patriots: $71.8K (Jets = 10.9%)
+  if (sharpSideValueRatio < 0.15) {
+    if (baseConfidence === 'HIGH') return 'MEDIUM'
+    if (baseConfidence === 'MEDIUM') return 'LOW'
+  }
+  // Also downgrade if sharp side has < 25% and trying to be HIGH
+  else if (sharpSideValueRatio < 0.25 && baseConfidence === 'HIGH') {
     return 'MEDIUM'
   }
 
-  return 'LOW'
+  return baseConfidence
 }
 
 /**
@@ -842,10 +854,20 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         sharpSide = 'B'
       }
 
+      // Calculate sharp side's value ratio (conviction)
+      const totalMarketValue = sideATotalValue + sideBTotalValue
+      let sharpSideValueRatio = 0.5 // Default to 50% if even
+      if (sharpSide === 'A' && totalMarketValue > 0) {
+        sharpSideValueRatio = sideATotalValue / totalMarketValue
+      } else if (sharpSide === 'B' && totalMarketValue > 0) {
+        sharpSideValueRatio = sideBTotalValue / totalMarketValue
+      }
+
       const confidence = determineConfidence(
         scoreDifferential,
         sideAHolders.length,
         sideBHolders.length,
+        sharpSideValueRatio,
       )
 
       const analysis: SharpAnalysisResult = {
@@ -872,6 +894,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         sharpSide,
         confidence,
         scoreDifferential,
+        sharpSideValueRatio,
       }
 
       return { analysis }
@@ -988,6 +1011,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       sharpSide: analysis.sharpSide,
       confidence: analysis.confidence,
       scoreDifferential: analysis.scoreDifferential,
+      sharpSideValueRatio: analysis.sharpSideValueRatio,
     }
 
     await upsertSharpMoneyCache(db, cacheInput)

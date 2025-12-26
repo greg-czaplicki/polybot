@@ -44,6 +44,7 @@ export interface SharpMoneyCacheRow {
   sharp_side?: string | null
   confidence?: string | null
   score_differential: number
+  sharp_side_value_ratio?: number | null
   updated_at: number
 }
 
@@ -75,6 +76,7 @@ export interface SharpMoneyCacheEntry {
   sharpSide: 'A' | 'B' | 'EVEN'
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   scoreDifferential: number
+  sharpSideValueRatio?: number
   updatedAt: number
 }
 
@@ -105,6 +107,7 @@ export interface UpsertSharpMoneyCacheInput {
   sharpSide: 'A' | 'B' | 'EVEN'
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   scoreDifferential: number
+  sharpSideValueRatio?: number
 }
 
 function generateId(): string {
@@ -141,6 +144,7 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
     sharpSide: (row.sharp_side as 'A' | 'B' | 'EVEN') ?? 'EVEN',
     confidence: (row.confidence as 'HIGH' | 'MEDIUM' | 'LOW') ?? 'LOW',
     scoreDifferential: row.score_differential,
+    sharpSideValueRatio: row.sharp_side_value_ratio ?? undefined,
     updatedAt: row.updated_at,
   }
 }
@@ -169,8 +173,8 @@ export async function upsertSharpMoneyCache(
       id, condition_id, market_title, market_slug, event_slug, sport_tag, event_time,
       side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_top_holders,
       side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_top_holders,
-      sharp_side, confidence, score_differential, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sharp_side, confidence, score_differential, sharp_side_value_ratio, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
@@ -190,6 +194,7 @@ export async function upsertSharpMoneyCache(
       sharp_side = excluded.sharp_side,
       confidence = excluded.confidence,
       score_differential = excluded.score_differential,
+      sharp_side_value_ratio = excluded.sharp_side_value_ratio,
       updated_at = excluded.updated_at`,
     id,
     input.conditionId,
@@ -211,6 +216,7 @@ export async function upsertSharpMoneyCache(
     input.sharpSide,
     input.confidence,
     input.scoreDifferential,
+    input.sharpSideValueRatio ?? null,
     now,
   )
 }

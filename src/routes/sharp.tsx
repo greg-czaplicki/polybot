@@ -397,19 +397,14 @@ function SharpMoneyCard({
           <h3 className="text-base font-semibold text-white truncate pr-4">
             {entry.marketTitle}
           </h3>
-          <div className="flex items-center gap-3 mt-2">
-            {entry.sharpSide !== 'EVEN' && (
-              <div className="flex items-center gap-1.5">
-                <Zap className="h-4 w-4 text-amber-400" />
-                <span className="text-sm font-medium text-amber-400">
-                  Sharp: {sharpSideData.label}
-                </span>
-              </div>
-            )}
-            {entry.sharpSide === 'EVEN' && (
-              <span className="text-sm text-gray-500">No clear edge</span>
-            )}
-          </div>
+          {entry.sharpSide !== 'EVEN' && (
+            <div className="flex items-center gap-1.5 mt-2">
+              <Zap className="h-4 w-4 text-amber-400" />
+              <span className="text-sm font-medium text-amber-400">
+                Sharp: {sharpSideData.label}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {polymarketUrl && (
@@ -431,9 +426,14 @@ function SharpMoneyCard({
         </div>
       </div>
 
-      {/* Sharp Score Bars */}
+      {/* Unified Edge Bar */}
       <div className="px-4 pb-4">
-        <SharpScoreBars sideA={entry.sideA} sideB={entry.sideB} sharpSide={entry.sharpSide} />
+        <UnifiedEdgeBar 
+          sideA={entry.sideA} 
+          sideB={entry.sideB} 
+          sharpSide={entry.sharpSide}
+          conviction={entry.sharpSideValueRatio}
+        />
       </div>
 
       {/* Expanded Content */}
@@ -490,53 +490,116 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
   )
 }
 
-function SharpScoreBars({
+function UnifiedEdgeBar({
   sideA,
   sideB,
   sharpSide,
+  conviction,
 }: {
   sideA: SharpMoneyCacheEntry['sideA']
   sideB: SharpMoneyCacheEntry['sideB']
   sharpSide: 'A' | 'B' | 'EVEN'
+  conviction?: number
 }) {
-  const maxScore = Math.max(sideA.sharpScore, sideB.sharpScore, 1)
+  // Calculate proportional dominance (what % of total score does sharp side have)
+  // e.g., 62 vs 26 → 62/(62+26) = 70%
+  const totalScore = sideA.sharpScore + sideB.sharpScore
+  const sharpScore = sharpSide === 'A' ? sideA.sharpScore : sideB.sharpScore
+  const dominance = totalScore > 0 ? (sharpScore / totalScore) * 100 : 50
+  
+  // Determine colors based on conviction
+  const convictionPercent = conviction ? Math.round(conviction * 100) : 50
+  let barColor = 'bg-amber-500'
+  let glowClass = ''
+  
+  if (conviction !== undefined) {
+    if (conviction >= 0.4) {
+      // Strong conviction - bright green gradient with glow
+      barColor = 'bg-gradient-to-r from-emerald-400 to-emerald-500'
+      glowClass = 'shadow-lg shadow-emerald-500/30'
+    } else if (conviction >= 0.25) {
+      // Moderate conviction - amber
+      barColor = 'bg-amber-500'
+    } else {
+      // Low conviction - muted/faded
+      barColor = 'bg-amber-500/50'
+    }
+  }
 
-  return (
-    <div className="space-y-2">
-      {/* Side A */}
+  // For EVEN, show balanced bar
+  if (sharpSide === 'EVEN') {
+    return (
       <div className="flex items-center gap-3">
-        <span className={`text-xs font-medium w-28 truncate ${sharpSide === 'A' ? 'text-amber-400' : 'text-gray-400'}`}>
+        <span className="text-xs font-medium text-gray-400 w-24 truncate text-right">
           {sideA.label}
         </span>
-        <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${
-              sharpSide === 'A' ? 'bg-amber-500' : 'bg-cyan-500/50'
-            }`}
-            style={{ width: `${(sideA.sharpScore / 100) * 100}%` }}
-          />
+        <div className="flex-1 h-5 bg-slate-800 rounded-full overflow-hidden relative">
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-[0.65rem] font-medium text-gray-500">No clear edge</span>
+          </div>
         </div>
-        <span className={`text-xs font-semibold w-10 text-right ${sharpSide === 'A' ? 'text-amber-400' : 'text-gray-400'}`}>
-          {Math.round(sideA.sharpScore)}
-        </span>
-      </div>
-      {/* Side B */}
-      <div className="flex items-center gap-3">
-        <span className={`text-xs font-medium w-28 truncate ${sharpSide === 'B' ? 'text-amber-400' : 'text-gray-400'}`}>
+        <span className="text-xs font-medium text-gray-400 w-24 truncate">
           {sideB.label}
         </span>
-        <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${
-              sharpSide === 'B' ? 'bg-amber-500' : 'bg-cyan-500/50'
-            }`}
-            style={{ width: `${(sideB.sharpScore / 100) * 100}%` }}
-          />
-        </div>
-        <span className={`text-xs font-semibold w-10 text-right ${sharpSide === 'B' ? 'text-amber-400' : 'text-gray-400'}`}>
-          {Math.round(sideB.sharpScore)}
+      </div>
+    )
+  }
+
+  // Determine which side is sharp
+  const isSharpA = sharpSide === 'A'
+
+  return (
+    <div className="space-y-1.5">
+      {/* Labels row */}
+      <div className="flex items-center justify-between text-xs">
+        <span className={`font-semibold ${isSharpA ? 'text-amber-400' : 'text-gray-500'}`}>
+          {sideA.label}
+        </span>
+        <span className={`font-semibold ${!isSharpA ? 'text-amber-400' : 'text-gray-500'}`}>
+          {sideB.label}
         </span>
       </div>
+      
+      {/* Unified bar - fills proportionally based on score dominance */}
+      <div className={`h-6 bg-slate-800 rounded-full overflow-hidden relative ${glowClass}`}>
+        {/* Bar fill - width = proportional dominance */}
+        <div
+          className={`absolute top-0 h-full rounded-full transition-all duration-500 ${barColor} ${
+            isSharpA ? 'left-0' : 'right-0'
+          }`}
+          style={{ width: `${dominance}%` }}
+        />
+        
+        {/* Score labels inside bar */}
+        <div className="absolute inset-0 flex items-center justify-between px-3">
+          <span className={`text-xs font-bold drop-shadow-sm ${
+            isSharpA ? 'text-white' : 'text-gray-400'
+          }`}>
+            {Math.round(sideA.sharpScore)}
+          </span>
+          <span className={`text-xs font-bold drop-shadow-sm ${
+            !isSharpA ? 'text-white' : 'text-gray-400'
+          }`}>
+            {Math.round(sideB.sharpScore)}
+          </span>
+        </div>
+      </div>
+      
+      {/* Conviction indicator */}
+      {conviction !== undefined && (
+        <div className="flex items-center justify-center">
+          <div className="flex items-center gap-1.5">
+            <div className={`h-2 w-2 rounded-full ${
+              conviction >= 0.4 ? 'bg-emerald-400' : conviction >= 0.25 ? 'bg-amber-400' : 'bg-rose-400'
+            }`} />
+            <span className={`text-xs font-medium ${
+              conviction >= 0.4 ? 'text-emerald-400' : conviction >= 0.25 ? 'text-amber-400' : 'text-rose-400'
+            }`}>
+              {convictionPercent}% conviction
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
