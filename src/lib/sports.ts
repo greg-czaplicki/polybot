@@ -160,6 +160,12 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
     keywords: ['ncaaf', 'cfb', 'college football', 'heisman', 'rose bowl', 'orange bowl'],
   },
   {
+    tag: 'cfb',
+    label: 'College Football',
+    slugMarkers: ['cfb-'],
+    keywords: ['cfb', 'college football playoff', 'cfp'],
+  },
+  {
     tag: 'ncaab',
     label: 'College Basketball',
     slugMarkers: ['ncaab-', 'cbb-', 'marchmadness-'],
@@ -172,11 +178,16 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
     keywords: ['mls', 'major league soccer'],
   },
   {
+    tag: 'epl',
+    label: 'Premier League',
+    slugMarkers: ['epl-'],
+    keywords: ['premier league', 'epl', 'english premier'],
+  },
+  {
     tag: 'soccer',
     label: 'Soccer',
     slugMarkers: ['ucl-', 'uel-', 'prem-', 'serie-', 'laliga-', 'bundesliga-', 'liga-'],
     keywords: [
-      'premier league',
       'serie a',
       'la liga',
       'bundesliga',

@@ -34,7 +34,7 @@ const SPORT_FILTERS = [
   { value: 'all', label: 'All Sports' },
   { value: 'nfl', label: 'NFL' },
   { value: 'nba', label: 'NBA' },
-  { value: 'ncaaf', label: 'College Football' },
+  { value: 'cfb', label: 'College Football' },
   { value: 'ncaab', label: 'College Basketball' },
   { value: 'mlb', label: 'MLB' },
   { value: 'nhl', label: 'NHL' },
@@ -407,6 +407,19 @@ function SharpMoneyCard({
           )}
         </div>
         <div className="flex items-center gap-3">
+          {/* Edge Rating - main ranking indicator */}
+          <div className="flex flex-col items-center">
+            <span className={`text-2xl font-bold ${
+              entry.edgeRating >= 70 ? 'text-emerald-400' :
+              entry.edgeRating >= 50 ? 'text-amber-400' :
+              entry.edgeRating >= 30 ? 'text-gray-300' :
+              'text-gray-500'
+            }`}>
+              {entry.edgeRating}
+            </span>
+            <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
+          </div>
+          
           {polymarketUrl && (
             <a
               href={polymarketUrl}
@@ -432,7 +445,6 @@ function SharpMoneyCard({
           sideA={entry.sideA} 
           sideB={entry.sideB} 
           sharpSide={entry.sharpSide}
-          conviction={entry.sharpSideValueRatio}
         />
       </div>
 
@@ -494,112 +506,109 @@ function UnifiedEdgeBar({
   sideA,
   sideB,
   sharpSide,
-  conviction,
 }: {
   sideA: SharpMoneyCacheEntry['sideA']
   sideB: SharpMoneyCacheEntry['sideB']
   sharpSide: 'A' | 'B' | 'EVEN'
   conviction?: number
 }) {
-  // Calculate proportional dominance (what % of total score does sharp side have)
-  // e.g., 62 vs 26 → 62/(62+26) = 70%
-  const totalScore = sideA.sharpScore + sideB.sharpScore
-  const sharpScore = sharpSide === 'A' ? sideA.sharpScore : sideB.sharpScore
-  const dominance = totalScore > 0 ? (sharpScore / totalScore) * 100 : 50
+  // Calculate money split (what % of total dollars is on each side)
+  const totalValue = sideA.totalValue + sideB.totalValue
+  const sideAMoneyPercent = totalValue > 0 ? (sideA.totalValue / totalValue) * 100 : 50
+  const sideBMoneyPercent = 100 - sideAMoneyPercent
   
-  // Determine colors based on conviction
-  const convictionPercent = conviction ? Math.round(conviction * 100) : 50
-  let barColor = 'bg-amber-500'
-  let glowClass = ''
-  
-  if (conviction !== undefined) {
-    if (conviction >= 0.4) {
-      // Strong conviction - bright green gradient with glow
-      barColor = 'bg-gradient-to-r from-emerald-400 to-emerald-500'
-      glowClass = 'shadow-lg shadow-emerald-500/30'
-    } else if (conviction >= 0.25) {
-      // Moderate conviction - amber
-      barColor = 'bg-amber-500'
-    } else {
-      // Low conviction - muted/faded
-      barColor = 'bg-amber-500/50'
-    }
-  }
+  const isSharpA = sharpSide === 'A'
 
   // For EVEN, show balanced bar
   if (sharpSide === 'EVEN') {
     return (
-      <div className="flex items-center gap-3">
-        <span className="text-xs font-medium text-gray-400 w-24 truncate text-right">
-          {sideA.label}
-        </span>
-        <div className="flex-1 h-5 bg-slate-800 rounded-full overflow-hidden relative">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-[0.65rem] font-medium text-gray-500">No clear edge</span>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <div>
+            <span className="font-semibold text-gray-400">{sideA.label}</span>
+            <span className="text-gray-600 ml-2">({Math.round(sideA.sharpScore)})</span>
+          </div>
+          <div>
+            <span className="text-gray-600 mr-2">({Math.round(sideB.sharpScore)})</span>
+            <span className="font-semibold text-gray-400">{sideB.label}</span>
           </div>
         </div>
-        <span className="text-xs font-medium text-gray-400 w-24 truncate">
-          {sideB.label}
-        </span>
+        <div className="h-7 bg-slate-800 rounded-lg overflow-hidden relative">
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-xs font-medium text-gray-500">No clear edge - money split evenly</span>
+          </div>
+        </div>
       </div>
     )
   }
 
-  // Determine which side is sharp
-  const isSharpA = sharpSide === 'A'
-
   return (
-    <div className="space-y-1.5">
-      {/* Labels row */}
+    <div className="space-y-2">
+      {/* Labels row - sharp side highlighted with ⚡ and score */}
       <div className="flex items-center justify-between text-xs">
-        <span className={`font-semibold ${isSharpA ? 'text-amber-400' : 'text-gray-500'}`}>
-          {sideA.label}
-        </span>
-        <span className={`font-semibold ${!isSharpA ? 'text-amber-400' : 'text-gray-500'}`}>
-          {sideB.label}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {isSharpA && <Zap className="h-3.5 w-3.5 text-emerald-400" />}
+          <span className={`font-semibold ${isSharpA ? 'text-emerald-400' : 'text-gray-500'}`}>
+            {sideA.label}
+          </span>
+          <span className={`${isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
+            ({Math.round(sideA.sharpScore)})
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`${!isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
+            ({Math.round(sideB.sharpScore)})
+          </span>
+          <span className={`font-semibold ${!isSharpA ? 'text-emerald-400' : 'text-gray-500'}`}>
+            {sideB.label}
+          </span>
+          {!isSharpA && <Zap className="h-3.5 w-3.5 text-emerald-400" />}
+        </div>
       </div>
       
-      {/* Unified bar - fills proportionally based on score dominance */}
-      <div className={`h-6 bg-slate-800 rounded-full overflow-hidden relative ${glowClass}`}>
-        {/* Bar fill - width = proportional dominance */}
+      {/* Money split bar - shows where the actual dollars are */}
+      <div className="h-7 rounded-lg overflow-hidden relative flex">
+        {/* Side A money bar */}
         <div
-          className={`absolute top-0 h-full rounded-full transition-all duration-500 ${barColor} ${
-            isSharpA ? 'left-0' : 'right-0'
+          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] ${
+            isSharpA 
+              ? 'bg-gradient-to-r from-emerald-600 to-emerald-500' 
+              : 'bg-slate-700'
           }`}
-          style={{ width: `${dominance}%` }}
-        />
-        
-        {/* Score labels inside bar */}
-        <div className="absolute inset-0 flex items-center justify-between px-3">
-          <span className={`text-xs font-bold drop-shadow-sm ${
-            isSharpA ? 'text-white' : 'text-gray-400'
-          }`}>
-            {Math.round(sideA.sharpScore)}
+          style={{ width: `${Math.max(sideAMoneyPercent, 15)}%` }}
+        >
+          <span className={`text-xs font-bold ${isSharpA ? 'text-white' : 'text-gray-400'}`}>
+            {formatUsdCompact(sideA.totalValue)}
           </span>
-          <span className={`text-xs font-bold drop-shadow-sm ${
-            !isSharpA ? 'text-white' : 'text-gray-400'
-          }`}>
-            {Math.round(sideB.sharpScore)}
+        </div>
+        
+        {/* Divider */}
+        <div className="w-0.5 bg-slate-900" />
+        
+        {/* Side B money bar */}
+        <div
+          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] ${
+            !isSharpA 
+              ? 'bg-gradient-to-l from-emerald-600 to-emerald-500' 
+              : 'bg-slate-700'
+          }`}
+          style={{ width: `${Math.max(sideBMoneyPercent, 15)}%` }}
+        >
+          <span className={`text-xs font-bold ${!isSharpA ? 'text-white' : 'text-gray-400'}`}>
+            {formatUsdCompact(sideB.totalValue)}
           </span>
         </div>
       </div>
       
-      {/* Conviction indicator */}
-      {conviction !== undefined && (
-        <div className="flex items-center justify-center">
-          <div className="flex items-center gap-1.5">
-            <div className={`h-2 w-2 rounded-full ${
-              conviction >= 0.4 ? 'bg-emerald-400' : conviction >= 0.25 ? 'bg-amber-400' : 'bg-rose-400'
-            }`} />
-            <span className={`text-xs font-medium ${
-              conviction >= 0.4 ? 'text-emerald-400' : conviction >= 0.25 ? 'text-amber-400' : 'text-rose-400'
-            }`}>
-              {convictionPercent}% conviction
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Summary line */}
+      <div className="flex items-center justify-center">
+        <span className="text-xs text-gray-500">
+          {isSharpA 
+            ? `${Math.round(sideAMoneyPercent)}% of money on sharp side`
+            : `${Math.round(sideBMoneyPercent)}% of money on sharp side`
+          }
+        </span>
+      </div>
     </div>
   )
 }

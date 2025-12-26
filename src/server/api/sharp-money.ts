@@ -21,18 +21,21 @@ const POLYMARKET_DATA_API = 'https://data-api.polymarket.com'
 
 // Sport tags we want to track for sharp money
 // Note: 'soccer' is what detectSportTag returns for EPL games
-const TARGET_SPORT_TAGS = ['nfl', 'nba', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
+// Note: 'cfb' is college football (Polymarket uses this, not 'ncaaf')
+const TARGET_SPORT_TAGS = ['nfl', 'nba', 'cfb', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
 
 // Gamma API tag IDs for sports (from /sports endpoint)
 const SPORT_TAG_IDS: Record<string, number> = {
   nfl: 450,
   nba: 745,
-  ncaab: 100149,
+  cfb: 100351,    // College Football
+  ncaaf: 100351,  // Alias for college football
+  ncaab: 100149,  // College Basketball
   mlb: 100381,
   nhl: 899,
   // Soccer leagues
-  epl: 82,      // Premier League
-  laliga: 780,  // La Liga
+  epl: 82,        // Premier League
+  laliga: 780,    // La Liga
   bundesliga: 1494, // Bundesliga
 }
 
@@ -147,6 +150,7 @@ export interface SharpAnalysisResult {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   scoreDifferential: number
   sharpSideValueRatio?: number // 0-1, what % of total value is on the sharp side
+  edgeRating: number // 0-100, single ranking score for prioritizing bets
 }
 
 /**
@@ -162,6 +166,36 @@ function extractTeamNames(title: string): [string, string] | null {
     return [atMatch[1].trim(), atMatch[2].trim()]
   }
   return null
+}
+
+/**
+ * Enhance market title for display - adds game context for generic O/U and Spread titles
+ * Uses slug to extract team info when title is generic
+ * e.g., "O/U 43.5" with slug "cfb-nmx-minnst-2025-12-26-total-43pt5" → "New Mexico vs. Minnesota: O/U 43.5"
+ */
+function enhanceMarketTitle(title: string, slug?: string): string {
+  // Only enhance generic O/U or Spread titles
+  const isGenericOU = /^O\/U\s+[\d.]+$/i.test(title)
+  const isGenericSpread = /^Spread:\s+/i.test(title) && !title.includes(' vs')
+  
+  if (!slug || (!isGenericOU && !isGenericSpread)) {
+    return title
+  }
+  
+  // Extract game info from slug
+  // Format: {sport}-{team1}-{team2}-{date}-{type}
+  // e.g., cfb-nmx-minnst-2025-12-26-total-43pt5, nba-cha-orl-2025-12-26-total-230pt5
+  const slugMatch = slug.match(/^(?:cfb|nfl|nba|nhl|mlb|ncaab|epl)-([a-z0-9]+)-([a-z0-9]+)-\d{4}-\d{2}-\d{2}/i)
+  
+  if (!slugMatch) {
+    return title
+  }
+  
+  const team1Code = slugMatch[1].toUpperCase()
+  const team2Code = slugMatch[2].toUpperCase()
+  
+  // Build enhanced title
+  return `${team1Code} vs ${team2Code}: ${title}`
 }
 
 /**
@@ -268,7 +302,7 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       const topMarkets = sorted.slice(0, limit).map((market) => ({
         id: market.id,
         conditionId: market.conditionId,
-        title: market.question,
+        title: enhanceMarketTitle(market.question ?? '', market.slug),
         slug: market.slug,
         eventSlug: market.eventSlug,
         sportTag: detectSportTag({
@@ -607,6 +641,46 @@ function determineConfidence(
 }
 
 /**
+ * Calculate Edge Rating (0-100) for ranking bets
+ * Primary factor: Sharp score differential
+ * Bonus: Quality of top holders (avg PnL of sharp side's top 5)
+ */
+function calculateEdgeRating(
+  scoreDifferential: number,
+  sharpSideTopHolders: TopHolderPnlData[],
+  holderCount: number,
+): number {
+  // Base rating from score differential (max 70 points)
+  // Score diff ranges from 0-100 theoretically, but usually 10-60 in practice
+  // Map: 0 diff = 0, 30+ diff = 70
+  const diffScore = Math.min((scoreDifferential / 30) * 70, 70)
+  
+  // Holder quality bonus (max 20 points)
+  // Based on avg all-time PnL of top 5 sharp side holders
+  let qualityBonus = 0
+  if (sharpSideTopHolders.length > 0) {
+    const topHolderPnLs = sharpSideTopHolders
+      .slice(0, 5)
+      .map(h => h.pnlAll ?? 0)
+      .filter(pnl => pnl > 0)
+    
+    if (topHolderPnLs.length > 0) {
+      const avgPnL = topHolderPnLs.reduce((a, b) => a + b, 0) / topHolderPnLs.length
+      // $100K+ avg PnL = max bonus, scale down from there
+      qualityBonus = Math.min((avgPnL / 100_000) * 20, 20)
+    }
+  }
+  
+  // Holder count bonus (max 10 points)
+  // More holders = more reliable signal
+  // 10+ holders on sharp side = max bonus
+  const holderBonus = Math.min((holderCount / 10) * 10, 10)
+  
+  const total = diffScore + qualityBonus + holderBonus
+  return Math.round(Math.max(0, Math.min(100, total)))
+}
+
+/**
  * Analyze sharp money for a single market
  */
 export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handler(
@@ -870,6 +944,15 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         sharpSideValueRatio,
       )
 
+      // Calculate Edge Rating for ranking
+      const sharpSideTopHolders = sharpSide === 'A' ? sideATopHolders : sideBTopHolders
+      const sharpSideHolderCount = sharpSide === 'A' ? sideAHolders.length : sideBHolders.length
+      const edgeRating = calculateEdgeRating(
+        scoreDifferential,
+        sharpSideTopHolders,
+        sharpSideHolderCount,
+      )
+
       const analysis: SharpAnalysisResult = {
         conditionId,
         marketTitle,
@@ -895,6 +978,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         confidence,
         scoreDifferential,
         sharpSideValueRatio,
+        edgeRating,
       }
 
       return { analysis }
@@ -1012,6 +1096,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       confidence: analysis.confidence,
       scoreDifferential: analysis.scoreDifferential,
       sharpSideValueRatio: analysis.sharpSideValueRatio,
+      edgeRating: analysis.edgeRating,
     }
 
     await upsertSharpMoneyCache(db, cacheInput)
