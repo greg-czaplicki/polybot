@@ -39,8 +39,8 @@ const SPORT_TAG_IDS: Record<string, number> = {
   bundesliga: 1494, // Bundesliga
 }
 
-// Get all sport tag IDs for filtering
-const ALL_SPORT_TAG_IDS = Object.values(SPORT_TAG_IDS)
+// Get unique sport tag IDs for filtering (dedupe since cfb/ncaaf share same ID)
+const ALL_SPORT_TAG_IDS = [...new Set(Object.values(SPORT_TAG_IDS))]
 
 // Minimum volume to show in sharp money (filters out low-liquidity games)
 const MIN_VOLUME_USD = 50000
@@ -251,7 +251,7 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       // Fetch markets for each sport tag (Gamma API only supports one tag_id at a time)
       const allSportsMarkets: GammaMarket[] = []
       
-      for (const tagId of tagIdsToFetch.slice(0, 7)) { // Limit to 7 sports
+      for (const tagId of tagIdsToFetch) { // Fetch all configured sports
         const url = new URL('/markets', POLYMARKET_GAMMA_API)
         url.searchParams.set('tag_id', tagId.toString())
         url.searchParams.set('closed', 'false')
@@ -578,6 +578,45 @@ function calculatePnlTierWeight(pnlAll: number | null): number {
 }
 
 /**
+ * Calculate "fade boost" from anti-sharps on one side
+ * Anti-sharps are big losers on cold streaks - betting against them is valuable
+ * Returns a multiplier (1.0 = no boost, 1.15 = 15% boost)
+ */
+function calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): number {
+  if (holders.length === 0 || totalValue <= 0) {
+    return 1.0
+  }
+
+  let fadeBoostSum = 0
+
+  for (const holder of holders) {
+    const pnlAll = holder.pnlAll ?? 0
+    const isOnColdStreak = holder.momentumWeight <= 0.5 // Day + Week negative
+
+    // Only count as anti-sharp if big loser AND on cold streak
+    if (pnlAll < -50_000 && isOnColdStreak) {
+      const positionWeight = holder.amount / totalValue
+
+      // Fade boost based on how much they've lost
+      let fadeMultiplier = 0
+      if (pnlAll < -250_000) {
+        fadeMultiplier = 0.15 // Severe loser: 15% boost to other side
+      } else if (pnlAll < -100_000) {
+        fadeMultiplier = 0.10 // Moderate loser: 10% boost
+      } else {
+        fadeMultiplier = 0.05 // Mild loser: 5% boost
+      }
+
+      // Weight by their position size (bigger position = stronger fade signal)
+      fadeBoostSum += positionWeight * fadeMultiplier
+    }
+  }
+
+  // Cap total fade boost at 20%
+  return 1.0 + Math.min(fadeBoostSum, 0.20)
+}
+
+/**
  * Calculate sharp score for a side
  * Returns 0-100 scale
  */
@@ -643,7 +682,7 @@ function determineConfidence(
 /**
  * Calculate Edge Rating (0-100) for ranking bets
  * Primary factor: Sharp score differential
- * Bonus: Quality of top holders (avg PnL of sharp side's top 5)
+ * Bonus/Penalty: Quality of top 20 holders (avg PnL including losers)
  */
 function calculateEdgeRating(
   scoreDifferential: number,
@@ -655,19 +694,23 @@ function calculateEdgeRating(
   // Map: 0 diff = 0, 30+ diff = 70
   const diffScore = Math.min((scoreDifferential / 30) * 70, 70)
   
-  // Holder quality bonus (max 20 points)
-  // Based on avg all-time PnL of top 5 sharp side holders
+  // Holder quality bonus/penalty (-10 to +20 points)
+  // Based on avg all-time PnL of ALL top 20 sharp side holders (including losers!)
   let qualityBonus = 0
   if (sharpSideTopHolders.length > 0) {
-    const topHolderPnLs = sharpSideTopHolders
-      .slice(0, 5)
-      .map(h => h.pnlAll ?? 0)
-      .filter(pnl => pnl > 0)
+    // Use ALL holders passed in (top 20), not just top 5
+    const holderPnLs = sharpSideTopHolders.map(h => h.pnlAll ?? 0)
     
-    if (topHolderPnLs.length > 0) {
-      const avgPnL = topHolderPnLs.reduce((a, b) => a + b, 0) / topHolderPnLs.length
-      // $100K+ avg PnL = max bonus, scale down from there
-      qualityBonus = Math.min((avgPnL / 100_000) * 20, 20)
+    if (holderPnLs.length > 0) {
+      const avgPnL = holderPnLs.reduce((a, b) => a + b, 0) / holderPnLs.length
+      
+      if (avgPnL >= 0) {
+        // Positive avg: bonus up to 20 points ($100K+ avg = max)
+        qualityBonus = Math.min((avgPnL / 100_000) * 20, 20)
+      } else {
+        // Negative avg: penalty up to -10 points (-$50K or worse = max penalty)
+        qualityBonus = Math.max((avgPnL / 50_000) * 10, -10)
+      }
     }
   }
   
@@ -791,10 +834,14 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         }
       }
 
-      // Step 3: Fetch PnL for top holders on each side (top 10 each)
+      // Step 3: Sort holders by position size (descending) before taking top 20
+      sideAHolders.sort((a, b) => b.amount - a.amount)
+      sideBHolders.sort((a, b) => b.amount - a.amount)
+
+      // Fetch PnL for top holders on each side (top 20 each for scoring, display top 5)
       const topWallets = [
-        ...sideAHolders.slice(0, 10).map((h) => h.proxyWallet),
-        ...sideBHolders.slice(0, 10).map((h) => h.proxyWallet),
+        ...sideAHolders.slice(0, 20).map((h) => h.proxyWallet),
+        ...sideBHolders.slice(0, 20).map((h) => h.proxyWallet),
       ]
 
       const uniqueWallets = [...new Set(topWallets)]
@@ -855,9 +902,9 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         }
       }
 
-      // Step 4: Calculate weights and build top holder data
+      // Step 4: Calculate weights and build top holder data (top 20 for scoring)
       const processHolders = (holders: HolderWithPnl[]): TopHolderPnlData[] => {
-        return holders.slice(0, 10).map((holder) => {
+        return holders.slice(0, 20).map((holder) => {
           const pnl = pnlResults[holder.proxyWallet] ?? {
             day: null,
             week: null,
@@ -892,8 +939,17 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       const sideATotalValue = sideAHolders.reduce((sum, h) => sum + h.amount, 0)
       const sideBTotalValue = sideBHolders.reduce((sum, h) => sum + h.amount, 0)
 
-      const sideASharpScore = calculateSharpScore(sideATopHolders, sideATotalValue)
-      const sideBSharpScore = calculateSharpScore(sideBTopHolders, sideBTotalValue)
+      // Calculate raw sharp scores
+      const sideARawScore = calculateSharpScore(sideATopHolders, sideATotalValue)
+      const sideBRawScore = calculateSharpScore(sideBTopHolders, sideBTotalValue)
+
+      // Calculate fade boosts (anti-sharps on one side boost the other side)
+      const fadeBoostFromSideA = calculateFadeBoost(sideATopHolders, sideATotalValue)
+      const fadeBoostFromSideB = calculateFadeBoost(sideBTopHolders, sideBTotalValue)
+
+      // Apply fade boosts: anti-sharps on A boost B's score, and vice versa
+      const sideASharpScore = Math.min(100, sideARawScore * fadeBoostFromSideB)
+      const sideBSharpScore = Math.min(100, sideBRawScore * fadeBoostFromSideA)
 
       const scoreDifferential = Math.abs(sideASharpScore - sideBSharpScore)
 

@@ -200,6 +200,7 @@ function SharpMoneyPage() {
                 eventSlug: market.eventSlug,
                 sportTag: market.sportTag ?? undefined,
                 outcomes: market.outcomes,
+                endDate: market.endDate,
               },
             })
           } catch (error) {
@@ -244,12 +245,14 @@ function SharpMoneyPage() {
     })
   }
 
-  // Filter entries by sport
+  // Filter entries by sport and minimum edge rating
+  const MIN_EDGE_RATING = 65
   const filteredEntries = useMemo(() => {
-    if (selectedSport === 'all') {
-      return entries
+    let filtered = entries.filter((e) => e.edgeRating >= MIN_EDGE_RATING)
+    if (selectedSport !== 'all') {
+      filtered = filtered.filter((e) => e.sportTag === selectedSport)
     }
-    return entries.filter((e) => e.sportTag === selectedSport)
+    return filtered
   }, [entries, selectedSport])
 
   return (
@@ -327,7 +330,9 @@ function SharpMoneyPage() {
             <Target className="h-12 w-12 text-gray-600 mb-4" />
             <h2 className="text-lg font-semibold text-white mb-2">No Sharp Money Data</h2>
             <p className="text-gray-400 mb-4 max-w-md">
-              Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.
+              {entries.length > 0 
+                ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
+                : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
             </p>
             <button
               onClick={handleRefresh}
@@ -343,6 +348,12 @@ function SharpMoneyPage() {
         {/* Market Cards */}
         {!isLoading && filteredEntries.length > 0 && (
           <div className="space-y-4">
+            {/* Show count of hidden low-edge entries */}
+            {entries.length > filteredEntries.length && (
+              <p className="text-xs text-gray-500 text-right">
+                Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (Edge &lt; {MIN_EDGE_RATING})
+              </p>
+            )}
             {filteredEntries.map((entry) => (
               <SharpMoneyCard
                 key={entry.id}
