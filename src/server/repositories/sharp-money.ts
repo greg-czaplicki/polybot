@@ -30,6 +30,7 @@ export interface SharpMoneyCacheRow {
   market_slug?: string | null
   event_slug?: string | null
   sport_tag?: string | null
+  event_time?: string | null
   side_a_label: string
   side_a_total_value: number
   side_a_sharp_score: number
@@ -56,6 +57,7 @@ export interface SharpMoneyCacheEntry {
   marketSlug?: string
   eventSlug?: string
   sportTag?: string
+  eventTime?: string
   sideA: {
     label: string
     totalValue: number
@@ -85,6 +87,7 @@ export interface UpsertSharpMoneyCacheInput {
   marketSlug?: string
   eventSlug?: string
   sportTag?: string
+  eventTime?: string
   sideA: {
     label: string
     totalValue: number
@@ -116,6 +119,7 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
     marketSlug: row.market_slug ?? undefined,
     eventSlug: row.event_slug ?? undefined,
     sportTag: row.sport_tag ?? undefined,
+    eventTime: row.event_time ?? undefined,
     sideA: {
       label: row.side_a_label,
       totalValue: row.side_a_total_value,
@@ -162,16 +166,17 @@ export async function upsertSharpMoneyCache(
   await run(
     db,
     `INSERT INTO sharp_money_cache (
-      id, condition_id, market_title, market_slug, event_slug, sport_tag,
+      id, condition_id, market_title, market_slug, event_slug, sport_tag, event_time,
       side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_top_holders,
       side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_top_holders,
       sharp_side, confidence, score_differential, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
       event_slug = excluded.event_slug,
       sport_tag = excluded.sport_tag,
+      event_time = excluded.event_time,
       side_a_label = excluded.side_a_label,
       side_a_total_value = excluded.side_a_total_value,
       side_a_sharp_score = excluded.side_a_sharp_score,
@@ -192,6 +197,7 @@ export async function upsertSharpMoneyCache(
     input.marketSlug ?? null,
     input.eventSlug ?? null,
     input.sportTag ?? null,
+    input.eventTime ?? null,
     input.sideA.label,
     input.sideA.totalValue,
     input.sideA.sharpScore,

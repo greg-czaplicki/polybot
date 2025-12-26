@@ -128,6 +128,7 @@ export interface SharpAnalysisResult {
   marketSlug?: string
   eventSlug?: string
   sportTag?: string
+  eventTime?: string // ISO date string for when the event starts/ends
   sideA: {
     label: string
     totalValue: number
@@ -606,9 +607,10 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       eventSlug?: string
       sportTag?: string
       outcomes?: string[]
+      endDate?: string
     }
 
-    const { conditionId, marketTitle, marketSlug, eventSlug, sportTag, outcomes } = payload
+    const { conditionId, marketTitle, marketSlug, eventSlug, sportTag, outcomes, endDate } = payload
     console.log('[sharp-money] Analyzing:', { conditionId, marketTitle })
 
     if (!conditionId) {
@@ -616,17 +618,39 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
     }
 
     try {
-      // Step 1: Fetch holders
-      console.log('[sharp-money] Fetching holders...')
+      // Step 1: Fetch market prices and holders in parallel
+      console.log('[sharp-money] Fetching market prices and holders...')
+      
       const holdersUrl = new URL('/holders', POLYMARKET_DATA_API)
       holdersUrl.searchParams.set('market', conditionId)
       holdersUrl.searchParams.set('limit', '20')
       holdersUrl.searchParams.set('minBalance', '1')
 
-      const holdersResponse = await fetch(holdersUrl)
+      // Use CLOB API for accurate prices (Gamma API condition_id lookup is unreliable)
+      const clobMarketUrl = `https://clob.polymarket.com/markets/${conditionId}`
+
+      const [holdersResponse, clobResponse] = await Promise.all([
+        fetch(holdersUrl),
+        fetch(clobMarketUrl),
+      ])
 
       if (!holdersResponse.ok) {
         return { analysis: null, error: `Failed to fetch holders: ${holdersResponse.status}` }
+      }
+
+      // Parse market prices from CLOB API (prices are 0-1, e.g. 0.65 = $0.65 per share)
+      let prices: [number, number] = [1, 1] // Default to $1 if we can't get prices
+      if (clobResponse.ok) {
+        const clobData = await clobResponse.json() as {
+          tokens?: Array<{ outcome: string; price: number }>
+        }
+        if (clobData?.tokens && clobData.tokens.length >= 2) {
+          prices = [
+            clobData.tokens[0]?.price ?? 1,
+            clobData.tokens[1]?.price ?? 1,
+          ]
+          console.log('[sharp-money] Prices:', prices)
+        }
       }
 
       const holdersData = (await holdersResponse.json()) as Array<{
@@ -649,6 +673,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       // Step 2: Group holders by outcomeIndex (0 or 1) for consistent assignment
       // outcomeIndex 0 = first outcome (typically Yes or first team)
       // outcomeIndex 1 = second outcome (typically No or second team)
+      // Convert shares to USD using market prices
       const sideAHolders: HolderWithPnl[] = []
       const sideBHolders: HolderWithPnl[] = []
       const allWallets = new Set<string>()
@@ -657,12 +682,17 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       for (const tokenData of holdersData) {
         for (const holder of tokenData.holders) {
           allWallets.add(holder.proxyWallet)
+          
+          // Convert shares to USD: shares * price
+          const priceForOutcome = prices[holder.outcomeIndex] ?? 1
+          const usdValue = holder.amount * priceForOutcome
+          
           const holderData: HolderWithPnl = {
             proxyWallet: holder.proxyWallet,
             name: holder.name,
             pseudonym: holder.pseudonym,
             profileImage: holder.profileImageOptimized || holder.profileImage,
-            amount: holder.amount,
+            amount: usdValue, // Now in USD instead of shares
             outcomeIndex: holder.outcomeIndex,
           }
 
@@ -824,6 +854,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         marketSlug,
         eventSlug,
         sportTag,
+        eventTime: endDate,
         sideA: {
           label: sideALabel,
           totalValue: sideATotalValue,
@@ -904,6 +935,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       eventSlug?: string
       sportTag?: string
       outcomes?: string[]
+      endDate?: string
     }
     
     // Validate this is actually a sports market before processing
@@ -950,6 +982,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       marketSlug: analysis.marketSlug,
       eventSlug: analysis.eventSlug,
       sportTag: analysis.sportTag,
+      eventTime: analysis.eventTime,
       sideA: analysis.sideA,
       sideB: analysis.sideB,
       sharpSide: analysis.sharpSide,

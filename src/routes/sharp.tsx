@@ -74,6 +74,55 @@ function formatRelativeTime(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+function formatEventTime(isoDate?: string): string | null {
+  if (!isoDate) return null
+  
+  try {
+    const date = new Date(isoDate)
+    const now = new Date()
+    
+    // Check if it's today
+    const isToday = date.toDateString() === now.toDateString()
+    
+    // Check if it's tomorrow
+    const tomorrow = new Date(now)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const isTomorrow = date.toDateString() === tomorrow.toDateString()
+    
+    // Format time
+    const timeStr = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    
+    if (isToday) {
+      return `Today ${timeStr}`
+    }
+    if (isTomorrow) {
+      return `Tomorrow ${timeStr}`
+    }
+    
+    // Format as day of week + time for this week
+    const daysUntil = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    if (daysUntil <= 7 && daysUntil > 0) {
+      const dayName = date.toLocaleDateString('en-US', { weekday: 'short' })
+      return `${dayName} ${timeStr}`
+    }
+    
+    // Otherwise format as date
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return null
+  }
+}
+
 function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
   if (eventSlug && slug) {
     return `https://polymarket.com/event/${eventSlug}/${slug}`
@@ -339,6 +388,11 @@ function SharpMoneyCard({
               </span>
             )}
             <ConfidenceBadge confidence={entry.confidence} />
+            {entry.eventTime && (
+              <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
+                {formatEventTime(entry.eventTime)}
+              </span>
+            )}
           </div>
           <h3 className="text-base font-semibold text-white truncate pr-4">
             {entry.marketTitle}
