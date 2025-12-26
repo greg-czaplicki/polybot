@@ -1865,6 +1865,13 @@ function App() {
                       This device or browser does not support web push.
                     </p>
                   )}
+                  <a
+                    href="/sharp"
+                    className="inline-flex w-full items-center justify-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl border border-amber-500/50 bg-amber-500/10 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-amber-400 hover:bg-amber-500/20 hover:border-amber-400 transition-colors"
+                  >
+                    <Target className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    Sharp Money Tracker
+                  </a>
                   <p className="text-xs text-gray-500">
                     Tracking{' '}
                     <span className="font-semibold text-white">

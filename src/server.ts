@@ -6,6 +6,7 @@ import {
 import type { Env, RequestContext } from './server/env'
 import { runAlertCron } from './server/jobs/alert-cron'
 import { runStatsCron } from './server/jobs/stats-cron'
+import { runSharpMoneyCron } from './server/jobs/sharp-money-cron'
 import { clearAllWalletData, clearWalletData } from './server/repositories/wallet-stats'
 
 const startFetch = createStartHandler(defaultStreamHandler)
@@ -34,6 +35,24 @@ const serverEntry = {
         })
       } catch (error) {
         console.error('[manual-cron] Error:', error)
+        return new Response(JSON.stringify({ success: false, error: String(error) }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Sharp money cron trigger - separate due to rate limits
+    if (url.pathname === '/_cron/sharp-money' && request.method === 'POST') {
+      try {
+        console.log('[manual-cron] Starting sharp money cron run...')
+        await runSharpMoneyCron(env)
+        console.log('[manual-cron] Sharp money cron completed successfully')
+        return new Response(JSON.stringify({ success: true, message: 'Sharp money cron completed' }), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } catch (error) {
+        console.error('[manual-cron] Sharp money error:', error)
         return new Response(JSON.stringify({ success: false, error: String(error) }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' },
@@ -93,15 +112,16 @@ const serverEntry = {
     return startFetch(request, { context })
   },
   scheduled(_event: ScheduledEvent, env: Env, executionCtx: ExecutionContext) {
+    // Run alert and stats cron on every scheduled event
+    // Note: Sharp money cron is NOT run automatically to conserve free tier resources
+    // Use the manual /_cron/sharp-money endpoint or the Refresh button on /sharp page
     executionCtx.waitUntil(
       Promise.all([
         runAlertCron(env).catch((error) => {
           console.error('[alerts] Cron scan failed', error)
-          throw error
         }),
         runStatsCron(env).catch((error) => {
           console.error('[stats] Cron scan failed', error)
-          throw error
         }),
       ]).then(() => {}),
     )

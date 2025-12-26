@@ -1,0 +1,359 @@
+import type { Db } from '../db/client'
+import { all, first, run } from '../db/client'
+import { nowUnixSeconds } from '../env'
+
+/**
+ * Top holder data with PnL across multiple time periods
+ */
+export interface TopHolderPnlData {
+  proxyWallet: string
+  name?: string
+  pseudonym?: string
+  profileImage?: string
+  amount: number
+  pnlDay?: number | null
+  pnlWeek?: number | null
+  pnlMonth?: number | null
+  pnlAll?: number | null
+  volume?: number
+  momentumWeight: number
+  pnlTierWeight: number
+}
+
+/**
+ * Database row for sharp money cache
+ */
+export interface SharpMoneyCacheRow {
+  id: string
+  condition_id: string
+  market_title: string
+  market_slug?: string | null
+  event_slug?: string | null
+  sport_tag?: string | null
+  side_a_label: string
+  side_a_total_value: number
+  side_a_sharp_score: number
+  side_a_holder_count: number
+  side_a_top_holders?: string | null
+  side_b_label: string
+  side_b_total_value: number
+  side_b_sharp_score: number
+  side_b_holder_count: number
+  side_b_top_holders?: string | null
+  sharp_side?: string | null
+  confidence?: string | null
+  score_differential: number
+  updated_at: number
+}
+
+/**
+ * Parsed sharp money cache entry for frontend use
+ */
+export interface SharpMoneyCacheEntry {
+  id: string
+  conditionId: string
+  marketTitle: string
+  marketSlug?: string
+  eventSlug?: string
+  sportTag?: string
+  sideA: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    holderCount: number
+    topHolders: TopHolderPnlData[]
+  }
+  sideB: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    holderCount: number
+    topHolders: TopHolderPnlData[]
+  }
+  sharpSide: 'A' | 'B' | 'EVEN'
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  scoreDifferential: number
+  updatedAt: number
+}
+
+/**
+ * Input for upserting a sharp money cache entry
+ */
+export interface UpsertSharpMoneyCacheInput {
+  conditionId: string
+  marketTitle: string
+  marketSlug?: string
+  eventSlug?: string
+  sportTag?: string
+  sideA: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    holderCount: number
+    topHolders: TopHolderPnlData[]
+  }
+  sideB: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    holderCount: number
+    topHolders: TopHolderPnlData[]
+  }
+  sharpSide: 'A' | 'B' | 'EVEN'
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  scoreDifferential: number
+}
+
+function generateId(): string {
+  return `sharp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
+  return {
+    id: row.id,
+    conditionId: row.condition_id,
+    marketTitle: row.market_title,
+    marketSlug: row.market_slug ?? undefined,
+    eventSlug: row.event_slug ?? undefined,
+    sportTag: row.sport_tag ?? undefined,
+    sideA: {
+      label: row.side_a_label,
+      totalValue: row.side_a_total_value,
+      sharpScore: row.side_a_sharp_score,
+      holderCount: row.side_a_holder_count,
+      topHolders: row.side_a_top_holders
+        ? (JSON.parse(row.side_a_top_holders) as TopHolderPnlData[])
+        : [],
+    },
+    sideB: {
+      label: row.side_b_label,
+      totalValue: row.side_b_total_value,
+      sharpScore: row.side_b_sharp_score,
+      holderCount: row.side_b_holder_count,
+      topHolders: row.side_b_top_holders
+        ? (JSON.parse(row.side_b_top_holders) as TopHolderPnlData[])
+        : [],
+    },
+    sharpSide: (row.sharp_side as 'A' | 'B' | 'EVEN') ?? 'EVEN',
+    confidence: (row.confidence as 'HIGH' | 'MEDIUM' | 'LOW') ?? 'LOW',
+    scoreDifferential: row.score_differential,
+    updatedAt: row.updated_at,
+  }
+}
+
+/**
+ * Upsert a sharp money cache entry
+ */
+export async function upsertSharpMoneyCache(
+  db: Db,
+  input: UpsertSharpMoneyCacheInput,
+): Promise<void> {
+  const now = nowUnixSeconds()
+
+  // Check if entry exists
+  const existing = await first<SharpMoneyCacheRow>(
+    db,
+    `SELECT id FROM sharp_money_cache WHERE condition_id = ?`,
+    input.conditionId,
+  )
+
+  const id = existing?.id ?? generateId()
+
+  await run(
+    db,
+    `INSERT INTO sharp_money_cache (
+      id, condition_id, market_title, market_slug, event_slug, sport_tag,
+      side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_top_holders,
+      side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_top_holders,
+      sharp_side, confidence, score_differential, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(condition_id) DO UPDATE SET
+      market_title = excluded.market_title,
+      market_slug = excluded.market_slug,
+      event_slug = excluded.event_slug,
+      sport_tag = excluded.sport_tag,
+      side_a_label = excluded.side_a_label,
+      side_a_total_value = excluded.side_a_total_value,
+      side_a_sharp_score = excluded.side_a_sharp_score,
+      side_a_holder_count = excluded.side_a_holder_count,
+      side_a_top_holders = excluded.side_a_top_holders,
+      side_b_label = excluded.side_b_label,
+      side_b_total_value = excluded.side_b_total_value,
+      side_b_sharp_score = excluded.side_b_sharp_score,
+      side_b_holder_count = excluded.side_b_holder_count,
+      side_b_top_holders = excluded.side_b_top_holders,
+      sharp_side = excluded.sharp_side,
+      confidence = excluded.confidence,
+      score_differential = excluded.score_differential,
+      updated_at = excluded.updated_at`,
+    id,
+    input.conditionId,
+    input.marketTitle,
+    input.marketSlug ?? null,
+    input.eventSlug ?? null,
+    input.sportTag ?? null,
+    input.sideA.label,
+    input.sideA.totalValue,
+    input.sideA.sharpScore,
+    input.sideA.holderCount,
+    JSON.stringify(input.sideA.topHolders),
+    input.sideB.label,
+    input.sideB.totalValue,
+    input.sideB.sharpScore,
+    input.sideB.holderCount,
+    JSON.stringify(input.sideB.topHolders),
+    input.sharpSide,
+    input.confidence,
+    input.scoreDifferential,
+    now,
+  )
+}
+
+/**
+ * Get a single sharp money cache entry by condition ID
+ */
+export async function getSharpMoneyCacheByConditionId(
+  db: Db,
+  conditionId: string,
+): Promise<SharpMoneyCacheEntry | null> {
+  const row = await first<SharpMoneyCacheRow>(
+    db,
+    `SELECT * FROM sharp_money_cache WHERE condition_id = ?`,
+    conditionId,
+  )
+
+  return row ? parseRow(row) : null
+}
+
+/**
+ * Get all sharp money cache entries, optionally filtered by sport
+ */
+export async function listSharpMoneyCache(
+  db: Db,
+  options?: {
+    sportTag?: string
+    limit?: number
+  },
+): Promise<SharpMoneyCacheEntry[]> {
+  const { sportTag, limit = 50 } = options ?? {}
+
+  let query = `SELECT * FROM sharp_money_cache`
+  const params: unknown[] = []
+
+  if (sportTag) {
+    query += ` WHERE sport_tag = ?`
+    params.push(sportTag)
+  }
+
+  // Order by confidence (HIGH first), then by score differential
+  query += ` ORDER BY 
+    CASE confidence 
+      WHEN 'HIGH' THEN 1 
+      WHEN 'MEDIUM' THEN 2 
+      WHEN 'LOW' THEN 3 
+      ELSE 4 
+    END,
+    score_differential DESC
+    LIMIT ?`
+  params.push(limit)
+
+  const rows = await all<SharpMoneyCacheRow>(db, query, ...params)
+  return rows.map(parseRow)
+}
+
+/**
+ * Get all unique sport tags from the cache
+ */
+export async function listSharpMoneySportTags(db: Db): Promise<string[]> {
+  const rows = await all<{ sport_tag: string }>(
+    db,
+    `SELECT DISTINCT sport_tag FROM sharp_money_cache WHERE sport_tag IS NOT NULL ORDER BY sport_tag`,
+  )
+  return rows.map((r) => r.sport_tag)
+}
+
+/**
+ * Delete old cache entries (older than specified hours)
+ */
+export async function pruneSharpMoneyCache(
+  db: Db,
+  olderThanHours: number = 24,
+): Promise<number> {
+  const cutoff = nowUnixSeconds() - olderThanHours * 60 * 60
+  const result = await run(
+    db,
+    `DELETE FROM sharp_money_cache WHERE updated_at < ?`,
+    cutoff,
+  )
+  return result.meta?.changes as number ?? 0
+}
+
+/**
+ * Delete a specific cache entry
+ */
+export async function deleteSharpMoneyCache(
+  db: Db,
+  conditionId: string,
+): Promise<void> {
+  await run(
+    db,
+    `DELETE FROM sharp_money_cache WHERE condition_id = ?`,
+    conditionId,
+  )
+}
+
+/**
+ * Clear all sharp money cache entries
+ */
+export async function clearAllSharpMoneyCache(db: Db): Promise<void> {
+  await run(db, `DELETE FROM sharp_money_cache`)
+}
+
+/**
+ * Get cache stats
+ */
+export async function getSharpMoneyCacheStats(db: Db): Promise<{
+  totalEntries: number
+  bySport: Record<string, number>
+  byConfidence: Record<string, number>
+  oldestEntry?: number
+  newestEntry?: number
+}> {
+  const [countResult, sportCounts, confidenceCounts, timestamps] =
+    await Promise.all([
+      first<{ count: number }>(
+        db,
+        `SELECT COUNT(*) as count FROM sharp_money_cache`,
+      ),
+      all<{ sport_tag: string; count: number }>(
+        db,
+        `SELECT sport_tag, COUNT(*) as count FROM sharp_money_cache GROUP BY sport_tag`,
+      ),
+      all<{ confidence: string; count: number }>(
+        db,
+        `SELECT confidence, COUNT(*) as count FROM sharp_money_cache GROUP BY confidence`,
+      ),
+      first<{ oldest: number; newest: number }>(
+        db,
+        `SELECT MIN(updated_at) as oldest, MAX(updated_at) as newest FROM sharp_money_cache`,
+      ),
+    ])
+
+  const bySport: Record<string, number> = {}
+  for (const row of sportCounts) {
+    bySport[row.sport_tag ?? 'unknown'] = row.count
+  }
+
+  const byConfidence: Record<string, number> = {}
+  for (const row of confidenceCounts) {
+    byConfidence[row.confidence ?? 'unknown'] = row.count
+  }
+
+  return {
+    totalEntries: countResult?.count ?? 0,
+    bySport,
+    byConfidence,
+    oldestEntry: timestamps?.oldest,
+    newestEntry: timestamps?.newest,
+  }
+}
