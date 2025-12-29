@@ -22,6 +22,7 @@ import {
   refreshMarketSharpnessFn,
   fetchTrendingSportsMarketsFn,
   clearSharpMoneyCacheFn,
+  fetchBatchMultiPeriodPnlFn,
   type SharpMoneyCacheEntry,
 } from '../server/api/sharp-money'
 
@@ -191,12 +192,12 @@ function SharpMoneyPage() {
         })
 
         if (markets && markets.length > 0) {
-          const marketsToAnalyze = markets.slice(0, 25)
-          console.log(`[sharp] Analyzing ${marketsToAnalyze.length} markets...`)
+          // Analyze all fetched markets (no arbitrary limit)
+          console.log(`[sharp] Analyzing ${markets.length} markets...`)
           
-          for (const market of marketsToAnalyze) {
+          for (const market of markets) {
             try {
-              await refreshMarketSharpnessFn({
+              const result = await refreshMarketSharpnessFn({
                 data: {
                   conditionId: market.conditionId,
                   marketTitle: market.title,
@@ -207,10 +208,43 @@ function SharpMoneyPage() {
                   endDate: market.endDate,
                 },
               })
+
+              // Fetch PnL for all wallets (each call has its own 50 subrequest budget)
+              if (result?.allWalletAddresses && result.allWalletAddresses.length > 0) {
+                const wallets = result.allWalletAddresses
+                const walletsPerCall = 10 // Each call fetches 10 wallets (40 subrequests)
+                
+                // Fetch PnL in batches (each batch is a separate server function call)
+                for (let i = 0; i < wallets.length; i += walletsPerCall) {
+                  const batch = wallets.slice(i, i + walletsPerCall)
+                  try {
+                    await fetchBatchMultiPeriodPnlFn({ data: { walletAddresses: batch } })
+                  } catch (error) {
+                    console.error('Failed to fetch PnL batch:', error)
+                  }
+                  // Small delay between batches
+                  if (i + walletsPerCall < wallets.length) {
+                    await new Promise((resolve) => setTimeout(resolve, 100))
+                  }
+                }
+
+                // Re-run analysis now that all PnL data is cached
+                await refreshMarketSharpnessFn({
+                  data: {
+                    conditionId: market.conditionId,
+                    marketTitle: market.title,
+                    marketSlug: market.slug,
+                    eventSlug: market.eventSlug,
+                    sportTag: market.sportTag ?? undefined,
+                    outcomes: market.outcomes,
+                    endDate: market.endDate,
+                  },
+                })
+              }
             } catch (error) {
               console.error('Failed to refresh market:', market.title, error)
             }
-            await new Promise((resolve) => setTimeout(resolve, 300))
+            await new Promise((resolve) => setTimeout(resolve, 500))
           }
         }
       } else {
@@ -245,7 +279,7 @@ function SharpMoneyPage() {
             } catch (error) {
               console.error('Failed to refresh:', entry.marketTitle, error)
             }
-            await new Promise((resolve) => setTimeout(resolve, 300))
+            await new Promise((resolve) => setTimeout(resolve, 500))
           }
         }
       }
@@ -284,10 +318,20 @@ function SharpMoneyPage() {
     })
   }
 
-  // Filter entries by sport and minimum edge rating
+  // Filter entries by sport, minimum edge rating, and hide started games
   const MIN_EDGE_RATING = 65
   const filteredEntries = useMemo(() => {
-    let filtered = entries.filter((e) => e.edgeRating >= MIN_EDGE_RATING)
+    const now = new Date()
+    let filtered = entries.filter((e) => {
+      // Must meet minimum edge rating
+      if (e.edgeRating < MIN_EDGE_RATING) return false
+      // Hide games that have already started
+      if (e.eventTime) {
+        const gameTime = new Date(e.eventTime)
+        if (gameTime < now) return false
+      }
+      return true
+    })
     if (selectedSport !== 'all') {
       filtered = filtered.filter((e) => e.sportTag === selectedSport)
     }
@@ -388,10 +432,10 @@ function SharpMoneyPage() {
         {/* Market Cards */}
         {!isLoading && filteredEntries.length > 0 && (
           <div className="space-y-4">
-            {/* Show count of hidden low-edge entries */}
+            {/* Show count of hidden entries */}
             {entries.length > filteredEntries.length && (
               <p className="text-xs text-gray-500 text-right">
-                Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (Edge &lt; {MIN_EDGE_RATING})
+                Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (started or Edge &lt; {MIN_EDGE_RATING})
               </p>
             )}
             {filteredEntries.map((entry) => (

@@ -1,5 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getDb } from '../env'
+import { all, run } from '../db/client'
 import { isSportsMarket, detectSportTag } from '@/lib/sports'
 import {
   listSharpMoneyCache,
@@ -239,11 +240,11 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         tagIdsToFetch.push(...ALL_SPORT_TAG_IDS)
       }
       
-      // Date range: today to 3 days from now (for upcoming games, not futures)
+      // Date range: now to 24 hours from now
       const today = new Date()
       const endDateMin = today.toISOString().split('T')[0]
-      const futureDate = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000)
-      const endDateMax = futureDate.toISOString().split('T')[0]
+      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000)
+      const endDateMax = tomorrow.toISOString().split('T')[0]
       
       console.log(`[sharp-money] Fetching games from ${endDateMin} to ${endDateMax}`)
       console.log(`[sharp-money] Fetching markets for tag IDs: ${tagIdsToFetch.join(', ')}`)
@@ -255,7 +256,7 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         const url = new URL('/markets', POLYMARKET_GAMMA_API)
         url.searchParams.set('tag_id', tagId.toString())
         url.searchParams.set('closed', 'false')
-        url.searchParams.set('limit', '30')
+        url.searchParams.set('limit', '100')
         url.searchParams.set('end_date_min', endDateMin)
         url.searchParams.set('end_date_max', endDateMax)
         url.searchParams.set('volume_num_min', MIN_VOLUME_USD.toString())
@@ -277,10 +278,19 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       
       console.log(`[sharp-money] Total sports markets found: ${allSportsMarkets.length}`)
       
-      // Filter to markets with condition IDs and dedupe
+      // Filter to markets with condition IDs, dedupe, exclude started games, and within 24 hours
+      const now = new Date()
+      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
       const seenIds = new Set<string>()
       const sportsMarkets = allSportsMarkets.filter(market => {
         if (!market.conditionId || seenIds.has(market.conditionId)) return false
+        if (market.endDate) {
+          const gameTime = new Date(market.endDate)
+          // Exclude games that have already started
+          if (gameTime < now) return false
+          // Exclude games more than 24 hours out
+          if (gameTime > twentyFourHoursFromNow) return false
+        }
         seenIds.add(market.conditionId)
         return true
       })
@@ -412,7 +422,7 @@ export const fetchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).handler(
  * Processes sequentially with delays to avoid rate limits
  */
 export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).handler(
-  async ({ data }) => {
+  async ({ context, data }) => {
     const payload = data as { walletAddresses: string[] }
     const walletAddresses = payload.walletAddresses
 
@@ -420,16 +430,61 @@ export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).han
       return { results: {} as Record<string, MultiPeriodPnl> }
     }
 
+    const db = getDb(context)
     const results: Record<string, MultiPeriodPnl> = {}
+    const uniqueWallets = [...new Set(walletAddresses)]
 
-    // Process in batches of 5 with 200ms delay between batches
-    const batchSize = 5
-    for (let i = 0; i < walletAddresses.length; i += batchSize) {
-      const batch = walletAddresses.slice(i, i + batchSize)
+    // Check cache first (1 hour TTL)
+    const cacheExpiry = Math.floor(Date.now() / 1000) - 3600
+    const cachedResults = await all<{
+      wallet_address: string
+      pnl_day: number | null
+      pnl_week: number | null
+      pnl_month: number | null
+      pnl_all: number | null
+      volume: number | null
+    }>(
+      db,
+      `SELECT * FROM wallet_pnl_cache WHERE wallet_address IN (${uniqueWallets.map(() => '?').join(',')}) AND fetched_at > ?`,
+      ...uniqueWallets,
+      cacheExpiry,
+    )
+
+    // Populate results from cache
+    const cachedWallets = new Set<string>()
+    for (const row of cachedResults) {
+      cachedWallets.add(row.wallet_address)
+      results[row.wallet_address] = {
+        day: row.pnl_day,
+        week: row.pnl_week,
+        month: row.pnl_month,
+        all: row.pnl_all,
+        volume: row.volume ?? undefined,
+      }
+    }
+
+    // Only fetch wallets not in cache
+    const walletsToFetch = uniqueWallets.filter(w => !cachedWallets.has(w))
+    console.log(`[sharp-money] fetchBatchMultiPeriodPnlFn: ${cachedWallets.size} cached, ${walletsToFetch.length} to fetch`)
+
+    // Fetch uncached wallets (max 10 wallets = 40 subrequests, staying under 50 limit)
+    const maxToFetch = Math.min(walletsToFetch.length, 10)
+    const batchSize = 2 // Process 2 wallets at a time (8 subrequests per batch)
+
+    for (let i = 0; i < maxToFetch; i += batchSize) {
+      const batch = walletsToFetch.slice(i, i + batchSize)
 
       await Promise.all(
         batch.map(async (walletAddress) => {
           const periods = ['DAY', 'WEEK', 'MONTH', 'ALL'] as const
+          const pnl: MultiPeriodPnl = {
+            day: null,
+            week: null,
+            month: null,
+            all: null,
+            volume: undefined,
+          }
+          let walletSuccess = false
 
           const periodResults = await Promise.all(
             periods.map(async (period) => {
@@ -453,6 +508,7 @@ export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).han
                   return { period, pnl: null, volume: undefined }
                 }
 
+                walletSuccess = true
                 return {
                   period,
                   pnl: data[0].pnl ?? null,
@@ -463,14 +519,6 @@ export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).han
               }
             }),
           )
-
-          const pnl: MultiPeriodPnl = {
-            day: null,
-            week: null,
-            month: null,
-            all: null,
-            volume: undefined,
-          }
 
           for (const result of periodResults) {
             switch (result.period) {
@@ -490,12 +538,28 @@ export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).han
             }
           }
 
+          if (walletSuccess) {
+            // Cache the result
+            await run(
+              db,
+              `INSERT OR REPLACE INTO wallet_pnl_cache (wallet_address, pnl_day, pnl_week, pnl_month, pnl_all, volume, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              walletAddress,
+              pnl.day,
+              pnl.week,
+              pnl.month,
+              pnl.all,
+              pnl.volume ?? null,
+              Math.floor(Date.now() / 1000),
+            )
+          }
+
           results[walletAddress] = pnl
         }),
       )
 
       // Delay between batches to avoid rate limits
-      if (i + batchSize < walletAddresses.length) {
+      if (i + batchSize < maxToFetch) {
         await new Promise((resolve) => setTimeout(resolve, 200))
       }
     }
@@ -727,8 +791,9 @@ function calculateEdgeRating(
  * Analyze sharp money for a single market
  */
 export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handler(
-  async ({ data }) => {
+  async ({ context, data }) => {
     console.log('[sharp-money] analyzeMarketSharpnessFn called')
+    const db = getDb(context)
     const payload = data as {
       conditionId: string
       marketTitle: string
@@ -838,25 +903,63 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       sideAHolders.sort((a, b) => b.amount - a.amount)
       sideBHolders.sort((a, b) => b.amount - a.amount)
 
-      // Fetch PnL for top holders on each side (top 20 each for scoring, display top 5)
+      // Fetch PnL for top holders on each side (top 20 each for scoring = 40 wallets)
       const topWallets = [
         ...sideAHolders.slice(0, 20).map((h) => h.proxyWallet),
         ...sideBHolders.slice(0, 20).map((h) => h.proxyWallet),
       ]
 
       const uniqueWallets = [...new Set(topWallets)]
-
-      // Fetch PnL in batches
       const pnlResults: Record<string, MultiPeriodPnl> = {}
+      
+      // Check cache first (1 hour TTL) - this doesn't count as subrequests
+      const cacheExpiry = Math.floor(Date.now() / 1000) - 3600
+      const cachedResults = await all<{
+        wallet_address: string
+        pnl_day: number | null
+        pnl_week: number | null
+        pnl_month: number | null
+        pnl_all: number | null
+        volume: number | null
+      }>(
+        db,
+        `SELECT * FROM wallet_pnl_cache WHERE wallet_address IN (${uniqueWallets.map(() => '?').join(',')}) AND fetched_at > ?`,
+        ...uniqueWallets,
+        cacheExpiry,
+      )
+      
+      // Populate results from cache
+      const cachedWallets = new Set<string>()
+      for (const row of cachedResults) {
+        cachedWallets.add(row.wallet_address)
+        pnlResults[row.wallet_address] = {
+          day: row.pnl_day,
+          week: row.pnl_week,
+          month: row.pnl_month,
+          all: row.pnl_all,
+          volume: row.volume ?? undefined,
+        }
+      }
+      
+      // Only fetch wallets not in cache
+      const walletsToFetch = uniqueWallets.filter(w => !cachedWallets.has(w))
+      console.log(`[sharp-money] PnL: ${cachedWallets.size} cached, ${walletsToFetch.length} to fetch`)
 
-      const batchSize = 5
-      for (let i = 0; i < uniqueWallets.length; i += batchSize) {
-        const batch = uniqueWallets.slice(i, i + batchSize)
+      // Fetch uncached wallets in batches
+      // We have 2 subrequests used for market data (holders + CLOB)
+      // So we have ~48 subrequests left for PnL = 12 wallets × 4 periods
+      // But we want all 40 wallets, so we'll fetch what we can and cache the rest for next time
+      const maxToFetch = Math.min(walletsToFetch.length, 12) // 12 wallets = 48 subrequests
+      const batchSize = 3 // Process 3 wallets at a time (12 subrequests per batch)
+      
+      for (let i = 0; i < maxToFetch; i += batchSize) {
+        const batch = walletsToFetch.slice(i, i + batchSize)
 
         await Promise.all(
           batch.map(async (wallet) => {
             const periods = ['DAY', 'WEEK', 'MONTH', 'ALL'] as const
             const pnl: MultiPeriodPnl = { day: null, week: null, month: null, all: null }
+            let walletSuccess = false
 
             await Promise.all(
               periods.map(async (period) => {
@@ -871,6 +974,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
                   const data = (await response.json()) as Array<{ pnl?: number; vol?: number }>
                   if (!Array.isArray(data) || data.length === 0) return
 
+                  walletSuccess = true
                   switch (period) {
                     case 'DAY':
                       pnl.day = data[0].pnl ?? null
@@ -886,23 +990,47 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
                       pnl.volume = data[0].vol
                       break
                   }
-                } catch {
-                  // Ignore errors for individual periods
+                } catch (err) {
+                  console.log(`[sharp-money] PnL error ${wallet.slice(0,10)} ${period}:`, err)
                 }
               }),
             )
 
+            if (walletSuccess) {
+              // Cache the result
+              await run(
+                db,
+                `INSERT OR REPLACE INTO wallet_pnl_cache (wallet_address, pnl_day, pnl_week, pnl_month, pnl_all, volume, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                wallet,
+                pnl.day,
+                pnl.week,
+                pnl.month,
+                pnl.all,
+                pnl.volume ?? null,
+                Math.floor(Date.now() / 1000),
+              )
+            }
             pnlResults[wallet] = pnl
           }),
         )
 
         // Delay between batches
-        if (i + batchSize < uniqueWallets.length) {
+        if (i + batchSize < maxToFetch) {
           await new Promise((resolve) => setTimeout(resolve, 200))
         }
       }
 
-      // Step 4: Calculate weights and build top holder data (top 20 for scoring)
+      // For wallets we couldn't fetch this time, use null PnL (they'll be cached next refresh)
+      for (const wallet of uniqueWallets) {
+        if (!pnlResults[wallet]) {
+          pnlResults[wallet] = { day: null, week: null, month: null, all: null }
+        }
+      }
+
+      console.log(`[sharp-money] PnL fetch: ${maxToFetch} fetched, ${cachedWallets.size} from cache, ${uniqueWallets.length - maxToFetch - cachedWallets.size} will be cached next refresh`)
+
+      // Step 4: Calculate weights and build top holder data (top 20 for scoring, display top 5)
       const processHolders = (holders: HolderWithPnl[]): TopHolderPnlData[] => {
         return holders.slice(0, 20).map((holder) => {
           const pnl = pnlResults[holder.proxyWallet] ?? {
@@ -1037,7 +1165,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         edgeRating,
       }
 
-      return { analysis }
+      return { analysis, allWalletAddresses: uniqueWallets }
     } catch (error) {
       console.error('Error analyzing market sharpness', conditionId, error)
       return { analysis: null, error: 'Analysis failed' }
@@ -1130,7 +1258,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
     const db = getDb(context)
 
     // Run analysis
-    const { analysis, error } = await analyzeMarketSharpnessFn({ data: payload })
+    const { analysis, error, allWalletAddresses } = await analyzeMarketSharpnessFn({ data: payload })
 
     if (!analysis) {
       console.warn('[sharp-money] Analysis failed:', error)
@@ -1157,6 +1285,6 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
 
     await upsertSharpMoneyCache(db, cacheInput)
 
-    return { success: true, analysis }
+    return { success: true, analysis, allWalletAddresses }
   },
 )
