@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Navigate } from '@tanstack/react-router'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlertTriangle,
@@ -1779,6 +1779,15 @@ function App() {
         </div>
       </div>
     )
+  }
+
+  // Redirect to sharp money page as the default when authenticated, unless explicitly viewing wallets
+  if (isAuthenticated) {
+    const searchParams = new URLSearchParams(window.location.search)
+    const view = searchParams.get('view')
+    if (view !== 'wallets') {
+      return <Navigate to="/sharp" />
+    }
   }
 
   return (

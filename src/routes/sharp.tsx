@@ -11,6 +11,7 @@ import {
   TrendingDown,
   Trophy,
   User,
+  Wallet,
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -73,6 +74,12 @@ function formatRelativeTime(timestamp: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   return `${Math.floor(diff / 86400)}d ago`
+}
+
+function truncateWalletName(name: string | null | undefined, maxLength: number = 20): string {
+  if (!name) return ''
+  if (name.length <= maxLength) return name
+  return name.slice(0, maxLength) + '...'
 }
 
 function formatEventTime(isoDate?: string): string | null {
@@ -346,10 +353,12 @@ function SharpMoneyPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Link
-                to="/"
+                to="/?view=wallets"
                 className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
+                title="Go to Wallet Tracking"
               >
-                <ArrowLeft className="h-5 w-5" />
+                <Wallet className="h-5 w-5" />
+                <span className="text-sm">Wallets</span>
               </Link>
               <div className="flex items-center gap-2">
                 <Target className="h-6 w-6 text-cyan-400" />
@@ -774,7 +783,7 @@ function SideDetails({
                 </div>
               )}
               <span className="flex-1 truncate text-gray-300">
-                {holder.name || holder.pseudonym || `${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
+                {truncateWalletName(holder.name || holder.pseudonym) || `${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
               </span>
               <PnlBadge pnlAll={holder.pnlAll} />
               <span className="text-gray-400 text-xs">
