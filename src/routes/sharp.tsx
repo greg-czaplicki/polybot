@@ -10,6 +10,7 @@ import {
   TrendingUp,
   TrendingDown,
   Trophy,
+  Trash2,
   User,
   Wallet,
   Zap,
@@ -180,6 +181,93 @@ function SharpMoneyPage() {
     loadCache()
   }, [loadCache])
 
+  // Discover new events (always fetches from API and analyzes new markets)
+  const handleDiscoverNew = async () => {
+    setIsRefreshing(true)
+    try {
+      console.log('[sharp] Discovering new events...')
+      const { markets } = await fetchTrendingSportsMarketsFn({
+        data: {
+          limit: 50,
+          sportTags: selectedSport === 'all' ? undefined : [selectedSport],
+        },
+      })
+
+      if (markets && markets.length > 0) {
+        // Get existing condition IDs to avoid re-analyzing
+        const existingConditionIds = new Set(entries.map(e => e.conditionId))
+        
+        // Filter to only new markets
+        const newMarkets = markets.filter(m => !existingConditionIds.has(m.conditionId))
+        
+        if (newMarkets.length > 0) {
+          console.log(`[sharp] Found ${newMarkets.length} new events to analyze`)
+          
+          for (const market of newMarkets) {
+            try {
+              const result = await refreshMarketSharpnessFn({
+                data: {
+                  conditionId: market.conditionId,
+                  marketTitle: market.title,
+                  marketSlug: market.slug,
+                  eventSlug: market.eventSlug,
+                  sportTag: market.sportTag ?? undefined,
+                  outcomes: market.outcomes,
+                  endDate: market.endDate,
+                },
+              })
+
+              // Fetch PnL for all wallets (each call has its own 50 subrequest budget)
+              if (result?.allWalletAddresses && result.allWalletAddresses.length > 0) {
+                const wallets = result.allWalletAddresses
+                const walletsPerCall = 10 // Each call fetches 10 wallets (40 subrequests)
+                
+                // Fetch PnL in batches (each batch is a separate server function call)
+                for (let i = 0; i < wallets.length; i += walletsPerCall) {
+                  const batch = wallets.slice(i, i + walletsPerCall)
+                  try {
+                    await fetchBatchMultiPeriodPnlFn({ data: { walletAddresses: batch } })
+                  } catch (error) {
+                    console.error('Failed to fetch PnL batch:', error)
+                  }
+                  // Small delay between batches
+                  if (i + walletsPerCall < wallets.length) {
+                    await new Promise((resolve) => setTimeout(resolve, 100))
+                  }
+                }
+
+                // Re-run analysis now that all PnL data is cached
+                await refreshMarketSharpnessFn({
+                  data: {
+                    conditionId: market.conditionId,
+                    marketTitle: market.title,
+                    marketSlug: market.slug,
+                    eventSlug: market.eventSlug,
+                    sportTag: market.sportTag ?? undefined,
+                    outcomes: market.outcomes,
+                    endDate: market.endDate,
+                  },
+                })
+              }
+            } catch (error) {
+              console.error('Failed to refresh market:', market.title, error)
+            }
+            await new Promise((resolve) => setTimeout(resolve, 500))
+          }
+        } else {
+          console.log('[sharp] No new events found')
+        }
+      }
+
+      // Reload cache
+      await loadCache()
+    } catch (error) {
+      console.error('Failed to discover new events:', error)
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
   // Manual refresh - behavior depends on cache state:
   // - If cache is empty: full refresh - fetch and analyze all markets
   // - If cache has data: partial refresh - only re-fetch data for imminent cached events
@@ -255,7 +343,7 @@ function SharpMoneyPage() {
           }
         }
       } else {
-        // Cache has data - partial refresh: re-fetch stale data for imminent events only
+        // Cache has data - partial refresh: ONLY update existing imminent/live events (no new discovery)
         const now = new Date()
         const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000)
         
@@ -348,43 +436,59 @@ function SharpMoneyPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-sm">
+      <header 
+        className="sticky top-0 z-50 border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-sm"
+        style={{ paddingTop: 'max(1rem, env(safe-area-inset-top, 0px) + 1rem)' }}
+      >
         <div className="mx-auto max-w-7xl px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <Link
                 to="/?view=wallets"
-                className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
+                className="flex items-center gap-1 sm:gap-2 text-gray-400 hover:text-white transition-colors flex-shrink-0"
                 title="Go to Wallet Tracking"
               >
                 <Wallet className="h-5 w-5" />
-                <span className="text-sm">Wallets</span>
+                <span className="text-sm hidden sm:inline">Wallets</span>
               </Link>
-              <div className="flex items-center gap-2">
-                <Target className="h-6 w-6 text-cyan-400" />
-                <h1 className="text-xl font-bold text-white">Sharp Money</h1>
+              <div className="flex items-center gap-2 min-w-0">
+                <Target className="h-5 w-5 sm:h-6 sm:w-6 text-cyan-400 flex-shrink-0" />
+                <h1 className="text-lg sm:text-xl font-bold text-white truncate">Sharp Money</h1>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
               {cacheStats?.newestEntry && (
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-gray-500 hidden sm:inline">
                   Updated {formatRelativeTime(cacheStats.newestEntry)}
                 </span>
               )}
               <button
                 onClick={handleClearCache}
-                className="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                className="flex items-center gap-1 sm:gap-2 rounded-lg bg-red-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                title="Clear Cache"
               >
-                Clear Cache
+                <Trash2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Clear Cache</span>
               </button>
+              {entries.length > 0 && (
+                <button
+                  onClick={handleDiscoverNew}
+                  disabled={isRefreshing}
+                  className="flex items-center gap-1 sm:gap-2 rounded-lg bg-emerald-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                  title="Discover and analyze new events (keeps existing cache)"
+                >
+                  <Target className={`h-4 w-4 ${isRefreshing ? 'animate-pulse' : ''}`} />
+                  <span className="hidden sm:inline">{isRefreshing ? 'Discovering...' : 'Discover New'}</span>
+                </button>
+              )}
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
-                className="flex items-center gap-2 rounded-lg bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
-                title={entries.length === 0 ? "Full refresh - analyze all markets" : "Quick refresh - only live/imminent events"}
+                className="flex items-center gap-1 sm:gap-2 rounded-lg bg-cyan-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
+                title={entries.length === 0 ? "Discover and analyze all new markets" : "Update existing events only (no new discovery)"}
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                {isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh Live'}
+                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh Live'}</span>
               </button>
             </div>
           </div>
@@ -491,7 +595,6 @@ function SharpMoneyCard({
                 {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
               </span>
             )}
-            <ConfidenceBadge confidence={entry.confidence} />
             {entry.eventTime && (
               <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
                 {formatEventTime(entry.eventTime)}
@@ -510,13 +613,34 @@ function SharpMoneyCard({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Key Metrics - Score Differential (prominent badge) */}
+          {entry.sharpSide !== 'EVEN' && (
+            <div className={`flex flex-col items-center justify-center px-2 sm:px-3 py-1.5 rounded-lg border flex-shrink-0 ${
+              entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
+              entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
+              entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
+              'bg-slate-800/50 border-slate-700'
+            }`}>
+              <span className={`text-base sm:text-lg font-bold ${
+                entry.scoreDifferential >= 40 ? 'text-emerald-400' :
+                entry.scoreDifferential >= 30 ? 'text-emerald-400' :
+                entry.scoreDifferential >= 20 ? 'text-amber-400' :
+                'text-gray-400'
+              }`}>
+                {entry.scoreDifferential.toFixed(0)}
+              </span>
+              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
+            </div>
+          )}
+          
           {/* Edge Rating - main ranking indicator */}
           <div className="flex flex-col items-center">
-            <span className={`text-2xl font-bold ${
-              entry.edgeRating >= 70 ? 'text-emerald-400' :
-              entry.edgeRating >= 50 ? 'text-amber-400' :
-              entry.edgeRating >= 30 ? 'text-gray-300' :
+            <span className={`text-xl sm:text-2xl font-bold ${
+              entry.edgeRating >= 90 ? 'text-emerald-400' :
+              entry.edgeRating >= 75 ? 'text-cyan-400' :
+              entry.edgeRating >= 65 ? 'text-amber-400' :
+              entry.edgeRating >= 50 ? 'text-gray-300' :
               'text-gray-500'
             }`}>
               {entry.edgeRating}
@@ -524,21 +648,31 @@ function SharpMoneyCard({
             <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
           </div>
           
+          {/* Volume indicator */}
+          {entry.sharpSide !== 'EVEN' && (
+            <div className="flex flex-col items-center flex-shrink-0">
+              <span className="text-xs sm:text-sm font-semibold text-gray-400">
+                {formatUsdCompact(entry.sideA.totalValue + entry.sideB.totalValue)}
+              </span>
+              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider hidden sm:inline">Volume</span>
+            </div>
+          )}
+          
           {polymarketUrl && (
             <a
               href={polymarketUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 text-gray-400 hover:text-cyan-400 transition-colors"
+              className="p-2 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
               onClick={(e) => e.stopPropagation()}
             >
               <ExternalLink className="h-4 w-4" />
             </a>
           )}
           {isExpanded ? (
-            <ChevronUp className="h-5 w-5 text-gray-400" />
+            <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
           ) : (
-            <ChevronDown className="h-5 w-5 text-gray-400" />
+            <ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
           )}
         </div>
       </div>
@@ -549,6 +683,7 @@ function SharpMoneyCard({
           sideA={entry.sideA} 
           sideB={entry.sideB} 
           sharpSide={entry.sharpSide}
+          scoreDifferential={entry.scoreDifferential}
         />
       </div>
 
@@ -610,11 +745,12 @@ function UnifiedEdgeBar({
   sideA,
   sideB,
   sharpSide,
+  scoreDifferential,
 }: {
   sideA: SharpMoneyCacheEntry['sideA']
   sideB: SharpMoneyCacheEntry['sideB']
   sharpSide: 'A' | 'B' | 'EVEN'
-  conviction?: number
+  scoreDifferential?: number
 }) {
   // Calculate money split (what % of total dollars is on each side)
   const totalValue = sideA.totalValue + sideB.totalValue
@@ -622,6 +758,7 @@ function UnifiedEdgeBar({
   const sideBMoneyPercent = 100 - sideAMoneyPercent
   
   const isSharpA = sharpSide === 'A'
+  const scoreDiff = scoreDifferential ?? Math.abs(sideA.sharpScore - sideB.sharpScore)
 
   // For EVEN, show balanced bar
   if (sharpSide === 'EVEN') {
@@ -656,12 +793,29 @@ function UnifiedEdgeBar({
             {sideA.label}
           </span>
           <span className={`${isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
-            ({Math.round(sideA.sharpScore)})
+            {Math.round(sideA.sharpScore)}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          <div className={`px-2 py-0.5 rounded ${
+            scoreDiff >= 40 ? 'bg-emerald-500/20' :
+            scoreDiff >= 30 ? 'bg-emerald-500/15' :
+            scoreDiff >= 20 ? 'bg-amber-500/20' :
+            'bg-slate-800'
+          }`}>
+            <span className={`text-xs font-bold ${
+              scoreDiff >= 40 ? 'text-emerald-400' :
+              scoreDiff >= 30 ? 'text-emerald-400' :
+              scoreDiff >= 20 ? 'text-amber-400' :
+              'text-gray-400'
+            }`}>
+              +{Math.round(scoreDiff)}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
           <span className={`${!isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
-            ({Math.round(sideB.sharpScore)})
+            {Math.round(sideB.sharpScore)}
           </span>
           <span className={`font-semibold ${!isSharpA ? 'text-emerald-400' : 'text-gray-500'}`}>
             {sideB.label}
@@ -704,14 +858,25 @@ function UnifiedEdgeBar({
         </div>
       </div>
       
-      {/* Summary line */}
-      <div className="flex items-center justify-center">
-        <span className="text-xs text-gray-500">
-          {isSharpA 
-            ? `${Math.round(sideAMoneyPercent)}% of money on sharp side`
-            : `${Math.round(sideBMoneyPercent)}% of money on sharp side`
-          }
+      {/* Summary line - Conviction with visual indicator */}
+      <div className="flex items-center justify-center gap-2">
+        <span className="text-xs text-gray-500">Conviction:</span>
+        <span className={`text-sm font-bold ${
+          (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 40 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 60
+            ? 'text-emerald-400' 
+            : (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 30 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 70
+            ? 'text-amber-400'
+            : 'text-gray-400'
+        }`}>
+          {Math.round(isSharpA ? sideAMoneyPercent : sideBMoneyPercent)}%
         </span>
+        <span className={`inline-block w-2 h-2 rounded-full ${
+          (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 40 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 60
+            ? 'bg-emerald-400' 
+            : (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 30 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 70
+            ? 'bg-amber-400'
+            : 'bg-gray-500'
+        }`} />
       </div>
     </div>
   )

@@ -263,9 +263,18 @@ export async function listSharpMoneyCache(
     params.push(sportTag)
   }
 
-  // Order by: Edge Rating (highest first), then event time (soonest first)
+  // Order by: Edge Rating (highest first), then score differential (highest first), 
+  // then confidence (HIGH > MEDIUM > LOW), then conviction (balanced is better), then event time (soonest first)
   query += ` ORDER BY 
     edge_rating DESC NULLS LAST,
+    score_differential DESC NULLS LAST,
+    CASE confidence
+      WHEN 'HIGH' THEN 3
+      WHEN 'MEDIUM' THEN 2
+      WHEN 'LOW' THEN 1
+      ELSE 0
+    END DESC,
+    ABS(sharp_side_value_ratio - 0.5) ASC NULLS LAST,
     event_time ASC NULLS LAST
     LIMIT ?`
   params.push(limit)
