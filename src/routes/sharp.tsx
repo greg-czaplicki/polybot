@@ -144,6 +144,10 @@ function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
   return null
 }
 
+function buildPolymarketProfileUrl(walletAddress: string): string {
+  return `https://polymarket.com/profile/${walletAddress}`
+}
+
 function SharpMoneyPage() {
   const [entries, setEntries] = useState<SharpMoneyCacheEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -1067,21 +1071,21 @@ function SideDetails({
   return (
     <div
       className={`rounded-lg p-4 ${
-        isSharp ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-slate-800/30'
+        isSharp ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-slate-800/30'
       }`}
     >
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <h4 className={`font-semibold ${isSharp ? 'text-amber-400' : 'text-white'}`}>
+          <h4 className={`font-semibold ${isSharp ? 'text-emerald-400' : 'text-white'}`}>
             {side.label}
           </h4>
           {isSharp && (
-            <span className="flex items-center gap-1 text-[0.65rem] font-semibold uppercase text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded">
+            <span className="flex items-center gap-1 text-[0.65rem] font-semibold uppercase text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded">
               <Zap className="h-3 w-3" /> Sharp
             </span>
           )}
         </div>
-        <span className={`text-lg font-bold ${isSharp ? 'text-amber-400' : 'text-cyan-400'}`}>
+        <span className={`text-lg font-bold ${isSharp ? 'text-emerald-400' : 'text-cyan-400'}`}>
           {Math.round(side.sharpScore)}
         </span>
       </div>
@@ -1116,9 +1120,15 @@ function SideDetails({
                   <User className="h-3 w-3 text-gray-400" />
                 </div>
               )}
-              <span className="flex-1 truncate text-gray-300">
+              <a
+                href={buildPolymarketProfileUrl(holder.proxyWallet)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 truncate text-gray-300 hover:text-emerald-400 transition-colors cursor-pointer"
+                onClick={(e) => e.stopPropagation()}
+              >
                 {truncateWalletName(holder.name || holder.pseudonym) || `${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
-              </span>
+              </a>
               <PnlBadge pnlAll={holder.pnlAll} />
               <span className="text-gray-400 text-xs">
                 {formatUsdCompact(holder.amount)}

@@ -1094,30 +1094,30 @@ function App() {
     // Process each request with a delay to prevent ERR_INSUFFICIENT_RESOURCES
     limitedItems.forEach((item, index) => {
       setTimeout(() => {
-        fetchMarketMetricsFn({
-          data: {
+          fetchMarketMetricsFn({
+            data: {
             conditionId: item.conditionId,
             eventId: item.eventId,
             slug: item.slug,
           }
-        })
-          .then((response) => {
-            const metrics = response.metrics
-            if (metrics && (metrics.volume || metrics.openInterest)) {
-              setMarketMetricsCache((prev) => {
-                const next = new Map(prev)
-                next.set(item.conditionId, { metrics, fetchedAt: Date.now() })
-                return next
-              })
-            }
           })
-          .catch((error) => {
+            .then((response) => {
+              const metrics = response.metrics
+              if (metrics && (metrics.volume || metrics.openInterest)) {
+                setMarketMetricsCache((prev) => {
+                  const next = new Map(prev)
+                next.set(item.conditionId, { metrics, fetchedAt: Date.now() })
+                  return next
+                })
+              }
+            })
+            .catch((error) => {
             console.warn('[CLIENT] Failed to fetch metrics for conditionId:', item.conditionId, error)
             // Clear the fetched timestamp so we can retry later
             fetchedMetricsRef.current.delete(item.conditionId)
-          })
+            })
       }, index * 500) // 500ms delay between each request
-    })
+        })
   }, [aggregatedPositions]) // Only depend on aggregatedPositions, not marketMetricsCache
 
   const loadPositionsForWallet = useCallback(async (walletAddress: string) => {
