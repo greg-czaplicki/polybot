@@ -745,20 +745,27 @@ function determineConfidence(
 
 /**
  * Calculate Edge Rating (0-100) for ranking bets
- * Primary factor: Sharp score differential
+ * Primary factor: Sharp score differential (uncapped, scales better)
+ * Secondary: Volume (higher volume = more reliable signal)
  * Bonus/Penalty: Quality of top 20 holders (avg PnL including losers)
  */
 function calculateEdgeRating(
   scoreDifferential: number,
   sharpSideTopHolders: TopHolderPnlData[],
   holderCount: number,
+  totalVolume: number,
 ): number {
-  // Base rating from score differential (max 70 points)
+  // Base rating from score differential (max 60 points, uncapped for higher diffs)
   // Score diff ranges from 0-100 theoretically, but usually 10-60 in practice
-  // Map: 0 diff = 0, 30+ diff = 70
-  const diffScore = Math.min((scoreDifferential / 30) * 70, 70)
+  // Map: 0 diff = 0, 50 diff = 60, higher diffs can exceed 60
+  const diffScore = Math.min((scoreDifferential / 50) * 60, 60)
   
-  // Holder quality bonus/penalty (-10 to +20 points)
+  // Volume bonus (max 15 points)
+  // Higher volume = more reliable signal and more money at stake
+  // $200K+ volume = max bonus, scales down to $0
+  const volumeBonus = Math.min((totalVolume / 200_000) * 15, 15)
+  
+  // Holder quality bonus/penalty (-10 to +15 points)
   // Based on avg all-time PnL of ALL top 20 sharp side holders (including losers!)
   let qualityBonus = 0
   if (sharpSideTopHolders.length > 0) {
@@ -769,8 +776,8 @@ function calculateEdgeRating(
       const avgPnL = holderPnLs.reduce((a, b) => a + b, 0) / holderPnLs.length
       
       if (avgPnL >= 0) {
-        // Positive avg: bonus up to 20 points ($100K+ avg = max)
-        qualityBonus = Math.min((avgPnL / 100_000) * 20, 20)
+        // Positive avg: bonus up to 15 points ($100K+ avg = max)
+        qualityBonus = Math.min((avgPnL / 100_000) * 15, 15)
       } else {
         // Negative avg: penalty up to -10 points (-$50K or worse = max penalty)
         qualityBonus = Math.max((avgPnL / 50_000) * 10, -10)
@@ -783,7 +790,7 @@ function calculateEdgeRating(
   // 10+ holders on sharp side = max bonus
   const holderBonus = Math.min((holderCount / 10) * 10, 10)
   
-  const total = diffScore + qualityBonus + holderBonus
+  const total = diffScore + volumeBonus + qualityBonus + holderBonus
   return Math.round(Math.max(0, Math.min(100, total)))
 }
 
@@ -1135,6 +1142,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         scoreDifferential,
         sharpSideTopHolders,
         sharpSideHolderCount,
+        totalMarketValue,
       )
 
       const analysis: SharpAnalysisResult = {

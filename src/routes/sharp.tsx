@@ -433,6 +433,15 @@ function SharpMoneyPage() {
     return filtered
   }, [entries, selectedSport])
 
+  // Calculate max volume for scale
+  const maxVolume = useMemo(() => {
+    if (filteredEntries.length === 0) return 1
+    return Math.max(
+      ...filteredEntries.map(e => e.sideA.totalValue + e.sideB.totalValue),
+      1
+    )
+  }, [filteredEntries])
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       {/* Header */}
@@ -557,6 +566,7 @@ function SharpMoneyPage() {
                 entry={entry}
                 isExpanded={expandedMarkets.has(entry.id)}
                 onToggle={() => toggleMarket(entry.id)}
+                maxVolume={maxVolume}
               />
             ))}
           </div>
@@ -570,10 +580,12 @@ function SharpMoneyCard({
   entry,
   isExpanded,
   onToggle,
+  maxVolume,
 }: {
   entry: SharpMoneyCacheEntry
   isExpanded: boolean
   onToggle: () => void
+  maxVolume: number
 }) {
   const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug)
 
@@ -581,99 +593,220 @@ function SharpMoneyCard({
   const sharpSideData = entry.sharpSide === 'A' ? entry.sideA : entry.sideB
   const squareSideData = entry.sharpSide === 'A' ? entry.sideB : entry.sideA
 
+  // Calculate volume percentage and get heat map color
+  const totalVolume = entry.sideA.totalValue + entry.sideB.totalValue
+  const volumePercent = Math.min((totalVolume / maxVolume) * 100, 100)
+  const getVolumeColor = (percent: number) => {
+    if (percent >= 80) return 'bg-gradient-to-r from-red-500 to-orange-500' // Hot - high volume
+    if (percent >= 60) return 'bg-gradient-to-r from-orange-500 to-amber-500' // Warm - medium-high
+    if (percent >= 40) return 'bg-gradient-to-r from-amber-500 to-yellow-500' // Medium
+    if (percent >= 20) return 'bg-gradient-to-r from-cyan-500 to-blue-500' // Cool - medium-low
+    return 'bg-gradient-to-r from-blue-500 to-indigo-500' // Cold - low volume
+  }
+
   return (
     <div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
       {/* Card Header */}
       <div
-        className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-800/30 transition-colors"
+        className="cursor-pointer hover:bg-slate-800/30 transition-colors"
         onClick={onToggle}
       >
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            {entry.sportTag && (
-              <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-2 py-0.5 rounded">
-                {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
-              </span>
-            )}
-            {entry.eventTime && (
-              <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
-                {formatEventTime(entry.eventTime)}
-              </span>
+        {/* Mobile: Stacked layout */}
+        <div className="block sm:hidden">
+          {/* Top Row - League, Time, Actions */}
+          <div className="flex items-center justify-between p-3 pb-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {entry.sportTag && (
+                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-1.5 py-0.5 rounded">
+                  {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
+                </span>
+              )}
+              {entry.eventTime && (
+                <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-1.5 py-0.5 rounded">
+                  {formatEventTime(entry.eventTime)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {polymarketUrl && (
+                <a
+                  href={polymarketUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              )}
+              {isExpanded ? (
+                <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
+              ) : (
+                <ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
+              )}
+            </div>
+          </div>
+
+          {/* Title and Sharp Indicator */}
+          <div className="px-3 pb-2">
+            <h3 className="text-base font-semibold text-white leading-tight mb-1.5">
+              {entry.marketTitle}
+            </h3>
+            {entry.sharpSide !== 'EVEN' && (
+              <div className="flex items-center gap-1.5">
+                <Zap className="h-4 w-4 text-amber-400" />
+                <span className="text-sm font-medium text-amber-400">
+                  Sharp: {sharpSideData.label}
+                </span>
+              </div>
             )}
           </div>
-          <h3 className="text-base font-semibold text-white truncate pr-4">
-            {entry.marketTitle}
-          </h3>
-          {entry.sharpSide !== 'EVEN' && (
-            <div className="flex items-center gap-1.5 mt-2">
-              <Zap className="h-4 w-4 text-amber-400" />
-              <span className="text-sm font-medium text-amber-400">
-                Sharp: {sharpSideData.label}
-              </span>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Key Metrics - Score Differential (prominent badge) */}
-          {entry.sharpSide !== 'EVEN' && (
-            <div className={`flex flex-col items-center justify-center px-2 sm:px-3 py-1.5 rounded-lg border flex-shrink-0 ${
-              entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
-              entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
-              entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
-              'bg-slate-800/50 border-slate-700'
-            }`}>
-              <span className={`text-base sm:text-lg font-bold ${
-                entry.scoreDifferential >= 40 ? 'text-emerald-400' :
-                entry.scoreDifferential >= 30 ? 'text-emerald-400' :
-                entry.scoreDifferential >= 20 ? 'text-amber-400' :
-                'text-gray-400'
-              }`}>
-                {entry.scoreDifferential.toFixed(0)}
-              </span>
-              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
-            </div>
-          )}
-          
-          {/* Edge Rating - main ranking indicator */}
-          <div className="flex flex-col items-center">
-            <span className={`text-xl sm:text-2xl font-bold ${
-              entry.edgeRating >= 90 ? 'text-emerald-400' :
-              entry.edgeRating >= 75 ? 'text-cyan-400' :
-              entry.edgeRating >= 65 ? 'text-amber-400' :
-              entry.edgeRating >= 50 ? 'text-gray-300' :
-              'text-gray-500'
-            }`}>
-              {entry.edgeRating}
-            </span>
-            <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
-          </div>
-          
-          {/* Volume indicator */}
-          {entry.sharpSide !== 'EVEN' && (
+
+          {/* Metrics Row - Mobile */}
+          <div className="px-3 pb-3 flex items-center gap-2">
             <div className="flex flex-col items-center flex-shrink-0">
-              <span className="text-xs sm:text-sm font-semibold text-gray-400">
-                {formatUsdCompact(entry.sideA.totalValue + entry.sideB.totalValue)}
+              <span className={`text-xl font-bold ${
+                entry.edgeRating >= 90 ? 'text-emerald-400' :
+                entry.edgeRating >= 75 ? 'text-cyan-400' :
+                entry.edgeRating >= 65 ? 'text-amber-400' :
+                entry.edgeRating >= 50 ? 'text-gray-300' :
+                'text-gray-500'
+              }`}>
+                {entry.edgeRating}
               </span>
-              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider hidden sm:inline">Volume</span>
             </div>
-          )}
-          
-          {polymarketUrl && (
-            <a
-              href={polymarketUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-2 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          )}
-          {isExpanded ? (
-            <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
-          ) : (
-            <ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
-          )}
+            {entry.sharpSide !== 'EVEN' && (
+              <>
+                <div className={`flex flex-col items-center justify-center px-2 py-1 rounded-lg border flex-shrink-0 ${
+                  entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
+                  entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
+                  entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
+                  'bg-slate-800/50 border-slate-700'
+                }`}>
+                  <span className={`text-base font-bold ${
+                    entry.scoreDifferential >= 40 ? 'text-emerald-400' :
+                    entry.scoreDifferential >= 30 ? 'text-emerald-400' :
+                    entry.scoreDifferential >= 20 ? 'text-amber-400' :
+                    'text-gray-400'
+                  }`}>
+                    {entry.scoreDifferential.toFixed(0)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center flex-1 min-w-0">
+                  <span className="text-xs font-semibold text-gray-400 truncate w-full text-center mb-1">
+                    {formatUsdCompact(totalVolume)}
+                  </span>
+                  <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
+                      style={{
+                        width: `${volumePercent}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Desktop: Original horizontal layout */}
+        <div className="hidden sm:flex items-center justify-between p-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              {entry.sportTag && (
+                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-2 py-0.5 rounded">
+                  {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
+                </span>
+              )}
+              {entry.eventTime && (
+                <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
+                  {formatEventTime(entry.eventTime)}
+                </span>
+              )}
+            </div>
+            <h3 className="text-base font-semibold text-white truncate pr-4">
+              {entry.marketTitle}
+            </h3>
+            {entry.sharpSide !== 'EVEN' && (
+              <div className="flex items-center gap-1.5 mt-2">
+                <Zap className="h-4 w-4 text-amber-400" />
+                <span className="text-sm font-medium text-amber-400">
+                  Sharp: {sharpSideData.label}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Key Metrics - Score Differential (prominent badge) */}
+            {entry.sharpSide !== 'EVEN' && (
+              <div className={`flex flex-col items-center justify-center px-3 py-1.5 rounded-lg border flex-shrink-0 ${
+                entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
+                entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
+                entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
+                'bg-slate-800/50 border-slate-700'
+              }`}>
+                <span className={`text-lg font-bold ${
+                  entry.scoreDifferential >= 40 ? 'text-emerald-400' :
+                  entry.scoreDifferential >= 30 ? 'text-emerald-400' :
+                  entry.scoreDifferential >= 20 ? 'text-amber-400' :
+                  'text-gray-400'
+                }`}>
+                  {entry.scoreDifferential.toFixed(0)}
+                </span>
+                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
+              </div>
+            )}
+            
+            {/* Edge Rating - main ranking indicator */}
+            <div className="flex flex-col items-center">
+              <span className={`text-2xl font-bold ${
+                entry.edgeRating >= 90 ? 'text-emerald-400' :
+                entry.edgeRating >= 75 ? 'text-cyan-400' :
+                entry.edgeRating >= 65 ? 'text-amber-400' :
+                entry.edgeRating >= 50 ? 'text-gray-300' :
+                'text-gray-500'
+              }`}>
+                {entry.edgeRating}
+              </span>
+              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
+            </div>
+            
+            {/* Volume indicator with bar chart */}
+            {entry.sharpSide !== 'EVEN' && (
+              <div className="flex flex-col items-center flex-shrink-0 min-w-[60px]">
+                <span className="text-sm font-semibold text-gray-400 mb-1">
+                  {formatUsdCompact(totalVolume)}
+                </span>
+                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
+                    style={{
+                      width: `${volumePercent}%`
+                    }}
+                  />
+                </div>
+                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider mt-0.5">Volume</span>
+              </div>
+            )}
+            
+            {polymarketUrl && (
+              <a
+                href={polymarketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            )}
+            {isExpanded ? (
+              <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
+            ) : (
+              <ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
+            )}
+          </div>
         </div>
       </div>
 
@@ -858,7 +991,7 @@ function UnifiedEdgeBar({
         </div>
       </div>
       
-      {/* Summary line - Conviction with visual indicator */}
+      {/* Summary line - Conviction */}
       <div className="flex items-center justify-center gap-2">
         <span className="text-xs text-gray-500">Conviction:</span>
         <span className={`text-sm font-bold ${
@@ -870,13 +1003,6 @@ function UnifiedEdgeBar({
         }`}>
           {Math.round(isSharpA ? sideAMoneyPercent : sideBMoneyPercent)}%
         </span>
-        <span className={`inline-block w-2 h-2 rounded-full ${
-          (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 40 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 60
-            ? 'bg-emerald-400' 
-            : (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 30 && (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 70
-            ? 'bg-amber-400'
-            : 'bg-gray-500'
-        }`} />
       </div>
     </div>
   )
