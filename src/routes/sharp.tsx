@@ -606,6 +606,25 @@ function SharpMoneyCard({
     return 'bg-gradient-to-r from-blue-500 to-indigo-500' // Cold - low volume
   }
 
+  // Convert Edge Rating to letter grade
+  const getBetGrade = (edgeRating: number): { grade: string; color: string; bgColor: string; borderColor: string } => {
+    if (edgeRating >= 90) {
+      return { grade: 'A+', color: 'text-emerald-400', bgColor: 'bg-emerald-500/20', borderColor: 'border-emerald-500/50' }
+    }
+    if (edgeRating >= 80) {
+      return { grade: 'A', color: 'text-emerald-400', bgColor: 'bg-emerald-500/15', borderColor: 'border-emerald-500/40' }
+    }
+    if (edgeRating >= 70) {
+      return { grade: 'B', color: 'text-cyan-400', bgColor: 'bg-cyan-500/15', borderColor: 'border-cyan-500/40' }
+    }
+    if (edgeRating >= 65) {
+      return { grade: 'C', color: 'text-amber-400', bgColor: 'bg-amber-500/15', borderColor: 'border-amber-500/40' }
+    }
+    return { grade: 'D', color: 'text-gray-400', bgColor: 'bg-slate-800/50', borderColor: 'border-slate-700' }
+  }
+  
+  const betGrade = getBetGrade(entry.edgeRating)
+
   return (
     <div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
       {/* Card Header */}
@@ -668,8 +687,17 @@ function SharpMoneyCard({
 
           {/* Metrics Row - Mobile */}
           <div className="px-3 pb-3 flex items-center gap-2">
-            <div className="flex flex-col items-center flex-shrink-0">
-              <span className={`text-xl font-bold ${
+            {/* Bet Grade - Single value indicator (most prominent) */}
+            <div className={`flex flex-col items-center justify-center px-2.5 py-1.5 rounded-lg border-2 ${betGrade.bgColor} ${betGrade.borderColor} flex-shrink-0 h-[56px] w-[50px]`}>
+              <span className={`text-xl font-black ${betGrade.color}`}>
+                {betGrade.grade}
+              </span>
+              <span className="text-[0.55rem] font-semibold text-gray-400 uppercase tracking-wider mt-0.5">Bet</span>
+            </div>
+            
+            {/* Edge Rating - PRIMARY */}
+            <div className="flex flex-col items-center justify-center flex-shrink-0 h-[56px] w-[44px]">
+              <span className={`text-lg font-bold ${
                 entry.edgeRating >= 90 ? 'text-emerald-400' :
                 entry.edgeRating >= 75 ? 'text-cyan-400' :
                 entry.edgeRating >= 65 ? 'text-amber-400' :
@@ -678,16 +706,13 @@ function SharpMoneyCard({
               }`}>
                 {entry.edgeRating}
               </span>
+              <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
             </div>
             {entry.sharpSide !== 'EVEN' && (
               <>
-                <div className={`flex flex-col items-center justify-center px-2 py-1 rounded-lg border flex-shrink-0 ${
-                  entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
-                  entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
-                  entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
-                  'bg-slate-800/50 border-slate-700'
-                }`}>
-                  <span className={`text-base font-bold ${
+                {/* Diff - Secondary */}
+                <div className="flex flex-col items-center justify-center flex-shrink-0 h-[56px] w-[44px]">
+                  <span className={`text-lg font-bold ${
                     entry.scoreDifferential >= 40 ? 'text-emerald-400' :
                     entry.scoreDifferential >= 30 ? 'text-emerald-400' :
                     entry.scoreDifferential >= 20 ? 'text-amber-400' :
@@ -695,12 +720,14 @@ function SharpMoneyCard({
                   }`}>
                     {entry.scoreDifferential.toFixed(0)}
                   </span>
+                  <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
                 </div>
-                <div className="flex flex-col items-center flex-1 min-w-0">
-                  <span className="text-xs font-semibold text-gray-400 truncate w-full text-center mb-1">
+                {/* Volume - Tertiary */}
+                <div className="flex flex-col items-center justify-center flex-shrink-0 h-[56px] w-[56px]">
+                  <span className="text-lg font-bold text-gray-400 mb-1">
                     {formatUsdCompact(totalVolume)}
                   </span>
-                  <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mb-0.5">
                     <div
                       className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
                       style={{
@@ -708,6 +735,7 @@ function SharpMoneyCard({
                       }}
                     />
                   </div>
+                  <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Volume</span>
                 </div>
               </>
             )}
@@ -715,7 +743,7 @@ function SharpMoneyCard({
         </div>
 
         {/* Desktop: Original horizontal layout */}
-        <div className="hidden sm:flex items-center justify-between p-4">
+        <div className="hidden sm:grid sm:grid-cols-[1fr_auto] items-start gap-4 p-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               {entry.sportTag && (
@@ -743,30 +771,18 @@ function SharpMoneyCard({
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3">
-            {/* Key Metrics - Score Differential (prominent badge) */}
-            {entry.sharpSide !== 'EVEN' && (
-              <div className={`flex flex-col items-center justify-center px-3 py-1.5 rounded-lg border flex-shrink-0 ${
-                entry.scoreDifferential >= 40 ? 'bg-emerald-500/10 border-emerald-500/30' :
-                entry.scoreDifferential >= 30 ? 'bg-emerald-500/10 border-emerald-500/20' :
-                entry.scoreDifferential >= 20 ? 'bg-amber-500/10 border-amber-500/30' :
-                'bg-slate-800/50 border-slate-700'
-              }`}>
-                <span className={`text-lg font-bold ${
-                  entry.scoreDifferential >= 40 ? 'text-emerald-400' :
-                  entry.scoreDifferential >= 30 ? 'text-emerald-400' :
-                  entry.scoreDifferential >= 20 ? 'text-amber-400' :
-                  'text-gray-400'
-                }`}>
-                  {entry.scoreDifferential.toFixed(0)}
-                </span>
-                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
-              </div>
-            )}
+          <div className="flex items-center gap-2.5">
+            {/* Bet Grade - Single value indicator (most prominent) */}
+            <div className={`flex flex-col items-center justify-center px-3 py-2 rounded-xl border-2 ${betGrade.bgColor} ${betGrade.borderColor} flex-shrink-0 h-[60px] w-[56px]`}>
+              <span className={`text-2xl font-black ${betGrade.color}`}>
+                {betGrade.grade}
+              </span>
+              <span className="text-[0.6rem] font-semibold text-gray-400 uppercase tracking-wider mt-0.5">Bet</span>
+            </div>
             
-            {/* Edge Rating - main ranking indicator */}
-            <div className="flex flex-col items-center">
-              <span className={`text-2xl font-bold ${
+            {/* Edge Rating - PRIMARY ranking indicator */}
+            <div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[48px]">
+              <span className={`text-xl font-bold ${
                 entry.edgeRating >= 90 ? 'text-emerald-400' :
                 entry.edgeRating >= 75 ? 'text-cyan-400' :
                 entry.edgeRating >= 65 ? 'text-amber-400' :
@@ -778,13 +794,30 @@ function SharpMoneyCard({
               <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Edge</span>
             </div>
             
-            {/* Volume indicator with bar chart */}
-            {entry.sharpSide !== 'EVEN' && (
-              <div className="flex flex-col items-center flex-shrink-0 min-w-[60px]">
-                <span className="text-sm font-semibold text-gray-400 mb-1">
+            {/* Score Differential - Secondary context (signal strength) */}
+            {entry.sharpSide !== 'EVEN' ? (
+              <div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[48px]">
+                <span className={`text-xl font-bold ${
+                  entry.scoreDifferential >= 40 ? 'text-emerald-400' :
+                  entry.scoreDifferential >= 30 ? 'text-emerald-400' :
+                  entry.scoreDifferential >= 20 ? 'text-amber-400' :
+                  'text-gray-400'
+                }`}>
+                  {entry.scoreDifferential.toFixed(0)}
+                </span>
+                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Diff</span>
+              </div>
+            ) : (
+              <div className="w-[48px] flex-shrink-0" /> // Spacer to maintain alignment
+            )}
+            
+            {/* Volume indicator - Tertiary (validation) */}
+            {entry.sharpSide !== 'EVEN' ? (
+              <div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[60px]">
+                <span className="text-xl font-bold text-gray-400 mb-1">
                   {formatUsdCompact(totalVolume)}
                 </span>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-0.5">
                   <div
                     className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
                     style={{
@@ -792,8 +825,10 @@ function SharpMoneyCard({
                     }}
                   />
                 </div>
-                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider mt-0.5">Volume</span>
+                <span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">Volume</span>
               </div>
+            ) : (
+              <div className="w-[60px] flex-shrink-0" /> // Spacer to maintain alignment
             )}
             
             {polymarketUrl && (
