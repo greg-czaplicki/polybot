@@ -1,6 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import {
   ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   ExternalLink,
@@ -653,11 +655,13 @@ function SharpMoneyCard({
               {entry.marketTitle}
             </h3>
             {entry.sharpSide !== 'EVEN' && (
-              <div className="flex items-center gap-1.5">
-                <Zap className="h-4 w-4 text-amber-400" />
-                <span className="text-sm font-medium text-amber-400">
-                  Sharp: {sharpSideData.label}
-                </span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  <span className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
+                    Bet: {sharpSideData.label}
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -729,11 +733,13 @@ function SharpMoneyCard({
               {entry.marketTitle}
             </h3>
             {entry.sharpSide !== 'EVEN' && (
-              <div className="flex items-center gap-1.5 mt-2">
-                <Zap className="h-4 w-4 text-amber-400" />
-                <span className="text-sm font-medium text-amber-400">
-                  Sharp: {sharpSideData.label}
-                </span>
+              <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  <span className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
+                    Bet: {sharpSideData.label}
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -918,15 +924,15 @@ function UnifiedEdgeBar({
 
   return (
     <div className="space-y-2">
-      {/* Labels row - sharp side highlighted with ⚡ and score */}
+      {/* Labels row - sharp side highlighted with checkmark */}
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-1.5">
-          {isSharpA && <Zap className="h-3.5 w-3.5 text-emerald-400" />}
+          {isSharpA && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}
           <span className={`font-semibold ${isSharpA ? 'text-emerald-400' : 'text-gray-500'}`}>
             {sideA.label}
           </span>
           <span className={`${isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
-            {Math.round(sideA.sharpScore)}
+            ({Math.round(sideA.sharpScore)})
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -948,27 +954,30 @@ function UnifiedEdgeBar({
         </div>
         <div className="flex items-center gap-1.5">
           <span className={`${!isSharpA ? 'text-emerald-400/70' : 'text-gray-600'}`}>
-            {Math.round(sideB.sharpScore)}
+            ({Math.round(sideB.sharpScore)})
           </span>
           <span className={`font-semibold ${!isSharpA ? 'text-emerald-400' : 'text-gray-500'}`}>
             {sideB.label}
           </span>
-          {!isSharpA && <Zap className="h-3.5 w-3.5 text-emerald-400" />}
+          {!isSharpA && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}
         </div>
       </div>
       
       {/* Money split bar - shows where the actual dollars are */}
-      <div className="h-7 rounded-lg overflow-hidden relative flex">
+      <div className="h-7 rounded-lg overflow-hidden relative flex border-2 border-slate-800">
         {/* Side A money bar */}
         <div
-          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] ${
+          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] relative ${
             isSharpA 
-              ? 'bg-gradient-to-r from-emerald-600 to-emerald-500' 
+              ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 ring-2 ring-emerald-400 ring-offset-0' 
               : 'bg-slate-700'
           }`}
           style={{ width: `${Math.max(sideAMoneyPercent, 15)}%` }}
         >
-          <span className={`text-xs font-bold ${isSharpA ? 'text-white' : 'text-gray-400'}`}>
+          {isSharpA && (
+            <div className="absolute inset-0 border-2 border-emerald-300/50 rounded-l-lg pointer-events-none" />
+          )}
+          <span className={`text-xs font-bold ${isSharpA ? 'text-white drop-shadow-sm' : 'text-gray-400'}`}>
             {formatUsdCompact(sideA.totalValue)}
           </span>
         </div>
@@ -978,14 +987,17 @@ function UnifiedEdgeBar({
         
         {/* Side B money bar */}
         <div
-          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] ${
+          className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] relative ${
             !isSharpA 
-              ? 'bg-gradient-to-l from-emerald-600 to-emerald-500' 
+              ? 'bg-gradient-to-l from-emerald-600 to-emerald-500 ring-2 ring-emerald-400 ring-offset-0' 
               : 'bg-slate-700'
           }`}
           style={{ width: `${Math.max(sideBMoneyPercent, 15)}%` }}
         >
-          <span className={`text-xs font-bold ${!isSharpA ? 'text-white' : 'text-gray-400'}`}>
+          {!isSharpA && (
+            <div className="absolute inset-0 border-2 border-emerald-300/50 rounded-r-lg pointer-events-none" />
+          )}
+          <span className={`text-xs font-bold ${!isSharpA ? 'text-white drop-shadow-sm' : 'text-gray-400'}`}>
             {formatUsdCompact(sideB.totalValue)}
           </span>
         </div>
@@ -1043,10 +1055,6 @@ function SideDetails({
         <div>
           <span className="text-gray-500">Total Value</span>
           <p className="font-semibold text-white">{formatUsdCompact(side.totalValue)}</p>
-        </div>
-        <div>
-          <span className="text-gray-500">Holders</span>
-          <p className="font-semibold text-white">{side.holderCount}</p>
         </div>
       </div>
 

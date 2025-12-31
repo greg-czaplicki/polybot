@@ -853,7 +853,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       
       const holdersUrl = new URL('/holders', POLYMARKET_DATA_API)
       holdersUrl.searchParams.set('market', conditionId)
-      holdersUrl.searchParams.set('limit', '20')
+      holdersUrl.searchParams.set('limit', '100') // High limit to ensure we get holders from both sides
       holdersUrl.searchParams.set('minBalance', '1')
 
       // Use CLOB API for accurate prices (Gamma API condition_id lookup is unreliable)
@@ -898,6 +898,39 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
 
       if (!holdersData || holdersData.length === 0) {
         return { analysis: null, error: 'No holders data' }
+      }
+      
+      // The API returns holders grouped by token, but limit applies to total across all tokens
+      // Sort holders within each token group by amount (descending) and take top 20 per token
+      for (const tokenData of holdersData) {
+        tokenData.holders.sort((a, b) => b.amount - a.amount)
+        tokenData.holders = tokenData.holders.slice(0, 20) // Take top 20 per token
+      }
+      
+      // If any token has fewer than 10 holders, try to fetch more for that specific token
+      for (const tokenData of holdersData) {
+        if (tokenData.holders.length < 10 && tokenData.token) {
+          try {
+            const tokenUrl = new URL('/holders', POLYMARKET_DATA_API)
+            tokenUrl.searchParams.set('token', tokenData.token)
+            tokenUrl.searchParams.set('limit', '20')
+            tokenUrl.searchParams.set('minBalance', '1')
+            
+            const tokenResponse = await fetch(tokenUrl)
+            if (tokenResponse.ok) {
+              const tokenResponseData = await tokenResponse.json() as { holders?: Array<any> }
+              if (tokenResponseData.holders && tokenResponseData.holders.length > tokenData.holders.length) {
+                // Merge and sort, keeping top 20
+                const allHolders = [...tokenData.holders, ...tokenResponseData.holders]
+                allHolders.sort((a, b) => b.amount - a.amount)
+                tokenData.holders = allHolders.slice(0, 20)
+                console.log(`[sharp-money] Fetched additional holders for token ${tokenData.token}: ${tokenData.holders.length} total`)
+              }
+            }
+          } catch (error) {
+            console.warn(`[sharp-money] Failed to fetch additional holders for token ${tokenData.token}:`, error)
+          }
+        }
       }
 
       // Step 2: Group holders by outcomeIndex (0 or 1) for consistent assignment
