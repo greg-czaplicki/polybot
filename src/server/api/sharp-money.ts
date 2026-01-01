@@ -23,28 +23,83 @@ const POLYMARKET_DATA_API = 'https://data-api.polymarket.com'
 // Sport tags we want to track for sharp money
 // Note: 'soccer' is what detectSportTag returns for EPL games
 // Note: 'cfb' is college football (Polymarket uses this, not 'ncaaf')
-const TARGET_SPORT_TAGS = ['nfl', 'nba', 'cfb', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
+const TARGET_SPORT_TAGS = ['nfl', 'nba', 'cfb', 'ncaab', 'mlb', 'nhl', 'epl']
 
-// Gamma API tag IDs for sports (from /sports endpoint)
-const SPORT_TAG_IDS: Record<string, number> = {
-  nfl: 450,
-  nba: 745,
-  cfb: 100351,    // College Football
-  ncaaf: 100351,  // Alias for college football
-  ncaab: 100149,  // College Basketball
-  mlb: 100381,
-  nhl: 899,
-  // Soccer leagues
-  epl: 82,        // Premier League
-  laliga: 780,    // La Liga
-  bundesliga: 1494, // Bundesliga
+const SPORTS_SERIES_IDS: Partial<Record<string, number>> = {
+  ncaab: 39,
+  epl: 10188,
+  mlb: 10426,
+  cfb: 10210,
+  nfl: 10187,
+  nba: 10345,
+  nhl: 10346,
+  atp: 10365,
+  mma: 10500,
 }
 
-// Get unique sport tag IDs for filtering (dedupe since cfb/ncaaf share same ID)
-const ALL_SPORT_TAG_IDS = [...new Set(Object.values(SPORT_TAG_IDS))]
+const GAME_BETS_TAG_ID = 100639
 
 // Minimum volume to show in sharp money (filters out low-liquidity games)
 const MIN_VOLUME_USD = 50000
+const MAX_SUBREQUESTS = 50
+const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60
+const UNIT_SIZE_SAMPLE_LIMIT = 20
+const UNIT_SIZE_POSITION_LIMIT = 100
+const MIN_UNIT_SIZE_SAMPLES = 3
+
+type RuntimeMarketStats = {
+  fetchedAt: number
+  tagStats: Array<{
+    tag: string
+    seriesId: number
+    count: number
+    markets: Array<{
+      title: string
+      volume: number
+      eventSlug?: string
+      slug?: string
+    }>
+  }>
+  combinedTagStats: Array<{
+    tag: string
+    count: number
+    markets: Array<{
+      title: string
+      volume: number
+      eventSlug?: string
+      slug?: string
+    }>
+  }>
+  filteredTagStats: Array<{
+    tag: string
+    count: number
+    markets: Array<{
+      title: string
+      volume: number
+      eventSlug?: string
+      slug?: string
+    }>
+  }>
+  eventStats: Array<{
+    tag: string
+    seriesId: number
+    eventCount: number
+    marketCount: number
+  }>
+  eventDetails: Array<{
+    tag: string
+    seriesId: number
+    eventSlug: string
+    eventTitle: string
+    marketCount: number
+    rawMarketCount: number
+  }>
+  expandedEventCount: number
+  expandedMarketCount: number
+  totalMarkets: number
+}
+
+let lastRuntimeMarketStats: RuntimeMarketStats | null = null
 
 /**
  * Parse outcomes from Gamma API - can be JSON array string or comma-separated
@@ -68,6 +123,61 @@ function parseOutcomes(outcomes: string | undefined | null): string[] {
   return outcomes.split(',').map(o => o.trim())
 }
 
+type ClosedPosition = {
+  conditionId?: string
+  title?: string
+  avgPrice?: number
+  totalBought: number
+  realizedPnl: number
+  timestamp?: number
+  outcome?: string
+}
+
+type OpenPosition = {
+  conditionId?: string
+  title?: string
+  avgPrice?: number
+  initialValue?: number
+  size?: number
+  totalBought?: number
+  timestamp?: number
+  outcome?: string
+}
+
+function calculateMedian(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2
+  }
+  return sorted[mid]
+}
+
+function calculateMedianTopHalf(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const start = Math.floor(sorted.length / 2)
+  const topHalf = sorted.slice(start)
+  return calculateMedian(topHalf)
+}
+
+function normalizePnl(pnl: number | null | undefined, unitSize: number | null | undefined): number | null {
+  if (pnl === null || pnl === undefined) return null
+  if (!unitSize || unitSize <= 0) return null
+  return pnl / unitSize
+}
+
+function calculateStakeUnitWeight(stakeUnits: number | null | undefined): number {
+  if (stakeUnits === null || stakeUnits === undefined || !Number.isFinite(stakeUnits)) {
+    return 1.0
+  }
+
+  const clampedUnits = Math.max(stakeUnits, 0)
+  const raw = Math.sqrt(clampedUnits)
+  return Math.min(2.0, Math.max(0.25, raw))
+}
+
 /**
  * Market data from Gamma API
  */
@@ -76,6 +186,7 @@ export interface GammaMarket {
   question: string
   conditionId: string
   slug: string
+  event_slug?: string
   resolutionSource?: string
   endDate?: string
   liquidity?: number
@@ -93,6 +204,61 @@ export interface GammaMarket {
   groupItemTitle?: string
   eventSlug?: string
   enableOrderBook?: boolean
+}
+
+interface GammaEvent {
+  id: string
+  slug?: string
+  title?: string
+  startTime?: string
+  markets?: GammaMarket[]
+}
+
+interface GammaSport {
+  id: number
+  slug?: string
+  name?: string
+  short_name?: string
+}
+
+function getEventSlug(market: GammaMarket): string | undefined {
+  return market.eventSlug ?? market.event_slug ?? undefined
+}
+
+function isMainMarketTitle(title: string): boolean {
+  const normalized = title.toLowerCase()
+  if (normalized.includes('spread:')) return true
+  if (normalized.includes('o/u') || normalized.includes('over/under')) return true
+  return /\bvs\.?\b|\bvs\b|\bat\b|@/i.test(title)
+}
+
+function mapSportToTag(sport: GammaSport): string | undefined {
+  const candidates = [sport.slug, sport.name, sport.short_name].filter(Boolean) as string[]
+  const value = candidates.join(' ').toLowerCase()
+
+  if (value.includes('nfl')) return 'nfl'
+  if (value.includes('nba')) return 'nba'
+  if (value.includes('mlb')) return 'mlb'
+  if (value.includes('nhl')) return 'nhl'
+  if (value.includes('premier league') || value.includes('epl')) return 'epl'
+  if (value.includes('soccer')) return 'soccer'
+  if (value.includes('college football') || value.includes('ncaaf') || value.includes('cfb') || value.includes('ncaa football')) {
+    return 'ncaaf'
+  }
+  if (value.includes('college basketball') || value.includes('ncaab') || value.includes('cbb') || value.includes('ncaa basketball')) {
+    return 'ncaab'
+  }
+
+  return undefined
+}
+
+function isMatchingSportTag(detectedTag: string | null | undefined, requestedTag: string): boolean {
+  if (!detectedTag) return false
+  if (detectedTag === requestedTag) return true
+  if (requestedTag === 'ncaaf' || requestedTag === 'cfb') {
+    return detectedTag === 'ncaaf' || detectedTag === 'cfb'
+  }
+  return false
 }
 
 /**
@@ -152,6 +318,76 @@ export interface SharpAnalysisResult {
   scoreDifferential: number
   sharpSideValueRatio?: number // 0-1, what % of total value is on the sharp side
   edgeRating: number // 0-100, single ranking score for prioritizing bets
+}
+
+export interface SharpAnalysisDebug {
+  inputs: {
+    conditionId: string
+    marketTitle: string
+    marketSlug?: string
+    eventSlug?: string
+    sportTag?: string
+    outcomes?: string[]
+    endDate?: string
+  }
+  prices: {
+    sideA: number
+    sideB: number
+  }
+  holders: {
+    sideA: number
+    sideB: number
+  }
+  tokenHolders?: Array<{
+    token: string
+    count: number
+  }>
+  topHolders: {
+    sideA: TopHolderPnlData[]
+    sideB: TopHolderPnlData[]
+  }
+  totals: {
+    sideAValue: number
+    sideBValue: number
+    totalMarketValue: number
+  }
+  rawScores: {
+    sideA: number
+    sideB: number
+  }
+  fadeBoosts: {
+    fromSideA: number
+    fromSideB: number
+  }
+  sharpScores: {
+    sideA: number
+    sideB: number
+  }
+  scoreDifferential: number
+  sharpSide: 'A' | 'B' | 'EVEN'
+  sharpSideValueRatio: number
+  pnlCoverage: {
+    sideA: number
+    sideB: number
+    min: number
+  }
+  concentration: {
+    top1Share: number
+    top3Share: number
+  }
+  warnings: string[]
+  confidence: {
+    base: 'HIGH' | 'MEDIUM' | 'LOW'
+    adjusted: 'HIGH' | 'MEDIUM' | 'LOW'
+  }
+  edgeRating: {
+    base: number
+    adjusted: number
+    penalty: number
+    diffScore: number
+    volumeBonus: number
+    qualityBonus: number
+  }
 }
 
 /**
@@ -230,16 +466,6 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
 
     // Use Gamma API with tag_id filtering for sports markets
     try {
-      // Map sport tags to tag IDs
-      const tagIdsToFetch = sportTags
-        .map(tag => SPORT_TAG_IDS[tag])
-        .filter((id): id is number => id !== undefined)
-      
-      if (tagIdsToFetch.length === 0) {
-        // Use all sport tag IDs if no specific sport selected
-        tagIdsToFetch.push(...ALL_SPORT_TAG_IDS)
-      }
-      
       // Date range: now to 24 hours from now
       const today = new Date()
       const endDateMin = today.toISOString().split('T')[0]
@@ -247,29 +473,103 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       const endDateMax = tomorrow.toISOString().split('T')[0]
       
       console.log(`[sharp-money] Fetching games from ${endDateMin} to ${endDateMax}`)
-      console.log(`[sharp-money] Fetching markets for tag IDs: ${tagIdsToFetch.join(', ')}`)
+      console.log(`[sharp-money] Fetching markets for sports: ${sportTags.join(', ')}`)
       
-      // Fetch markets for each sport tag (Gamma API only supports one tag_id at a time)
+      const seriesIdByTag = new Map<string, number>()
+      for (const [tag, seriesId] of Object.entries(SPORTS_SERIES_IDS)) {
+        seriesIdByTag.set(tag, seriesId)
+      }
+
+      // Fetch markets for each sport series via events
       const allSportsMarkets: GammaMarket[] = []
+      const tagStats: RuntimeMarketStats['tagStats'] = []
+      const eventStats: RuntimeMarketStats['eventStats'] = []
+      const eventDetails: RuntimeMarketStats['eventDetails'] = []
       
-      for (const tagId of tagIdsToFetch) { // Fetch all configured sports
-        const url = new URL('/markets', POLYMARKET_GAMMA_API)
-        url.searchParams.set('tag_id', tagId.toString())
-        url.searchParams.set('closed', 'false')
-        url.searchParams.set('limit', '100')
-        url.searchParams.set('end_date_min', endDateMin)
-        url.searchParams.set('end_date_max', endDateMax)
-        url.searchParams.set('volume_num_min', MIN_VOLUME_USD.toString())
-        
+      for (const tag of sportTags) {
+        const seriesId = seriesIdByTag.get(tag)
+        let tagMarkets: GammaMarket[] = []
+
+        if (!seriesId) {
+          console.warn(`[sharp-money] Missing series_id for ${tag}`)
+          tagStats.push({ tag, seriesId: -1, count: 0, markets: [] })
+          eventStats.push({ tag, seriesId: -1, eventCount: 0, marketCount: 0 })
+          continue
+        }
+
+        const eventsUrl = new URL('/events', POLYMARKET_GAMMA_API)
+        eventsUrl.searchParams.set('series_id', seriesId.toString())
+        eventsUrl.searchParams.set('tag_id', GAME_BETS_TAG_ID.toString())
+        eventsUrl.searchParams.set('active', 'true')
+        eventsUrl.searchParams.set('closed', 'false')
+        eventsUrl.searchParams.set('order', 'startTime')
+        eventsUrl.searchParams.set('ascending', 'true')
+
         try {
-          const response = await fetch(url)
+          const response = await fetch(eventsUrl)
           if (response.ok) {
-            const markets = (await response.json()) as GammaMarket[]
-            console.log(`[sharp-money] Tag ${tagId}: found ${markets.length} upcoming games`)
-            allSportsMarkets.push(...markets)
+            const events = (await response.json()) as GammaEvent[]
+            let expandedCount = 0
+            for (const event of events) {
+              const rawMarkets = event.markets ?? []
+              if (rawMarkets.length === 0) {
+                continue
+              }
+              const normalizedMarkets = rawMarkets.map((market) => ({
+                ...market,
+                event_slug: event.slug ?? market.event_slug,
+              }))
+              const filteredMarkets = normalizedMarkets.filter((market) => {
+                const descriptor = {
+                  title: market.question,
+                  slug: market.slug,
+                  eventSlug: getEventSlug(market),
+                }
+                const detectedTag = detectSportTag(descriptor)
+                return isSportsMarket(descriptor) && isMatchingSportTag(detectedTag, tag)
+              })
+              tagMarkets.push(...filteredMarkets)
+              expandedCount += filteredMarkets.length
+              eventDetails.push({
+                tag,
+                seriesId,
+                eventSlug: event.slug ?? 'unknown',
+                eventTitle: event.title ?? event.slug ?? 'unknown',
+                marketCount: filteredMarkets.length,
+                rawMarketCount: rawMarkets.length,
+              })
+            }
+            eventStats.push({
+              tag,
+              seriesId,
+              eventCount: events.length,
+              marketCount: expandedCount,
+            })
+            const filteredTagMarkets = tagMarkets.filter((market) => {
+              const marketVolume = market.volumeNum ?? market.volume ?? 0
+              return marketVolume >= MIN_VOLUME_USD
+                && isMainMarketTitle(market.question ?? '')
+            })
+            tagStats.push({
+              tag,
+              seriesId,
+              count: filteredTagMarkets.length,
+              markets: filteredTagMarkets.map((market) => ({
+                title: market.question ?? '',
+                volume: market.volumeNum ?? market.volume ?? 0,
+                eventSlug: getEventSlug(market),
+                slug: market.slug ?? undefined,
+              })),
+            })
+            allSportsMarkets.push(...tagMarkets)
+          } else {
+            tagStats.push({ tag, seriesId, count: 0, markets: [] })
+            eventStats.push({ tag, seriesId, eventCount: 0, marketCount: 0 })
           }
         } catch (err) {
-          console.warn(`[sharp-money] Failed to fetch tag ${tagId}:`, err)
+          console.warn(`[sharp-money] Failed to fetch events for ${tag}:`, err)
+          tagStats.push({ tag, seriesId, count: 0, markets: [] })
+          eventStats.push({ tag, seriesId, eventCount: 0, marketCount: 0 })
         }
         
         // Small delay between requests
@@ -277,12 +577,61 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       }
       
       console.log(`[sharp-money] Total sports markets found: ${allSportsMarkets.length}`)
+
+      const combinedMarkets = [...allSportsMarkets]
+      const combinedByConditionId = new Map<string, GammaMarket>()
+      for (const market of combinedMarkets) {
+        if (market.conditionId && !combinedByConditionId.has(market.conditionId)) {
+          combinedByConditionId.set(market.conditionId, market)
+        }
+      }
+      const uniqueCombinedMarkets = [...combinedByConditionId.values()]
+      const sportsOnlyMarkets = uniqueCombinedMarkets.filter((market) => {
+        const descriptor = {
+          title: market.question,
+          slug: market.slug,
+          eventSlug: getEventSlug(market),
+        }
+        const detectedTag = detectSportTag(descriptor)
+        return isSportsMarket(descriptor) && Boolean(detectedTag && TARGET_SPORT_TAGS.includes(detectedTag))
+      })
+      const combinedTagMap = new Map<string, GammaMarket[]>()
+      for (const market of uniqueCombinedMarkets) {
+        const tag = detectSportTag({
+          title: market.question,
+          slug: market.slug,
+          eventSlug: getEventSlug(market),
+        }) ?? 'unknown'
+        if (!combinedTagMap.has(tag)) combinedTagMap.set(tag, [])
+        combinedTagMap.get(tag)?.push(market)
+      }
+      
+      lastRuntimeMarketStats = {
+        fetchedAt: Math.floor(Date.now() / 1000),
+        tagStats,
+        combinedTagStats: [...combinedTagMap.entries()].map(([tag, markets]) => ({
+          tag,
+          count: markets.length,
+          markets: markets.map((market) => ({
+            title: market.question ?? '',
+            volume: market.volumeNum ?? market.volume ?? 0,
+            eventSlug: getEventSlug(market),
+            slug: market.slug ?? undefined,
+          })),
+        })),
+        filteredTagStats: [],
+        eventStats,
+        eventDetails,
+        expandedEventCount: eventStats.reduce((sum, entry) => sum + entry.eventCount, 0),
+        expandedMarketCount: eventStats.reduce((sum, entry) => sum + entry.marketCount, 0),
+        totalMarkets: sportsOnlyMarkets.length,
+      }
       
       // Filter to markets with condition IDs, dedupe, exclude started games, and within 24 hours
       const now = new Date()
       const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
       const seenIds = new Set<string>()
-      const sportsMarkets = allSportsMarkets.filter(market => {
+      const sportsMarkets = sportsOnlyMarkets.filter(market => {
         if (!market.conditionId || seenIds.has(market.conditionId)) return false
         if (market.endDate) {
           const gameTime = new Date(market.endDate)
@@ -291,9 +640,32 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
           // Exclude games more than 24 hours out
           if (gameTime > twentyFourHoursFromNow) return false
         }
+        const marketVolume = market.volumeNum ?? market.volume ?? 0
+        if (marketVolume < MIN_VOLUME_USD) return false
+        if (!isMainMarketTitle(market.question ?? '')) return false
         seenIds.add(market.conditionId)
         return true
       })
+      const filteredTagMap = new Map<string, GammaMarket[]>()
+      for (const market of sportsMarkets) {
+        const tag = detectSportTag({
+          title: market.question,
+          slug: market.slug,
+          eventSlug: getEventSlug(market),
+        }) ?? 'unknown'
+        if (!filteredTagMap.has(tag)) filteredTagMap.set(tag, [])
+        filteredTagMap.get(tag)?.push(market)
+      }
+      lastRuntimeMarketStats.filteredTagStats = [...filteredTagMap.entries()].map(([tag, markets]) => ({
+        tag,
+        count: markets.length,
+        markets: markets.map((market) => ({
+          title: market.question ?? '',
+          volume: market.volumeNum ?? market.volume ?? 0,
+          eventSlug: getEventSlug(market),
+          slug: market.slug ?? undefined,
+        })),
+      }))
       
       // Sort by volume (highest first) for consistent, quality-focused results
       const sorted = sportsMarkets.sort((a, b) => {
@@ -314,11 +686,11 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         conditionId: market.conditionId,
         title: enhanceMarketTitle(market.question ?? '', market.slug),
         slug: market.slug,
-        eventSlug: market.eventSlug,
+        eventSlug: getEventSlug(market),
         sportTag: detectSportTag({
           title: market.question,
           slug: market.slug,
-          eventSlug: market.eventSlug,
+          eventSlug: getEventSlug(market),
         }),
         volume: market.volumeNum ?? market.volume ?? 0,
         liquidity: market.liquidityNum ?? market.liquidity ?? 0,
@@ -568,6 +940,154 @@ export const fetchBatchMultiPeriodPnlFn = createServerFn({ method: 'POST' }).han
   },
 )
 
+export const fetchWalletClosedPositionsFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const payload = data as { walletAddress: string; limit?: number }
+    const walletAddress = payload.walletAddress
+
+    if (!walletAddress) {
+      return { positions: [] as Array<ClosedPosition & { stake: number }>, unitSize: null }
+    }
+
+    const limit = Math.min(Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1), 50)
+
+    try {
+      const url = new URL('/closed-positions', POLYMARKET_DATA_API)
+      url.searchParams.set('user', walletAddress)
+      url.searchParams.set('limit', String(limit))
+      url.searchParams.set('sortBy', 'TIMESTAMP')
+      url.searchParams.set('sortDirection', 'DESC')
+
+      const response = await fetch(url)
+      if (!response.ok) {
+        return { positions: [] as Array<ClosedPosition & { stake: number }>, unitSize: null }
+      }
+
+      const data = (await response.json()) as ClosedPosition[]
+      if (!Array.isArray(data) || data.length === 0) {
+        return { positions: [] as Array<ClosedPosition & { stake: number }>, unitSize: null }
+      }
+
+      const positions = data.map((position) => ({
+        ...position,
+        stake: (position.totalBought ?? 0) * (position.avgPrice ?? 0),
+      }))
+
+      const stakes = positions
+        .map((position) => position.stake)
+        .filter((value) => Number.isFinite(value) && value > 0)
+      const unitSize = stakes.length >= MIN_UNIT_SIZE_SAMPLES ? calculateMedianTopHalf(stakes) : null
+
+      return { positions, unitSize }
+    } catch {
+      return { positions: [] as Array<ClosedPosition & { stake: number }>, unitSize: null }
+    }
+  },
+)
+
+export const fetchWalletOpenPositionsFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const payload = data as { walletAddress: string; limit?: number }
+    const walletAddress = payload.walletAddress
+
+    if (!walletAddress) {
+      return { positions: [] as Array<OpenPosition & { stake: number }>, unitSize: null }
+    }
+
+    const limit = Math.min(Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1), 100)
+
+    try {
+      const url = new URL('/positions', POLYMARKET_DATA_API)
+      url.searchParams.set('user', walletAddress)
+      url.searchParams.set('sizeThreshold', '1')
+      url.searchParams.set('limit', String(limit))
+      url.searchParams.set('sortBy', 'INITIAL')
+      url.searchParams.set('sortDirection', 'DESC')
+
+      const response = await fetch(url)
+      if (!response.ok) {
+        return { positions: [] as Array<OpenPosition & { stake: number }>, unitSize: null }
+      }
+
+      const data = (await response.json()) as OpenPosition[]
+      if (!Array.isArray(data) || data.length === 0) {
+        return { positions: [] as Array<OpenPosition & { stake: number }>, unitSize: null }
+      }
+
+      const positions = data.map((position) => ({
+        ...position,
+        stake: position.initialValue ?? ((position.size ?? position.totalBought ?? 0) * (position.avgPrice ?? 0)),
+      }))
+
+      const stakes = positions
+        .map((position) => position.stake)
+        .filter((value) => Number.isFinite(value) && value > 0)
+      const unitSize = stakes.length >= MIN_UNIT_SIZE_SAMPLES ? calculateMedianTopHalf(stakes) : null
+
+      return { positions, unitSize }
+    } catch {
+      return { positions: [] as Array<OpenPosition & { stake: number }>, unitSize: null }
+    }
+  },
+)
+
+async function fetchOpenPositionStakes(walletAddress: string, limit: number): Promise<number[]> {
+  const url = new URL('/positions', POLYMARKET_DATA_API)
+  url.searchParams.set('user', walletAddress)
+  url.searchParams.set('sizeThreshold', '1')
+  url.searchParams.set('limit', String(limit))
+  url.searchParams.set('sortBy', 'INITIAL')
+  url.searchParams.set('sortDirection', 'DESC')
+
+  const response = await fetch(url)
+  if (!response.ok) return []
+
+  const data = (await response.json()) as OpenPosition[]
+  if (!Array.isArray(data) || data.length === 0) return []
+
+  return data
+    .map((position) =>
+      position.initialValue ?? ((position.size ?? position.totalBought ?? 0) * (position.avgPrice ?? 0)),
+    )
+    .filter((value) => Number.isFinite(value) && value > 0)
+}
+
+async function fetchClosedPositionStakes(walletAddress: string, limit: number): Promise<number[]> {
+  const url = new URL('/closed-positions', POLYMARKET_DATA_API)
+  url.searchParams.set('user', walletAddress)
+  url.searchParams.set('limit', String(limit))
+  url.searchParams.set('sortBy', 'TIMESTAMP')
+  url.searchParams.set('sortDirection', 'DESC')
+
+  const response = await fetch(url)
+  if (!response.ok) return []
+
+  const data = (await response.json()) as ClosedPosition[]
+  if (!Array.isArray(data) || data.length === 0) return []
+
+  return data
+    .map((position) => (position.totalBought ?? 0) * (position.avgPrice ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+}
+
+async function fetchWalletUnitSize(walletAddress: string): Promise<number | null> {
+  try {
+    const openStakes = await fetchOpenPositionStakes(walletAddress, UNIT_SIZE_POSITION_LIMIT)
+    if (openStakes.length >= MIN_UNIT_SIZE_SAMPLES) {
+      return calculateMedianTopHalf(openStakes)
+    }
+
+    const closedStakes = await fetchClosedPositionStakes(walletAddress, UNIT_SIZE_SAMPLE_LIMIT)
+    if (closedStakes.length < MIN_UNIT_SIZE_SAMPLES) {
+      return null
+    }
+
+    return calculateMedianTopHalf(closedStakes)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Calculate momentum weight based on recent PnL performance
  * Higher weight = hotter streak
@@ -612,28 +1132,72 @@ function calculateMomentumWeight(pnl: MultiPeriodPnl): number {
  * Calculate PnL tier weight based on all-time profitability
  * Higher weight = more profitable trader
  */
-function calculatePnlTierWeight(pnlAll: number | null): number {
-  if (pnlAll === null) {
+function calculatePnlTierWeight(pnlAll: number | null, pnlAllUnits?: number | null): number {
+  const useUnits = pnlAllUnits !== null && pnlAllUnits !== undefined
+  const value = useUnits ? pnlAllUnits : pnlAll
+
+  if (value === null || value === undefined) {
     return 1.0
   }
 
+  if (useUnits) {
+    // Unit-based tiers
+    if (value >= 30) {
+      return 2.0
+    }
+
+    if (value >= 15) {
+      return 1.7
+    }
+
+    if (value >= 7) {
+      return 1.4
+    }
+
+    if (value >= 3) {
+      return 1.2
+    }
+
+    if (value >= 0) {
+      return 1.0
+    }
+
+    if (value >= -3) {
+      return 0.9
+    }
+
+    if (value >= -7) {
+      return 0.8
+    }
+
+    if (value >= -15) {
+      return 0.7
+    }
+
+    if (value >= -30) {
+      return 0.6
+    }
+
+    return 0.5
+  }
+
   // Whale sharp: >$100k profit
-  if (pnlAll >= 100_000) {
+  if (value >= 100_000) {
     return 2.0
   }
 
   // Solid sharp: $10k-$100k profit
-  if (pnlAll >= 10_000) {
+  if (value >= 10_000) {
     return 1.5
   }
 
   // Minor positive: $0-$10k profit
-  if (pnlAll >= 0) {
+  if (value >= 0) {
     return 1.0
   }
 
   // Losing trader: negative PnL (potential fade signal)
-  if (pnlAll >= -10_000) {
+  if (value >= -10_000) {
     return 0.8
   }
 
@@ -651,24 +1215,37 @@ function calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): nu
     return 1.0
   }
 
+  const effectiveTotalValue = holders.reduce(
+    (sum, holder) => sum + holder.amount * (holder.stakeUnitWeight ?? 1),
+    0,
+  )
+
   let fadeBoostSum = 0
 
   for (const holder of holders) {
-    const pnlAll = holder.pnlAll ?? 0
+    const hasUnitPnl = holder.pnlAllUnits !== null && holder.pnlAllUnits !== undefined
+    const pnlAll = hasUnitPnl ? holder.pnlAllUnits ?? 0 : holder.pnlAll ?? 0
     const isOnColdStreak = holder.momentumWeight <= 0.5 // Day + Week negative
 
     // Only count as anti-sharp if big loser AND on cold streak
-    if (pnlAll < -50_000 && isOnColdStreak) {
-      const positionWeight = holder.amount / totalValue
+    const mildLoss = hasUnitPnl ? -7 : -50_000
+    const moderateLoss = hasUnitPnl ? -15 : -100_000
+    const severeLoss = hasUnitPnl ? -30 : -250_000
+
+    if (pnlAll < mildLoss && isOnColdStreak) {
+      const positionWeight =
+        effectiveTotalValue > 0
+          ? (holder.amount * (holder.stakeUnitWeight ?? 1)) / effectiveTotalValue
+          : holder.amount / totalValue
 
       // Fade boost based on how much they've lost
       let fadeMultiplier = 0
-      if (pnlAll < -250_000) {
-        fadeMultiplier = 0.15 // Severe loser: 15% boost to other side
-      } else if (pnlAll < -100_000) {
-        fadeMultiplier = 0.10 // Moderate loser: 10% boost
+      if (pnlAll < severeLoss) {
+        fadeMultiplier = 0.18 // Severe loser: 18% boost to other side
+      } else if (pnlAll < moderateLoss) {
+        fadeMultiplier = 0.12 // Moderate loser: 12% boost
       } else {
-        fadeMultiplier = 0.05 // Mild loser: 5% boost
+        fadeMultiplier = 0.07 // Mild loser: 7% boost
       }
 
       // Weight by their position size (bigger position = stronger fade signal)
@@ -676,8 +1253,8 @@ function calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): nu
     }
   }
 
-  // Cap total fade boost at 20%
-  return 1.0 + Math.min(fadeBoostSum, 0.20)
+  // Cap total fade boost at 30%
+  return 1.0 + Math.min(fadeBoostSum, 0.30)
 }
 
 /**
@@ -689,11 +1266,19 @@ function calculateSharpScore(holders: TopHolderPnlData[], totalValue: number): n
     return 50 // Neutral score
   }
 
+  const effectiveTotalValue = holders.reduce(
+    (sum, holder) => sum + holder.amount * (holder.stakeUnitWeight ?? 1),
+    0,
+  )
+
   let weightedSum = 0
 
   for (const holder of holders) {
-    const positionWeight = holder.amount / totalValue
-    const combinedWeight = holder.momentumWeight * holder.pnlTierWeight
+    const positionWeight =
+      effectiveTotalValue > 0
+        ? (holder.amount * (holder.stakeUnitWeight ?? 1)) / effectiveTotalValue
+        : holder.amount / totalValue
+    const combinedWeight = holder.momentumWeight * holder.pnlTierWeight * (holder.stakeUnitWeight ?? 1)
     weightedSum += positionWeight * combinedWeight
   }
 
@@ -749,11 +1334,16 @@ function determineConfidence(
  * Secondary: Holder quality based on recent + long-term PnL performance
  * Minimal: Volume (small bonus, mainly used for filtering - volume already indicates big holders)
  */
-function calculateEdgeRating(
+function calculateEdgeRatingBreakdown(
   scoreDifferential: number,
   sharpSideTopHolders: TopHolderPnlData[],
   totalVolume: number,
-): number {
+): {
+  diffScore: number
+  volumeBonus: number
+  qualityBonus: number
+  total: number
+} {
   // Base rating from score differential using logarithmic curve (max 70 points)
   // Logarithmic scaling: early diffs matter more, higher diffs have diminishing returns
   // Formula: 70 * (1 - e^(-diff/25)) gives us:
@@ -775,7 +1365,10 @@ function calculateEdgeRating(
   let qualityBonus = 0
   if (sharpSideTopHolders.length > 0) {
     // Calculate total position value for weighting
-    const totalPositionValue = sharpSideTopHolders.reduce((sum, h) => sum + h.amount, 0)
+    const totalPositionValue = sharpSideTopHolders.reduce(
+      (sum, h) => sum + h.amount * (h.stakeUnitWeight ?? 1),
+      0,
+    )
     
     if (totalPositionValue > 0) {
       let weightedQualitySum = 0
@@ -798,7 +1391,7 @@ function calculateEdgeRating(
         const holderQuality = (recentPnL * 0.4) + (longTermPnL * 0.6)
         
         // Weight by position size (larger positions = more influence)
-        const positionWeight = holder.amount / totalPositionValue
+        const positionWeight = (holder.amount * (holder.stakeUnitWeight ?? 1)) / totalPositionValue
         weightedQualitySum += holderQuality * positionWeight
       }
       
@@ -820,7 +1413,40 @@ function calculateEdgeRating(
   }
   
   const total = diffScore + volumeBonus + qualityBonus
-  return Math.round(Math.max(0, Math.min(100, total)))
+  return { diffScore, volumeBonus, qualityBonus, total }
+}
+
+function getPnlCoverage(holders: TopHolderPnlData[]): number {
+  if (holders.length === 0) return 0
+  const withPnl = holders.filter((holder) => {
+    return holder.pnlDay !== null
+      || holder.pnlWeek !== null
+      || holder.pnlMonth !== null
+      || holder.pnlAll !== null
+  }).length
+  return withPnl / holders.length
+}
+
+function downgradeConfidence(confidence: 'HIGH' | 'MEDIUM' | 'LOW'): 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (confidence === 'HIGH') return 'MEDIUM'
+  if (confidence === 'MEDIUM') return 'LOW'
+  return 'LOW'
+}
+
+function getConcentration(
+  holders: TopHolderPnlData[],
+  totalValue: number,
+): { top1Share: number; top3Share: number } {
+  if (holders.length === 0 || totalValue <= 0) {
+    return { top1Share: 0, top3Share: 0 }
+  }
+  const sorted = holders.slice().sort((a, b) => b.amount - a.amount)
+  const top1 = sorted[0]?.amount ?? 0
+  const top3 = sorted.slice(0, 3).reduce((sum, holder) => sum + holder.amount, 0)
+  return {
+    top1Share: top1 / totalValue,
+    top3Share: top3 / totalValue,
+  }
 }
 
 /**
@@ -838,9 +1464,10 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       sportTag?: string
       outcomes?: string[]
       endDate?: string
+      includeDebug?: boolean
     }
 
-    const { conditionId, marketTitle, marketSlug, eventSlug, sportTag, outcomes, endDate } = payload
+    const { conditionId, marketTitle, marketSlug, eventSlug, sportTag, outcomes, endDate, includeDebug } = payload
     console.log('[sharp-money] Analyzing:', { conditionId, marketTitle })
 
     if (!conditionId) {
@@ -853,7 +1480,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       
       const holdersUrl = new URL('/holders', POLYMARKET_DATA_API)
       holdersUrl.searchParams.set('market', conditionId)
-      holdersUrl.searchParams.set('limit', '100') // High limit to ensure we get holders from both sides
+      holdersUrl.searchParams.set('limit', '200') // Higher limit to reduce side imbalance after grouping
       holdersUrl.searchParams.set('minBalance', '1')
 
       // Use CLOB API for accurate prices (Gamma API condition_id lookup is unreliable)
@@ -883,7 +1510,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         }
       }
 
-      const holdersData = (await holdersResponse.json()) as Array<{
+      let holdersData = (await holdersResponse.json()) as Array<{
         token: string
         holders: Array<{
           proxyWallet: string
@@ -899,38 +1526,49 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       if (!holdersData || holdersData.length === 0) {
         return { analysis: null, error: 'No holders data' }
       }
-      
+
+      // Re-fetch holders per token to avoid market-level limit skewing sides
+      const tokenIds = holdersData.map((tokenData) => tokenData.token).filter(Boolean)
+      let tokenHoldersCounts: Array<{ token: string; count: number }> | undefined
+      if (tokenIds.length > 0) {
+        const tokenHoldersResults = await Promise.all(
+          tokenIds.map(async (tokenId) => {
+            try {
+              const tokenUrl = new URL('/holders', POLYMARKET_DATA_API)
+              tokenUrl.searchParams.set('token', tokenId)
+              tokenUrl.searchParams.set('limit', '100')
+              tokenUrl.searchParams.set('minBalance', '1')
+              const tokenResponse = await fetch(tokenUrl)
+              if (!tokenResponse.ok) return null
+              const tokenResponseData = await tokenResponse.json() as { holders?: Array<any> }
+              if (!tokenResponseData.holders || tokenResponseData.holders.length === 0) return null
+              return { token: tokenId, holders: tokenResponseData.holders }
+            } catch (error) {
+              console.warn(`[sharp-money] Failed to fetch holders for token ${tokenId}:`, error)
+              return null
+            }
+          }),
+        )
+
+        const filteredResults = tokenHoldersResults.filter(
+          (result): result is { token: string; holders: Array<any> } => Boolean(result),
+        )
+
+        if (filteredResults.length > 0) {
+          holdersData = filteredResults
+          tokenHoldersCounts = filteredResults.map((result) => ({
+            token: result.token,
+            count: result.holders.length,
+          }))
+          console.log(`[sharp-money] Using per-token holders: ${filteredResults.length} tokens`)
+        }
+      }
+
       // The API returns holders grouped by token, but limit applies to total across all tokens
-      // Sort holders within each token group by amount (descending) and take top 20 per token
+      // Sort holders within each token group by amount (descending) and take top 50 per token
       for (const tokenData of holdersData) {
         tokenData.holders.sort((a, b) => b.amount - a.amount)
-        tokenData.holders = tokenData.holders.slice(0, 20) // Take top 20 per token
-      }
-      
-      // If any token has fewer than 10 holders, try to fetch more for that specific token
-      for (const tokenData of holdersData) {
-        if (tokenData.holders.length < 10 && tokenData.token) {
-          try {
-            const tokenUrl = new URL('/holders', POLYMARKET_DATA_API)
-            tokenUrl.searchParams.set('token', tokenData.token)
-            tokenUrl.searchParams.set('limit', '20')
-            tokenUrl.searchParams.set('minBalance', '1')
-            
-            const tokenResponse = await fetch(tokenUrl)
-            if (tokenResponse.ok) {
-              const tokenResponseData = await tokenResponse.json() as { holders?: Array<any> }
-              if (tokenResponseData.holders && tokenResponseData.holders.length > tokenData.holders.length) {
-                // Merge and sort, keeping top 20
-                const allHolders = [...tokenData.holders, ...tokenResponseData.holders]
-                allHolders.sort((a, b) => b.amount - a.amount)
-                tokenData.holders = allHolders.slice(0, 20)
-                console.log(`[sharp-money] Fetched additional holders for token ${tokenData.token}: ${tokenData.holders.length} total`)
-              }
-            }
-          } catch (error) {
-            console.warn(`[sharp-money] Failed to fetch additional holders for token ${tokenData.token}:`, error)
-          }
-        }
+        tokenData.holders = tokenData.holders.slice(0, 50) // Take top 50 per token
       }
 
       // Step 2: Group holders by outcomeIndex (0 or 1) for consistent assignment
@@ -1016,9 +1654,8 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
 
       // Fetch uncached wallets in batches
       // We have 2 subrequests used for market data (holders + CLOB)
-      // So we have ~48 subrequests left for PnL = 12 wallets × 4 periods
-      // But we want all 40 wallets, so we'll fetch what we can and cache the rest for next time
-      const maxToFetch = Math.min(walletsToFetch.length, 12) // 12 wallets = 48 subrequests
+      // Leave headroom for unit-size fetches (1 per wallet) under the 50 subrequest limit
+      const maxToFetch = Math.min(walletsToFetch.length, 9) // 9 wallets = 36 subrequests
       const batchSize = 3 // Process 3 wallets at a time (12 subrequests per batch)
       
       for (let i = 0; i < maxToFetch; i += batchSize) {
@@ -1099,6 +1736,57 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
 
       console.log(`[sharp-money] PnL fetch: ${maxToFetch} fetched, ${cachedWallets.size} from cache, ${uniqueWallets.length - maxToFetch - cachedWallets.size} will be cached next refresh`)
 
+      const unitSizeByWallet: Record<string, number | null> = {}
+      const unitSizeCacheExpiry = Math.floor(Date.now() / 1000) - UNIT_SIZE_CACHE_TTL_SEC
+      const cachedUnitSizeRows = await all<{
+        wallet_address: string
+        unit_size: number | null
+      }>(
+        db,
+        `SELECT wallet_address, unit_size FROM wallet_unit_size_cache WHERE wallet_address IN (${uniqueWallets.map(() => '?').join(',')}) AND fetched_at > ?`,
+        ...uniqueWallets,
+        unitSizeCacheExpiry,
+      )
+
+      const cachedUnitWallets = new Set<string>()
+      for (const row of cachedUnitSizeRows) {
+        cachedUnitWallets.add(row.wallet_address)
+        unitSizeByWallet[row.wallet_address] = row.unit_size ?? null
+      }
+
+      const walletsWithPnlAll = uniqueWallets.filter((wallet) => {
+        const pnl = pnlResults[wallet]
+        return pnl?.all !== null && pnl?.all !== undefined
+      })
+
+      const unitSizeBudget = Math.max(0, MAX_SUBREQUESTS - 2 - (maxToFetch * 4))
+      const walletsMissingUnitSize = walletsWithPnlAll.filter((wallet) => !cachedUnitWallets.has(wallet))
+      const walletsToFetchUnitSize = walletsMissingUnitSize.slice(0, unitSizeBudget)
+      const unitBatchSize = 4
+
+      for (let i = 0; i < walletsToFetchUnitSize.length; i += unitBatchSize) {
+        const batch = walletsToFetchUnitSize.slice(i, i + unitBatchSize)
+
+        await Promise.all(
+          batch.map(async (wallet) => {
+            const unitSize = await fetchWalletUnitSize(wallet)
+            await run(
+              db,
+              `INSERT OR REPLACE INTO wallet_unit_size_cache (wallet_address, unit_size, fetched_at)
+               VALUES (?, ?, ?)`,
+              wallet,
+              unitSize,
+              Math.floor(Date.now() / 1000),
+            )
+            unitSizeByWallet[wallet] = unitSize
+          }),
+        )
+
+        if (i + unitBatchSize < walletsToFetchUnitSize.length) {
+          await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+      }
+
       // Step 4: Calculate weights and build top holder data (top 20 for scoring, display top 5)
       const processHolders = (holders: HolderWithPnl[]): TopHolderPnlData[] => {
         return holders.slice(0, 20).map((holder) => {
@@ -1110,7 +1798,11 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
           }
 
           const momentumWeight = calculateMomentumWeight(pnl)
-          const pnlTierWeight = calculatePnlTierWeight(pnl.all)
+          const unitSize = unitSizeByWallet[holder.proxyWallet] ?? null
+          const pnlAllUnits = normalizePnl(pnl.all, unitSize)
+          const pnlTierWeight = calculatePnlTierWeight(pnl.all, pnlAllUnits)
+          const stakeUnits = normalizePnl(holder.amount, unitSize)
+          const stakeUnitWeight = calculateStakeUnitWeight(stakeUnits)
 
           return {
             proxyWallet: holder.proxyWallet,
@@ -1122,6 +1814,10 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             pnlWeek: pnl.week,
             pnlMonth: pnl.month,
             pnlAll: pnl.all,
+            pnlAllUnits,
+            unitSize,
+            stakeUnits,
+            stakeUnitWeight,
             volume: pnl.volume,
             momentumWeight,
             pnlTierWeight,
@@ -1197,13 +1893,166 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         sharpSideValueRatio,
       )
 
-      // Calculate Edge Rating for ranking
+      const pnlCoverage = Math.min(
+        getPnlCoverage(sideATopHolders),
+        getPnlCoverage(sideBTopHolders),
+      )
+      let adjustedConfidence = confidence
+      let edgePenalty = 1.0
+      const warnings: string[] = []
+
+      if (pnlCoverage < 0.4) {
+        adjustedConfidence = 'LOW'
+        edgePenalty = 0.7
+        warnings.push('low_pnl_coverage')
+      } else if (pnlCoverage < 0.6) {
+        adjustedConfidence = downgradeConfidence(adjustedConfidence)
+        edgePenalty = 0.85
+        warnings.push('low_pnl_coverage')
+      }
+
+      const minHolderCount = Math.min(sideAHolders.length, sideBHolders.length)
+      if (minHolderCount < 10) {
+        adjustedConfidence = 'LOW'
+        edgePenalty *= 0.75
+        warnings.push('low_holder_count')
+      } else if (minHolderCount < 15) {
+        adjustedConfidence = downgradeConfidence(adjustedConfidence)
+        edgePenalty *= 0.9
+        warnings.push('low_holder_count')
+      }
+
+      if (sharpSideValueRatio < 0.25) {
+        adjustedConfidence = 'LOW'
+        edgePenalty *= 0.85
+        warnings.push('low_conviction')
+      } else if (sharpSideValueRatio < 0.35) {
+        adjustedConfidence = downgradeConfidence(adjustedConfidence)
+        edgePenalty *= 0.9
+        warnings.push('low_conviction')
+      }
+
       const sharpSideTopHolders = sharpSide === 'A' ? sideATopHolders : sideBTopHolders
-      const edgeRating = calculateEdgeRating(
+      const sharpSideTotalValue = sharpSide === 'A' ? sideATotalValue : sideBTotalValue
+      const concentration = getConcentration(sharpSideTopHolders, sharpSideTotalValue)
+      if (concentration.top1Share >= 0.6 || concentration.top3Share >= 0.8) {
+        adjustedConfidence = downgradeConfidence(adjustedConfidence)
+        edgePenalty *= 0.85
+        warnings.push('high_concentration')
+      }
+
+      if (edgePenalty < 1.0) {
+        console.warn(
+          `[sharp-money] Low PnL coverage (${(pnlCoverage * 100).toFixed(0)}%) for ${conditionId}. ` +
+          `Confidence ${confidence} -> ${adjustedConfidence}. Edge penalty ${edgePenalty}.`,
+        )
+      }
+
+      const edgeBreakdown = calculateEdgeRatingBreakdown(
         scoreDifferential,
         sharpSideTopHolders,
         totalMarketValue,
       )
+
+      // Calculate Edge Rating for ranking
+      const baseEdgeRating = Math.round(Math.max(0, Math.min(100, edgeBreakdown.total)))
+      const edgeRating = Math.max(0, Math.min(100, Math.round(baseEdgeRating * edgePenalty)))
+
+      if (includeDebug) {
+        const debug: SharpAnalysisDebug = {
+          inputs: {
+            conditionId,
+            marketTitle,
+            marketSlug,
+            eventSlug,
+            sportTag,
+            outcomes,
+            endDate,
+          },
+          prices: {
+            sideA: prices[0],
+            sideB: prices[1],
+          },
+          holders: {
+            sideA: sideAHolders.length,
+            sideB: sideBHolders.length,
+          },
+          tokenHolders: tokenHoldersCounts,
+          topHolders: {
+            sideA: sideATopHolders,
+            sideB: sideBTopHolders,
+          },
+          totals: {
+            sideAValue: sideATotalValue,
+            sideBValue: sideBTotalValue,
+            totalMarketValue,
+          },
+          rawScores: {
+            sideA: sideARawScore,
+            sideB: sideBRawScore,
+          },
+          fadeBoosts: {
+            fromSideA: fadeBoostFromSideA,
+            fromSideB: fadeBoostFromSideB,
+          },
+          sharpScores: {
+            sideA: sideASharpScore,
+            sideB: sideBSharpScore,
+          },
+          scoreDifferential,
+          sharpSide,
+          sharpSideValueRatio,
+          pnlCoverage: {
+            sideA: getPnlCoverage(sideATopHolders),
+            sideB: getPnlCoverage(sideBTopHolders),
+            min: pnlCoverage,
+          },
+          concentration,
+          warnings,
+          confidence: {
+            base: confidence,
+            adjusted: adjustedConfidence,
+          },
+          edgeRating: {
+            base: baseEdgeRating,
+            adjusted: edgeRating,
+            penalty: edgePenalty,
+            diffScore: edgeBreakdown.diffScore,
+            volumeBonus: edgeBreakdown.volumeBonus,
+            qualityBonus: edgeBreakdown.qualityBonus,
+          },
+        }
+
+        const analysis: SharpAnalysisResult = {
+          conditionId,
+          marketTitle,
+          marketSlug,
+          eventSlug,
+          sportTag,
+          eventTime: endDate,
+          sideA: {
+            label: sideALabel,
+            totalValue: sideATotalValue,
+            sharpScore: sideASharpScore,
+            holderCount: sideAHolders.length,
+            topHolders: sideATopHolders,
+          },
+          sideB: {
+            label: sideBLabel,
+            totalValue: sideBTotalValue,
+            sharpScore: sideBSharpScore,
+            holderCount: sideBHolders.length,
+            topHolders: sideBTopHolders,
+          },
+          sharpSide,
+          confidence: adjustedConfidence,
+          scoreDifferential,
+          sharpSideValueRatio,
+          edgeRating,
+        }
+
+        return { analysis, debug, allWalletAddresses: uniqueWallets }
+      }
 
       const analysis: SharpAnalysisResult = {
         conditionId,
@@ -1217,17 +2066,17 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
           totalValue: sideATotalValue,
           sharpScore: sideASharpScore,
           holderCount: sideAHolders.length,
-          topHolders: sideATopHolders.slice(0, 5),
+          topHolders: sideATopHolders,
         },
         sideB: {
           label: sideBLabel,
           totalValue: sideBTotalValue,
           sharpScore: sideBSharpScore,
           holderCount: sideBHolders.length,
-          topHolders: sideBTopHolders.slice(0, 5),
+          topHolders: sideBTopHolders,
         },
         sharpSide,
-        confidence,
+        confidence: adjustedConfidence,
         scoreDifferential,
         sharpSideValueRatio,
         edgeRating,
@@ -1259,6 +2108,23 @@ export const getSharpMoneyCacheFn = createServerFn({ method: 'POST' }).handler(
 )
 
 /**
+ * Get a single cache entry for debug
+ */
+export const getSharpMoneyCacheEntryFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context, data }) => {
+    const payload = data as { conditionId: string }
+    const db = getDb(context)
+
+    if (!payload.conditionId) {
+      return { entry: null, error: 'No condition ID provided' }
+    }
+
+    const entry = await getSharpMoneyCacheByConditionId(db, payload.conditionId)
+    return { entry }
+  },
+)
+
+/**
  * Get cache stats
  */
 export const getSharpMoneyCacheStatsFn = createServerFn({ method: 'POST' }).handler(
@@ -1270,12 +2136,25 @@ export const getSharpMoneyCacheStatsFn = createServerFn({ method: 'POST' }).hand
 )
 
 /**
+ * Get runtime market fetch stats (for /runtime)
+ */
+export const getRuntimeMarketStatsFn = createServerFn({ method: 'POST' }).handler(async () => {
+  if (!lastRuntimeMarketStats) {
+    return { stats: null }
+  }
+
+  return { stats: lastRuntimeMarketStats }
+})
+
+/**
  * Clear all cached sharp money data
  */
 export const clearSharpMoneyCacheFn = createServerFn({ method: 'POST' }).handler(
   async ({ context }) => {
     const db = getDb(context)
     await clearAllSharpMoneyCache(db)
+    await run(db, `DELETE FROM wallet_unit_size_cache`)
+    await run(db, `DELETE FROM wallet_pnl_cache`)
     console.log('[sharp-money] Cache cleared')
     return { success: true }
   },
@@ -1354,5 +2233,56 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
     await upsertSharpMoneyCache(db, cacheInput)
 
     return { success: true, analysis, allWalletAddresses }
+  },
+)
+
+/**
+ * Run sharp analysis with debug details (for /debug)
+ */
+export const analyzeMarketSharpnessDebugFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context, data }) => {
+    const payload = data as {
+      conditionId: string
+      marketTitle?: string
+      marketSlug?: string
+      eventSlug?: string
+      sportTag?: string
+      outcomes?: string[]
+      endDate?: string
+      useCache?: boolean
+    }
+
+    if (!payload.conditionId) {
+      return { analysis: null, debug: null, error: 'No condition ID provided' }
+    }
+
+    const db = getDb(context)
+    const cacheEntry = payload.useCache
+      ? await getSharpMoneyCacheByConditionId(db, payload.conditionId)
+      : null
+
+    const marketTitle = payload.marketTitle ?? cacheEntry?.marketTitle
+    if (!marketTitle) {
+      return { analysis: null, debug: null, error: 'Missing market title' }
+    }
+
+    const analysisPayload = {
+      conditionId: payload.conditionId,
+      marketTitle,
+      marketSlug: payload.marketSlug ?? cacheEntry?.marketSlug,
+      eventSlug: payload.eventSlug ?? cacheEntry?.eventSlug,
+      sportTag: payload.sportTag ?? cacheEntry?.sportTag,
+      outcomes: payload.outcomes,
+      endDate: payload.endDate ?? cacheEntry?.eventTime,
+      includeDebug: true,
+    }
+
+    const { analysis, debug, error } = await analyzeMarketSharpnessFn({ context, data: analysisPayload })
+
+    if (!analysis || !debug) {
+      return { analysis: null, debug: null, error: error ?? 'Analysis failed' }
+    }
+
+    return { analysis, debug }
   },
 )

@@ -15,6 +15,10 @@ export interface TopHolderPnlData {
   pnlWeek?: number | null
   pnlMonth?: number | null
   pnlAll?: number | null
+  pnlAllUnits?: number | null
+  unitSize?: number | null
+  stakeUnits?: number | null
+  stakeUnitWeight?: number | null
   volume?: number
   momentumWeight: number
   pnlTierWeight: number

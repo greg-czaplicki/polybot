@@ -44,6 +44,7 @@ const SPORT_FILTERS = [
   { value: 'mlb', label: 'MLB' },
   { value: 'nhl', label: 'NHL' },
   { value: 'epl', label: 'Premier League' },
+  // Soccer removed; EPL only for now
 ]
 
 const USD_FORMATTER = new Intl.NumberFormat('en-US', {
@@ -59,6 +60,11 @@ const USD_COMPACT_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 1,
 })
 
+const UNIT_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
 function formatUsdCompact(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return '$0'
@@ -67,6 +73,20 @@ function formatUsdCompact(value: number | null | undefined): string {
     return USD_COMPACT_FORMATTER.format(value)
   }
   return USD_FORMATTER.format(value)
+}
+
+function formatUnits(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null
+  }
+  return UNIT_FORMATTER.format(value)
+}
+
+function describeUnitScale(pnlUnits: number): 'small' | 'avg' | 'large' {
+  const magnitude = Math.abs(pnlUnits)
+  if (magnitude >= 20) return 'large'
+  if (magnitude >= 5) return 'avg'
+  return 'small'
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -152,6 +172,9 @@ function SharpMoneyPage() {
   const [entries, setEntries] = useState<SharpMoneyCacheEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshStatus, setRefreshStatus] = useState<string | null>(null)
+  const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null)
+  const [refreshLog, setRefreshLog] = useState<string[]>([])
   const [selectedSport, setSelectedSport] = useState('all')
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set())
   const [cacheStats, setCacheStats] = useState<{
@@ -187,104 +210,21 @@ function SharpMoneyPage() {
     loadCache()
   }, [loadCache])
 
-  // Discover new events (always fetches from API and analyzes new markets)
-  const handleDiscoverNew = async () => {
-    setIsRefreshing(true)
-    try {
-      console.log('[sharp] Discovering new events...')
-      const { markets } = await fetchTrendingSportsMarketsFn({
-        data: {
-          limit: 50,
-          sportTags: selectedSport === 'all' ? undefined : [selectedSport],
-        },
-      })
-
-      if (markets && markets.length > 0) {
-        // Get existing condition IDs to avoid re-analyzing
-        const existingConditionIds = new Set(entries.map(e => e.conditionId))
-        
-        // Filter to only new markets
-        const newMarkets = markets.filter(m => !existingConditionIds.has(m.conditionId))
-        
-        if (newMarkets.length > 0) {
-          console.log(`[sharp] Found ${newMarkets.length} new events to analyze`)
-          
-          for (const market of newMarkets) {
-            try {
-              const result = await refreshMarketSharpnessFn({
-                data: {
-                  conditionId: market.conditionId,
-                  marketTitle: market.title,
-                  marketSlug: market.slug,
-                  eventSlug: market.eventSlug,
-                  sportTag: market.sportTag ?? undefined,
-                  outcomes: market.outcomes,
-                  endDate: market.endDate,
-                },
-              })
-
-              // Fetch PnL for all wallets (each call has its own 50 subrequest budget)
-              if (result?.allWalletAddresses && result.allWalletAddresses.length > 0) {
-                const wallets = result.allWalletAddresses
-                const walletsPerCall = 10 // Each call fetches 10 wallets (40 subrequests)
-                
-                // Fetch PnL in batches (each batch is a separate server function call)
-                for (let i = 0; i < wallets.length; i += walletsPerCall) {
-                  const batch = wallets.slice(i, i + walletsPerCall)
-                  try {
-                    await fetchBatchMultiPeriodPnlFn({ data: { walletAddresses: batch } })
-                  } catch (error) {
-                    console.error('Failed to fetch PnL batch:', error)
-                  }
-                  // Small delay between batches
-                  if (i + walletsPerCall < wallets.length) {
-                    await new Promise((resolve) => setTimeout(resolve, 100))
-                  }
-                }
-
-                // Re-run analysis now that all PnL data is cached
-                await refreshMarketSharpnessFn({
-                  data: {
-                    conditionId: market.conditionId,
-                    marketTitle: market.title,
-                    marketSlug: market.slug,
-                    eventSlug: market.eventSlug,
-                    sportTag: market.sportTag ?? undefined,
-                    outcomes: market.outcomes,
-                    endDate: market.endDate,
-                  },
-                })
-              }
-            } catch (error) {
-              console.error('Failed to refresh market:', market.title, error)
-            }
-            await new Promise((resolve) => setTimeout(resolve, 500))
-          }
-        } else {
-          console.log('[sharp] No new events found')
-        }
-      }
-
-      // Reload cache
-      await loadCache()
-    } catch (error) {
-      console.error('Failed to discover new events:', error)
-    } finally {
-      setIsRefreshing(false)
-    }
-  }
-
   // Manual refresh - behavior depends on cache state:
   // - If cache is empty: full refresh - fetch and analyze all markets
   // - If cache has data: partial refresh - only re-fetch data for imminent cached events
   const handleRefresh = async () => {
     setIsRefreshing(true)
+    setRefreshStatus('Preparing refresh...')
+    setRefreshProgress(null)
+    setRefreshLog([])
     try {
       const isFullRefresh = entries.length === 0
       
       if (isFullRefresh) {
         // Cache is empty - do a full refresh of all markets
         console.log('[sharp] Cache empty - doing full refresh')
+        setRefreshStatus('Fetching markets...')
         const { markets } = await fetchTrendingSportsMarketsFn({
           data: {
             limit: 50,
@@ -295,8 +235,13 @@ function SharpMoneyPage() {
         if (markets && markets.length > 0) {
           // Analyze all fetched markets (no arbitrary limit)
           console.log(`[sharp] Analyzing ${markets.length} markets...`)
+          setRefreshStatus(`Analyzing ${markets.length} markets...`)
+          setRefreshProgress({ current: 0, total: markets.length })
           
-          for (const market of markets) {
+          for (let i = 0; i < markets.length; i += 1) {
+            const market = markets[i]
+            setRefreshProgress({ current: i + 1, total: markets.length })
+            setRefreshLog((prev) => [...prev.slice(-30), `Analyzing ${market.title}`])
             try {
               const result = await refreshMarketSharpnessFn({
                 data: {
@@ -314,11 +259,14 @@ function SharpMoneyPage() {
               if (result?.allWalletAddresses && result.allWalletAddresses.length > 0) {
                 const wallets = result.allWalletAddresses
                 const walletsPerCall = 10 // Each call fetches 10 wallets (40 subrequests)
+                const totalBatches = Math.ceil(wallets.length / walletsPerCall)
                 
                 // Fetch PnL in batches (each batch is a separate server function call)
                 for (let i = 0; i < wallets.length; i += walletsPerCall) {
                   const batch = wallets.slice(i, i + walletsPerCall)
                   try {
+                    const batchIndex = Math.floor(i / walletsPerCall) + 1
+                    setRefreshStatus(`Fetching PnL batch ${batchIndex}/${totalBatches}...`)
                     await fetchBatchMultiPeriodPnlFn({ data: { walletAddresses: batch } })
                   } catch (error) {
                     console.error('Failed to fetch PnL batch:', error)
@@ -330,6 +278,7 @@ function SharpMoneyPage() {
                 }
 
                 // Re-run analysis now that all PnL data is cached
+                setRefreshStatus(`Re-analyzing ${market.title}...`)
                 await refreshMarketSharpnessFn({
                   data: {
                     conditionId: market.conditionId,
@@ -362,10 +311,16 @@ function SharpMoneyPage() {
         
         if (imminentCachedEntries.length === 0) {
           console.log('[sharp] No imminent events to refresh')
+          setRefreshStatus('No imminent events to refresh.')
         } else {
           console.log(`[sharp] Partial refresh: updating ${imminentCachedEntries.length} imminent/live events`)
+          setRefreshStatus(`Refreshing ${imminentCachedEntries.length} live markets...`)
+          setRefreshProgress({ current: 0, total: imminentCachedEntries.length })
           
-          for (const entry of imminentCachedEntries) {
+          for (let i = 0; i < imminentCachedEntries.length; i += 1) {
+            const entry = imminentCachedEntries[i]
+            setRefreshProgress({ current: i + 1, total: imminentCachedEntries.length })
+            setRefreshLog((prev) => [...prev.slice(-30), `Refreshing ${entry.marketTitle}`])
             try {
               await refreshMarketSharpnessFn({
                 data: {
@@ -386,17 +341,20 @@ function SharpMoneyPage() {
       }
 
       // Reload cache
+      setRefreshStatus('Refreshing cache view...')
       await loadCache()
     } catch (error) {
       console.error('Failed to refresh:', error)
     } finally {
       setIsRefreshing(false)
+      setRefreshStatus(null)
+      setRefreshProgress(null)
     }
   }
 
   // Clear cache handler
   const handleClearCache = async () => {
-    if (!confirm('Clear all cached sharp money data?')) return
+    if (!confirm('Reset all stored sharp data?')) return
     try {
       await clearSharpMoneyCacheFn({ data: {} })
       setEntries([])
@@ -480,22 +438,11 @@ function SharpMoneyPage() {
               <button
                 onClick={handleClearCache}
                 className="flex items-center gap-1 sm:gap-2 rounded-lg bg-red-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-red-400 hover:bg-red-500/20 transition-colors"
-                title="Clear Cache"
+                title="Reset stored data"
               >
                 <Trash2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Clear Cache</span>
+                <span className="hidden sm:inline">Reset Data</span>
               </button>
-              {entries.length > 0 && (
-                <button
-                  onClick={handleDiscoverNew}
-                  disabled={isRefreshing}
-                  className="flex items-center gap-1 sm:gap-2 rounded-lg bg-emerald-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
-                  title="Discover and analyze new events (keeps existing cache)"
-                >
-                  <Target className={`h-4 w-4 ${isRefreshing ? 'animate-pulse' : ''}`} />
-                  <span className="hidden sm:inline">{isRefreshing ? 'Discovering...' : 'Discover New'}</span>
-                </button>
-              )}
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
@@ -503,7 +450,7 @@ function SharpMoneyPage() {
                 title={entries.length === 0 ? "Discover and analyze all new markets" : "Update existing events only (no new discovery)"}
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh Live'}</span>
+                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh View'}</span>
               </button>
             </div>
           </div>
@@ -512,21 +459,65 @@ function SharpMoneyPage() {
 
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-4 py-6">
+        {isRefreshing && (
+          <div className="mb-6 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+            <p className="font-semibold">Refreshing data (this can take 4+ minutes)</p>
+            {refreshStatus && <p className="text-cyan-100/80">{refreshStatus}</p>}
+            {refreshProgress && refreshProgress.total > 0 && (
+              <div className="mt-2">
+                <div className="h-2 w-full rounded-full bg-cyan-500/20">
+                  <div
+                    className="h-2 rounded-full bg-cyan-400 transition-[width] duration-300"
+                    style={{ width: `${Math.min(100, (refreshProgress.current / refreshProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-cyan-100/80">
+                  {refreshProgress.current} / {refreshProgress.total} markets
+                </p>
+              </div>
+            )}
+            {refreshLog.length > 0 && (
+              <div className="mt-2 max-h-24 overflow-y-auto rounded-md border border-cyan-500/20 bg-slate-950/60 px-3 py-2 text-xs text-cyan-100/70">
+                {refreshLog.map((line, index) => (
+                  <div key={`${line}-${index}`}>{line}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {/* Sport Filter */}
-        <div className="mb-6 flex flex-wrap gap-2">
-          {SPORT_FILTERS.map((filter) => (
-            <button
-              key={filter.value}
-              onClick={() => setSelectedSport(filter.value)}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                selectedSport === filter.value
-                  ? 'bg-cyan-500 text-white'
-                  : 'bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white'
-              }`}
+        <div className="mb-6">
+          <div className="sm:hidden">
+            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Sport filter
+            </label>
+            <select
+              value={selectedSport}
+              onChange={(event) => setSelectedSport(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             >
-              {filter.label}
-            </button>
-          ))}
+              {SPORT_FILTERS.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="hidden flex-wrap gap-2 sm:flex">
+            {SPORT_FILTERS.map((filter) => (
+              <button
+                key={filter.value}
+                onClick={() => setSelectedSport(filter.value)}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                  selectedSport === filter.value
+                    ? 'bg-cyan-500 text-white'
+                    : 'bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Loading State */}
@@ -598,6 +589,14 @@ function SharpMoneyCard({
   // Determine which side is "sharp"
   const sharpSideData = entry.sharpSide === 'A' ? entry.sideA : entry.sideB
   const squareSideData = entry.sharpSide === 'A' ? entry.sideB : entry.sideA
+  const minHolderCount = Math.min(entry.sideA.holderCount, entry.sideB.holderCount)
+  const hasLowHolderCount = minHolderCount < 15
+  const hasLowConviction = (entry.sharpSideValueRatio ?? 0.5) < 0.35
+  const sharpSideTopHolders = sharpSideData.topHolders.slice().sort((a, b) => b.amount - a.amount)
+  const sharpTop1 = sharpSideTopHolders[0]?.amount ?? 0
+  const sharpTop3 = sharpSideTopHolders.slice(0, 3).reduce((sum, holder) => sum + holder.amount, 0)
+  const sharpSideTotal = sharpSideData.totalValue
+  const hasHighConcentration = sharpSideTotal > 0 && (sharpTop1 / sharpSideTotal >= 0.6 || sharpTop3 / sharpSideTotal >= 0.8)
 
   // Calculate volume percentage and get heat map color
   const totalVolume = entry.sideA.totalValue + entry.sideB.totalValue
@@ -685,6 +684,27 @@ function SharpMoneyCard({
                     Bet: {sharpSideData.label}
                   </span>
                 </div>
+                {hasLowHolderCount && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+                      Low holders ({minHolderCount})
+                    </span>
+                  </div>
+                )}
+                {hasLowConviction && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+                      Low conviction
+                    </span>
+                  </div>
+                )}
+                {hasHighConcentration && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+                      Concentrated
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -772,6 +792,27 @@ function SharpMoneyCard({
                     Bet: {sharpSideData.label}
                   </span>
                 </div>
+                {hasLowHolderCount && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+                      Low holders ({minHolderCount})
+                    </span>
+                  </div>
+                )}
+                {hasLowConviction && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+                      Low conviction
+                    </span>
+                  </div>
+                )}
+                {hasHighConcentration && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+                      Concentrated
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1102,13 +1143,22 @@ function SideDetails({
         <h5 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
           Top Holders
         </h5>
+        <div className="grid grid-cols-[16px_20px_minmax(0,1fr)_80px_56px_56px_80px] items-center gap-2 text-[0.6rem] uppercase tracking-wider text-gray-500 mb-1">
+          <span />
+          <span />
+          <span>Holder</span>
+          <span className="text-right">PnL $</span>
+          <span className="text-right">PnL u</span>
+          <span className="text-right">Stake u</span>
+          <span className="text-right">Stake $</span>
+        </div>
         <ul className="space-y-1.5">
           {side.topHolders.map((holder, idx) => (
             <li
               key={holder.proxyWallet}
-              className="flex items-center gap-2 text-sm"
+              className="grid grid-cols-[16px_20px_minmax(0,1fr)_80px_56px_56px_80px] items-center gap-2 text-sm"
             >
-              <span className="text-gray-500 w-4">{idx + 1}.</span>
+              <span className="text-gray-500">{idx + 1}.</span>
               {holder.profileImage ? (
                 <img
                   src={holder.profileImage}
@@ -1129,8 +1179,16 @@ function SideDetails({
               >
                 {truncateWalletName(holder.name || holder.pseudonym) || `${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
               </a>
-              <PnlBadge pnlAll={holder.pnlAll} />
-              <span className="text-gray-400 text-xs">
+              <div className="flex justify-end">
+                <PnlBadge pnlAll={holder.pnlAll} />
+              </div>
+              <div className="flex justify-end">
+                <UnitBadge pnlUnits={holder.pnlAllUnits} unitSize={holder.unitSize} />
+              </div>
+              <div className="flex justify-end">
+                <StakeUnitBadge stakeUsd={holder.amount} unitSize={holder.unitSize} />
+              </div>
+              <span className="text-gray-400 text-xs text-right">
                 {formatUsdCompact(holder.amount)}
               </span>
             </li>
@@ -1158,6 +1216,78 @@ function PnlBadge({ pnlAll }: { pnlAll?: number | null }) {
     >
       {isPositive ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
       {formatUsdCompact(Math.abs(pnlAll))}
+    </span>
+  )
+}
+
+function UnitBadge({
+  pnlUnits,
+  unitSize,
+}: {
+  pnlUnits?: number | null
+  unitSize?: number | null
+}) {
+  const formatted = formatUnits(pnlUnits === null || pnlUnits === undefined ? null : Math.abs(pnlUnits))
+  if (!formatted) {
+    return null
+  }
+
+  const isPositive = (pnlUnits ?? 0) >= 0
+  const title =
+    unitSize && Number.isFinite(unitSize)
+      ? `${formatted}u • unit size ${formatUsdCompact(unitSize)}`
+      : `${formatted}u`
+
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${
+        isPositive
+          ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+          : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
+      }`}
+    >
+      {formatted}u
+    </span>
+  )
+}
+
+function StakeUnitBadge({
+  stakeUsd,
+  unitSize,
+}: {
+  stakeUsd: number
+  unitSize?: number | null
+}) {
+  if (!unitSize || unitSize <= 0) {
+    return null
+  }
+
+  const stakeUnits = stakeUsd / unitSize
+  if (!Number.isFinite(stakeUnits)) {
+    return null
+  }
+
+  const formatted = formatUnits(Math.abs(stakeUnits))
+  if (!formatted) {
+    return null
+  }
+
+  const title = `${formatted}x typical stake • unit size ${formatUsdCompact(unitSize)}`
+
+  const tone =
+    stakeUnits < 0.5
+      ? 'bg-slate-500/10 text-slate-300 border border-slate-500/20'
+      : stakeUnits <= 2
+        ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+        : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${tone}`}
+    >
+      {formatted}x
     </span>
   )
 }

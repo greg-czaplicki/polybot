@@ -25,6 +25,8 @@ const SPORT_TAG_IDS: Record<string, number> = {
 
 // Minimum volume to show in sharp money
 const MIN_VOLUME_USD = 50000
+const UNIT_SIZE_SAMPLE_LIMIT = 20
+const MIN_UNIT_SIZE_SAMPLES = 3
 
 // Target sport tags for sharp money analysis
 // Note: 'soccer' is what detectSportTag returns for EPL games
@@ -81,6 +83,104 @@ function extractTeamNames(title: string): [string, string] | null {
   return null
 }
 
+type ClosedPosition = {
+  avgPrice?: number
+  totalBought: number
+  realizedPnl: number
+}
+
+type OpenPosition = {
+  avgPrice?: number
+  initialValue?: number
+  size?: number
+  totalBought?: number
+}
+
+function calculateMedian(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2
+  }
+  return sorted[mid]
+}
+
+function calculateMedianTopHalf(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const start = Math.floor(sorted.length / 2)
+  const topHalf = sorted.slice(start)
+  return calculateMedian(topHalf)
+}
+
+function normalizePnl(pnl: number | null | undefined, unitSize: number | null | undefined): number | null {
+  if (pnl === null || pnl === undefined) return null
+  if (!unitSize || unitSize <= 0) return null
+  return pnl / unitSize
+}
+
+function calculateStakeUnitWeight(stakeUnits: number | null | undefined): number {
+  if (stakeUnits === null || stakeUnits === undefined || !Number.isFinite(stakeUnits)) {
+    return 1.0
+  }
+
+  const clampedUnits = Math.max(stakeUnits, 0)
+  const raw = Math.sqrt(clampedUnits)
+  return Math.min(2.0, Math.max(0.25, raw))
+}
+
+async function fetchWalletUnitSize(walletAddress: string): Promise<number | null> {
+  try {
+    const openUrl = new URL('/positions', POLYMARKET_DATA_API)
+    openUrl.searchParams.set('user', walletAddress)
+    openUrl.searchParams.set('sizeThreshold', '1')
+    openUrl.searchParams.set('limit', '100')
+    openUrl.searchParams.set('sortBy', 'INITIAL')
+    openUrl.searchParams.set('sortDirection', 'DESC')
+
+    const openResponse = await fetch(openUrl)
+    if (openResponse.ok) {
+      const openData = (await openResponse.json()) as OpenPosition[]
+      if (Array.isArray(openData) && openData.length > 0) {
+        const openStakes = openData
+          .map((position) =>
+            position.initialValue ?? ((position.size ?? position.totalBought ?? 0) * (position.avgPrice ?? 0)),
+          )
+          .filter((value) => Number.isFinite(value) && value > 0)
+
+        if (openStakes.length >= MIN_UNIT_SIZE_SAMPLES) {
+          return calculateMedianTopHalf(openStakes)
+        }
+      }
+    }
+
+    const closedUrl = new URL('/closed-positions', POLYMARKET_DATA_API)
+    closedUrl.searchParams.set('user', walletAddress)
+    closedUrl.searchParams.set('limit', String(UNIT_SIZE_SAMPLE_LIMIT))
+    closedUrl.searchParams.set('sortBy', 'TIMESTAMP')
+    closedUrl.searchParams.set('sortDirection', 'DESC')
+
+    const closedResponse = await fetch(closedUrl)
+    if (!closedResponse.ok) return null
+
+    const closedData = (await closedResponse.json()) as ClosedPosition[]
+    if (!Array.isArray(closedData) || closedData.length === 0) return null
+
+    const closedStakes = closedData
+      .map((position) => (position.totalBought ?? 0) * (position.avgPrice ?? 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+
+    if (closedStakes.length < MIN_UNIT_SIZE_SAMPLES) {
+      return null
+    }
+
+    return calculateMedianTopHalf(closedStakes)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Calculate momentum weight based on recent PnL performance
  */
@@ -104,12 +204,29 @@ function calculateMomentumWeight(pnl: MultiPeriodPnl): number {
 /**
  * Calculate PnL tier weight based on all-time profitability
  */
-function calculatePnlTierWeight(pnlAll: number | null): number {
-  if (pnlAll === null) return 1.0
-  if (pnlAll >= 100_000) return 2.0
-  if (pnlAll >= 10_000) return 1.5
-  if (pnlAll >= 0) return 1.0
-  if (pnlAll >= -10_000) return 0.8
+function calculatePnlTierWeight(pnlAll: number | null, pnlAllUnits?: number | null): number {
+  const useUnits = pnlAllUnits !== null && pnlAllUnits !== undefined
+  const value = useUnits ? pnlAllUnits : pnlAll
+
+  if (value === null || value === undefined) return 1.0
+
+  if (useUnits) {
+    if (value >= 30) return 2.0
+    if (value >= 15) return 1.7
+    if (value >= 7) return 1.4
+    if (value >= 3) return 1.2
+    if (value >= 0) return 1.0
+    if (value >= -3) return 0.9
+    if (value >= -7) return 0.8
+    if (value >= -15) return 0.7
+    if (value >= -30) return 0.6
+    return 0.5
+  }
+
+  if (value >= 100_000) return 2.0
+  if (value >= 10_000) return 1.5
+  if (value >= 0) return 1.0
+  if (value >= -10_000) return 0.8
   return 0.7
 }
 
@@ -119,15 +236,69 @@ function calculatePnlTierWeight(pnlAll: number | null): number {
 function calculateSharpScore(holders: TopHolderPnlData[], totalValue: number): number {
   if (holders.length === 0 || totalValue <= 0) return 50
 
+  const effectiveTotalValue = holders.reduce(
+    (sum, holder) => sum + holder.amount * (holder.stakeUnitWeight ?? 1),
+    0,
+  )
+
   let weightedSum = 0
   for (const holder of holders) {
-    const positionWeight = holder.amount / totalValue
-    const combinedWeight = holder.momentumWeight * holder.pnlTierWeight
+    const positionWeight =
+      effectiveTotalValue > 0
+        ? (holder.amount * (holder.stakeUnitWeight ?? 1)) / effectiveTotalValue
+        : holder.amount / totalValue
+    const combinedWeight = holder.momentumWeight * holder.pnlTierWeight * (holder.stakeUnitWeight ?? 1)
     weightedSum += positionWeight * combinedWeight
   }
 
   const normalized = ((weightedSum - 0.35) / (3.0 - 0.35)) * 100
   return Math.max(0, Math.min(100, normalized))
+}
+
+/**
+ * Calculate "fade boost" from anti-sharps on one side
+ * Anti-sharps are big losers on cold streaks - betting against them is valuable
+ * Returns a multiplier (1.0 = no boost, 1.18 = 18% boost)
+ */
+function calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): number {
+  if (holders.length === 0 || totalValue <= 0) return 1.0
+
+  const effectiveTotalValue = holders.reduce(
+    (sum, holder) => sum + holder.amount * (holder.stakeUnitWeight ?? 1),
+    0,
+  )
+
+  let fadeBoostSum = 0
+
+  for (const holder of holders) {
+    const hasUnitPnl = holder.pnlAllUnits !== null && holder.pnlAllUnits !== undefined
+    const pnlAll = hasUnitPnl ? holder.pnlAllUnits ?? 0 : holder.pnlAll ?? 0
+    const isOnColdStreak = holder.momentumWeight <= 0.5
+
+    const mildLoss = hasUnitPnl ? -7 : -50_000
+    const moderateLoss = hasUnitPnl ? -15 : -100_000
+    const severeLoss = hasUnitPnl ? -30 : -250_000
+
+    if (pnlAll < mildLoss && isOnColdStreak) {
+      const positionWeight =
+        effectiveTotalValue > 0
+          ? (holder.amount * (holder.stakeUnitWeight ?? 1)) / effectiveTotalValue
+          : holder.amount / totalValue
+
+      let fadeMultiplier = 0
+      if (pnlAll < severeLoss) {
+        fadeMultiplier = 0.18
+      } else if (pnlAll < moderateLoss) {
+        fadeMultiplier = 0.12
+      } else {
+        fadeMultiplier = 0.07
+      }
+
+      fadeBoostSum += positionWeight * fadeMultiplier
+    }
+  }
+
+  return 1.0 + Math.min(fadeBoostSum, 0.30)
 }
 
 /**
@@ -352,6 +523,23 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
     }
   }
 
+  const unitSizeResults: Record<string, number | null> = {}
+  const unitBatchSize = 5
+
+  for (let i = 0; i < uniqueWallets.length; i += unitBatchSize) {
+    const batch = uniqueWallets.slice(i, i + unitBatchSize)
+
+    await Promise.all(
+      batch.map(async (wallet) => {
+        unitSizeResults[wallet] = await fetchWalletUnitSize(wallet)
+      }),
+    )
+
+    if (i + unitBatchSize < uniqueWallets.length) {
+      await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_PNL_BATCHES_MS))
+    }
+  }
+
   // Process holders with PnL data
   const processHolders = (holders: HolderData[]): TopHolderPnlData[] => {
     return holders.slice(0, 10).map((holder) => {
@@ -361,6 +549,11 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
         month: null,
         all: null,
       }
+
+      const unitSize = unitSizeResults[holder.proxyWallet] ?? null
+      const pnlAllUnits = normalizePnl(pnl.all, unitSize)
+      const stakeUnits = normalizePnl(holder.amount, unitSize)
+      const stakeUnitWeight = calculateStakeUnitWeight(stakeUnits)
 
       return {
         proxyWallet: holder.proxyWallet,
@@ -372,9 +565,13 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
         pnlWeek: pnl.week,
         pnlMonth: pnl.month,
         pnlAll: pnl.all,
+        pnlAllUnits,
+        unitSize,
+        stakeUnits,
+        stakeUnitWeight,
         volume: pnl.volume,
         momentumWeight: calculateMomentumWeight(pnl),
-        pnlTierWeight: calculatePnlTierWeight(pnl.all),
+        pnlTierWeight: calculatePnlTierWeight(pnl.all, pnlAllUnits),
       }
     })
   }
