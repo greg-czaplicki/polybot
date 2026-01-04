@@ -1,6 +1,5 @@
 import type { Env } from '../env'
 import { nowUnixSeconds } from '../env'
-import { detectSportTag } from '@/lib/sports'
 import {
   upsertSharpMoneyCache,
   pruneSharpMoneyCache,
@@ -22,6 +21,7 @@ const SPORT_TAG_IDS: Record<string, number> = {
   laliga: 780,
   bundesliga: 1494,
 }
+
 
 // Minimum volume to show in sharp money
 const MIN_VOLUME_USD = 50000
@@ -608,18 +608,11 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
     sideBHolders.length,
   )
 
-  const sportTag = detectSportTag({
-    title: market.question,
-    slug: market.slug,
-    eventSlug: market.eventSlug,
-  })
-
   return {
     conditionId,
     marketTitle: market.question,
     marketSlug: market.slug,
     eventSlug: market.eventSlug,
-    sportTag: sportTag ?? undefined,
     sideA: {
       label: sideALabel,
       totalValue: sideATotalValue,

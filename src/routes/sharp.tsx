@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Eye,
+  EyeOff,
   ExternalLink,
   Loader2,
   RefreshCw,
@@ -19,7 +21,6 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { getSportLabel } from '@/lib/sports'
 import {
   getSharpMoneyCacheFn,
   getSharpMoneyCacheStatsFn,
@@ -37,15 +38,24 @@ export const Route = createFileRoute('/sharp')({
 // Sport filter options
 const SPORT_FILTERS = [
   { value: 'all', label: 'All Sports' },
-  { value: 'nfl', label: 'NFL' },
-  { value: 'nba', label: 'NBA' },
-  { value: 'cfb', label: 'College Football' },
-  { value: 'ncaab', label: 'College Basketball' },
-  { value: 'mlb', label: 'MLB' },
-  { value: 'nhl', label: 'NHL' },
-  { value: 'epl', label: 'Premier League' },
-  // Soccer removed; EPL only for now
+  { value: '10187', label: 'NFL' },
+  { value: '10345', label: 'NBA' },
+  { value: '10210', label: 'College Football' },
+  { value: '10470', label: 'College Basketball' },
+  { value: '10426', label: 'MLB' },
+  { value: '10346', label: 'NHL' },
+  { value: '10188', label: 'Premier League' },
 ]
+
+const SERIES_LABELS: Record<number, string> = {
+  10187: 'NFL',
+  10345: 'NBA',
+  10210: 'College Football',
+  10470: 'College Basketball',
+  10426: 'MLB',
+  10346: 'NHL',
+  10188: 'Premier League',
+}
 
 const USD_FORMATTER = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -82,6 +92,18 @@ function formatUnits(value: number | null | undefined): string | null {
   return UNIT_FORMATTER.format(value)
 }
 
+function formatAmericanOdds(price?: number | null): string | null {
+  if (!price || !Number.isFinite(price) || price <= 0 || price >= 1) {
+    return null
+  }
+  if (price >= 0.5) {
+    const odds = Math.round((price / (1 - price)) * 100)
+    return `-${odds}`
+  }
+  const odds = Math.round(((1 - price) / price) * 100)
+  return `+${odds}`
+}
+
 function describeUnitScale(pnlUnits: number): 'small' | 'avg' | 'large' {
   const magnitude = Math.abs(pnlUnits)
   if (magnitude >= 20) return 'large'
@@ -105,42 +127,52 @@ function truncateWalletName(name: string | null | undefined, maxLength: number =
   return name.slice(0, maxLength) + '...'
 }
 
+function parseEventTime(isoDate?: string): Date | null {
+  if (!isoDate) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    return new Date(`${isoDate}T23:59:59Z`)
+  }
+  const parsed = new Date(isoDate)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 function formatEventTime(isoDate?: string): string | null {
   if (!isoDate) return null
-  
+
   try {
-    const date = new Date(isoDate)
+    const date = parseEventTime(isoDate)
+    if (!date) return null
     const now = new Date()
-    
+
     // Check if it's today
     const isToday = date.toDateString() === now.toDateString()
-    
+
     // Check if it's tomorrow
     const tomorrow = new Date(now)
     tomorrow.setDate(tomorrow.getDate() + 1)
     const isTomorrow = date.toDateString() === tomorrow.toDateString()
-    
+
     // Format time
     const timeStr = date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
     })
-    
+
     if (isToday) {
       return `Today ${timeStr}`
     }
     if (isTomorrow) {
       return `Tomorrow ${timeStr}`
     }
-    
+
     // Format as day of week + time for this week
     const daysUntil = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     if (daysUntil <= 7 && daysUntil > 0) {
       const dayName = date.toLocaleDateString('en-US', { weekday: 'short' })
       return `${dayName} ${timeStr}`
     }
-    
+
     // Otherwise format as date
     return date.toLocaleDateString('en-US', {
       month: 'short',
@@ -152,6 +184,11 @@ function formatEventTime(isoDate?: string): string | null {
   } catch {
     return null
   }
+}
+
+function getSeriesLabel(seriesId?: number): string | null {
+  if (!seriesId) return null
+  return SERIES_LABELS[seriesId] ?? `Series ${seriesId}`
 }
 
 function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
@@ -175,8 +212,9 @@ function SharpMoneyPage() {
   const [refreshStatus, setRefreshStatus] = useState<string | null>(null)
   const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null)
   const [refreshLog, setRefreshLog] = useState<string[]>([])
-  const [selectedSport, setSelectedSport] = useState('all')
+  const [selectedSeriesId, setSelectedSeriesId] = useState('all')
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set())
+  const [showAllEntries, setShowAllEntries] = useState(false)
   const [cacheStats, setCacheStats] = useState<{
     totalEntries: number
     newestEntry?: number
@@ -186,11 +224,12 @@ function SharpMoneyPage() {
   const loadCache = useCallback(async () => {
     setIsLoading(true)
     try {
+      const limit = showAllEntries ? 200 : 50
       const [cacheResult, statsResult] = await Promise.all([
         getSharpMoneyCacheFn({
           data: {
-            sportTag: selectedSport === 'all' ? undefined : selectedSport,
-            limit: 50,
+            sportSeriesId: selectedSeriesId === 'all' ? undefined : Number(selectedSeriesId),
+            limit,
           },
         }),
         getSharpMoneyCacheStatsFn({ data: {} }),
@@ -203,7 +242,7 @@ function SharpMoneyPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedSport])
+  }, [selectedSeriesId, showAllEntries])
 
   // Initial load
   useEffect(() => {
@@ -227,8 +266,9 @@ function SharpMoneyPage() {
         setRefreshStatus('Fetching markets...')
         const { markets } = await fetchTrendingSportsMarketsFn({
           data: {
-            limit: 50,
-            sportTags: selectedSport === 'all' ? undefined : [selectedSport],
+            limit: 200,
+            seriesIds: selectedSeriesId === 'all' ? undefined : [Number(selectedSeriesId)],
+            includeAllMarkets: true,
           },
         })
 
@@ -249,7 +289,7 @@ function SharpMoneyPage() {
                   marketTitle: market.title,
                   marketSlug: market.slug,
                   eventSlug: market.eventSlug,
-                  sportTag: market.sportTag ?? undefined,
+                  sportSeriesId: market.sportSeriesId ?? undefined,
                   outcomes: market.outcomes,
                   endDate: market.endDate,
                 },
@@ -278,14 +318,14 @@ function SharpMoneyPage() {
                 }
 
                 // Re-run analysis now that all PnL data is cached
-                setRefreshStatus(`Re-analyzing ${market.title}...`)
+                setRefreshStatus(`Analyzing ${market.title}...`)
                 await refreshMarketSharpnessFn({
                   data: {
                     conditionId: market.conditionId,
                     marketTitle: market.title,
                     marketSlug: market.slug,
                     eventSlug: market.eventSlug,
-                    sportTag: market.sportTag ?? undefined,
+                  sportSeriesId: market.sportSeriesId ?? undefined,
                     outcomes: market.outcomes,
                     endDate: market.endDate,
                   },
@@ -303,8 +343,8 @@ function SharpMoneyPage() {
         const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000)
         
         const imminentCachedEntries = entries.filter((entry) => {
-          if (!entry.eventTime) return false
-          const eventDate = new Date(entry.eventTime)
+          const eventDate = parseEventTime(entry.eventTime)
+          if (!eventDate) return false
           // Include if: already started (live) OR starting within 1 hour
           return eventDate <= oneHourFromNow
         })
@@ -328,7 +368,7 @@ function SharpMoneyPage() {
                   marketTitle: entry.marketTitle,
                   marketSlug: entry.marketSlug,
                   eventSlug: entry.eventSlug,
-                  sportTag: entry.sportTag ?? undefined,
+                  sportSeriesId: entry.sportSeriesId ?? undefined,
                   endDate: entry.eventTime,
                 },
               })
@@ -381,21 +421,24 @@ function SharpMoneyPage() {
   const MIN_EDGE_RATING = 65
   const filteredEntries = useMemo(() => {
     const now = new Date()
+    const cutoff = new Date(now.getTime() + 24 * 60 * 60 * 1000)
     let filtered = entries.filter((e) => {
+      if (showAllEntries) return true
       // Must meet minimum edge rating
       if (e.edgeRating < MIN_EDGE_RATING) return false
       // Hide games that have already started
-      if (e.eventTime) {
-        const gameTime = new Date(e.eventTime)
+      const gameTime = parseEventTime(e.eventTime)
+      if (gameTime) {
         if (gameTime < now) return false
+        if (gameTime > cutoff) return false
       }
       return true
     })
-    if (selectedSport !== 'all') {
-      filtered = filtered.filter((e) => e.sportTag === selectedSport)
+    if (selectedSeriesId !== 'all') {
+      filtered = filtered.filter((e) => e.sportSeriesId === Number(selectedSeriesId))
     }
     return filtered
-  }, [entries, selectedSport])
+  }, [entries, selectedSeriesId, showAllEntries])
 
   // Calculate max volume for scale
   const maxVolume = useMemo(() => {
@@ -461,7 +504,7 @@ function SharpMoneyPage() {
       <main className="mx-auto max-w-7xl px-4 py-6">
         {isRefreshing && (
           <div className="mb-6 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
-            <p className="font-semibold">Refreshing data (this can take 4+ minutes)</p>
+            <p className="font-semibold">Refreshing data (this can take a while...)</p>
             {refreshStatus && <p className="text-cyan-100/80">{refreshStatus}</p>}
             {refreshProgress && refreshProgress.total > 0 && (
               <div className="mt-2">
@@ -476,13 +519,6 @@ function SharpMoneyPage() {
                 </p>
               </div>
             )}
-            {refreshLog.length > 0 && (
-              <div className="mt-2 max-h-24 overflow-y-auto rounded-md border border-cyan-500/20 bg-slate-950/60 px-3 py-2 text-xs text-cyan-100/70">
-                {refreshLog.map((line, index) => (
-                  <div key={`${line}-${index}`}>{line}</div>
-                ))}
-              </div>
-            )}
           </div>
         )}
         {/* Sport Filter */}
@@ -492,8 +528,8 @@ function SharpMoneyPage() {
               Sport filter
             </label>
             <select
-              value={selectedSport}
-              onChange={(event) => setSelectedSport(event.target.value)}
+              value={selectedSeriesId}
+              onChange={(event) => setSelectedSeriesId(event.target.value)}
               className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             >
               {SPORT_FILTERS.map((filter) => (
@@ -507,9 +543,9 @@ function SharpMoneyPage() {
             {SPORT_FILTERS.map((filter) => (
               <button
                 key={filter.value}
-                onClick={() => setSelectedSport(filter.value)}
+                onClick={() => setSelectedSeriesId(filter.value)}
                 className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                  selectedSport === filter.value
+                  selectedSeriesId === filter.value
                     ? 'bg-cyan-500 text-white'
                     : 'bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white'
                 }`}
@@ -552,10 +588,21 @@ function SharpMoneyPage() {
         {!isLoading && filteredEntries.length > 0 && (
           <div className="space-y-4">
             {/* Show count of hidden entries */}
-            {entries.length > filteredEntries.length && (
-              <p className="text-xs text-gray-500 text-right">
-                Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (started or Edge &lt; {MIN_EDGE_RATING})
-              </p>
+            {(entries.length > filteredEntries.length || showAllEntries) && (
+              <div className="flex items-center justify-end gap-2 text-xs text-gray-500">
+                <span>
+                  Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (started or Edge &lt; {MIN_EDGE_RATING})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAllEntries((prev) => !prev)}
+                  className="flex items-center gap-1 rounded-md border border-slate-700/60 px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800/60"
+                  title={showAllEntries ? 'Hide filtered entries' : 'Show filtered entries'}
+                >
+                  {showAllEntries ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  {showAllEntries ? 'Filtered' : 'Show All'}
+                </button>
+              </div>
             )}
             {filteredEntries.map((entry) => (
               <SharpMoneyCard
@@ -585,6 +632,14 @@ function SharpMoneyCard({
   maxVolume: number
 }) {
   const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug)
+  const sideAOdds = formatAmericanOdds(entry.sideA.price)
+  const sideBOdds = formatAmericanOdds(entry.sideB.price)
+  const oddsLine = sideAOdds && sideBOdds
+    ? {
+        sideA: `${entry.sideA.label} ${sideAOdds}`,
+        sideB: `${entry.sideB.label} ${sideBOdds}`,
+      }
+    : null
 
   // Determine which side is "sharp"
   const sharpSideData = entry.sharpSide === 'A' ? entry.sideA : entry.sideB
@@ -640,9 +695,9 @@ function SharpMoneyCard({
           {/* Top Row - League, Time, Actions */}
           <div className="flex items-center justify-between p-3 pb-2">
             <div className="flex items-center gap-1.5 flex-wrap">
-              {entry.sportTag && (
+              {entry.sportSeriesId && (
                 <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-1.5 py-0.5 rounded">
-                  {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
+                  {getSeriesLabel(entry.sportSeriesId)}
                 </span>
               )}
               {entry.eventTime && (
@@ -673,7 +728,7 @@ function SharpMoneyCard({
 
           {/* Title and Sharp Indicator */}
           <div className="px-3 pb-2">
-            <h3 className="text-base font-semibold text-white leading-tight mb-1.5">
+            <h3 className="text-base font-semibold text-white leading-tight mb-1">
               {entry.marketTitle}
             </h3>
             {entry.sharpSide !== 'EVEN' && (
@@ -770,9 +825,9 @@ function SharpMoneyCard({
         <div className="hidden sm:grid sm:grid-cols-[1fr_auto] items-start gap-4 p-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              {entry.sportTag && (
+              {entry.sportSeriesId && (
                 <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-2 py-0.5 rounded">
-                  {getSportLabel(entry.sportTag) ?? entry.sportTag.toUpperCase()}
+                  {getSeriesLabel(entry.sportSeriesId)}
                 </span>
               )}
               {entry.eventTime && (
@@ -896,8 +951,21 @@ function SharpMoneyCard({
         </div>
       </div>
 
-      {/* Unified Edge Bar */}
+      {/* Odds + Unified Edge Bar */}
       <div className="px-4 pb-4">
+        {oddsLine && (
+          <div className="mb-2">
+            <span className="inline-flex items-center gap-3 rounded-full bg-slate-800/60 px-3 py-1 text-xs font-semibold text-slate-200">
+              <span className={entry.sharpSide === 'A' ? 'text-emerald-300' : 'text-slate-200'}>
+                {oddsLine.sideA}
+              </span>
+              <span className="text-slate-500">|</span>
+              <span className={entry.sharpSide === 'B' ? 'text-emerald-300' : 'text-slate-200'}>
+                {oddsLine.sideB}
+              </span>
+            </span>
+          </div>
+        )}
         <UnifiedEdgeBar 
           sideA={entry.sideA} 
           sideB={entry.sideB} 

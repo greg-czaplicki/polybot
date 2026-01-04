@@ -108,7 +108,7 @@ function SharpDebugPage() {
   const [marketTitle, setMarketTitle] = useState('')
   const [marketSlug, setMarketSlug] = useState('')
   const [eventSlug, setEventSlug] = useState('')
-  const [sportTag, setSportTag] = useState('')
+  const [sportSeriesId, setSportSeriesId] = useState('')
   const [endDate, setEndDate] = useState('')
   const [outcomesInput, setOutcomesInput] = useState('')
   const [useCache, setUseCache] = useState(true)
@@ -173,7 +173,7 @@ function SharpDebugPage() {
     setMarketTitle(entry.marketTitle)
     setMarketSlug(entry.marketSlug ?? '')
     setEventSlug(entry.eventSlug ?? '')
-    setSportTag(entry.sportTag ?? '')
+    setSportSeriesId(entry.sportSeriesId ? String(entry.sportSeriesId) : '')
     setEndDate(entry.eventTime ?? '')
   }, [selectedId, entries])
 
@@ -197,7 +197,7 @@ function SharpDebugPage() {
         marketTitle?: string
         marketSlug?: string
         eventSlug?: string
-        sportTag?: string
+        sportSeriesId?: number
         endDate?: string
         outcomes?: string[]
         useCache?: boolean
@@ -209,7 +209,7 @@ function SharpDebugPage() {
       if (marketTitle.trim()) payload.marketTitle = marketTitle.trim()
       if (marketSlug.trim()) payload.marketSlug = marketSlug.trim()
       if (eventSlug.trim()) payload.eventSlug = eventSlug.trim()
-      if (sportTag.trim()) payload.sportTag = sportTag.trim()
+      if (sportSeriesId.trim()) payload.sportSeriesId = Number(sportSeriesId.trim())
       if (endDate.trim()) payload.endDate = endDate.trim()
 
       const outcomes = parseOutcomes(outcomesInput)
@@ -260,7 +260,7 @@ function SharpDebugPage() {
     marketSlug,
     marketTitle,
     outcomesInput,
-    sportTag,
+    sportSeriesId,
     useCache,
   ])
 
@@ -389,11 +389,11 @@ function SharpDebugPage() {
               </div>
               <div>
                 <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Sport tag
+                  Series ID
                 </label>
                 <input
-                  value={sportTag}
-                  onChange={(event) => setSportTag(event.target.value)}
+                  value={sportSeriesId}
+                  onChange={(event) => setSportSeriesId(event.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
                 />
               </div>

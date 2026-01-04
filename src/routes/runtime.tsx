@@ -86,7 +86,7 @@ function RuntimePage() {
     setIsLoading(true)
     setError(null)
     try {
-      await fetchTrendingSportsMarketsFn({ data: { limit: 50 } })
+      await fetchTrendingSportsMarketsFn({ data: { limit: 50, includeLowVolume: true } })
       await loadStats()
     } catch (err) {
       console.error('Failed to refresh runtime stats', err)

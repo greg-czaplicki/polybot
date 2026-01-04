@@ -33,17 +33,19 @@ export interface SharpMoneyCacheRow {
   market_title: string
   market_slug?: string | null
   event_slug?: string | null
-  sport_tag?: string | null
+  sport_series_id?: number | null
   event_time?: string | null
   side_a_label: string
   side_a_total_value: number
   side_a_sharp_score: number
   side_a_holder_count: number
+  side_a_price?: number | null
   side_a_top_holders?: string | null
   side_b_label: string
   side_b_total_value: number
   side_b_sharp_score: number
   side_b_holder_count: number
+  side_b_price?: number | null
   side_b_top_holders?: string | null
   sharp_side?: string | null
   confidence?: string | null
@@ -62,13 +64,14 @@ export interface SharpMoneyCacheEntry {
   marketTitle: string
   marketSlug?: string
   eventSlug?: string
-  sportTag?: string
+  sportSeriesId?: number
   eventTime?: string
   sideA: {
     label: string
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sideB: {
@@ -76,6 +79,7 @@ export interface SharpMoneyCacheEntry {
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sharpSide: 'A' | 'B' | 'EVEN'
@@ -94,13 +98,14 @@ export interface UpsertSharpMoneyCacheInput {
   marketTitle: string
   marketSlug?: string
   eventSlug?: string
-  sportTag?: string
+  sportSeriesId?: number
   eventTime?: string
   sideA: {
     label: string
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sideB: {
@@ -108,6 +113,7 @@ export interface UpsertSharpMoneyCacheInput {
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sharpSide: 'A' | 'B' | 'EVEN'
@@ -128,13 +134,14 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
     marketTitle: row.market_title,
     marketSlug: row.market_slug ?? undefined,
     eventSlug: row.event_slug ?? undefined,
-    sportTag: row.sport_tag ?? undefined,
+    sportSeriesId: row.sport_series_id ?? undefined,
     eventTime: row.event_time ?? undefined,
     sideA: {
       label: row.side_a_label,
       totalValue: row.side_a_total_value,
       sharpScore: row.side_a_sharp_score,
       holderCount: row.side_a_holder_count,
+      price: row.side_a_price ?? null,
       topHolders: row.side_a_top_holders
         ? (JSON.parse(row.side_a_top_holders) as TopHolderPnlData[])
         : [],
@@ -144,6 +151,7 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
       totalValue: row.side_b_total_value,
       sharpScore: row.side_b_sharp_score,
       holderCount: row.side_b_holder_count,
+      price: row.side_b_price ?? null,
       topHolders: row.side_b_top_holders
         ? (JSON.parse(row.side_b_top_holders) as TopHolderPnlData[])
         : [],
@@ -178,26 +186,28 @@ export async function upsertSharpMoneyCache(
   await run(
     db,
     `INSERT INTO sharp_money_cache (
-      id, condition_id, market_title, market_slug, event_slug, sport_tag, event_time,
-      side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_top_holders,
-      side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_top_holders,
+      id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time,
+      side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_price, side_a_top_holders,
+      side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_price, side_b_top_holders,
       sharp_side, confidence, score_differential, sharp_side_value_ratio, edge_rating, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
       event_slug = excluded.event_slug,
-      sport_tag = excluded.sport_tag,
+      sport_series_id = excluded.sport_series_id,
       event_time = excluded.event_time,
       side_a_label = excluded.side_a_label,
       side_a_total_value = excluded.side_a_total_value,
       side_a_sharp_score = excluded.side_a_sharp_score,
       side_a_holder_count = excluded.side_a_holder_count,
+      side_a_price = excluded.side_a_price,
       side_a_top_holders = excluded.side_a_top_holders,
       side_b_label = excluded.side_b_label,
       side_b_total_value = excluded.side_b_total_value,
       side_b_sharp_score = excluded.side_b_sharp_score,
       side_b_holder_count = excluded.side_b_holder_count,
+      side_b_price = excluded.side_b_price,
       side_b_top_holders = excluded.side_b_top_holders,
       sharp_side = excluded.sharp_side,
       confidence = excluded.confidence,
@@ -210,17 +220,19 @@ export async function upsertSharpMoneyCache(
     input.marketTitle,
     input.marketSlug ?? null,
     input.eventSlug ?? null,
-    input.sportTag ?? null,
+    input.sportSeriesId ?? null,
     input.eventTime ?? null,
     input.sideA.label,
     input.sideA.totalValue,
     input.sideA.sharpScore,
     input.sideA.holderCount,
+    input.sideA.price ?? null,
     JSON.stringify(input.sideA.topHolders),
     input.sideB.label,
     input.sideB.totalValue,
     input.sideB.sharpScore,
     input.sideB.holderCount,
+    input.sideB.price ?? null,
     JSON.stringify(input.sideB.topHolders),
     input.sharpSide,
     input.confidence,
@@ -253,18 +265,18 @@ export async function getSharpMoneyCacheByConditionId(
 export async function listSharpMoneyCache(
   db: Db,
   options?: {
-    sportTag?: string
+    sportSeriesId?: number
     limit?: number
   },
 ): Promise<SharpMoneyCacheEntry[]> {
-  const { sportTag, limit = 50 } = options ?? {}
+  const { sportSeriesId, limit = 50 } = options ?? {}
 
   let query = `SELECT * FROM sharp_money_cache`
   const params: unknown[] = []
 
-  if (sportTag) {
-    query += ` WHERE sport_tag = ?`
-    params.push(sportTag)
+  if (sportSeriesId !== undefined) {
+    query += ` WHERE sport_series_id = ?`
+    params.push(sportSeriesId)
   }
 
   // Order by: Edge Rating (highest first), then score differential (highest first), 
@@ -290,14 +302,6 @@ export async function listSharpMoneyCache(
 /**
  * Get all unique sport tags from the cache
  */
-export async function listSharpMoneySportTags(db: Db): Promise<string[]> {
-  const rows = await all<{ sport_tag: string }>(
-    db,
-    `SELECT DISTINCT sport_tag FROM sharp_money_cache WHERE sport_tag IS NOT NULL ORDER BY sport_tag`,
-  )
-  return rows.map((r) => r.sport_tag)
-}
-
 /**
  * Delete old cache entries (older than specified hours)
  */
@@ -351,9 +355,9 @@ export async function getSharpMoneyCacheStats(db: Db): Promise<{
         db,
         `SELECT COUNT(*) as count FROM sharp_money_cache`,
       ),
-      all<{ sport_tag: string; count: number }>(
+      all<{ sport_series_id: number | null; count: number }>(
         db,
-        `SELECT sport_tag, COUNT(*) as count FROM sharp_money_cache GROUP BY sport_tag`,
+        `SELECT sport_series_id, COUNT(*) as count FROM sharp_money_cache GROUP BY sport_series_id`,
       ),
       all<{ confidence: string; count: number }>(
         db,
@@ -367,7 +371,8 @@ export async function getSharpMoneyCacheStats(db: Db): Promise<{
 
   const bySport: Record<string, number> = {}
   for (const row of sportCounts) {
-    bySport[row.sport_tag ?? 'unknown'] = row.count
+    const key = row.sport_series_id === null ? 'unknown' : String(row.sport_series_id)
+    bySport[key] = row.count
   }
 
   const byConfidence: Record<string, number> = {}

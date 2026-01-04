@@ -1,7 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getDb } from '../env'
 import { all, run } from '../db/client'
-import { isSportsMarket, detectSportTag } from '@/lib/sports'
 import {
   listSharpMoneyCache,
   getSharpMoneyCacheByConditionId,
@@ -21,12 +20,8 @@ const POLYMARKET_CLOB_API = 'https://clob.polymarket.com'
 const POLYMARKET_DATA_API = 'https://data-api.polymarket.com'
 
 // Sport tags we want to track for sharp money
-// Note: 'soccer' is what detectSportTag returns for EPL games
-// Note: 'cfb' is college football (Polymarket uses this, not 'ncaaf')
-const TARGET_SPORT_TAGS = ['nfl', 'nba', 'cfb', 'ncaab', 'mlb', 'nhl', 'epl']
-
 const SPORTS_SERIES_IDS: Partial<Record<string, number>> = {
-  ncaab: 39,
+  ncaab: 10470,
   epl: 10188,
   mlb: 10426,
   cfb: 10210,
@@ -46,6 +41,19 @@ const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60
 const UNIT_SIZE_SAMPLE_LIMIT = 20
 const UNIT_SIZE_POSITION_LIMIT = 100
 const MIN_UNIT_SIZE_SAMPLES = 3
+
+const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 10426, 10346, 10188]
+
+const SERIES_ID_TO_TAG = new Map<number, string>(
+  Object.entries(SPORTS_SERIES_IDS)
+    .filter(([, id]) => typeof id === 'number')
+    .map(([tag, id]) => [id as number, tag]),
+)
+
+function isTargetSeriesId(seriesId?: number | null): boolean {
+  if (seriesId === null || seriesId === undefined) return false
+  return TARGET_SPORT_SERIES_IDS.includes(seriesId)
+}
 
 type RuntimeMarketStats = {
   fetchedAt: number
@@ -123,6 +131,16 @@ function parseOutcomes(outcomes: string | undefined | null): string[] {
   return outcomes.split(',').map(o => o.trim())
 }
 
+function parseEventTime(endDate?: string | null): Date | null {
+  if (!endDate) return null
+  // Handle date-only strings by assuming end of day UTC.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return new Date(`${endDate}T23:59:59Z`)
+  }
+  const parsed = new Date(endDate)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 type ClosedPosition = {
   conditionId?: string
   title?: string
@@ -187,6 +205,8 @@ export interface GammaMarket {
   conditionId: string
   slug: string
   event_slug?: string
+  startTime?: string
+  seriesId?: number
   resolutionSource?: string
   endDate?: string
   liquidity?: number
@@ -252,15 +272,6 @@ function mapSportToTag(sport: GammaSport): string | undefined {
   return undefined
 }
 
-function isMatchingSportTag(detectedTag: string | null | undefined, requestedTag: string): boolean {
-  if (!detectedTag) return false
-  if (detectedTag === requestedTag) return true
-  if (requestedTag === 'ncaaf' || requestedTag === 'cfb') {
-    return detectedTag === 'ncaaf' || detectedTag === 'cfb'
-  }
-  return false
-}
-
 /**
  * Holder with multi-period PnL data
  */
@@ -297,13 +308,14 @@ export interface SharpAnalysisResult {
   marketTitle: string
   marketSlug?: string
   eventSlug?: string
-  sportTag?: string
+  sportSeriesId?: number
   eventTime?: string // ISO date string for when the event starts/ends
   sideA: {
     label: string
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sideB: {
@@ -311,6 +323,7 @@ export interface SharpAnalysisResult {
     totalValue: number
     sharpScore: number
     holderCount: number
+    price?: number | null
     topHolders: TopHolderPnlData[]
   }
   sharpSide: 'A' | 'B' | 'EVEN'
@@ -326,7 +339,7 @@ export interface SharpAnalysisDebug {
     marketTitle: string
     marketSlug?: string
     eventSlug?: string
-    sportTag?: string
+    sportSeriesId?: number
     outcomes?: string[]
     endDate?: string
   }
@@ -456,13 +469,14 @@ interface ClobMarket {
 export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).handler(
   async ({ data }) => {
     console.log('[sharp-money] fetchTrendingSportsMarketsFn called')
-    const payload = data as { limit?: number; sportTags?: string[] }
+    const payload = data as { limit?: number; seriesIds?: number[]; includeAllMarkets?: boolean; includeLowVolume?: boolean }
     const limit = payload.limit ?? 50
-    // Use TARGET_SPORT_TAGS if sportTags is undefined, null, or empty array
-    const sportTags = payload.sportTags && payload.sportTags.length > 0 
-      ? payload.sportTags 
-      : TARGET_SPORT_TAGS
-    console.log('[sharp-money] Received sportTags:', payload.sportTags, '→ Using:', sportTags)
+    const includeAllMarkets = payload.includeAllMarkets ?? false
+    const includeLowVolume = payload.includeLowVolume ?? false
+    const seriesIds = payload.seriesIds && payload.seriesIds.length > 0
+      ? payload.seriesIds
+      : TARGET_SPORT_SERIES_IDS
+    console.log('[sharp-money] Received seriesIds:', payload.seriesIds, '→ Using:', seriesIds)
 
     // Use Gamma API with tag_id filtering for sports markets
     try {
@@ -473,21 +487,16 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       const endDateMax = tomorrow.toISOString().split('T')[0]
       
       console.log(`[sharp-money] Fetching games from ${endDateMin} to ${endDateMax}`)
-      console.log(`[sharp-money] Fetching markets for sports: ${sportTags.join(', ')}`)
+      console.log(`[sharp-money] Fetching markets for series IDs: ${seriesIds.join(', ')}`)
       
-      const seriesIdByTag = new Map<string, number>()
-      for (const [tag, seriesId] of Object.entries(SPORTS_SERIES_IDS)) {
-        seriesIdByTag.set(tag, seriesId)
-      }
-
       // Fetch markets for each sport series via events
       const allSportsMarkets: GammaMarket[] = []
       const tagStats: RuntimeMarketStats['tagStats'] = []
       const eventStats: RuntimeMarketStats['eventStats'] = []
       const eventDetails: RuntimeMarketStats['eventDetails'] = []
       
-      for (const tag of sportTags) {
-        const seriesId = seriesIdByTag.get(tag)
+      for (const seriesId of seriesIds) {
+        const tag = SERIES_ID_TO_TAG.get(seriesId) ?? `series-${seriesId}`
         let tagMarkets: GammaMarket[] = []
 
         if (!seriesId) {
@@ -518,24 +527,17 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
               const normalizedMarkets = rawMarkets.map((market) => ({
                 ...market,
                 event_slug: event.slug ?? market.event_slug,
+                seriesId,
+                startTime: event.startTime ?? market.startTime,
               }))
-              const filteredMarkets = normalizedMarkets.filter((market) => {
-                const descriptor = {
-                  title: market.question,
-                  slug: market.slug,
-                  eventSlug: getEventSlug(market),
-                }
-                const detectedTag = detectSportTag(descriptor)
-                return isSportsMarket(descriptor) && isMatchingSportTag(detectedTag, tag)
-              })
-              tagMarkets.push(...filteredMarkets)
-              expandedCount += filteredMarkets.length
+              tagMarkets.push(...normalizedMarkets)
+              expandedCount += normalizedMarkets.length
               eventDetails.push({
                 tag,
                 seriesId,
                 eventSlug: event.slug ?? 'unknown',
                 eventTitle: event.title ?? event.slug ?? 'unknown',
-                marketCount: filteredMarkets.length,
+                marketCount: normalizedMarkets.length,
                 rawMarketCount: rawMarkets.length,
               })
             }
@@ -547,8 +549,8 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
             })
             const filteredTagMarkets = tagMarkets.filter((market) => {
               const marketVolume = market.volumeNum ?? market.volume ?? 0
-              return marketVolume >= MIN_VOLUME_USD
-                && isMainMarketTitle(market.question ?? '')
+              if (!includeLowVolume && marketVolume < MIN_VOLUME_USD) return false
+              return isMainMarketTitle(market.question ?? '')
             })
             tagStats.push({
               tag,
@@ -586,22 +588,12 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         }
       }
       const uniqueCombinedMarkets = [...combinedByConditionId.values()]
-      const sportsOnlyMarkets = uniqueCombinedMarkets.filter((market) => {
-        const descriptor = {
-          title: market.question,
-          slug: market.slug,
-          eventSlug: getEventSlug(market),
-        }
-        const detectedTag = detectSportTag(descriptor)
-        return isSportsMarket(descriptor) && Boolean(detectedTag && TARGET_SPORT_TAGS.includes(detectedTag))
-      })
+      const sportsOnlyMarkets = uniqueCombinedMarkets.filter((market) =>
+        isTargetSeriesId(market.seriesId),
+      )
       const combinedTagMap = new Map<string, GammaMarket[]>()
       for (const market of uniqueCombinedMarkets) {
-        const tag = detectSportTag({
-          title: market.question,
-          slug: market.slug,
-          eventSlug: getEventSlug(market),
-        }) ?? 'unknown'
+        const tag = SERIES_ID_TO_TAG.get(market.seriesId ?? -1) ?? 'unknown'
         if (!combinedTagMap.has(tag)) combinedTagMap.set(tag, [])
         combinedTagMap.get(tag)?.push(market)
       }
@@ -633,26 +625,25 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       const seenIds = new Set<string>()
       const sportsMarkets = sportsOnlyMarkets.filter(market => {
         if (!market.conditionId || seenIds.has(market.conditionId)) return false
-        if (market.endDate) {
-          const gameTime = new Date(market.endDate)
-          // Exclude games that have already started
-          if (gameTime < now) return false
-          // Exclude games more than 24 hours out
-          if (gameTime > twentyFourHoursFromNow) return false
+        const eventTime = market.startTime ?? market.endDate
+        if (eventTime) {
+          const gameTime = parseEventTime(eventTime)
+          if (gameTime) {
+            // Exclude games that have already started
+            if (gameTime < now) return false
+            // Exclude games more than 24 hours out
+            if (gameTime > twentyFourHoursFromNow) return false
+          }
         }
         const marketVolume = market.volumeNum ?? market.volume ?? 0
-        if (marketVolume < MIN_VOLUME_USD) return false
-        if (!isMainMarketTitle(market.question ?? '')) return false
+        if (!includeLowVolume && marketVolume < MIN_VOLUME_USD) return false
+        if (!includeAllMarkets && !isMainMarketTitle(market.question ?? '')) return false
         seenIds.add(market.conditionId)
         return true
       })
       const filteredTagMap = new Map<string, GammaMarket[]>()
       for (const market of sportsMarkets) {
-        const tag = detectSportTag({
-          title: market.question,
-          slug: market.slug,
-          eventSlug: getEventSlug(market),
-        }) ?? 'unknown'
+        const tag = SERIES_ID_TO_TAG.get(market.seriesId ?? -1) ?? 'unknown'
         if (!filteredTagMap.has(tag)) filteredTagMap.set(tag, [])
         filteredTagMap.get(tag)?.push(market)
       }
@@ -687,15 +678,11 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         title: enhanceMarketTitle(market.question ?? '', market.slug),
         slug: market.slug,
         eventSlug: getEventSlug(market),
-        sportTag: detectSportTag({
-          title: market.question,
-          slug: market.slug,
-          eventSlug: getEventSlug(market),
-        }),
+        sportSeriesId: market.seriesId,
         volume: market.volumeNum ?? market.volume ?? 0,
         liquidity: market.liquidityNum ?? market.liquidity ?? 0,
         outcomes: parseOutcomes(market.outcomes),
-        endDate: market.endDate,
+        endDate: market.startTime ?? market.endDate,
       }))
 
       return { markets: topMarkets }
@@ -1461,13 +1448,22 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       marketTitle: string
       marketSlug?: string
       eventSlug?: string
-      sportTag?: string
+      sportSeriesId?: number
       outcomes?: string[]
       endDate?: string
       includeDebug?: boolean
     }
 
-    const { conditionId, marketTitle, marketSlug, eventSlug, sportTag, outcomes, endDate, includeDebug } = payload
+    const {
+      conditionId,
+      marketTitle,
+      marketSlug,
+      eventSlug,
+      sportSeriesId,
+      outcomes,
+      endDate,
+      includeDebug,
+    } = payload
     console.log('[sharp-money] Analyzing:', { conditionId, marketTitle })
 
     if (!conditionId) {
@@ -1965,7 +1961,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             marketTitle,
             marketSlug,
             eventSlug,
-            sportTag,
+            sportSeriesId,
             outcomes,
             endDate,
           },
@@ -2028,13 +2024,14 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
           marketTitle,
           marketSlug,
           eventSlug,
-          sportTag,
+          sportSeriesId,
           eventTime: endDate,
           sideA: {
             label: sideALabel,
             totalValue: sideATotalValue,
             sharpScore: sideASharpScore,
             holderCount: sideAHolders.length,
+            price: prices[0] ?? null,
             topHolders: sideATopHolders,
           },
           sideB: {
@@ -2042,6 +2039,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             totalValue: sideBTotalValue,
             sharpScore: sideBSharpScore,
             holderCount: sideBHolders.length,
+            price: prices[1] ?? null,
             topHolders: sideBTopHolders,
           },
           sharpSide,
@@ -2059,13 +2057,14 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         marketTitle,
         marketSlug,
         eventSlug,
-        sportTag,
+        sportSeriesId,
         eventTime: endDate,
         sideA: {
           label: sideALabel,
           totalValue: sideATotalValue,
           sharpScore: sideASharpScore,
           holderCount: sideAHolders.length,
+          price: prices[0] ?? null,
           topHolders: sideATopHolders,
         },
         sideB: {
@@ -2073,6 +2072,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
           totalValue: sideBTotalValue,
           sharpScore: sideBSharpScore,
           holderCount: sideBHolders.length,
+          price: prices[1] ?? null,
           topHolders: sideBTopHolders,
         },
         sharpSide,
@@ -2095,11 +2095,11 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
  */
 export const getSharpMoneyCacheFn = createServerFn({ method: 'POST' }).handler(
   async ({ context, data }) => {
-    const payload = data as { sportTag?: string; limit?: number }
+    const payload = data as { sportSeriesId?: number; limit?: number }
     const db = getDb(context)
 
     const entries = await listSharpMoneyCache(db, {
-      sportTag: payload.sportTag,
+      sportSeriesId: payload.sportSeriesId,
       limit: payload.limit ?? 50,
     })
 
@@ -2171,7 +2171,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       marketTitle: string
       marketSlug?: string
       eventSlug?: string
-      sportTag?: string
+      sportSeriesId?: number
       outcomes?: string[]
       endDate?: string
     }
@@ -2185,27 +2185,20 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
     
     console.log('[sharp-money] Checking descriptor:', JSON.stringify(descriptor))
     
-    const detectedSportTag = detectSportTag(descriptor)
-    const isSport = isSportsMarket(descriptor)
-    
-    console.log('[sharp-money] Detection result:', { isSport, detectedSportTag })
-    
-    if (!isSport) {
-      console.warn('[sharp-money] REJECTED - Not a sports market:', payload.marketTitle)
-      return { success: false, error: 'Not a sports market' }
+    const { sportSeriesId } = payload
+    if (sportSeriesId !== undefined && !isTargetSeriesId(sportSeriesId)) {
+      console.warn('[sharp-money] REJECTED - Not a target series:', payload.marketTitle, sportSeriesId)
+      return { success: false, error: 'Not a target series' }
     }
-    
-    if (!detectedSportTag || !TARGET_SPORT_TAGS.includes(detectedSportTag)) {
-      console.warn('[sharp-money] REJECTED - Not a target sport:', payload.marketTitle, detectedSportTag)
-      return { success: false, error: 'Not a target sport' }
-    }
-    
-    console.log('[sharp-money] ACCEPTED:', payload.marketTitle, '| sport:', detectedSportTag)
+
+    console.log('[sharp-money] ACCEPTED:', payload.marketTitle, '| series:', sportSeriesId ?? 'unknown')
 
     const db = getDb(context)
 
     // Run analysis
-    const { analysis, error, allWalletAddresses } = await analyzeMarketSharpnessFn({ data: payload })
+    const { analysis, error, allWalletAddresses } = await analyzeMarketSharpnessFn({
+      data: payload,
+    })
 
     if (!analysis) {
       console.warn('[sharp-money] Analysis failed:', error)
@@ -2219,7 +2212,7 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       marketTitle: analysis.marketTitle,
       marketSlug: analysis.marketSlug,
       eventSlug: analysis.eventSlug,
-      sportTag: analysis.sportTag,
+      sportSeriesId: analysis.sportSeriesId,
       eventTime: analysis.eventTime,
       sideA: analysis.sideA,
       sideB: analysis.sideB,
@@ -2246,7 +2239,7 @@ export const analyzeMarketSharpnessDebugFn = createServerFn({ method: 'POST' }).
       marketTitle?: string
       marketSlug?: string
       eventSlug?: string
-      sportTag?: string
+      sportSeriesId?: number
       outcomes?: string[]
       endDate?: string
       useCache?: boolean
@@ -2271,7 +2264,7 @@ export const analyzeMarketSharpnessDebugFn = createServerFn({ method: 'POST' }).
       marketTitle,
       marketSlug: payload.marketSlug ?? cacheEntry?.marketSlug,
       eventSlug: payload.eventSlug ?? cacheEntry?.eventSlug,
-      sportTag: payload.sportTag ?? cacheEntry?.sportTag,
+      sportSeriesId: payload.sportSeriesId ?? cacheEntry?.sportSeriesId,
       outcomes: payload.outcomes,
       endDate: payload.endDate ?? cacheEntry?.eventTime,
       includeDebug: true,
