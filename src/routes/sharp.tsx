@@ -652,6 +652,13 @@ function SharpMoneyCard({
   const sharpTop3 = sharpSideTopHolders.slice(0, 3).reduce((sum, holder) => sum + holder.amount, 0)
   const sharpSideTotal = sharpSideData.totalValue
   const hasHighConcentration = sharpSideTotal > 0 && (sharpTop1 / sharpSideTotal >= 0.6 || sharpTop3 / sharpSideTotal >= 0.8)
+  const LOW_ROI_PRICE_THRESHOLD = 0.8
+  const sharpSidePrice = sharpSideData.price
+  const hasLowRoi =
+    entry.sharpSide !== 'EVEN' &&
+    typeof sharpSidePrice === 'number' &&
+    Number.isFinite(sharpSidePrice) &&
+    sharpSidePrice >= LOW_ROI_PRICE_THRESHOLD
 
   // Calculate volume percentage and get heat map color
   const totalVolume = entry.sideA.totalValue + entry.sideB.totalValue
@@ -760,6 +767,13 @@ function SharpMoneyCard({
                     </span>
                   </div>
                 )}
+                {hasLowRoi && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+                      Low ROI
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -865,6 +879,13 @@ function SharpMoneyCard({
                   <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
                     <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
                       Concentrated
+                    </span>
+                  </div>
+                )}
+                {hasLowRoi && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+                      Low ROI
                     </span>
                   </div>
                 )}
