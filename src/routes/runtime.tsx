@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useCallback, useEffect, useState } from 'react'
 
+import { AuthGate } from '@/components/auth-gate'
 import {
   fetchTrendingSportsMarketsFn,
   getRuntimeMarketStatsFn,
@@ -101,7 +102,8 @@ function RuntimePage() {
   }, [loadStats])
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <AuthGate>
+      <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
         <header>
           <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Runtime</p>
@@ -260,6 +262,7 @@ function RuntimePage() {
           </section>
         )}
       </div>
-    </div>
+      </div>
+    </AuthGate>
   )
 }

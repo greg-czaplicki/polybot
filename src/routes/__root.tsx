@@ -16,7 +16,7 @@ export const Route = createRootRoute({
       },
       {
         name: 'description',
-        content: 'Track proxy wallets, monitor positions, and receive alerts for big swings on Polymarket',
+        content: 'Sharp money signals and market reads for Polymarket sports markets',
       },
       {
         name: 'apple-mobile-web-app-capable',
@@ -31,7 +31,7 @@ export const Route = createRootRoute({
         content: 'Polywhaler',
       },
       {
-        title: 'Polywhaler - Polymarket Dashboard',
+        title: 'Polywhaler - Sharp Money',
       },
     ],
     links: [
@@ -54,119 +54,10 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
-  const instanceId = import.meta.env.VITE_PUSHER_BEAMS_INSTANCE_ID || ''
-  
   return (
     <html lang="en">
       <head>
         <HeadContent />
-        <script src="https://js.pusher.com/beams/2.1.0/push-notifications-cdn.js" />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function () {
-                const instanceId = ${instanceId ? `'${instanceId.replace(/'/g, "\\'")}'` : 'null'};
-                if (!instanceId) return;
-                if (!('serviceWorker' in navigator)) return;
-                
-                function initPusherBeams() {
-                  if (!window.PusherPushNotifications) {
-                    setTimeout(initPusherBeams, 100);
-                    return;
-                  }
-                  
-                  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-                    return;
-                  }
-                  
-                  if ('Notification' in window && Notification.permission === 'denied') {
-                    return;
-                  }
-                  
-                  if (!('PushManager' in window)) {
-                    return;
-                  }
-                  
-                  navigator.serviceWorker
-                    .register('/service-worker.js', { scope: '/' })
-                    .then(async (registration) => {
-                      console.log('[Pusher Beams] Service worker registered');
-                      let serviceWorker = registration.installing || registration.waiting || registration.active;
-                      
-                      if (serviceWorker && serviceWorker.state !== 'activated') {
-                        await new Promise((resolve) => {
-                          const stateChangeHandler = () => {
-                            if (serviceWorker.state === 'activated') {
-                              console.log('[Pusher Beams] Service worker activated');
-                              serviceWorker.removeEventListener('statechange', stateChangeHandler);
-                              resolve(undefined);
-                            }
-                          };
-                          serviceWorker.addEventListener('statechange', stateChangeHandler);
-                          setTimeout(() => {
-                            serviceWorker.removeEventListener('statechange', stateChangeHandler);
-                            resolve(undefined);
-                          }, 5000);
-                        });
-                      }
-                      
-                      if (!registration.active) {
-                        await navigator.serviceWorker.ready;
-                        console.log('[Pusher Beams] Service worker ready');
-                      }
-                      
-                      if ('Notification' in window && Notification.permission === 'default') {
-                        try {
-                          const permission = await Notification.requestPermission();
-                          console.log('[Pusher Beams] Notification permission:', permission);
-                          if (permission === 'denied') {
-                            console.warn('[Pusher Beams] Notification permission denied');
-                            return;
-                          }
-                        } catch (err) {
-                          console.error('[Pusher Beams] Error requesting permission:', err);
-                          return;
-                        }
-                      } else if ('Notification' in window) {
-                        console.log('[Pusher Beams] Notification permission:', Notification.permission);
-                        if (Notification.permission === 'denied') {
-                          console.warn('[Pusher Beams] Notification permission denied');
-                          return;
-                        }
-                      }
-                      
-                      const beamsClient = new window.PusherPushNotifications.Client({
-                        instanceId: instanceId,
-                      });
-                      
-                      return beamsClient.start().then(() => {
-                        console.log('[Pusher Beams] Client started');
-                        // Subscribe to the wallet-alerts interest to receive push notifications
-                        return beamsClient.addDeviceInterest('wallet-alerts').then(() => {
-                          console.log('[Pusher Beams] Subscribed to wallet-alerts interest');
-                          return beamsClient.getDeviceInterests().then((interestsResponse) => {
-                            const interests = Array.isArray(interestsResponse) 
-                              ? interestsResponse 
-                              : (interestsResponse && interestsResponse.interests ? interestsResponse.interests : []);
-                            console.log('[Pusher Beams] Current interests:', interests);
-                          });
-                        });
-                      });
-                    })
-                    .catch((err) => {
-                      console.error('[Pusher Beams] Initialization error:', err);
-                    });
-                }
-                
-                if (document.readyState === 'loading') {
-                  document.addEventListener('DOMContentLoaded', initPusherBeams);
-                } else {
-                  setTimeout(initPusherBeams, 100);
-                }
-              })();
-            `,
-          }}
-        />
       </head>
       <body>
         {children}

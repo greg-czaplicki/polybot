@@ -30,7 +30,7 @@ const MIN_UNIT_SIZE_SAMPLES = 3
 
 // Target sport tags for sharp money analysis
 // Note: 'soccer' is what detectSportTag returns for EPL games
-const TARGET_SPORT_TAGS = ['nfl', 'nba', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
+const _TARGET_SPORT_TAGS = ['nfl', 'nba', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
 
 // Configuration
 const MAX_MARKETS_PER_RUN = 10 // Limit to avoid rate limits
@@ -260,7 +260,7 @@ function calculateSharpScore(holders: TopHolderPnlData[], totalValue: number): n
  * Anti-sharps are big losers on cold streaks - betting against them is valuable
  * Returns a multiplier (1.0 = no boost, 1.18 = 18% boost)
  */
-function calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): number {
+function _calculateFadeBoost(holders: TopHolderPnlData[], totalValue: number): number {
   if (holders.length === 0 || totalValue <= 0) return 1.0
 
   const effectiveTotalValue = holders.reduce(
@@ -447,7 +447,7 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
   const conditionId = market.conditionId
 
   // Fetch holders
-  let holdersData = await fetchMarketHolders(conditionId)
+  const holdersData = await fetchMarketHolders(conditionId)
   if (!holdersData || holdersData.length === 0) {
     return null
   }

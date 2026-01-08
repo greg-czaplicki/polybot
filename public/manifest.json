@@ -1,7 +1,7 @@
 {
   "short_name": "Polywhaler",
-  "name": "Polywhaler - Polymarket Dashboard",
-  "description": "Track proxy wallets, monitor positions, and receive alerts for big swings",
+  "name": "Polywhaler - Sharp Money",
+  "description": "Sharp money signals and market reads for Polymarket sports markets",
   "icons": [
     {
       "src": "favicon.ico",
@@ -21,11 +21,10 @@
       "purpose": "any maskable"
     }
   ],
-  "start_url": "/",
+  "start_url": "/sharp",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#000000",
-  "background_color": "#ffffff",
-  "gcm_sender_id": "103953800507"
+  "background_color": "#ffffff"
 }

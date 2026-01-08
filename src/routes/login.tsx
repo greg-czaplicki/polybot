@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { Lock } from 'lucide-react'
-import { useState, FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { verifyPasswordFn } from '../server/api/auth'
 
 export const Route = createFileRoute('/login')({
@@ -22,8 +22,8 @@ function LoginPage() {
       await verifyPasswordFn({ data: { password } })
       // Store authentication in sessionStorage
       sessionStorage.setItem('polywhaler_authenticated', 'true')
-      // Redirect to home
-      navigate({ to: '/' })
+      // Redirect to primary app
+      navigate({ to: '/sharp' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid password')
       setIsLoading(false)
@@ -52,7 +52,6 @@ function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoFocus
                 className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-white placeholder-gray-500 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
                 placeholder="Enter password"
                 disabled={isLoading}
@@ -78,4 +77,3 @@ function LoginPage() {
     </div>
   )
 }
-

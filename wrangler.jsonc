@@ -24,21 +24,8 @@
 					"preview_database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7",
 					"remote": true
 				}
-			],
-			"vars": {
-				"PRIMARY_USER_ID": "polywhaler-admin",
-				"PUSHER_BEAMS_INSTANCE_ID": "bf064daf-795d-4c1b-9ee5-25c4676b4628"
-			}
+			]
 		}
 	},
-	"vars": {
-		"PRIMARY_USER_ID": "polywhaler-admin",
-		"PUSHER_BEAMS_INSTANCE_ID": "bf064daf-795d-4c1b-9ee5-25c4676b4628"
-	},
 	// Set APP_PASSWORD as a secret using: wrangler secret put APP_PASSWORD
-	"triggers": {
-		"crons": [
-			"*/5 * * * *"
-		]
-	}
 }

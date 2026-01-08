@@ -43,37 +43,6 @@ Polywhaler includes simple password protection to restrict access. To enable it:
 
 3. Users will be redirected to `/login` if not authenticated. Authentication is stored in `sessionStorage` and persists for the browser session.
 
-## Alerts
-
-Polywhaler now emits Pusher Beams push notifications whenever a tracked wallet opens a position worth at least \$50K (configurable). Push notifications work even when the app is closed or the screen is locked (PWA).
-
-Configure the following environment variables before running the alert cron:
-
-| Variable | Description |
-| --- | --- |
-| `ALERT_POSITION_THRESHOLD_USD` | Optional override for the default USD threshold (defaults to `50000`). |
-| `PUSHER_BEAMS_INSTANCE_ID` | Your Pusher Beams instance ID (found in Pusher dashboard). |
-| `PUSHER_BEAMS_SECRET_KEY` | Your Pusher Beams secret key (found in Pusher dashboard). |
-| `PUSHER_BEAMS_INTEREST` | Interest name to publish alerts to (defaults to `wallet-alerts`). |
-| `VITE_PUSHER_BEAMS_INSTANCE_ID` | Frontend-only value used to register browsers with Pusher Beams (same as `PUSHER_BEAMS_INSTANCE_ID`). |
-
-**Note:** You need to create a Pusher Beams instance (not Pusher Channels) in your Pusher dashboard. The client automatically subscribes to the `wallet-alerts` interest when notification permission is granted.
-
-**iOS Support (iOS 16.4+):** iOS/iPadOS 16.4+ supports Web Push Notifications for PWAs! Users must add the website to their home screen via Safari. Once installed as a PWA, the app will function like a native app and receive push notifications through Apple Push Notification service (APNs).
-
-**To enable iOS web push notifications:**
-1. Go to your Pusher Beams dashboard → Instance Settings
-2. Configure **APNs Integration** (not Safari Integration):
-   - Upload the `AuthKey_<KeyId>.p8` file from Apple Developer Portal
-   - Enter your Team ID (found in Apple Developer account)
-   - Save changes
-3. Users must add your site to their iOS home screen (Share → Add to Home Screen)
-4. Grant notification permission when prompted
-
-**Safari on macOS (Optional):** To enable push notifications in Safari on macOS desktop, configure the **Safari Integration** section in Pusher Beams dashboard. This requires a `.p12` certificate from Apple Developer Portal. See the [Pusher Beams Safari configuration guide](https://pusher.com/docs/beams/getting-started/web/configure-safari/) for details.
-
-If Pusher Beams keys are missing, Polywhaler will skip the push call and log a warning.
-
 ## Linting & Formatting
 
 This project uses [Biome](https://biomejs.dev/) for linting and formatting. The following scripts are available:

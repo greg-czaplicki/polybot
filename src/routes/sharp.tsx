@@ -1,7 +1,5 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import {
-  ArrowLeft,
-  ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -13,14 +11,13 @@ import {
   Target,
   TrendingUp,
   TrendingDown,
-  Trophy,
   Trash2,
   User,
-  Wallet,
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { AuthGate } from '@/components/auth-gate'
 import {
   getSharpMoneyCacheFn,
   getSharpMoneyCacheStatsFn,
@@ -124,7 +121,7 @@ function formatRelativeTime(timestamp: number): string {
 function truncateWalletName(name: string | null | undefined, maxLength: number = 20): string {
   if (!name) return ''
   if (name.length <= maxLength) return name
-  return name.slice(0, maxLength) + '...'
+  return `${name.slice(0, maxLength)}...`
 }
 
 function parseEventTime(isoDate?: string): Date | null {
@@ -450,7 +447,8 @@ function SharpMoneyPage() {
   }, [filteredEntries])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+    <AuthGate>
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       {/* Header */}
       <header 
         className="sticky top-0 z-50 border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-sm"
@@ -459,14 +457,6 @@ function SharpMoneyPage() {
         <div className="mx-auto max-w-7xl px-4 py-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-              <Link
-                to="/?view=wallets"
-                className="flex items-center gap-1 sm:gap-2 text-gray-400 hover:text-white transition-colors flex-shrink-0"
-                title="Go to Wallet Tracking"
-              >
-                <Wallet className="h-5 w-5" />
-                <span className="text-sm hidden sm:inline">Wallets</span>
-              </Link>
               <div className="flex items-center gap-2 min-w-0">
                 <Target className="h-5 w-5 sm:h-6 sm:w-6 text-cyan-400 flex-shrink-0" />
                 <h1 className="text-lg sm:text-xl font-bold text-white truncate">Sharp Money</h1>
@@ -616,7 +606,8 @@ function SharpMoneyPage() {
           </div>
         )}
       </main>
-    </div>
+      </div>
+    </AuthGate>
   )
 }
 

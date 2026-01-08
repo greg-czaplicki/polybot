@@ -1,5 +1,4 @@
 import { createServerFn } from '@tanstack/react-start'
-import { getDb } from '../env'
 
 export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
   async ({ data, context }) => {
@@ -26,4 +25,3 @@ export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
     return { success: true }
   },
 )
-

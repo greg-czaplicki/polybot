@@ -130,15 +130,10 @@ npx wrangler secret delete APP_PASSWORD
 **Required secrets:**
 - `APP_PASSWORD` (optional) - Password protection for the app
 
-**Optional secrets for alerts:**
-- `PUSHER_BEAMS_SECRET_KEY` - Pusher Beams secret key for push notifications
-- `ALERT_POSITION_THRESHOLD_USD` - Override default alert threshold (default: 50000)
-
 #### Environment Variables
 
 Some variables are set in `wrangler.jsonc`:
-- `PRIMARY_USER_ID` - Default user ID
-- `PUSHER_BEAMS_INSTANCE_ID` - Pusher Beams instance ID
+- (No required variables beyond D1 binding and optional password)
 
 These are already configured in the project.
 
