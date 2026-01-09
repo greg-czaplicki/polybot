@@ -215,6 +215,8 @@ export interface GammaMarket {
   liquidityNum?: number
   outcomes?: string
   outcomePrices?: string
+  bestBid?: number
+  bestAsk?: number
   active?: boolean
   closed?: boolean
   marketMakerAddress?: string
@@ -269,6 +271,19 @@ function mapSportToTag(sport: GammaSport): string | undefined {
     return 'ncaab'
   }
 
+  return undefined
+}
+
+function parseGammaNumber(value?: string | number | null): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
   return undefined
 }
 
@@ -446,6 +461,20 @@ function enhanceMarketTitle(title: string, slug?: string): string {
   
   // Build enhanced title
   return `${team1Code} vs ${team2Code}: ${title}`
+}
+
+function resolvePriceForLabel(
+  label: string,
+  fallbackIndex: number,
+  tokenOutcomes: Array<{ outcome: string; price: number | null }>,
+  fallbackPrices: [number, number],
+): number | null {
+  const normalized = label.trim().toLowerCase()
+  const exact = tokenOutcomes.find((token) => token.outcome === normalized)
+  if (exact?.price) return exact.price
+  const prefix = tokenOutcomes.find((token) => token.outcome.startsWith(normalized))
+  if (prefix?.price) return prefix.price
+  return fallbackPrices[fallbackIndex] ?? null
 }
 
 /**
@@ -682,6 +711,8 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
         volume: market.volumeNum ?? market.volume ?? 0,
         liquidity: market.liquidityNum ?? market.liquidity ?? 0,
         outcomes: parseOutcomes(market.outcomes),
+        bestBid: parseGammaNumber(market.bestBid),
+        bestAsk: parseGammaNumber(market.bestAsk),
         endDate: market.startTime ?? market.endDate,
       }))
 
@@ -1450,6 +1481,8 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       eventSlug?: string
       sportSeriesId?: number
       outcomes?: string[]
+      bestBid?: number
+      bestAsk?: number
       endDate?: string
       includeDebug?: boolean
     }
@@ -1461,6 +1494,8 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       eventSlug,
       sportSeriesId,
       outcomes,
+      bestBid,
+      bestAsk,
       endDate,
       includeDebug,
     } = payload
@@ -1491,18 +1526,85 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         return { analysis: null, error: `Failed to fetch holders: ${holdersResponse.status}` }
       }
 
+      const normalizeOutcome = (value?: string | null) => value?.trim().toLowerCase() ?? ''
+      const normalizePrice = (value: unknown): number | null => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          return null
+        }
+        if (value <= 0 || value >= 1) {
+          return null
+        }
+        return value
+      }
+
+      const pickValuePrice = (token: {
+        price?: number
+        bestAsk?: number
+        best_ask?: number
+      }) => normalizePrice(token.price) ?? normalizePrice(token.bestAsk) ?? normalizePrice(token.best_ask)
+
+      const pickDisplayPrice = (token: {
+        bestAsk?: number
+        best_ask?: number
+        price?: number
+      }) => normalizePrice(token.bestAsk) ?? normalizePrice(token.best_ask) ?? normalizePrice(token.price)
+
       // Parse market prices from CLOB API (prices are 0-1, e.g. 0.65 = $0.65 per share)
-      let prices: [number, number] = [1, 1] // Default to $1 if we can't get prices
+      let valuePrices: [number, number] = [1, 1] // For USD conversion of holder size
+      let displayPrices: [number, number] = [1, 1] // For odds display
+      const tokenOutcomes: Array<{ outcome: string; price: number | null }> = []
+      let hasOrderbookPrices = false
+
+      const normalizedBestAsk = normalizePrice(bestAsk)
+      const normalizedBestBid = normalizePrice(bestBid)
+      if (normalizedBestAsk && normalizedBestBid) {
+        displayPrices = [
+          normalizedBestAsk,
+          normalizePrice(1 - normalizedBestBid) ?? displayPrices[1],
+        ]
+        hasOrderbookPrices = true
+        if (outcomes && outcomes.length >= 2) {
+          tokenOutcomes.push(
+            { outcome: normalizeOutcome(outcomes[0]), price: displayPrices[0] },
+            { outcome: normalizeOutcome(outcomes[1]), price: displayPrices[1] },
+          )
+        }
+      }
       if (clobResponse.ok) {
         const clobData = await clobResponse.json() as {
-          tokens?: Array<{ outcome: string; price: number }>
+          tokens?: Array<{
+            outcome: string
+            price?: number
+            bestAsk?: number
+            best_ask?: number
+          }>
         }
         if (clobData?.tokens && clobData.tokens.length >= 2) {
-          prices = [
-            clobData.tokens[0]?.price ?? 1,
-            clobData.tokens[1]?.price ?? 1,
+          const parsedTokens = clobData.tokens.map((token) => ({
+            outcome: token.outcome,
+            valuePrice: pickValuePrice(token),
+            displayPrice: pickDisplayPrice(token),
+          }))
+
+          valuePrices = [
+            parsedTokens[0]?.valuePrice ?? 1,
+            parsedTokens[1]?.valuePrice ?? 1,
           ]
-          console.log('[sharp-money] Prices:', prices)
+          if (!hasOrderbookPrices) {
+            displayPrices = [
+              parsedTokens[0]?.displayPrice ?? valuePrices[0],
+              parsedTokens[1]?.displayPrice ?? valuePrices[1],
+            ]
+          }
+          if (tokenOutcomes.length === 0) {
+            parsedTokens.forEach((token) => {
+              tokenOutcomes.push({
+                outcome: normalizeOutcome(token.outcome),
+                price: token.displayPrice ?? token.valuePrice ?? null,
+              })
+            })
+          }
+          console.log('[sharp-money] Prices:', displayPrices)
         }
       }
 
@@ -1581,7 +1683,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
           allWallets.add(holder.proxyWallet)
           
           // Convert shares to USD: shares * price
-          const priceForOutcome = prices[holder.outcomeIndex] ?? 1
+          const priceForOutcome = valuePrices[holder.outcomeIndex] ?? 1
           const usdValue = holder.amount * priceForOutcome
           
           const holderData: HolderWithPnl = {
@@ -1966,8 +2068,8 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             endDate,
           },
           prices: {
-            sideA: prices[0],
-            sideB: prices[1],
+            sideA: displayPrices[0],
+            sideB: displayPrices[1],
           },
           holders: {
             sideA: sideAHolders.length,
@@ -2031,7 +2133,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             totalValue: sideATotalValue,
             sharpScore: sideASharpScore,
             holderCount: sideAHolders.length,
-            price: prices[0] ?? null,
+            price: resolvePriceForLabel(sideALabel, 0, tokenOutcomes, displayPrices),
             topHolders: sideATopHolders,
           },
           sideB: {
@@ -2039,7 +2141,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
             totalValue: sideBTotalValue,
             sharpScore: sideBSharpScore,
             holderCount: sideBHolders.length,
-            price: prices[1] ?? null,
+            price: resolvePriceForLabel(sideBLabel, 1, tokenOutcomes, displayPrices),
             topHolders: sideBTopHolders,
           },
           sharpSide,
@@ -2059,22 +2161,22 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         eventSlug,
         sportSeriesId,
         eventTime: endDate,
-        sideA: {
-          label: sideALabel,
-          totalValue: sideATotalValue,
-          sharpScore: sideASharpScore,
-          holderCount: sideAHolders.length,
-          price: prices[0] ?? null,
-          topHolders: sideATopHolders,
-        },
-        sideB: {
-          label: sideBLabel,
-          totalValue: sideBTotalValue,
-          sharpScore: sideBSharpScore,
-          holderCount: sideBHolders.length,
-          price: prices[1] ?? null,
-          topHolders: sideBTopHolders,
-        },
+          sideA: {
+            label: sideALabel,
+            totalValue: sideATotalValue,
+            sharpScore: sideASharpScore,
+            holderCount: sideAHolders.length,
+            price: resolvePriceForLabel(sideALabel, 0, tokenOutcomes, displayPrices),
+            topHolders: sideATopHolders,
+          },
+          sideB: {
+            label: sideBLabel,
+            totalValue: sideBTotalValue,
+            sharpScore: sideBSharpScore,
+            holderCount: sideBHolders.length,
+            price: resolvePriceForLabel(sideBLabel, 1, tokenOutcomes, displayPrices),
+            topHolders: sideBTopHolders,
+          },
         sharpSide,
         confidence: adjustedConfidence,
         scoreDifferential,
@@ -2173,6 +2275,8 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       eventSlug?: string
       sportSeriesId?: number
       outcomes?: string[]
+      bestBid?: number
+      bestAsk?: number
       endDate?: string
     }
     

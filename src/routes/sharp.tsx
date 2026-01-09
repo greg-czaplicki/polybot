@@ -288,6 +288,8 @@ function SharpMoneyPage() {
                   eventSlug: market.eventSlug,
                   sportSeriesId: market.sportSeriesId ?? undefined,
                   outcomes: market.outcomes,
+                  bestBid: market.bestBid,
+                  bestAsk: market.bestAsk,
                   endDate: market.endDate,
                 },
               })
@@ -324,6 +326,8 @@ function SharpMoneyPage() {
                     eventSlug: market.eventSlug,
                   sportSeriesId: market.sportSeriesId ?? undefined,
                     outcomes: market.outcomes,
+                    bestBid: market.bestBid,
+                    bestAsk: market.bestAsk,
                     endDate: market.endDate,
                   },
                 })
