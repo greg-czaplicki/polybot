@@ -1,5 +1,7 @@
 export interface Env {
   POLYWHALER_DB: D1Database
+  SHARP_PIPELINE: DurableObjectNamespace
+  SHARP_PIPELINE_QUEUE: Queue
   // Password protection
   APP_PASSWORD?: string
 }

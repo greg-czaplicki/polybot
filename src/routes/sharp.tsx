@@ -9,8 +9,6 @@ import {
   Loader2,
   RefreshCw,
   Target,
-  TrendingUp,
-  TrendingDown,
   Trash2,
   User,
   Zap,
@@ -21,10 +19,7 @@ import { AuthGate } from '@/components/auth-gate'
 import {
   getSharpMoneyCacheFn,
   getSharpMoneyCacheStatsFn,
-  refreshMarketSharpnessFn,
-  fetchTrendingSportsMarketsFn,
   clearSharpMoneyCacheFn,
-  fetchBatchMultiPeriodPnlFn,
   type SharpMoneyCacheEntry,
 } from '../server/api/sharp-money'
 
@@ -118,6 +113,15 @@ function formatRelativeTime(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+function formatRelativeTimeMs(timestampMs: number): string {
+  const now = Date.now()
+  const diffMs = now - timestampMs
+  if (diffMs < 60_000) return 'Just now'
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`
+  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`
+  return `${Math.floor(diffMs / 86_400_000)}d ago`
+}
+
 function truncateWalletName(name: string | null | undefined, maxLength: number = 20): string {
   if (!name) return ''
   if (name.length <= maxLength) return name
@@ -209,17 +213,31 @@ function SharpMoneyPage() {
   const [refreshStatus, setRefreshStatus] = useState<string | null>(null)
   const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null)
   const [refreshLog, setRefreshLog] = useState<string[]>([])
+  const [lastCacheFetchAt, setLastCacheFetchAt] = useState<number | null>(null)
+  const [pipelineStatus, setPipelineStatus] = useState<{
+    inProgress: boolean
+    startedAt?: number
+    updatedAt?: number
+    totalQueued?: number
+    processed?: number
+  } | null>(null)
   const [selectedSeriesId, setSelectedSeriesId] = useState('all')
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set())
   const [showAllEntries, setShowAllEntries] = useState(false)
+  const showRefreshDebug =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).has('refreshDebug')
   const [cacheStats, setCacheStats] = useState<{
     totalEntries: number
     newestEntry?: number
   } | null>(null)
 
   // Load cached data
-  const loadCache = useCallback(async () => {
-    setIsLoading(true)
+  const loadCache = useCallback(async (options?: { silent?: boolean }) => {
+    let result: { entries: SharpMoneyCacheEntry[]; stats: { totalEntries: number; newestEntry?: number } | null } | null = null
+    if (!options?.silent) {
+      setIsLoading(true)
+    }
     try {
       const limit = showAllEntries ? 200 : 50
       const [cacheResult, statsResult] = await Promise.all([
@@ -232,18 +250,49 @@ function SharpMoneyPage() {
         getSharpMoneyCacheStatsFn({ data: {} }),
       ])
 
-      setEntries(cacheResult.entries ?? [])
-      setCacheStats(statsResult.stats ?? null)
+      const nextEntries = cacheResult.entries ?? []
+      const nextStats = statsResult.stats ?? null
+      setEntries(nextEntries)
+      setCacheStats(nextStats)
+      result = { entries: nextEntries, stats: nextStats }
     } catch (error) {
       console.error('Failed to load sharp money cache:', error)
     } finally {
-      setIsLoading(false)
+      if (!options?.silent) {
+        setIsLoading(false)
+      }
+      setLastCacheFetchAt(Date.now())
     }
+    return result
   }, [selectedSeriesId, showAllEntries])
+
+  const loadPipelineStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/_pipeline/status')
+      if (!response.ok) {
+        throw new Error('Failed to load pipeline status')
+      }
+      const status = await response.json()
+      setPipelineStatus(status)
+    } catch (error) {
+      console.error('Failed to load pipeline status:', error)
+    }
+  }, [])
 
   // Initial load
   useEffect(() => {
     loadCache()
+  }, [loadCache])
+
+  useEffect(() => {
+    loadPipelineStatus()
+  }, [loadPipelineStatus])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadCache({ silent: true })
+    }, 60000)
+    return () => clearInterval(interval)
   }, [loadCache])
 
   // Manual refresh - behavior depends on cache state:
@@ -251,139 +300,18 @@ function SharpMoneyPage() {
   // - If cache has data: partial refresh - only re-fetch data for imminent cached events
   const handleRefresh = async () => {
     setIsRefreshing(true)
-    setRefreshStatus('Preparing refresh...')
-    setRefreshProgress(null)
-    setRefreshLog([])
     try {
-      const isFullRefresh = entries.length === 0
-      
-      if (isFullRefresh) {
-        // Cache is empty - do a full refresh of all markets
-        console.log('[sharp] Cache empty - doing full refresh')
-        setRefreshStatus('Fetching markets...')
-        const { markets } = await fetchTrendingSportsMarketsFn({
-          data: {
-            limit: 200,
-            seriesIds: selectedSeriesId === 'all' ? undefined : [Number(selectedSeriesId)],
-            includeAllMarkets: true,
-          },
-        })
-
-        if (markets && markets.length > 0) {
-          // Analyze all fetched markets (no arbitrary limit)
-          console.log(`[sharp] Analyzing ${markets.length} markets...`)
-          setRefreshStatus(`Analyzing ${markets.length} markets...`)
-          setRefreshProgress({ current: 0, total: markets.length })
-          
-          for (let i = 0; i < markets.length; i += 1) {
-            const market = markets[i]
-            setRefreshProgress({ current: i + 1, total: markets.length })
-            setRefreshLog((prev) => [...prev.slice(-30), `Analyzing ${market.title}`])
-            try {
-              const result = await refreshMarketSharpnessFn({
-                data: {
-                  conditionId: market.conditionId,
-                  marketTitle: market.title,
-                  marketSlug: market.slug,
-                  eventSlug: market.eventSlug,
-                  sportSeriesId: market.sportSeriesId ?? undefined,
-                  outcomes: market.outcomes,
-                  bestBid: market.bestBid,
-                  bestAsk: market.bestAsk,
-                  endDate: market.endDate,
-                },
-              })
-
-              // Fetch PnL for all wallets (each call has its own 50 subrequest budget)
-              if (result?.allWalletAddresses && result.allWalletAddresses.length > 0) {
-                const wallets = result.allWalletAddresses
-                const walletsPerCall = 10 // Each call fetches 10 wallets (40 subrequests)
-                const totalBatches = Math.ceil(wallets.length / walletsPerCall)
-                
-                // Fetch PnL in batches (each batch is a separate server function call)
-                for (let i = 0; i < wallets.length; i += walletsPerCall) {
-                  const batch = wallets.slice(i, i + walletsPerCall)
-                  try {
-                    const batchIndex = Math.floor(i / walletsPerCall) + 1
-                    setRefreshStatus(`Fetching PnL batch ${batchIndex}/${totalBatches}...`)
-                    await fetchBatchMultiPeriodPnlFn({ data: { walletAddresses: batch } })
-                  } catch (error) {
-                    console.error('Failed to fetch PnL batch:', error)
-                  }
-                  // Small delay between batches
-                  if (i + walletsPerCall < wallets.length) {
-                    await new Promise((resolve) => setTimeout(resolve, 100))
-                  }
-                }
-
-                // Re-run analysis now that all PnL data is cached
-                setRefreshStatus(`Analyzing ${market.title}...`)
-                await refreshMarketSharpnessFn({
-                  data: {
-                    conditionId: market.conditionId,
-                    marketTitle: market.title,
-                    marketSlug: market.slug,
-                    eventSlug: market.eventSlug,
-                  sportSeriesId: market.sportSeriesId ?? undefined,
-                    outcomes: market.outcomes,
-                    bestBid: market.bestBid,
-                    bestAsk: market.bestAsk,
-                    endDate: market.endDate,
-                  },
-                })
-              }
-            } catch (error) {
-              console.error('Failed to refresh market:', market.title, error)
-            }
-            await new Promise((resolve) => setTimeout(resolve, 500))
-          }
-        }
-      } else {
-        // Cache has data - partial refresh: ONLY update existing imminent/live events (no new discovery)
-        const now = new Date()
-        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000)
-        
-        const imminentCachedEntries = entries.filter((entry) => {
-          const eventDate = parseEventTime(entry.eventTime)
-          if (!eventDate) return false
-          // Include if: already started (live) OR starting within 1 hour
-          return eventDate <= oneHourFromNow
-        })
-        
-        if (imminentCachedEntries.length === 0) {
-          console.log('[sharp] No imminent events to refresh')
-          setRefreshStatus('No imminent events to refresh.')
-        } else {
-          console.log(`[sharp] Partial refresh: updating ${imminentCachedEntries.length} imminent/live events`)
-          setRefreshStatus(`Refreshing ${imminentCachedEntries.length} live markets...`)
-          setRefreshProgress({ current: 0, total: imminentCachedEntries.length })
-          
-          for (let i = 0; i < imminentCachedEntries.length; i += 1) {
-            const entry = imminentCachedEntries[i]
-            setRefreshProgress({ current: i + 1, total: imminentCachedEntries.length })
-            setRefreshLog((prev) => [...prev.slice(-30), `Refreshing ${entry.marketTitle}`])
-            try {
-              await refreshMarketSharpnessFn({
-                data: {
-                  conditionId: entry.conditionId,
-                  marketTitle: entry.marketTitle,
-                  marketSlug: entry.marketSlug,
-                  eventSlug: entry.eventSlug,
-                  sportSeriesId: entry.sportSeriesId ?? undefined,
-                  endDate: entry.eventTime,
-                },
-              })
-            } catch (error) {
-              console.error('Failed to refresh:', entry.marketTitle, error)
-            }
-            await new Promise((resolve) => setTimeout(resolve, 500))
-          }
-        }
-      }
-
-      // Reload cache
-      setRefreshStatus('Refreshing cache view...')
-      await loadCache()
+      setRefreshStatus('Queueing background refresh...')
+      setRefreshProgress(null)
+      setRefreshLog([])
+      await fetch('/_pipeline/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      })
+      await loadPipelineStatus()
+      setRefreshStatus('Loading latest cache...')
+      await loadCache({ silent: true })
     } catch (error) {
       console.error('Failed to refresh:', error)
     } finally {
@@ -393,6 +321,19 @@ function SharpMoneyPage() {
     }
   }
 
+  useEffect(() => {
+    if (!pipelineStatus?.inProgress) {
+      return
+    }
+
+    const interval = setInterval(async () => {
+      await loadPipelineStatus()
+      await loadCache({ silent: true })
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [pipelineStatus?.inProgress, loadPipelineStatus, loadCache])
+
   // Clear cache handler
   const handleClearCache = async () => {
     if (!confirm('Reset all stored sharp data?')) return
@@ -400,6 +341,7 @@ function SharpMoneyPage() {
       await clearSharpMoneyCacheFn({ data: {} })
       setEntries([])
       setCacheStats(null)
+      await handleRefresh()
     } catch (error) {
       console.error('Failed to clear cache:', error)
     }
@@ -461,17 +403,20 @@ function SharpMoneyPage() {
         <div className="mx-auto max-w-7xl px-4 py-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <Target className="h-5 w-5 sm:h-6 sm:w-6 text-cyan-400 flex-shrink-0" />
-                <h1 className="text-lg sm:text-xl font-bold text-white truncate">Sharp Money</h1>
+              <div className="flex flex-col gap-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Target className="h-5 w-5 sm:h-6 sm:w-6 text-cyan-400 flex-shrink-0" />
+                  <h1 className="text-lg sm:text-xl font-bold text-white truncate">Polywhaler</h1>
+                </div>
+                <div className="sm:hidden text-[0.55rem] text-gray-500">
+                  Updated {cacheStats?.newestEntry ? formatRelativeTime(cacheStats.newestEntry) : '—'}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-              {cacheStats?.newestEntry && (
-                <span className="text-xs text-gray-500 hidden sm:inline">
-                  Updated {formatRelativeTime(cacheStats.newestEntry)}
-                </span>
-              )}
+              <div className="hidden sm:flex items-center text-xs text-gray-500">
+                Updated {cacheStats?.newestEntry ? formatRelativeTime(cacheStats.newestEntry) : '—'}
+              </div>
               <button
                 onClick={handleClearCache}
                 className="flex items-center gap-1 sm:gap-2 rounded-lg bg-red-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-red-400 hover:bg-red-500/20 transition-colors"
@@ -484,10 +429,10 @@ function SharpMoneyPage() {
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="flex items-center gap-1 sm:gap-2 rounded-lg bg-cyan-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
-                title={entries.length === 0 ? "Discover and analyze all new markets" : "Update existing events only (no new discovery)"}
+                title="Queue background refresh and reload cache"
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : entries.length === 0 ? 'Refresh All' : 'Refresh View'}</span>
+                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh Cache'}</span>
               </button>
             </div>
           </div>
@@ -496,23 +441,10 @@ function SharpMoneyPage() {
 
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-4 py-6">
-        {isRefreshing && (
-          <div className="mb-6 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
-            <p className="font-semibold">Refreshing data (this can take a while...)</p>
-            {refreshStatus && <p className="text-cyan-100/80">{refreshStatus}</p>}
-            {refreshProgress && refreshProgress.total > 0 && (
-              <div className="mt-2">
-                <div className="h-2 w-full rounded-full bg-cyan-500/20">
-                  <div
-                    className="h-2 rounded-full bg-cyan-400 transition-[width] duration-300"
-                    style={{ width: `${Math.min(100, (refreshProgress.current / refreshProgress.total) * 100)}%` }}
-                  />
-                </div>
-                <p className="mt-1 text-xs text-cyan-100/80">
-                  {refreshProgress.current} / {refreshProgress.total} markets
-                </p>
-              </div>
-            )}
+        {isLoading && entries.length === 0 && (
+          <div className="mb-6 flex items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-6 text-sm text-slate-200">
+            <Loader2 className="h-4 w-4 animate-spin text-cyan-300" />
+            Loading sharp data...
           </div>
         )}
         {/* Sport Filter */}
@@ -557,23 +489,65 @@ function SharpMoneyPage() {
           </div>
         )}
 
+        {pipelineStatus?.inProgress && !isLoading && (
+          <div className="mb-4 flex items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+            <Loader2 className="h-3 w-3 animate-spin text-cyan-200" />
+            <span>
+              Analyzing markets
+              {pipelineStatus.totalQueued
+                ? ` (${pipelineStatus.processed ?? 0}/${pipelineStatus.totalQueued})`
+                : ''}
+              . This can take a few minutes on first run.
+            </span>
+          </div>
+        )}
+        {showRefreshDebug && (
+          <div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.65rem] text-slate-300">
+            <div>refreshDebug=1</div>
+            <div>isLoading: {String(isLoading)}</div>
+            <div>isRefreshing: {String(isRefreshing)}</div>
+            <div>pipeline.inProgress: {String(pipelineStatus?.inProgress ?? false)}</div>
+            <div>entries: {entries.length}</div>
+            <div>filteredEntries: {filteredEntries.length}</div>
+            <div>cacheStats.totalEntries: {cacheStats?.totalEntries ?? 'null'}</div>
+            <div>cacheStats.newestEntry: {cacheStats?.newestEntry ?? 'null'}</div>
+            <div>pipeline.startedAt: {pipelineStatus?.startedAt ?? 'null'}</div>
+            <div>pipeline.updatedAt: {pipelineStatus?.updatedAt ?? 'null'}</div>
+            <div>pipeline.totalQueued: {pipelineStatus?.totalQueued ?? 'null'}</div>
+            <div>pipeline.processed: {pipelineStatus?.processed ?? 'null'}</div>
+            <div>lastCacheFetchAt: {lastCacheFetchAt ?? 'null'}</div>
+          </div>
+        )}
+
         {/* Empty State */}
         {!isLoading && filteredEntries.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Target className="h-12 w-12 text-gray-600 mb-4" />
             <h2 className="text-lg font-semibold text-white mb-2">No Sharp Money Data</h2>
             <p className="text-gray-400 mb-4 max-w-md">
-              {entries.length > 0 
-                ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
-                : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
+              {pipelineStatus?.inProgress
+                ? 'We are still processing the full refresh. Results will appear as the cache fills.'
+                : entries.length > 0 
+                  ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
+                  : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
             </p>
+            {!pipelineStatus?.inProgress && entries.length > 0 && !showAllEntries && (
+              <button
+                type="button"
+                onClick={() => setShowAllEntries(true)}
+                className="mb-4 flex items-center gap-2 rounded-lg border border-slate-700/60 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800/60"
+              >
+                <Eye className="h-4 w-4" />
+                Show all {entries.length} markets (including filtered)
+              </button>
+            )}
             <button
               onClick={handleRefresh}
               disabled={isRefreshing}
               className="flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50 transition-colors"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              Analyze Markets
+              Refresh Cache
             </button>
           </div>
         )}
@@ -1227,31 +1201,43 @@ function SideDetails({
         <h5 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
           Top Holders
         </h5>
-        <div className="grid grid-cols-[16px_20px_minmax(0,1fr)_80px_56px_56px_80px] items-center gap-2 text-[0.6rem] uppercase tracking-wider text-gray-500 mb-1">
+        <div className="grid grid-cols-[20px_26px_minmax(0,1fr)_52px_40px_40px_44px] sm:grid-cols-[22px_28px_minmax(0,1fr)_64px_48px_48px_64px] items-center gap-1 sm:gap-0.5 text-[0.5rem] sm:text-[0.6rem] uppercase tracking-wider text-gray-500 mb-1">
           <span />
           <span />
           <span>Holder</span>
-          <span className="text-right">PnL $</span>
-          <span className="text-right">PnL u</span>
-          <span className="text-right">Stake u</span>
-          <span className="text-right">Stake $</span>
+          <span className="text-right">
+            <span className="sm:hidden">PnL$</span>
+            <span className="hidden sm:inline">PnL $</span>
+          </span>
+          <span className="text-right">
+            <span className="sm:hidden">PnLu</span>
+            <span className="hidden sm:inline">PnL u</span>
+          </span>
+          <span className="text-right">
+            <span className="sm:hidden">StkU</span>
+            <span className="hidden sm:inline">Stake u</span>
+          </span>
+          <span className="text-right">
+            <span className="sm:hidden">Stk$</span>
+            <span className="hidden sm:inline">Stake $</span>
+          </span>
         </div>
         <ul className="space-y-1.5">
           {side.topHolders.map((holder, idx) => (
             <li
               key={holder.proxyWallet}
-              className="grid grid-cols-[16px_20px_minmax(0,1fr)_80px_56px_56px_80px] items-center gap-2 text-sm"
+              className="grid grid-cols-[20px_26px_minmax(0,1fr)_52px_40px_40px_44px] sm:grid-cols-[22px_28px_minmax(0,1fr)_64px_48px_48px_64px] items-center gap-1 sm:gap-0.5 text-[0.7rem] sm:text-sm"
             >
-              <span className="text-gray-500">{idx + 1}.</span>
+              <span className="text-gray-500 pr-1 text-right">{idx + 1}.</span>
               {holder.profileImage ? (
                 <img
                   src={holder.profileImage}
                   alt=""
-                  className="h-5 w-5 rounded-full object-cover"
+                  className="h-4 w-4 sm:h-5 sm:w-5 rounded-full object-cover ml-0.5"
                 />
               ) : (
-                <div className="h-5 w-5 rounded-full bg-slate-700 flex items-center justify-center">
-                  <User className="h-3 w-3 text-gray-400" />
+                <div className="h-4 w-4 sm:h-5 sm:w-5 rounded-full bg-slate-700 flex items-center justify-center ml-0.5">
+                  <User className="h-2.5 w-2.5 sm:h-3 sm:w-3 text-gray-400" />
                 </div>
               )}
               <a
@@ -1264,15 +1250,27 @@ function SideDetails({
                 {truncateWalletName(holder.name || holder.pseudonym) || `${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
               </a>
               <div className="flex justify-end">
-                <PnlBadge pnlAll={holder.pnlAll} />
+                {holder.pnlAll === null || holder.pnlAll === undefined ? (
+                  <span className="text-gray-600 text-[0.55rem] sm:text-xs">—</span>
+                ) : (
+                  <PnlBadge pnlAll={holder.pnlAll} />
+                )}
               </div>
               <div className="flex justify-end">
-                <UnitBadge pnlUnits={holder.pnlAllUnits} unitSize={holder.unitSize} />
+                {holder.pnlAllUnits === null || holder.pnlAllUnits === undefined ? (
+                  <span className="text-gray-600 text-[0.55rem] sm:text-xs">—</span>
+                ) : (
+                  <UnitBadge pnlUnits={holder.pnlAllUnits} unitSize={holder.unitSize} />
+                )}
               </div>
               <div className="flex justify-end">
-                <StakeUnitBadge stakeUsd={holder.amount} unitSize={holder.unitSize} />
+                {holder.unitSize === null || holder.unitSize === undefined || holder.unitSize <= 0 ? (
+                  <span className="text-gray-600 text-[0.55rem] sm:text-xs">—</span>
+                ) : (
+                  <StakeUnitBadge stakeUsd={holder.amount} unitSize={holder.unitSize} />
+                )}
               </div>
-              <span className="text-gray-400 text-xs text-right">
+              <span className="text-gray-400 text-[0.55rem] sm:text-xs text-right">
                 {formatUsdCompact(holder.amount)}
               </span>
             </li>
@@ -1292,13 +1290,12 @@ function PnlBadge({ pnlAll }: { pnlAll?: number | null }) {
 
   return (
     <span
-      className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${
+      className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${
         isPositive
           ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
           : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
       }`}
     >
-      {isPositive ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
       {formatUsdCompact(Math.abs(pnlAll))}
     </span>
   )
@@ -1325,7 +1322,7 @@ function UnitBadge({
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${
+      className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${
         isPositive
           ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
           : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
@@ -1369,7 +1366,7 @@ function StakeUnitBadge({
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-0.5 text-[0.6rem] font-semibold px-1.5 py-0.5 rounded ${tone}`}
+      className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${tone}`}
     >
       {formatted}x
     </span>

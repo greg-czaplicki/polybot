@@ -14,6 +14,35 @@
 			"preview_database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SHARP_PIPELINE",
+				"class_name": "SharpPipeline"
+			}
+		]
+	},
+	"queues": {
+		"producers": [
+			{
+				"binding": "SHARP_PIPELINE_QUEUE",
+				"queue": "sharp-pipeline"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "sharp-pipeline",
+				"max_batch_size": 1,
+				"max_batch_timeout": 30
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_classes": ["SharpPipeline"]
+		}
+	],
 	"env": {
 		"preview": {
 			"d1_databases": [
@@ -24,8 +53,36 @@
 					"preview_database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7",
 					"remote": true
 				}
-			]
+			],
+			"durable_objects": {
+				"bindings": [
+					{
+						"name": "SHARP_PIPELINE",
+						"class_name": "SharpPipeline"
+					}
+				]
+			},
+			"queues": {
+				"producers": [
+					{
+						"binding": "SHARP_PIPELINE_QUEUE",
+						"queue": "sharp-pipeline"
+					}
+				],
+				"consumers": [
+					{
+						"queue": "sharp-pipeline",
+						"max_batch_size": 1,
+						"max_batch_timeout": 30
+					}
+				]
+			}
 		}
 	},
 	// Set APP_PASSWORD as a secret using: wrangler secret put APP_PASSWORD
+	"triggers": {
+		"crons": [
+			"*/2 * * * *"
+		]
+	}
 }

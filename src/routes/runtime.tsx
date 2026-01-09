@@ -72,6 +72,10 @@ function RuntimePage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const filteredTotalMarkets = stats
+    ? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
+    : 0
+
   const loadStats = useCallback(async () => {
     setError(null)
     try {
@@ -120,7 +124,7 @@ function RuntimePage() {
                 Last fetched: {formatRelativeTime(stats?.fetchedAt)}
               </p>
               <p className="text-sm text-slate-400">
-                Total markets: {stats?.totalMarkets ?? 0}
+                Filtered markets (24h): {filteredTotalMarkets}
               </p>
               <p className="text-sm text-slate-400">
                 Expanded events: {stats?.expandedEventCount ?? 0} • Expanded markets: {stats?.expandedMarketCount ?? 0}
@@ -151,11 +155,11 @@ function RuntimePage() {
                   <tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
                     <th className="pb-3">Tag</th>
                     <th className="pb-3">Count</th>
-                    <th className="pb-3">Markets (events)</th>
+                    <th className="pb-3">Markets (24h window)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stats.tagStats.map((entry) => (
+                  {stats.filteredTagStats.map((entry) => (
                     <tr key={`${entry.seriesId}-${entry.tag}`} className="border-t border-slate-800">
                       <td className="py-3 pr-4 font-semibold text-slate-100">
                         {entry.tag} <span className="text-xs text-slate-500">(series {entry.seriesId})</span>

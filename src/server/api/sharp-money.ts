@@ -1,5 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getDb } from '../env'
+import type { Env } from '../env'
 import { all, run } from '../db/client'
 import {
   listSharpMoneyCache,
@@ -43,6 +44,41 @@ const UNIT_SIZE_POSITION_LIMIT = 100
 const MIN_UNIT_SIZE_SAMPLES = 3
 
 const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 10426, 10346, 10188]
+
+export type TrendingSportsPayload = {
+  limit?: number
+  seriesIds?: number[]
+  includeAllMarkets?: boolean
+  includeLowVolume?: boolean
+}
+
+export type TrendingSportsMarket = {
+  id: string
+  conditionId: string
+  title: string
+  slug?: string
+  eventSlug?: string
+  sportSeriesId?: number
+  volume: number
+  liquidity: number
+  outcomes: string[]
+  bestBid?: number
+  bestAsk?: number
+  endDate?: string
+}
+
+export type SharpAnalysisPayload = {
+  conditionId: string
+  marketTitle: string
+  marketSlug?: string
+  eventSlug?: string
+  sportSeriesId?: number
+  outcomes?: string[]
+  bestBid?: number
+  bestAsk?: number
+  endDate?: string
+  includeDebug?: boolean
+}
 
 const SERIES_ID_TO_TAG = new Map<number, string>(
   Object.entries(SPORTS_SERIES_IDS)
@@ -495,10 +531,8 @@ interface ClobMarket {
 /**
  * Fetch trending sports markets - tries CLOB API first, then Gamma
  */
-export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).handler(
-  async ({ data }) => {
-    console.log('[sharp-money] fetchTrendingSportsMarketsFn called')
-    const payload = data as { limit?: number; seriesIds?: number[]; includeAllMarkets?: boolean; includeLowVolume?: boolean }
+export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload) {
+    console.log('[sharp-money] fetchTrendingSportsMarkets called')
     const limit = payload.limit ?? 50
     const includeAllMarkets = payload.includeAllMarkets ?? false
     const includeLowVolume = payload.includeLowVolume ?? false
@@ -721,7 +755,10 @@ export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).h
       console.warn('Error fetching trending sports markets', error)
       return { markets: [] }
     }
-  },
+}
+
+export const fetchTrendingSportsMarketsFn = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => fetchTrendingSportsMarkets((data ?? {}) as TrendingSportsPayload),
 )
 
 /**
@@ -1470,22 +1507,9 @@ function getConcentration(
 /**
  * Analyze sharp money for a single market
  */
-export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handler(
-  async ({ context, data }) => {
-    console.log('[sharp-money] analyzeMarketSharpnessFn called')
-    const db = getDb(context)
-    const payload = data as {
-      conditionId: string
-      marketTitle: string
-      marketSlug?: string
-      eventSlug?: string
-      sportSeriesId?: number
-      outcomes?: string[]
-      bestBid?: number
-      bestAsk?: number
-      endDate?: string
-      includeDebug?: boolean
-    }
+export async function analyzeMarketSharpness(env: Env, payload: SharpAnalysisPayload) {
+    console.log('[sharp-money] analyzeMarketSharpness called')
+    const db = env.POLYWHALER_DB
 
     const {
       conditionId,
@@ -1750,14 +1774,21 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       const walletsToFetch = uniqueWallets.filter(w => !cachedWallets.has(w))
       console.log(`[sharp-money] PnL: ${cachedWallets.size} cached, ${walletsToFetch.length} to fetch`)
 
-      // Fetch uncached wallets in batches
-      // We have 2 subrequests used for market data (holders + CLOB)
-      // Leave headroom for unit-size fetches (1 per wallet) under the 50 subrequest limit
-      const maxToFetch = Math.min(walletsToFetch.length, 9) // 9 wallets = 36 subrequests
-      const batchSize = 3 // Process 3 wallets at a time (12 subrequests per batch)
-      
-      for (let i = 0; i < maxToFetch; i += batchSize) {
-        const batch = walletsToFetch.slice(i, i + batchSize)
+      // Fetch uncached wallets in batches with a mix of full-period and ALL-only requests.
+      // We have 2 subrequests used for market data (holders + CLOB).
+      const FULL_PNL_WALLET_COUNT = 6
+      const ALL_PNL_WALLET_COUNT = 20
+      const maxWalletsByBudget = Math.max(0, MAX_SUBREQUESTS - 2 - (FULL_PNL_WALLET_COUNT * 4)) + FULL_PNL_WALLET_COUNT
+      const totalWalletsToFetch = Math.min(walletsToFetch.length, ALL_PNL_WALLET_COUNT, maxWalletsByBudget)
+      const walletsToFetchAll = walletsToFetch.slice(0, totalWalletsToFetch)
+      const walletsFullPnl = walletsToFetchAll.slice(0, Math.min(FULL_PNL_WALLET_COUNT, walletsToFetchAll.length))
+      const walletsAllOnly = walletsToFetchAll.slice(walletsFullPnl.length)
+
+      console.log(`[sharp-money] PnL fetch plan: ${walletsFullPnl.length} full, ${walletsAllOnly.length} all-time only`)
+
+      const fullBatchSize = 3 // Process 3 wallets at a time (12 subrequests per batch)
+      for (let i = 0; i < walletsFullPnl.length; i += fullBatchSize) {
+        const batch = walletsFullPnl.slice(i, i + fullBatchSize)
 
         await Promise.all(
           batch.map(async (wallet) => {
@@ -1820,8 +1851,53 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         )
 
         // Delay between batches
-        if (i + batchSize < maxToFetch) {
+        if (i + fullBatchSize < walletsFullPnl.length) {
           await new Promise((resolve) => setTimeout(resolve, 200))
+        }
+      }
+
+      const allOnlyBatchSize = 6
+      for (let i = 0; i < walletsAllOnly.length; i += allOnlyBatchSize) {
+        const batch = walletsAllOnly.slice(i, i + allOnlyBatchSize)
+
+        await Promise.all(
+          batch.map(async (wallet) => {
+            const pnl: MultiPeriodPnl = { day: null, week: null, month: null, all: null }
+            try {
+              const url = new URL('/v1/leaderboard', POLYMARKET_DATA_API)
+              url.searchParams.set('user', wallet)
+              url.searchParams.set('timePeriod', 'ALL')
+
+              const response = await fetch(url)
+              if (!response.ok) return
+
+              const data = (await response.json()) as Array<{ pnl?: number; vol?: number }>
+              if (!Array.isArray(data) || data.length === 0) return
+
+              pnl.all = data[0].pnl ?? null
+              pnl.volume = data[0].vol
+
+              await run(
+                db,
+                `INSERT OR REPLACE INTO wallet_pnl_cache (wallet_address, pnl_day, pnl_week, pnl_month, pnl_all, volume, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                wallet,
+                null,
+                null,
+                null,
+                pnl.all,
+                pnl.volume ?? null,
+                Math.floor(Date.now() / 1000),
+              )
+            } catch (err) {
+              console.log(`[sharp-money] PnL error ${wallet.slice(0,10)} ALL:`, err)
+            }
+            pnlResults[wallet] = pnl
+          }),
+        )
+
+        if (i + allOnlyBatchSize < walletsAllOnly.length) {
+          await new Promise((resolve) => setTimeout(resolve, 150))
         }
       }
 
@@ -1832,7 +1908,8 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         }
       }
 
-      console.log(`[sharp-money] PnL fetch: ${maxToFetch} fetched, ${cachedWallets.size} from cache, ${uniqueWallets.length - maxToFetch - cachedWallets.size} will be cached next refresh`)
+      const pnlSubrequestsUsed = (walletsFullPnl.length * 4) + walletsAllOnly.length
+      console.log(`[sharp-money] PnL fetch: ${walletsToFetchAll.length} fetched, ${cachedWallets.size} from cache, ${uniqueWallets.length - walletsToFetchAll.length - cachedWallets.size} will be cached next refresh`)
 
       const unitSizeByWallet: Record<string, number | null> = {}
       const unitSizeCacheExpiry = Math.floor(Date.now() / 1000) - UNIT_SIZE_CACHE_TTL_SEC
@@ -1857,7 +1934,7 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
         return pnl?.all !== null && pnl?.all !== undefined
       })
 
-      const unitSizeBudget = Math.max(0, MAX_SUBREQUESTS - 2 - (maxToFetch * 4))
+      const unitSizeBudget = Math.max(0, MAX_SUBREQUESTS - 2 - pnlSubrequestsUsed)
       const walletsMissingUnitSize = walletsWithPnlAll.filter((wallet) => !cachedUnitWallets.has(wallet))
       const walletsToFetchUnitSize = walletsMissingUnitSize.slice(0, unitSizeBudget)
       const unitBatchSize = 4
@@ -2189,6 +2266,14 @@ export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
       console.error('Error analyzing market sharpness', conditionId, error)
       return { analysis: null, error: 'Analysis failed' }
     }
+}
+
+export const analyzeMarketSharpnessFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context, data }) => {
+    if (!context?.env) {
+      throw new Error('Environment not available')
+    }
+    return analyzeMarketSharpness(context.env, (data ?? {}) as SharpAnalysisPayload)
   },
 )
 
@@ -2265,6 +2350,41 @@ export const clearSharpMoneyCacheFn = createServerFn({ method: 'POST' }).handler
 /**
  * Manually refresh sharp money analysis for a specific market
  */
+export async function refreshMarketSharpness(env: Env, payload: SharpAnalysisPayload) {
+  const { sportSeriesId } = payload
+  if (sportSeriesId !== undefined && !isTargetSeriesId(sportSeriesId)) {
+    console.warn('[sharp-money] REJECTED - Not a target series:', payload.marketTitle, sportSeriesId)
+    return { success: false, error: 'Not a target series' }
+  }
+
+  const { analysis, error, allWalletAddresses } = await analyzeMarketSharpness(env, payload)
+
+  if (!analysis) {
+    console.warn('[sharp-money] Analysis failed:', error)
+    return { success: false, error }
+  }
+
+  const cacheInput: UpsertSharpMoneyCacheInput = {
+    conditionId: analysis.conditionId,
+    marketTitle: analysis.marketTitle,
+    marketSlug: analysis.marketSlug,
+    eventSlug: analysis.eventSlug,
+    sportSeriesId: analysis.sportSeriesId,
+    eventTime: analysis.eventTime,
+    sideA: analysis.sideA,
+    sideB: analysis.sideB,
+    sharpSide: analysis.sharpSide,
+    confidence: analysis.confidence,
+    scoreDifferential: analysis.scoreDifferential,
+    sharpSideValueRatio: analysis.sharpSideValueRatio,
+    edgeRating: analysis.edgeRating,
+  }
+
+  await upsertSharpMoneyCache(env.POLYWHALER_DB, cacheInput)
+
+  return { success: true, analysis, allWalletAddresses }
+}
+
 export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handler(
   async ({ context, data }) => {
     console.log('[sharp-money] refreshMarketSharpnessFn called')
@@ -2289,47 +2409,11 @@ export const refreshMarketSharpnessFn = createServerFn({ method: 'POST' }).handl
     
     console.log('[sharp-money] Checking descriptor:', JSON.stringify(descriptor))
     
-    const { sportSeriesId } = payload
-    if (sportSeriesId !== undefined && !isTargetSeriesId(sportSeriesId)) {
-      console.warn('[sharp-money] REJECTED - Not a target series:', payload.marketTitle, sportSeriesId)
-      return { success: false, error: 'Not a target series' }
+    console.log('[sharp-money] ACCEPTED:', payload.marketTitle, '| series:', payload.sportSeriesId ?? 'unknown')
+    if (!context?.env) {
+      throw new Error('Environment not available')
     }
-
-    console.log('[sharp-money] ACCEPTED:', payload.marketTitle, '| series:', sportSeriesId ?? 'unknown')
-
-    const db = getDb(context)
-
-    // Run analysis
-    const { analysis, error, allWalletAddresses } = await analyzeMarketSharpnessFn({
-      data: payload,
-    })
-
-    if (!analysis) {
-      console.warn('[sharp-money] Analysis failed:', error)
-      return { success: false, error }
-    }
-    console.log('[sharp-money] Analysis complete:', analysis.sharpSide, analysis.confidence)
-
-    // Save to cache
-    const cacheInput: UpsertSharpMoneyCacheInput = {
-      conditionId: analysis.conditionId,
-      marketTitle: analysis.marketTitle,
-      marketSlug: analysis.marketSlug,
-      eventSlug: analysis.eventSlug,
-      sportSeriesId: analysis.sportSeriesId,
-      eventTime: analysis.eventTime,
-      sideA: analysis.sideA,
-      sideB: analysis.sideB,
-      sharpSide: analysis.sharpSide,
-      confidence: analysis.confidence,
-      scoreDifferential: analysis.scoreDifferential,
-      sharpSideValueRatio: analysis.sharpSideValueRatio,
-      edgeRating: analysis.edgeRating,
-    }
-
-    await upsertSharpMoneyCache(db, cacheInput)
-
-    return { success: true, analysis, allWalletAddresses }
+    return refreshMarketSharpness(context.env, payload)
   },
 )
 
@@ -2374,7 +2458,7 @@ export const analyzeMarketSharpnessDebugFn = createServerFn({ method: 'POST' }).
       includeDebug: true,
     }
 
-    const { analysis, debug, error } = await analyzeMarketSharpnessFn({ context, data: analysisPayload })
+    const { analysis, debug, error } = await analyzeMarketSharpness(context.env, analysisPayload)
 
     if (!analysis || !debug) {
       return { analysis: null, debug: null, error: error ?? 'Analysis failed' }
