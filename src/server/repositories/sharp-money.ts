@@ -35,6 +35,8 @@ export interface SharpMoneyCacheRow {
   event_slug?: string | null
   sport_series_id?: number | null
   event_time?: string | null
+  pnl_coverage?: number | null
+  is_ready?: number | null
   side_a_label: string
   side_a_total_value: number
   side_a_sharp_score: number
@@ -66,6 +68,8 @@ export interface SharpMoneyCacheEntry {
   eventSlug?: string
   sportSeriesId?: number
   eventTime?: string
+  pnlCoverage?: number
+  isReady?: boolean
   sideA: {
     label: string
     totalValue: number
@@ -100,6 +104,7 @@ export interface UpsertSharpMoneyCacheInput {
   eventSlug?: string
   sportSeriesId?: number
   eventTime?: string
+  pnlCoverage?: number
   sideA: {
     label: string
     totalValue: number
@@ -123,6 +128,23 @@ export interface UpsertSharpMoneyCacheInput {
   edgeRating: number
 }
 
+const MIN_READY_HOLDER_COUNT = 10
+const MIN_READY_PNL_COVERAGE = 0.6
+
+function getEasternOffset(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'shortOffset',
+  }).formatToParts(date)
+  const offsetPart = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-0'
+  const match = offsetPart.match(/GMT([+-]\d{1,2})/)
+  if (!match) return '+00:00'
+  const hours = Number(match[1])
+  const sign = hours >= 0 ? '+' : '-'
+  const absHours = Math.abs(hours).toString().padStart(2, '0')
+  return `${sign}${absHours}:00`
+}
+
 function generateId(): string {
   return `sharp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 }
@@ -136,6 +158,8 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
     eventSlug: row.event_slug ?? undefined,
     sportSeriesId: row.sport_series_id ?? undefined,
     eventTime: row.event_time ?? undefined,
+    pnlCoverage: row.pnl_coverage ?? undefined,
+    isReady: row.is_ready === 1,
     sideA: {
       label: row.side_a_label,
       totalValue: row.side_a_total_value,
@@ -175,28 +199,39 @@ export async function upsertSharpMoneyCache(
   const now = nowUnixSeconds()
 
   // Check if entry exists
-  const existing = await first<SharpMoneyCacheRow>(
+  const existing = await first<Pick<SharpMoneyCacheRow, 'id' | 'pnl_coverage' | 'is_ready'>>(
     db,
-    `SELECT id FROM sharp_money_cache WHERE condition_id = ?`,
+    `SELECT id, pnl_coverage, is_ready FROM sharp_money_cache WHERE condition_id = ?`,
     input.conditionId,
   )
 
   const id = existing?.id ?? generateId()
+  const minHolderCount = Math.min(input.sideA.holderCount, input.sideB.holderCount)
+  const pnlCoverage = input.pnlCoverage ?? null
+  const isReady = pnlCoverage !== null
+    && pnlCoverage >= MIN_READY_PNL_COVERAGE
+    && minHolderCount >= MIN_READY_HOLDER_COUNT
+
+  if (existing?.is_ready === 1 && !isReady) {
+    return
+  }
 
   await run(
     db,
     `INSERT INTO sharp_money_cache (
-      id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time,
+      id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time, pnl_coverage, is_ready,
       side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_price, side_a_top_holders,
       side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_price, side_b_top_holders,
       sharp_side, confidence, score_differential, sharp_side_value_ratio, edge_rating, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
       event_slug = excluded.event_slug,
       sport_series_id = excluded.sport_series_id,
       event_time = excluded.event_time,
+      pnl_coverage = excluded.pnl_coverage,
+      is_ready = excluded.is_ready,
       side_a_label = excluded.side_a_label,
       side_a_total_value = excluded.side_a_total_value,
       side_a_sharp_score = excluded.side_a_sharp_score,
@@ -222,6 +257,8 @@ export async function upsertSharpMoneyCache(
     input.eventSlug ?? null,
     input.sportSeriesId ?? null,
     input.eventTime ?? null,
+    pnlCoverage,
+    isReady ? 1 : 0,
     input.sideA.label,
     input.sideA.totalValue,
     input.sideA.sharpScore,
@@ -273,10 +310,24 @@ export async function listSharpMoneyCache(
 
   let query = `SELECT * FROM sharp_money_cache`
   const params: unknown[] = []
+  const whereClauses: string[] = []
+
+  const now = new Date()
+  const nowIso = now.toISOString()
+  const easternOffset = getEasternOffset(now)
+  whereClauses.push(`event_time IS NOT NULL`)
+  whereClauses.push(`date(event_time, ?) = date(?, ?)`)
+  params.push(easternOffset, nowIso, easternOffset)
+  whereClauses.push(`datetime(event_time) >= datetime(?)`)
+  params.push(nowIso)
 
   if (sportSeriesId !== undefined) {
-    query += ` WHERE sport_series_id = ?`
+    whereClauses.push(`sport_series_id = ?`)
     params.push(sportSeriesId)
+  }
+
+  if (whereClauses.length > 0) {
+    query += ` WHERE ${whereClauses.join(' AND ')}`
   }
 
   // Order by: Edge Rating (highest first), then score differential (highest first), 
@@ -310,9 +361,13 @@ export async function pruneSharpMoneyCache(
   olderThanHours: number = 24,
 ): Promise<number> {
   const cutoff = nowUnixSeconds() - olderThanHours * 60 * 60
+  const nowIso = new Date().toISOString()
   const result = await run(
     db,
-    `DELETE FROM sharp_money_cache WHERE updated_at < ?`,
+    `DELETE FROM sharp_money_cache
+     WHERE (event_time IS NOT NULL AND datetime(event_time) < datetime(?))
+       OR (event_time IS NULL AND updated_at < ?)`,
+    nowIso,
     cutoff,
   )
   return result.meta?.changes as number ?? 0

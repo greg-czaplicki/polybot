@@ -20,7 +20,9 @@ import {
   getSharpMoneyCacheFn,
   getSharpMoneyCacheStatsFn,
   clearSharpMoneyCacheFn,
+  refreshMarketSharpnessFn,
   type SharpMoneyCacheEntry,
+  type TopHolderPnlData,
 } from '../server/api/sharp-money'
 
 export const Route = createFileRoute('/sharp')({
@@ -34,7 +36,7 @@ const SPORT_FILTERS = [
   { value: '10345', label: 'NBA' },
   { value: '10210', label: 'College Football' },
   { value: '10470', label: 'College Basketball' },
-  { value: '10426', label: 'MLB' },
+  { value: '3', label: 'MLB' },
   { value: '10346', label: 'NHL' },
   { value: '10188', label: 'Premier League' },
 ]
@@ -44,7 +46,7 @@ const SERIES_LABELS: Record<number, string> = {
   10345: 'NBA',
   10210: 'College Football',
   10470: 'College Basketball',
-  10426: 'MLB',
+  3: 'MLB',
   10346: 'NHL',
   10188: 'Premier League',
 }
@@ -120,6 +122,31 @@ function formatRelativeTimeMs(timestampMs: number): string {
   if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`
   if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`
   return `${Math.floor(diffMs / 86_400_000)}d ago`
+}
+
+const MIN_EDGE_RATING = 65
+const MIN_READY_HOLDER_COUNT = 10
+const MIN_READY_PNL_COVERAGE = 0.6
+
+function getPnlCoverage(holders: TopHolderPnlData[]): number {
+  if (holders.length === 0) return 0
+  const withPnl = holders.filter((holder) => (
+    holder.pnlDay !== null
+    || holder.pnlWeek !== null
+    || holder.pnlMonth !== null
+    || holder.pnlAll !== null
+  )).length
+  return withPnl / holders.length
+}
+
+function isEntryReady(entry: SharpMoneyCacheEntry): boolean {
+  const minHolderCount = Math.min(entry.sideA.holderCount, entry.sideB.holderCount)
+  if (minHolderCount < MIN_READY_HOLDER_COUNT) return false
+  const pnlCoverage = entry.pnlCoverage ?? Math.min(
+    getPnlCoverage(entry.sideA.topHolders),
+    getPnlCoverage(entry.sideB.topHolders),
+  )
+  return pnlCoverage >= MIN_READY_PNL_COVERAGE
 }
 
 function truncateWalletName(name: string | null | undefined, maxLength: number = 20): string {
@@ -224,6 +251,7 @@ function SharpMoneyPage() {
   const [selectedSeriesId, setSelectedSeriesId] = useState('all')
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set())
   const [showAllEntries, setShowAllEntries] = useState(false)
+  const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(null)
   const showRefreshDebug =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('refreshDebug')
@@ -321,6 +349,28 @@ function SharpMoneyPage() {
     }
   }
 
+  const handleRefreshEntry = useCallback(async (entry: SharpMoneyCacheEntry) => {
+    if (refreshingEntryId) return
+    setRefreshingEntryId(entry.id)
+    try {
+      await refreshMarketSharpnessFn({
+        data: {
+          conditionId: entry.conditionId,
+          marketTitle: entry.marketTitle,
+          marketSlug: entry.marketSlug,
+          eventSlug: entry.eventSlug,
+          sportSeriesId: entry.sportSeriesId,
+          endDate: entry.eventTime,
+        },
+      })
+      await loadCache({ silent: true })
+    } catch (error) {
+      console.error('Failed to refresh entry:', error)
+    } finally {
+      setRefreshingEntryId(null)
+    }
+  }, [loadCache, refreshingEntryId])
+
   useEffect(() => {
     if (!pipelineStatus?.inProgress) {
       return
@@ -361,11 +411,13 @@ function SharpMoneyPage() {
   }
 
   // Filter entries by sport, minimum edge rating, and hide started games
-  const MIN_EDGE_RATING = 65
+  const readyEntries = useMemo(() => entries.filter(isEntryReady), [entries])
+  const hasReadyEntries = readyEntries.length > 0
+  const baseEntries = showAllEntries ? entries : readyEntries
   const filteredEntries = useMemo(() => {
     const now = new Date()
     const cutoff = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-    let filtered = entries.filter((e) => {
+    let filtered = baseEntries.filter((e) => {
       if (showAllEntries) return true
       // Must meet minimum edge rating
       if (e.edgeRating < MIN_EDGE_RATING) return false
@@ -381,16 +433,21 @@ function SharpMoneyPage() {
       filtered = filtered.filter((e) => e.sportSeriesId === Number(selectedSeriesId))
     }
     return filtered
-  }, [entries, selectedSeriesId, showAllEntries])
+  }, [baseEntries, selectedSeriesId, showAllEntries])
+
+  const displayEntries = hasReadyEntries ? filteredEntries : []
+  const showProcessingState = !isLoading
+    && displayEntries.length === 0
+    && (pipelineStatus?.inProgress || (entries.length > 0 && !hasReadyEntries))
 
   // Calculate max volume for scale
   const maxVolume = useMemo(() => {
-    if (filteredEntries.length === 0) return 1
+    if (displayEntries.length === 0) return 1
     return Math.max(
-      ...filteredEntries.map(e => e.sideA.totalValue + e.sideB.totalValue),
+      ...displayEntries.map(e => e.sideA.totalValue + e.sideB.totalValue),
       1
     )
-  }, [filteredEntries])
+  }, [displayEntries])
 
   return (
     <AuthGate>
@@ -518,18 +575,47 @@ function SharpMoneyPage() {
             <div>lastCacheFetchAt: {lastCacheFetchAt ?? 'null'}</div>
           </div>
         )}
+        {showRefreshDebug && entries.length > 0 && (
+          <div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.7rem] text-slate-300">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Not Ready Diagnostics
+            </div>
+            {entries.filter((entry) => !isEntryReady(entry)).length === 0 ? (
+              <div>All entries are ready.</div>
+            ) : (
+              entries.filter((entry) => !isEntryReady(entry)).map((entry) => {
+                const minHolderCount = Math.min(entry.sideA.holderCount, entry.sideB.holderCount)
+                const pnlCoverage = entry.pnlCoverage ?? Math.min(
+                  getPnlCoverage(entry.sideA.topHolders),
+                  getPnlCoverage(entry.sideB.topHolders),
+                )
+                const reasons: string[] = []
+                if (minHolderCount < MIN_READY_HOLDER_COUNT) {
+                  reasons.push(`holders ${minHolderCount}/${MIN_READY_HOLDER_COUNT}`)
+                }
+                if (pnlCoverage < MIN_READY_PNL_COVERAGE) {
+                  reasons.push(`pnl ${(pnlCoverage * 100).toFixed(0)}%`)
+                }
+                return (
+                  <div key={entry.id} className="mb-2">
+                    <div className="text-slate-100">{entry.marketTitle}</div>
+                    <div className="text-slate-500">Not ready: {reasons.join(' • ')}</div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
 
         {/* Empty State */}
-        {!isLoading && filteredEntries.length === 0 && (
+        {!showProcessingState && !isLoading && displayEntries.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Target className="h-12 w-12 text-gray-600 mb-4" />
             <h2 className="text-lg font-semibold text-white mb-2">No Sharp Money Data</h2>
             <p className="text-gray-400 mb-4 max-w-md">
-              {pipelineStatus?.inProgress
-                ? 'We are still processing the full refresh. Results will appear as the cache fills.'
-                : entries.length > 0 
-                  ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
-                  : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
+              {entries.length > 0
+                ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
+                : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
             </p>
             {!pipelineStatus?.inProgress && entries.length > 0 && !showAllEntries && (
               <button
@@ -552,14 +638,40 @@ function SharpMoneyPage() {
           </div>
         )}
 
+        {showProcessingState && (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Loader2 className="h-10 w-10 animate-spin text-cyan-400 mb-4" />
+            <h2 className="text-lg font-semibold text-white mb-2">Warming Up Sharp Grades</h2>
+            <p className="text-gray-400 mb-4 max-w-md">
+              We are fetching top holders and PnL. This usually takes a few refresh cycles
+              after a reset. Results will appear once all markets have full PnL coverage.
+            </p>
+            {entries.length > 0 && (
+              <div className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Ready {readyEntries.length} / {entries.length}
+              </div>
+            )}
+            {!pipelineStatus?.inProgress && (
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Refresh Cache
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Market Cards */}
-        {!isLoading && filteredEntries.length > 0 && (
+        {!showProcessingState && !isLoading && displayEntries.length > 0 && (
           <div className="space-y-4">
             {/* Show count of hidden entries */}
-            {(entries.length > filteredEntries.length || showAllEntries) && (
+            {(entries.length > displayEntries.length || showAllEntries) && (
               <div className="flex items-center justify-end gap-2 text-xs text-gray-500">
                 <span>
-                  Showing {filteredEntries.length} of {entries.length} • {entries.length - filteredEntries.length} hidden (started or Edge &lt; {MIN_EDGE_RATING})
+                  Showing {displayEntries.length} of {entries.length} • {entries.length - displayEntries.length} hidden (started, incomplete PnL, or Edge &lt; {MIN_EDGE_RATING})
                 </span>
                 <button
                   type="button"
@@ -572,12 +684,15 @@ function SharpMoneyPage() {
                 </button>
               </div>
             )}
-            {filteredEntries.map((entry) => (
+            {displayEntries.map((entry) => (
               <SharpMoneyCard
                 key={entry.id}
                 entry={entry}
                 isExpanded={expandedMarkets.has(entry.id)}
                 onToggle={() => toggleMarket(entry.id)}
+                onRefresh={() => handleRefreshEntry(entry)}
+                isRefreshing={refreshingEntryId === entry.id}
+                disableRefresh={Boolean(pipelineStatus?.inProgress)}
                 maxVolume={maxVolume}
               />
             ))}
@@ -593,11 +708,17 @@ function SharpMoneyCard({
   entry,
   isExpanded,
   onToggle,
+  onRefresh,
+  isRefreshing,
+  disableRefresh,
   maxVolume,
 }: {
   entry: SharpMoneyCacheEntry
   isExpanded: boolean
   onToggle: () => void
+  onRefresh: () => void
+  isRefreshing: boolean
+  disableRefresh: boolean
   maxVolume: number
 }) {
   const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug)
@@ -693,6 +814,20 @@ function SharpMoneyCard({
                 >
                   <ExternalLink className="h-4 w-4" />
                 </a>
+              )}
+              {!disableRefresh && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRefresh()
+                  }}
+                  className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0 disabled:opacity-50"
+                  disabled={isRefreshing}
+                  title="Refresh this market"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                </button>
               )}
               {isExpanded ? (
                 <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
@@ -931,6 +1066,20 @@ function SharpMoneyCard({
               >
                 <ExternalLink className="h-4 w-4" />
               </a>
+            )}
+            {!disableRefresh && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRefresh()
+                }}
+                className="p-2 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0 disabled:opacity-50"
+                disabled={isRefreshing}
+                title="Refresh this market"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              </button>
             )}
             {isExpanded ? (
               <ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />

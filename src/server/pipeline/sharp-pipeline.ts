@@ -26,9 +26,7 @@ type PipelineStatus = {
 }
 
 const DEFAULT_INTERVAL_MS = 2 * 60 * 1000
-const DEFAULT_BATCH_SIZE = 10
-const IMMINENT_WINDOW_MS = 2 * 60 * 60 * 1000
-const IMMINENT_LIMIT = 5
+const QUEUE_BATCH_SIZE = 100
 
 export class SharpPipeline extends DurableObject {
   private state: DurableObjectState
@@ -90,8 +88,7 @@ export class SharpPipeline extends DurableObject {
     await this.state.storage.put('lastRun', now)
 
     const { markets } = await fetchTrendingSportsMarkets({
-      limit: DEFAULT_BATCH_SIZE,
-      includeAllMarkets: true,
+      includeAllMarkets: false,
     })
 
     if (!markets || markets.length === 0) {
@@ -104,21 +101,7 @@ export class SharpPipeline extends DurableObject {
       return Response.json({ queued: false, reason: 'no_markets' })
     }
 
-    const imminenceNow = Date.now()
-    const imminentMarkets = markets.filter((market) => {
-      if (!market.endDate) return false
-      const eventTime = new Date(market.endDate).getTime()
-      return Number.isFinite(eventTime) && eventTime >= imminenceNow && eventTime <= imminenceNow + IMMINENT_WINDOW_MS
-    }).slice(0, IMMINENT_LIMIT)
-
-    const remainingSlots = Math.max(0, DEFAULT_BATCH_SIZE - imminentMarkets.length)
-    const remainingMarkets = markets.filter((market) => (
-      !imminentMarkets.some((item) => item.conditionId === market.conditionId)
-    )).slice(0, remainingSlots)
-
-    const selectedMarkets = [...imminentMarkets, ...remainingMarkets]
-
-    const jobs: SharpPipelineJob[] = selectedMarkets.map((market) => ({
+    const jobs: SharpPipelineJob[] = markets.map((market) => ({
       conditionId: market.conditionId,
       marketTitle: market.title,
       marketSlug: market.slug,
@@ -130,9 +113,12 @@ export class SharpPipeline extends DurableObject {
       endDate: market.endDate,
     }))
 
-    await this.env.SHARP_PIPELINE_QUEUE.sendBatch(
-      jobs.map((job) => ({ body: job })),
-    )
+    for (let i = 0; i < jobs.length; i += QUEUE_BATCH_SIZE) {
+      const chunk = jobs.slice(i, i + QUEUE_BATCH_SIZE)
+      await this.env.SHARP_PIPELINE_QUEUE.sendBatch(
+        chunk.map((job) => ({ body: job })),
+      )
+    }
 
     await this.state.storage.put('status', {
       inProgress: true,
@@ -145,7 +131,6 @@ export class SharpPipeline extends DurableObject {
     return Response.json({
       queued: true,
       jobs: jobs.length,
-      imminent: imminentMarkets.length,
     })
   }
 }

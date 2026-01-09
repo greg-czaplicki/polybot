@@ -24,7 +24,7 @@ const POLYMARKET_DATA_API = 'https://data-api.polymarket.com'
 const SPORTS_SERIES_IDS: Partial<Record<string, number>> = {
   ncaab: 10470,
   epl: 10188,
-  mlb: 10426,
+  mlb: 3,
   cfb: 10210,
   nfl: 10187,
   nba: 10345,
@@ -43,7 +43,7 @@ const UNIT_SIZE_SAMPLE_LIMIT = 20
 const UNIT_SIZE_POSITION_LIMIT = 100
 const MIN_UNIT_SIZE_SAMPLES = 3
 
-const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 10426, 10346, 10188]
+const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188]
 
 export type TrendingSportsPayload = {
   limit?: number
@@ -175,6 +175,16 @@ function parseEventTime(endDate?: string | null): Date | null {
   }
   const parsed = new Date(endDate)
   return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function getEasternDateString(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return formatter.format(date)
 }
 
 type ClosedPosition = {
@@ -361,6 +371,7 @@ export interface SharpAnalysisResult {
   eventSlug?: string
   sportSeriesId?: number
   eventTime?: string // ISO date string for when the event starts/ends
+  pnlCoverage?: number
   sideA: {
     label: string
     totalValue: number
@@ -533,7 +544,7 @@ interface ClobMarket {
  */
 export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload) {
     console.log('[sharp-money] fetchTrendingSportsMarkets called')
-    const limit = payload.limit ?? 50
+    const limit = payload.limit
     const includeAllMarkets = payload.includeAllMarkets ?? false
     const includeLowVolume = payload.includeLowVolume ?? false
     const seriesIds = payload.seriesIds && payload.seriesIds.length > 0
@@ -543,13 +554,13 @@ export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload)
 
     // Use Gamma API with tag_id filtering for sports markets
     try {
-      // Date range: now to 24 hours from now
-      const today = new Date()
-      const endDateMin = today.toISOString().split('T')[0]
-      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000)
-      const endDateMax = tomorrow.toISOString().split('T')[0]
+      // Date range: today only (Eastern)
+      const now = new Date()
+      const easternToday = getEasternDateString(now)
+      const endDateMin = easternToday
+      const endDateMax = easternToday
       
-      console.log(`[sharp-money] Fetching games from ${endDateMin} to ${endDateMax}`)
+      console.log(`[sharp-money] Fetching games for ${endDateMin} (Eastern)`)
       console.log(`[sharp-money] Fetching markets for series IDs: ${seriesIds.join(', ')}`)
       
       // Fetch markets for each sport series via events
@@ -683,8 +694,6 @@ export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload)
       }
       
       // Filter to markets with condition IDs, dedupe, exclude started games, and within 24 hours
-      const now = new Date()
-      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
       const seenIds = new Set<string>()
       const sportsMarkets = sportsOnlyMarkets.filter(market => {
         if (!market.conditionId || seenIds.has(market.conditionId)) return false
@@ -694,8 +703,8 @@ export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload)
           if (gameTime) {
             // Exclude games that have already started
             if (gameTime < now) return false
-            // Exclude games more than 24 hours out
-            if (gameTime > twentyFourHoursFromNow) return false
+            // Exclude games not on today's Eastern date
+            if (getEasternDateString(gameTime) !== easternToday) return false
           }
         }
         const marketVolume = market.volumeNum ?? market.volume ?? 0
@@ -734,8 +743,9 @@ export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload)
         ))
       }
 
-      // Take top N by volume
-      const topMarkets = sorted.slice(0, limit).map((market) => ({
+      // Take top N by volume (or all if no limit)
+      const limited = typeof limit === 'number' ? sorted.slice(0, limit) : sorted
+      const topMarkets = limited.map((market) => ({
         id: market.id,
         conditionId: market.conditionId,
         title: enhanceMarketTitle(market.question ?? '', market.slug),
@@ -2205,6 +2215,7 @@ export async function analyzeMarketSharpness(env: Env, payload: SharpAnalysisPay
           eventSlug,
           sportSeriesId,
           eventTime: endDate,
+          pnlCoverage,
           sideA: {
             label: sideALabel,
             totalValue: sideATotalValue,
@@ -2238,22 +2249,23 @@ export async function analyzeMarketSharpness(env: Env, payload: SharpAnalysisPay
         eventSlug,
         sportSeriesId,
         eventTime: endDate,
-          sideA: {
-            label: sideALabel,
-            totalValue: sideATotalValue,
-            sharpScore: sideASharpScore,
-            holderCount: sideAHolders.length,
-            price: resolvePriceForLabel(sideALabel, 0, tokenOutcomes, displayPrices),
-            topHolders: sideATopHolders,
-          },
-          sideB: {
-            label: sideBLabel,
-            totalValue: sideBTotalValue,
-            sharpScore: sideBSharpScore,
-            holderCount: sideBHolders.length,
-            price: resolvePriceForLabel(sideBLabel, 1, tokenOutcomes, displayPrices),
-            topHolders: sideBTopHolders,
-          },
+        pnlCoverage,
+        sideA: {
+          label: sideALabel,
+          totalValue: sideATotalValue,
+          sharpScore: sideASharpScore,
+          holderCount: sideAHolders.length,
+          price: resolvePriceForLabel(sideALabel, 0, tokenOutcomes, displayPrices),
+          topHolders: sideATopHolders,
+        },
+        sideB: {
+          label: sideBLabel,
+          totalValue: sideBTotalValue,
+          sharpScore: sideBSharpScore,
+          holderCount: sideBHolders.length,
+          price: resolvePriceForLabel(sideBLabel, 1, tokenOutcomes, displayPrices),
+          topHolders: sideBTopHolders,
+        },
         sharpSide,
         confidence: adjustedConfidence,
         scoreDifferential,
@@ -2371,6 +2383,7 @@ export async function refreshMarketSharpness(env: Env, payload: SharpAnalysisPay
     eventSlug: analysis.eventSlug,
     sportSeriesId: analysis.sportSeriesId,
     eventTime: analysis.eventTime,
+    pnlCoverage: analysis.pnlCoverage,
     sideA: analysis.sideA,
     sideB: analysis.sideB,
     sharpSide: analysis.sharpSide,

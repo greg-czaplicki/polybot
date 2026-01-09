@@ -33,7 +33,6 @@ const MIN_UNIT_SIZE_SAMPLES = 3
 const _TARGET_SPORT_TAGS = ['nfl', 'nba', 'ncaaf', 'ncaab', 'mlb', 'nhl', 'epl', 'soccer']
 
 // Configuration
-const MAX_MARKETS_PER_RUN = 10 // Limit to avoid rate limits
 const DELAY_BETWEEN_MARKETS_MS = 1000 // 1 second delay between markets
 const DELAY_BETWEEN_PNL_BATCHES_MS = 200 // 200ms delay between PnL batches
 
@@ -66,6 +65,27 @@ interface MultiPeriodPnl {
   month: number | null
   all: number | null
   volume?: number
+}
+
+function getPnlCoverage(holders: TopHolderPnlData[]): number {
+  if (holders.length === 0) return 0
+  const withPnl = holders.filter((holder) => (
+    holder.pnlDay !== null
+    || holder.pnlWeek !== null
+    || holder.pnlMonth !== null
+    || holder.pnlAll !== null
+  )).length
+  return withPnl / holders.length
+}
+
+function getEasternDateString(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return formatter.format(date)
 }
 
 /**
@@ -319,19 +339,17 @@ function determineConfidence(
 
 /**
  * Fetch upcoming sports games using Gamma API tag_id filtering
- * Only fetches games happening in the next 3 days (not futures)
+ * Only fetches games happening today (not futures)
  */
-async function fetchTrendingSportsMarkets(limit: number): Promise<GammaMarket[]> {
+async function fetchTrendingSportsMarkets(limit?: number): Promise<GammaMarket[]> {
   const allSportsMarkets: GammaMarket[] = []
   const tagIds = Object.values(SPORT_TAG_IDS)
   
-  // Date range: today to 3 days from now
-  const today = new Date()
-  const endDateMin = today.toISOString().split('T')[0]
-  const futureDate = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000)
-  const endDateMax = futureDate.toISOString().split('T')[0]
+  // Date range: today only (Eastern)
+  const endDateMin = getEasternDateString(new Date())
+  const endDateMax = endDateMin
   
-  console.log(`[sharp-money-cron] Fetching games from ${endDateMin} to ${endDateMax}`)
+  console.log(`[sharp-money-cron] Fetching games for ${endDateMin} (Eastern)`)
   
   // Fetch markets for each sport tag
   for (const tagId of tagIds.slice(0, 7)) { // Limit to 7 sports
@@ -339,7 +357,6 @@ async function fetchTrendingSportsMarkets(limit: number): Promise<GammaMarket[]>
       const url = new URL('/markets', POLYMARKET_GAMMA_API)
       url.searchParams.set('tag_id', tagId.toString())
       url.searchParams.set('closed', 'false')
-      url.searchParams.set('limit', '30')
       url.searchParams.set('end_date_min', endDateMin)
       url.searchParams.set('end_date_max', endDateMax)
       url.searchParams.set('volume_num_min', MIN_VOLUME_USD.toString())
@@ -367,7 +384,7 @@ async function fetchTrendingSportsMarkets(limit: number): Promise<GammaMarket[]>
   })
   
   console.log(`[sharp-money-cron] Total unique upcoming games: ${uniqueMarkets.length}`)
-  return uniqueMarkets.slice(0, limit)
+  return typeof limit === 'number' ? uniqueMarkets.slice(0, limit) : uniqueMarkets
 }
 
 /**
@@ -607,12 +624,17 @@ async function analyzeMarket(market: GammaMarket): Promise<UpsertSharpMoneyCache
     sideAHolders.length,
     sideBHolders.length,
   )
+  const pnlCoverage = Math.min(
+    getPnlCoverage(sideATopHolders),
+    getPnlCoverage(sideBTopHolders),
+  )
 
   return {
     conditionId,
     marketTitle: market.question,
     marketSlug: market.slug,
     eventSlug: market.eventSlug,
+    pnlCoverage,
     sideA: {
       label: sideALabel,
       totalValue: sideATotalValue,
@@ -650,7 +672,7 @@ export async function runSharpMoneyCron(env: Env) {
     }
 
     // Fetch trending sports markets
-    const markets = await fetchTrendingSportsMarkets(MAX_MARKETS_PER_RUN)
+    const markets = await fetchTrendingSportsMarkets()
     console.log('[sharp-money] Found', markets.length, 'sports markets to analyze')
 
     if (markets.length === 0) {

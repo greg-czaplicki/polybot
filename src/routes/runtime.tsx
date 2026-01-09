@@ -124,7 +124,7 @@ function RuntimePage() {
                 Last fetched: {formatRelativeTime(stats?.fetchedAt)}
               </p>
               <p className="text-sm text-slate-400">
-                Filtered markets (24h): {filteredTotalMarkets}
+                Filtered markets (today): {filteredTotalMarkets}
               </p>
               <p className="text-sm text-slate-400">
                 Expanded events: {stats?.expandedEventCount ?? 0} • Expanded markets: {stats?.expandedMarketCount ?? 0}
@@ -155,7 +155,7 @@ function RuntimePage() {
                   <tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
                     <th className="pb-3">Tag</th>
                     <th className="pb-3">Count</th>
-                    <th className="pb-3">Markets (24h window)</th>
+                    <th className="pb-3">Markets (today)</th>
                   </tr>
                 </thead>
                 <tbody>
