@@ -94,6 +94,32 @@ export interface SharpMoneyCacheEntry {
   updatedAt: number
 }
 
+export interface SharpMoneyHistoryEntry {
+  conditionId: string
+  recordedAt: number
+  marketTitle: string
+  eventTime?: string
+  sportSeriesId?: number
+  sideA: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    price?: number | null
+  }
+  sideB: {
+    label: string
+    totalValue: number
+    sharpScore: number
+    price?: number | null
+  }
+  sharpSide: 'A' | 'B' | 'EVEN'
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  scoreDifferential: number
+  sharpSideValueRatio?: number
+  edgeRating: number
+  pnlCoverage?: number
+}
+
 /**
  * Input for upserting a sharp money cache entry
  */
@@ -130,6 +156,8 @@ export interface UpsertSharpMoneyCacheInput {
 
 const MIN_READY_HOLDER_COUNT = 10
 const MIN_READY_PNL_COVERAGE = 0.6
+const HISTORY_RETENTION_HOURS = 24 * 7
+const HISTORY_EVENT_WINDOW_HOURS = 24
 
 function getEasternOffset(date: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -187,6 +215,61 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
     edgeRating: row.edge_rating ?? 0,
     updatedAt: row.updated_at,
   }
+}
+
+interface SharpMoneyHistoryRow {
+  condition_id: string
+  recorded_at: number
+  market_title: string
+  event_time?: string | null
+  sport_series_id?: number | null
+  side_a_label: string
+  side_b_label: string
+  side_a_total_value: number
+  side_b_total_value: number
+  side_a_sharp_score: number
+  side_b_sharp_score: number
+  side_a_price?: number | null
+  side_b_price?: number | null
+  sharp_side?: string | null
+  confidence?: string | null
+  score_differential: number
+  sharp_side_value_ratio?: number | null
+  edge_rating?: number | null
+  pnl_coverage?: number | null
+}
+
+function parseHistoryRow(row: SharpMoneyHistoryRow): SharpMoneyHistoryEntry {
+  return {
+    conditionId: row.condition_id,
+    recordedAt: row.recorded_at,
+    marketTitle: row.market_title,
+    eventTime: row.event_time ?? undefined,
+    sportSeriesId: row.sport_series_id ?? undefined,
+    sideA: {
+      label: row.side_a_label,
+      totalValue: row.side_a_total_value,
+      sharpScore: row.side_a_sharp_score,
+      price: row.side_a_price ?? null,
+    },
+    sideB: {
+      label: row.side_b_label,
+      totalValue: row.side_b_total_value,
+      sharpScore: row.side_b_sharp_score,
+      price: row.side_b_price ?? null,
+    },
+    sharpSide: (row.sharp_side as 'A' | 'B' | 'EVEN') ?? 'EVEN',
+    confidence: (row.confidence as 'HIGH' | 'MEDIUM' | 'LOW') ?? 'LOW',
+    scoreDifferential: row.score_differential,
+    sharpSideValueRatio: row.sharp_side_value_ratio ?? undefined,
+    edgeRating: row.edge_rating ?? 0,
+    pnlCoverage: row.pnl_coverage ?? undefined,
+  }
+}
+
+interface SharpMoneyHistoryStatRow {
+  recorded_at: number
+  edge_rating?: number | null
 }
 
 /**
@@ -442,4 +525,123 @@ export async function getSharpMoneyCacheStats(db: Db): Promise<{
     oldestEntry: timestamps?.oldest,
     newestEntry: timestamps?.newest,
   }
+}
+
+export async function insertSharpMoneyHistory(
+  db: Db,
+  input: {
+    conditionId: string
+    recordedAt?: number
+    marketTitle: string
+    eventTime?: string
+    sportSeriesId?: number
+    sideA: {
+      label: string
+      totalValue: number
+      sharpScore: number
+      price?: number | null
+    }
+    sideB: {
+      label: string
+      totalValue: number
+      sharpScore: number
+      price?: number | null
+    }
+    sharpSide: 'A' | 'B' | 'EVEN'
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+    scoreDifferential: number
+    sharpSideValueRatio?: number
+    edgeRating: number
+    pnlCoverage?: number
+  },
+): Promise<void> {
+  const now = input.recordedAt ?? nowUnixSeconds()
+  const cutoff = now - HISTORY_RETENTION_HOURS * 60 * 60
+
+  await run(
+    db,
+    `DELETE FROM sharp_money_history WHERE recorded_at < ?`,
+    cutoff,
+  )
+
+  await run(
+    db,
+    `INSERT OR REPLACE INTO sharp_money_history (
+      condition_id,
+      recorded_at,
+      market_title,
+      event_time,
+      sport_series_id,
+      side_a_label,
+      side_b_label,
+      side_a_total_value,
+      side_b_total_value,
+      side_a_sharp_score,
+      side_b_sharp_score,
+      side_a_price,
+      side_b_price,
+      sharp_side,
+      confidence,
+      score_differential,
+      sharp_side_value_ratio,
+      edge_rating,
+      pnl_coverage
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    input.conditionId,
+    now,
+    input.marketTitle,
+    input.eventTime ?? null,
+    input.sportSeriesId ?? null,
+    input.sideA.label,
+    input.sideB.label,
+    input.sideA.totalValue,
+    input.sideB.totalValue,
+    input.sideA.sharpScore,
+    input.sideB.sharpScore,
+    input.sideA.price ?? null,
+    input.sideB.price ?? null,
+    input.sharpSide,
+    input.confidence,
+    input.scoreDifferential,
+    input.sharpSideValueRatio ?? null,
+    input.edgeRating,
+    input.pnlCoverage ?? null,
+  )
+}
+
+export async function listSharpMoneyHistory(
+  db: Db,
+  conditionId: string,
+  sinceSeconds?: number,
+): Promise<SharpMoneyHistoryEntry[]> {
+  const cutoff = sinceSeconds ?? (nowUnixSeconds() - HISTORY_EVENT_WINDOW_HOURS * 60 * 60)
+  const rows = await all<SharpMoneyHistoryRow>(
+    db,
+    `SELECT * FROM sharp_money_history
+     WHERE condition_id = ?
+       AND recorded_at >= ?
+     ORDER BY recorded_at ASC`,
+    conditionId,
+    cutoff,
+  )
+  return rows.map(parseHistoryRow)
+}
+
+export async function listSharpMoneyHistoryWindow(
+  db: Db,
+  sinceSeconds: number,
+): Promise<Array<{ recordedAt: number; edgeRating: number }>> {
+  const rows = await all<SharpMoneyHistoryStatRow>(
+    db,
+    `SELECT recorded_at, edge_rating
+     FROM sharp_money_history
+     WHERE recorded_at >= ?`,
+    sinceSeconds,
+  )
+  return rows
+    .map((row) => ({
+      recordedAt: row.recorded_at,
+      edgeRating: row.edge_rating ?? 0,
+    }))
+    .filter((row) => Number.isFinite(row.edgeRating))
 }

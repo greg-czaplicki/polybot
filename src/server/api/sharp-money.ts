@@ -8,13 +8,17 @@ import {
   upsertSharpMoneyCache,
   getSharpMoneyCacheStats,
   clearAllSharpMoneyCache,
+  insertSharpMoneyHistory,
+  listSharpMoneyHistory,
+  listSharpMoneyHistoryWindow,
   type SharpMoneyCacheEntry,
+  type SharpMoneyHistoryEntry,
   type TopHolderPnlData,
   type UpsertSharpMoneyCacheInput,
 } from '../repositories/sharp-money'
 
 // Re-export types for frontend use
-export type { SharpMoneyCacheEntry, TopHolderPnlData } from '../repositories/sharp-money'
+export type { SharpMoneyCacheEntry, SharpMoneyHistoryEntry, TopHolderPnlData } from '../repositories/sharp-money'
 
 const POLYMARKET_GAMMA_API = 'https://gamma-api.polymarket.com'
 const POLYMARKET_CLOB_API = 'https://clob.polymarket.com'
@@ -37,6 +41,7 @@ const GAME_BETS_TAG_ID = 100639
 
 // Minimum volume to show in sharp money (filters out low-liquidity games)
 const MIN_VOLUME_USD = 50000
+const START_TIME_BUFFER_MINUTES = 20
 const MAX_SUBREQUESTS = 50
 const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60
 const UNIT_SIZE_SAMPLE_LIMIT = 20
@@ -701,8 +706,9 @@ export async function fetchTrendingSportsMarkets(payload: TrendingSportsPayload)
         if (eventTime) {
           const gameTime = parseEventTime(eventTime)
           if (gameTime) {
-            // Exclude games that have already started
-            if (gameTime < now) return false
+            // Exclude games that have been started beyond the buffer window
+            const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000
+            if (gameTime.getTime() < now.getTime() - startBufferMs) return false
             // Exclude games not on today's Eastern date
             if (getEasternDateString(gameTime) !== easternToday) return false
           }
@@ -2117,13 +2123,21 @@ export async function analyzeMarketSharpness(env: Env, payload: SharpAnalysisPay
         warnings.push('low_conviction')
       }
 
-      const sharpSideTopHolders = sharpSide === 'A' ? sideATopHolders : sideBTopHolders
-      const sharpSideTotalValue = sharpSide === 'A' ? sideATotalValue : sideBTotalValue
-      const concentration = getConcentration(sharpSideTopHolders, sharpSideTotalValue)
-      if (concentration.top1Share >= 0.6 || concentration.top3Share >= 0.8) {
-        adjustedConfidence = downgradeConfidence(adjustedConfidence)
-        edgePenalty *= 0.85
-        warnings.push('high_concentration')
+      const hasEdge = sharpSide !== 'EVEN'
+      let concentration = { top1Share: 0, top3Share: 0 }
+
+      if (!hasEdge) {
+        adjustedConfidence = 'LOW'
+        warnings.push('no_edge')
+      } else {
+        const sharpSideTopHolders = sharpSide === 'A' ? sideATopHolders : sideBTopHolders
+        const sharpSideTotalValue = sharpSide === 'A' ? sideATotalValue : sideBTotalValue
+        concentration = getConcentration(sharpSideTopHolders, sharpSideTotalValue)
+        if (concentration.top1Share >= 0.6 || concentration.top3Share >= 0.8) {
+          adjustedConfidence = downgradeConfidence(adjustedConfidence)
+          edgePenalty *= 0.85
+          warnings.push('high_concentration')
+        }
       }
 
       if (edgePenalty < 1.0) {
@@ -2133,15 +2147,19 @@ export async function analyzeMarketSharpness(env: Env, payload: SharpAnalysisPay
         )
       }
 
-      const edgeBreakdown = calculateEdgeRatingBreakdown(
-        scoreDifferential,
-        sharpSideTopHolders,
-        totalMarketValue,
-      )
+      const edgeBreakdown = hasEdge
+        ? calculateEdgeRatingBreakdown(
+          scoreDifferential,
+          sharpSide === 'A' ? sideATopHolders : sideBTopHolders,
+          totalMarketValue,
+        )
+        : { diffScore: 0, volumeBonus: 0, qualityBonus: 0, total: 0 }
 
       // Calculate Edge Rating for ranking
       const baseEdgeRating = Math.round(Math.max(0, Math.min(100, edgeBreakdown.total)))
-      const edgeRating = Math.max(0, Math.min(100, Math.round(baseEdgeRating * edgePenalty)))
+      const edgeRating = hasEdge
+        ? Math.max(0, Math.min(100, Math.round(baseEdgeRating * edgePenalty)))
+        : 0
 
       if (includeDebug) {
         const debug: SharpAnalysisDebug = {
@@ -2334,6 +2352,71 @@ export const getSharpMoneyCacheStatsFn = createServerFn({ method: 'POST' }).hand
   },
 )
 
+export const getSharpMoneyHistoryFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context, data }) => {
+    const payload = data as { conditionId: string; windowHours?: number }
+    const db = getDb(context)
+    if (!payload.conditionId) {
+      return { history: [] as SharpMoneyHistoryEntry[], error: 'No condition ID provided' }
+    }
+    const windowHours = payload.windowHours && payload.windowHours > 0
+      ? Math.min(payload.windowHours, 24 * 7)
+      : 24
+    const cutoff = Math.floor(Date.now() / 1000) - windowHours * 60 * 60
+    const history = await listSharpMoneyHistory(db, payload.conditionId, cutoff)
+    return { history }
+  },
+)
+
+export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({ method: 'POST' }).handler(
+  async ({ context, data }) => {
+    const db = getDb(context)
+    const payload = (data ?? {}) as { windowHours?: number }
+    const now = Math.floor(Date.now() / 1000)
+    const windowHours = payload.windowHours && payload.windowHours > 0
+      ? Math.min(payload.windowHours, 24 * 30)
+      : 7 * 24
+    const since = now - windowHours * 60 * 60
+    const rows = await listSharpMoneyHistoryWindow(db, since)
+    const buckets = new Map<number, number[]>()
+
+    for (const row of rows) {
+      const bucketStart = row.recordedAt - (row.recordedAt % 3600)
+      if (!buckets.has(bucketStart)) {
+        buckets.set(bucketStart, [])
+      }
+      buckets.get(bucketStart)?.push(row.edgeRating)
+    }
+
+    const percentile = (values: number[], percent: number) => {
+      if (values.length === 0) return 0
+      const sorted = [...values].sort((a, b) => a - b)
+      const index = Math.round((percent / 100) * (sorted.length - 1))
+      return sorted[Math.max(0, Math.min(sorted.length - 1, index))]
+    }
+
+    const bucketList = [...buckets.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([bucketStart, values]) => {
+        const count = values.length
+        const average = count > 0
+          ? Math.round(values.reduce((sum, value) => sum + value, 0) / count)
+          : 0
+        return {
+          start: bucketStart,
+          count,
+          average,
+          p50: percentile(values, 50),
+          p75: percentile(values, 75),
+          p90: percentile(values, 90),
+          max: values.length > 0 ? Math.max(...values) : 0,
+        }
+      })
+
+    return { buckets: bucketList }
+  },
+)
+
 /**
  * Get runtime market fetch stats (for /runtime)
  */
@@ -2394,6 +2477,30 @@ export async function refreshMarketSharpness(env: Env, payload: SharpAnalysisPay
   }
 
   await upsertSharpMoneyCache(env.POLYWHALER_DB, cacheInput)
+  await insertSharpMoneyHistory(env.POLYWHALER_DB, {
+    conditionId: analysis.conditionId,
+    marketTitle: analysis.marketTitle,
+    eventTime: analysis.eventTime,
+    sportSeriesId: analysis.sportSeriesId,
+    sideA: {
+      label: analysis.sideA.label,
+      totalValue: analysis.sideA.totalValue,
+      sharpScore: analysis.sideA.sharpScore,
+      price: analysis.sideA.price ?? null,
+    },
+    sideB: {
+      label: analysis.sideB.label,
+      totalValue: analysis.sideB.totalValue,
+      sharpScore: analysis.sideB.sharpScore,
+      price: analysis.sideB.price ?? null,
+    },
+    sharpSide: analysis.sharpSide,
+    confidence: analysis.confidence,
+    scoreDifferential: analysis.scoreDifferential,
+    sharpSideValueRatio: analysis.sharpSideValueRatio,
+    edgeRating: analysis.edgeRating,
+    pnlCoverage: analysis.pnlCoverage,
+  })
 
   return { success: true, analysis, allWalletAddresses }
 }

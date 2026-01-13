@@ -20,8 +20,11 @@ import {
   getSharpMoneyCacheFn,
   getSharpMoneyCacheStatsFn,
   clearSharpMoneyCacheFn,
+  getSharpMoneyHistoryFn,
+  getSharpMoneyEdgeStatsHistoryFn,
   refreshMarketSharpnessFn,
   type SharpMoneyCacheEntry,
+  type SharpMoneyHistoryEntry,
   type TopHolderPnlData,
 } from '../server/api/sharp-money'
 
@@ -124,7 +127,138 @@ function formatRelativeTimeMs(timestampMs: number): string {
   return `${Math.floor(diffMs / 86_400_000)}d ago`
 }
 
-const MIN_EDGE_RATING = 65
+function formatHourLabel(timestampSeconds: number): string {
+  const date = new Date(timestampSeconds * 1000)
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+type EdgeStatsBucket = {
+  start: number
+  count: number
+  average: number
+  p50: number
+  p75: number
+  p90: number
+  max: number
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function computeSignalScoreFromHistory(
+  entry: SharpMoneyCacheEntry,
+  history: SharpMoneyHistoryEntry[] | undefined,
+  minEdgeRating: number,
+): number {
+  const edgeScore = clamp(entry.edgeRating, 0, 100)
+  const diffScore = clamp(entry.scoreDifferential ?? 0, 0, 60) / 60 * 100
+
+  if (!history || history.length < 2) {
+    return clamp((edgeScore * 0.65) + (diffScore * 0.35), 0, 100)
+  }
+
+  const start = history[0]
+  const end = history[history.length - 1]
+  const startVolume = start.sideA.totalValue + start.sideB.totalValue
+  const endVolume = end.sideA.totalValue + end.sideB.totalValue
+  const edgeDelta = end.edgeRating - start.edgeRating
+  const diffDelta = end.scoreDifferential - start.scoreDifferential
+  const volumeDelta = endVolume - startVolume
+
+  let stabilityCount = 0
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].edgeRating < minEdgeRating) break
+    stabilityCount += 1
+  }
+
+  const trendScore = clamp(edgeDelta, -20, 20) * 1.5
+  const diffTrendScore = clamp(diffDelta, -20, 20) * 0.8
+  const volumeScore = clamp(volumeDelta, -50_000, 150_000) / 150_000 * 30
+  const stabilityScore = Math.min(stabilityCount, 5) * 2
+
+  const total = (edgeScore * 0.55)
+    + (diffScore * 0.25)
+    + trendScore
+    + diffTrendScore
+    + volumeScore
+    + stabilityScore
+
+  return clamp(total, 0, 100)
+}
+
+function computeSignalScoreFromWindow(
+  snapshot: SharpMoneyHistoryEntry,
+  window: SharpMoneyHistoryEntry[],
+  minEdgeRating: number,
+): number {
+  const edgeScore = clamp(snapshot.edgeRating, 0, 100)
+  const diffScore = clamp(snapshot.scoreDifferential ?? 0, 0, 60) / 60 * 100
+  if (window.length < 2) {
+    return clamp((edgeScore * 0.65) + (diffScore * 0.35), 0, 100)
+  }
+  const start = window[0]
+  const end = window[window.length - 1]
+  const volumeDelta = (end.sideA.totalValue + end.sideB.totalValue)
+    - (start.sideA.totalValue + start.sideB.totalValue)
+  const edgeDelta = end.edgeRating - start.edgeRating
+  const diffDelta = end.scoreDifferential - start.scoreDifferential
+  let stabilityCount = 0
+  for (let i = window.length - 1; i >= 0; i -= 1) {
+    if (window[i].edgeRating < minEdgeRating) break
+    stabilityCount += 1
+  }
+  const trendScore = clamp(edgeDelta, -20, 20) * 1.5
+  const diffTrendScore = clamp(diffDelta, -20, 20) * 0.8
+  const volumeScore = clamp(volumeDelta, -50_000, 150_000) / 150_000 * 30
+  const stabilityScore = Math.min(stabilityCount, 5) * 2
+  const total = (edgeScore * 0.55)
+    + (diffScore * 0.25)
+    + trendScore
+    + diffTrendScore
+    + volumeScore
+    + stabilityScore
+  return clamp(total, 0, 100)
+}
+
+function selectRecentHistory(
+  history: SharpMoneyHistoryEntry[] | undefined,
+  windowMinutes: number,
+): SharpMoneyHistoryEntry[] | undefined {
+  if (!history || history.length === 0) return history
+  const cutoff = Math.floor(Date.now() / 1000) - windowMinutes * 60
+  const recent = history.filter((entry) => entry.recordedAt >= cutoff)
+  return recent.length > 0 ? recent : history
+}
+
+function signalScoreToGradeLabel(score: number): 'A+' | 'A' | 'B' | 'C' | 'D' {
+  if (score >= 88) return 'A+'
+  if (score >= 80) return 'A'
+  if (score >= 72) return 'B'
+  if (score >= 62) return 'C'
+  return 'D'
+}
+
+function gradeWeight(grade: 'A+' | 'A' | 'B' | 'C' | 'D'): number {
+  switch (grade) {
+    case 'A+':
+      return 100
+    case 'A':
+      return 80
+    case 'B':
+      return 60
+    case 'C':
+      return 40
+    default:
+      return 20
+  }
+}
+
+const MIN_EDGE_RATING = 66
+const STARTING_SOON_MINUTES = 30
 const MIN_READY_HOLDER_COUNT = 10
 const MIN_READY_PNL_COVERAGE = 0.6
 
@@ -251,7 +385,15 @@ function SharpMoneyPage() {
   const [selectedSeriesId, setSelectedSeriesId] = useState('all')
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set())
   const [showAllEntries, setShowAllEntries] = useState(false)
+  const [showEdgeStats, setShowEdgeStats] = useState(true)
+  const [edgeStatsWindowHours, setEdgeStatsWindowHours] = useState(24 * 7)
+  const [edgeStatsHistory, setEdgeStatsHistory] = useState<EdgeStatsBucket[]>([])
+  const [edgeStatsHistoryLoading, setEdgeStatsHistoryLoading] = useState(false)
+  const [signalHistoryByConditionId, setSignalHistoryByConditionId] = useState<Record<string, SharpMoneyHistoryEntry[]>>({})
+  const [signalHistoryFetchedAt, setSignalHistoryFetchedAt] = useState<Record<string, number>>({})
   const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(null)
+  const [historyByConditionId, setHistoryByConditionId] = useState<Record<string, SharpMoneyHistoryEntry[]>>({})
+  const [historyLoading, setHistoryLoading] = useState<Set<string>>(new Set())
   const showRefreshDebug =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('refreshDebug')
@@ -315,6 +457,59 @@ function SharpMoneyPage() {
   useEffect(() => {
     loadPipelineStatus()
   }, [loadPipelineStatus])
+
+  const loadEdgeStatsHistory = useCallback(async () => {
+    setEdgeStatsHistoryLoading(true)
+    try {
+      const result = await getSharpMoneyEdgeStatsHistoryFn({
+        data: { windowHours: edgeStatsWindowHours },
+      })
+      setEdgeStatsHistory(result.buckets ?? [])
+    } catch (error) {
+      console.error('Failed to load edge stats history:', error)
+    } finally {
+      setEdgeStatsHistoryLoading(false)
+    }
+  }, [edgeStatsWindowHours])
+
+  useEffect(() => {
+    if (!showEdgeStats) return
+    loadEdgeStatsHistory()
+    const interval = setInterval(() => {
+      loadEdgeStatsHistory()
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadEdgeStatsHistory, showEdgeStats])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem('polywhaler:showEdgeStats')
+    if (stored === 'false' || stored === 'true') {
+      setShowEdgeStats(stored === 'true')
+    } else {
+      const isMobile = window.matchMedia('(max-width: 640px)').matches
+      if (isMobile) {
+        setShowEdgeStats(false)
+      }
+    }
+    const windowStored = window.localStorage.getItem('polywhaler:edgeStatsWindowHours')
+    if (windowStored) {
+      const parsed = Number(windowStored)
+      if (Number.isFinite(parsed) && parsed > 0) {
+        setEdgeStatsWindowHours(parsed)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('polywhaler:showEdgeStats', String(showEdgeStats))
+  }, [showEdgeStats])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('polywhaler:edgeStatsWindowHours', String(edgeStatsWindowHours))
+  }, [edgeStatsWindowHours])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -398,13 +593,42 @@ function SharpMoneyPage() {
   }
 
   // Toggle market expansion
-  const toggleMarket = (id: string) => {
+  const loadHistory = useCallback(async (entry: SharpMoneyCacheEntry) => {
+    if (historyByConditionId[entry.conditionId]) {
+      return
+    }
+    setHistoryLoading((prev) => {
+      const next = new Set(prev)
+      next.add(entry.conditionId)
+      return next
+    })
+    try {
+      const result = await getSharpMoneyHistoryFn({
+        data: { conditionId: entry.conditionId, windowHours: 24 },
+      })
+      setHistoryByConditionId((prev) => ({
+        ...prev,
+        [entry.conditionId]: result.history ?? [],
+      }))
+    } catch (error) {
+      console.error('Failed to load history:', error)
+    } finally {
+      setHistoryLoading((prev) => {
+        const next = new Set(prev)
+        next.delete(entry.conditionId)
+        return next
+      })
+    }
+  }, [historyByConditionId])
+
+  const toggleMarket = (entry: SharpMoneyCacheEntry) => {
     setExpandedMarkets((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
+      if (next.has(entry.id)) {
+        next.delete(entry.id)
       } else {
-        next.add(id)
+        next.add(entry.id)
+        void loadHistory(entry)
       }
       return next
     })
@@ -414,13 +638,27 @@ function SharpMoneyPage() {
   const readyEntries = useMemo(() => entries.filter(isEntryReady), [entries])
   const hasReadyEntries = readyEntries.length > 0
   const baseEntries = showAllEntries ? entries : readyEntries
+  const signalScoreByConditionId = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const entry of baseEntries) {
+      const recentSignalHistory = signalHistoryByConditionId[entry.conditionId]
+      const fallbackHistory = historyByConditionId[entry.conditionId]
+      const history = recentSignalHistory && recentSignalHistory.length > 0
+        ? recentSignalHistory
+        : selectRecentHistory(fallbackHistory, 60)
+      map[entry.conditionId] = computeSignalScoreFromHistory(entry, history, MIN_EDGE_RATING)
+    }
+    return map
+  }, [baseEntries, signalHistoryByConditionId, historyByConditionId])
   const filteredEntries = useMemo(() => {
     const now = new Date()
     const cutoff = new Date(now.getTime() + 24 * 60 * 60 * 1000)
     let filtered = baseEntries.filter((e) => {
+      if (e.sharpSide === 'EVEN') return false
       if (showAllEntries) return true
-      // Must meet minimum edge rating
-      if (e.edgeRating < MIN_EDGE_RATING) return false
+      const signalScore = signalScoreByConditionId[e.conditionId] ?? e.edgeRating
+      const signalGrade = signalScoreToGradeLabel(signalScore)
+      if (signalGrade === 'C' || signalGrade === 'D') return false
       // Hide games that have already started
       const gameTime = parseEventTime(e.eventTime)
       if (gameTime) {
@@ -433,9 +671,105 @@ function SharpMoneyPage() {
       filtered = filtered.filter((e) => e.sportSeriesId === Number(selectedSeriesId))
     }
     return filtered
-  }, [baseEntries, selectedSeriesId, showAllEntries])
+  }, [baseEntries, selectedSeriesId, showAllEntries, signalScoreByConditionId])
 
-  const displayEntries = hasReadyEntries ? filteredEntries : []
+  const statsEntries = useMemo(() => {
+    let filtered = baseEntries.filter((entry) => entry.sharpSide !== 'EVEN')
+    if (selectedSeriesId !== 'all') {
+      filtered = filtered.filter((entry) => entry.sportSeriesId === Number(selectedSeriesId))
+    }
+    return filtered
+  }, [baseEntries, selectedSeriesId])
+
+  const edgeStats = useMemo(() => {
+    if (statsEntries.length === 0) return null
+    const values = statsEntries
+      .map((entry) => entry.edgeRating)
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b)
+    if (values.length === 0) return null
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length
+    const pickPercentile = (percent: number) => {
+      const index = Math.round((percent / 100) * (values.length - 1))
+      return values[Math.max(0, Math.min(values.length - 1, index))]
+    }
+    const passingCount = values.filter((value) => value >= MIN_EDGE_RATING).length
+    return {
+      total: values.length,
+      passing: passingCount,
+      average: Math.round(average),
+      p50: pickPercentile(50),
+      p75: pickPercentile(75),
+      p90: pickPercentile(90),
+      max: values[values.length - 1],
+    }
+  }, [statsEntries])
+
+  useEffect(() => {
+    if (filteredEntries.length === 0) return
+    const now = Date.now()
+    const targets = filteredEntries.filter((entry) => {
+      const lastFetched = signalHistoryFetchedAt[entry.conditionId] ?? 0
+      return now - lastFetched > 2 * 60 * 1000
+    }).slice(0, 20)
+
+    if (targets.length === 0) return
+    let cancelled = false
+
+    ;(async () => {
+      const results = await Promise.all(targets.map(async (entry) => {
+        try {
+          const result = await getSharpMoneyHistoryFn({
+            data: { conditionId: entry.conditionId, windowHours: 1 },
+          })
+          return { conditionId: entry.conditionId, history: result.history ?? [] }
+        } catch (error) {
+          console.error('Failed to load signal history:', error)
+          return null
+        }
+      }))
+
+      if (cancelled) return
+      const nextFetchedAt = Date.now()
+      setSignalHistoryByConditionId((prev) => {
+        const next = { ...prev }
+        for (const result of results) {
+          if (!result) continue
+          next[result.conditionId] = result.history
+        }
+        return next
+      })
+      setSignalHistoryFetchedAt((prev) => {
+        const next = { ...prev }
+        for (const result of results) {
+          if (!result) continue
+          next[result.conditionId] = nextFetchedAt
+        }
+        return next
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [filteredEntries, signalHistoryFetchedAt])
+
+  const sortedEntries = useMemo(() => {
+    const entriesToSort = [...filteredEntries]
+    entriesToSort.sort((a, b) => {
+      const signalA = signalScoreByConditionId[a.conditionId] ?? 0
+      const signalB = signalScoreByConditionId[b.conditionId] ?? 0
+      const gradeA = signalScoreToGradeLabel(signalA)
+      const gradeB = signalScoreToGradeLabel(signalB)
+      const compositeA = gradeWeight(gradeA) + signalA
+      const compositeB = gradeWeight(gradeB) + signalB
+      if (compositeA !== compositeB) return compositeB - compositeA
+      return b.edgeRating - a.edgeRating
+    })
+    return entriesToSort
+  }, [filteredEntries, signalScoreByConditionId])
+
+  const displayEntries = hasReadyEntries ? sortedEntries : []
   const showProcessingState = !isLoading
     && displayEntries.length === 0
     && (pipelineStatus?.inProgress || (entries.length > 0 && !hasReadyEntries))
@@ -539,6 +873,135 @@ function SharpMoneyPage() {
           </div>
         </div>
 
+        {showEdgeStats && edgeStats && (
+          <div className="mb-6 rounded-xl border border-slate-800/70 bg-slate-900/40 px-4 py-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Edge Stats
+              </div>
+              <div className="text-[0.65rem] text-slate-500">
+                {showAllEntries ? 'All ready markets' : 'Filtered markets'}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-6">
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">Markets</div>
+                <div className="text-base font-semibold text-slate-100">{edgeStats.total}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">≥ {MIN_EDGE_RATING}</div>
+                <div className="text-base font-semibold text-cyan-300">{edgeStats.passing}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">Avg</div>
+                <div className="text-base font-semibold text-slate-100">{edgeStats.average}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">P50</div>
+                <div className="text-base font-semibold text-slate-100">{edgeStats.p50}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">P75</div>
+                <div className="text-base font-semibold text-slate-100">{edgeStats.p75}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+                <div className="text-[0.65rem] uppercase text-slate-500">P90/Max</div>
+                <div className="text-base font-semibold text-slate-100">
+                  {edgeStats.p90}/{edgeStats.max}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 border-t border-slate-800/60 pt-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
+                <span>
+                  Edge Distribution ({edgeStatsWindowHours === 24 ? '24h' : `${Math.round(edgeStatsWindowHours / 24)}d`})
+                </span>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-900 px-1 py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEdgeStatsWindowHours(24)}
+                      className={`rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider ${
+                        edgeStatsWindowHours === 24
+                          ? 'bg-cyan-500 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      24h
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEdgeStatsWindowHours(24 * 7)}
+                      className={`rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider ${
+                        edgeStatsWindowHours === 24 * 7
+                          ? 'bg-cyan-500 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      7d
+                    </button>
+                  </div>
+                  {edgeStatsHistoryLoading && (
+                    <span className="flex items-center gap-2 text-[0.6rem] text-slate-500">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading
+                    </span>
+                  )}
+                </div>
+              </div>
+              {edgeStatsHistory.length === 0 && !edgeStatsHistoryLoading ? (
+                <div className="text-xs text-slate-500">No history snapshots yet.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[520px] text-left text-xs text-slate-300">
+                    <thead className="text-[0.6rem] uppercase tracking-wider text-slate-500">
+                      <tr>
+                        <th className="py-2 pr-3">Hour</th>
+                        <th className="py-2 pr-3">Count</th>
+                        <th className="py-2 pr-3">Avg</th>
+                        <th className="py-2 pr-3">P50</th>
+                        <th className="py-2 pr-3">P75</th>
+                        <th className="py-2">P90</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {edgeStatsHistory.slice(-6).map((bucket) => (
+                        <tr key={bucket.start} className="border-t border-slate-800/60">
+                          <td className="py-2 pr-3 text-slate-400">
+                            {formatHourLabel(bucket.start)}
+                          </td>
+                          <td className="py-2 pr-3">{bucket.count}</td>
+                          <td className="py-2 pr-3">{bucket.average}</td>
+                          <td className="py-2 pr-3">{bucket.p50}</td>
+                          <td className="py-2 pr-3">{bucket.p75}</td>
+                          <td className="py-2">{bucket.p90}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {edgeStatsHistory.length > 6 && (
+                    <div className="mt-2 text-[0.65rem] text-slate-500">
+                      Showing last 6 hours of {edgeStatsWindowHours === 24 ? '24h' : '7d'} history.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {edgeStats && (
+          <div className="mb-6 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowEdgeStats((prev) => !prev)}
+              className="flex items-center gap-2 rounded-md border border-slate-700/60 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800/60"
+            >
+              {showEdgeStats ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              {showEdgeStats ? 'Hide Edge Stats' : 'Show Edge Stats'}
+            </button>
+          </div>
+        )}
+
         {/* Loading State */}
         {isLoading && (
           <div className="flex items-center justify-center py-20">
@@ -614,7 +1077,7 @@ function SharpMoneyPage() {
             <h2 className="text-lg font-semibold text-white mb-2">No Sharp Money Data</h2>
             <p className="text-gray-400 mb-4 max-w-md">
               {entries.length > 0
-                ? `No bets with Edge Rating ≥ ${MIN_EDGE_RATING}. Lower quality signals are hidden.`
+                ? 'No bets with Signal Grade ≥ B. Lower quality signals are hidden.'
                 : 'Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing.'}
             </p>
             {!pipelineStatus?.inProgress && entries.length > 0 && !showAllEntries && (
@@ -689,7 +1152,10 @@ function SharpMoneyPage() {
                 key={entry.id}
                 entry={entry}
                 isExpanded={expandedMarkets.has(entry.id)}
-                onToggle={() => toggleMarket(entry.id)}
+                onToggle={() => toggleMarket(entry)}
+                history={historyByConditionId[entry.conditionId]}
+                isHistoryLoading={historyLoading.has(entry.conditionId)}
+                signalScore={signalScoreByConditionId[entry.conditionId]}
                 onRefresh={() => handleRefreshEntry(entry)}
                 isRefreshing={refreshingEntryId === entry.id}
                 disableRefresh={Boolean(pipelineStatus?.inProgress)}
@@ -708,6 +1174,9 @@ function SharpMoneyCard({
   entry,
   isExpanded,
   onToggle,
+  history,
+  isHistoryLoading,
+  signalScore,
   onRefresh,
   isRefreshing,
   disableRefresh,
@@ -716,6 +1185,9 @@ function SharpMoneyCard({
   entry: SharpMoneyCacheEntry
   isExpanded: boolean
   onToggle: () => void
+  history?: SharpMoneyHistoryEntry[]
+  isHistoryLoading: boolean
+  signalScore?: number
   onRefresh: () => void
   isRefreshing: boolean
   disableRefresh: boolean
@@ -762,24 +1234,38 @@ function SharpMoneyCard({
   }
 
   // Convert Edge Rating to letter grade
-  const getBetGrade = (edgeRating: number): { grade: string; color: string; bgColor: string; borderColor: string } => {
-    if (edgeRating >= 90) {
+  const getBetGrade = (signalScore: number): { grade: string; color: string; bgColor: string; borderColor: string } => {
+    if (signalScore >= 88) {
       return { grade: 'A+', color: 'text-emerald-400', bgColor: 'bg-emerald-500/20', borderColor: 'border-emerald-500/50' }
     }
-    if (edgeRating >= 80) {
+    if (signalScore >= 80) {
       return { grade: 'A', color: 'text-emerald-400', bgColor: 'bg-emerald-500/15', borderColor: 'border-emerald-500/40' }
     }
-    if (edgeRating >= 70) {
+    if (signalScore >= 72) {
       return { grade: 'B', color: 'text-cyan-400', bgColor: 'bg-cyan-500/15', borderColor: 'border-cyan-500/40' }
     }
-    if (edgeRating >= 65) {
+    if (signalScore >= 62) {
       return { grade: 'C', color: 'text-amber-400', bgColor: 'bg-amber-500/15', borderColor: 'border-amber-500/40' }
     }
     return { grade: 'D', color: 'text-gray-400', bgColor: 'bg-slate-800/50', borderColor: 'border-slate-700' }
   }
   
-  const betGrade = getBetGrade(entry.edgeRating)
-
+  const betGrade = getBetGrade(signalScore ?? entry.edgeRating)
+  const historyEntries = history ?? []
+  const historyFirst = historyEntries[0]
+  const historyLast = historyEntries[historyEntries.length - 1]
+  const historySlice = historyEntries.slice(-12)
+  const formatOddsLine = (snapshot: SharpMoneyHistoryEntry) => {
+    const sideA = formatAmericanOdds(snapshot.sideA.price)
+    const sideB = formatAmericanOdds(snapshot.sideB.price)
+    if (!sideA && !sideB) return '—'
+    return `${snapshot.sideA.label} ${sideA ?? '—'} • ${snapshot.sideB.label} ${sideB ?? '—'}`
+  }
+  const eventDate = parseEventTime(entry.eventTime)
+  const minutesToStart = eventDate ? (eventDate.getTime() - Date.now()) / 60000 : null
+  const isStartingSoon = minutesToStart !== null
+    && minutesToStart >= 0
+    && minutesToStart <= STARTING_SOON_MINUTES
   return (
     <div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
       {/* Card Header */}
@@ -798,12 +1284,22 @@ function SharpMoneyCard({
                 </span>
               )}
               {entry.eventTime && (
-                <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-1.5 py-0.5 rounded">
-                  {formatEventTime(entry.eventTime)}
-                </span>
+                <>
+                  <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-1.5 py-0.5 rounded">
+                    {formatEventTime(entry.eventTime)}
+                  </span>
+                  {isStartingSoon && (
+                    <span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1.5 py-0.5 rounded">
+                      Starting soon
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <div className="flex items-center gap-1">
+              <span className="text-[0.6rem] text-gray-500">
+                Updated {formatRelativeTime(entry.updatedAt)}
+              </span>
               {polymarketUrl && (
                 <a
                   href={polymarketUrl}
@@ -898,9 +1394,10 @@ function SharpMoneyCard({
             {/* Edge Rating - PRIMARY */}
             <div className="flex flex-col items-center justify-center flex-1 h-[56px]">
               <span className={`text-lg font-bold ${
-                entry.edgeRating >= 90 ? 'text-emerald-400' :
-                entry.edgeRating >= 75 ? 'text-cyan-400' :
-                entry.edgeRating >= 65 ? 'text-amber-400' :
+                entry.edgeRating >= 80 ? 'text-emerald-400' :
+                entry.edgeRating >= 75 ? 'text-emerald-400' :
+                entry.edgeRating >= 66 ? 'text-cyan-400' :
+                entry.edgeRating >= 60 ? 'text-amber-400' :
                 entry.edgeRating >= 50 ? 'text-gray-300' :
                 'text-gray-500'
               }`}>
@@ -953,12 +1450,22 @@ function SharpMoneyCard({
                 </span>
               )}
               {entry.eventTime && (
-                <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
-                  {formatEventTime(entry.eventTime)}
-                </span>
+                <>
+                  <span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
+                    {formatEventTime(entry.eventTime)}
+                  </span>
+                  {isStartingSoon && (
+                    <span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-2 py-0.5 rounded">
+                      Starting soon
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <div className="flex items-center gap-1">
+              <span className="text-[0.6rem] text-gray-500">
+                Updated {formatRelativeTime(entry.updatedAt)}
+              </span>
               {polymarketUrl && (
                 <a
                   href={polymarketUrl}
@@ -1049,9 +1556,10 @@ function SharpMoneyCard({
               {/* Edge Rating - PRIMARY ranking indicator */}
               <div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[48px]">
                 <span className={`text-xl font-bold ${
-                  entry.edgeRating >= 90 ? 'text-emerald-400' :
-                  entry.edgeRating >= 75 ? 'text-cyan-400' :
-                  entry.edgeRating >= 65 ? 'text-amber-400' :
+                  entry.edgeRating >= 80 ? 'text-emerald-400' :
+                  entry.edgeRating >= 75 ? 'text-emerald-400' :
+                  entry.edgeRating >= 66 ? 'text-cyan-400' :
+                  entry.edgeRating >= 60 ? 'text-amber-400' :
                   entry.edgeRating >= 50 ? 'text-gray-300' :
                   'text-gray-500'
                 }`}>
@@ -1130,8 +1638,98 @@ function SharpMoneyCard({
               scoreDiff={entry.scoreDifferential}
             />
           </div>
-          <div className="mt-4 text-xs text-gray-500 text-center">
-            Updated {formatRelativeTime(entry.updatedAt)}
+          <div className="mt-4 rounded-lg border border-slate-800/70 bg-slate-950/30 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                History (24h)
+              </div>
+              {isHistoryLoading && (
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading
+                </div>
+              )}
+            </div>
+            {!isHistoryLoading && historyEntries.length === 0 && (
+              <div className="mt-3 text-xs text-slate-400">
+                No history recorded yet.
+              </div>
+            )}
+            {historyFirst && historyLast && (
+              <>
+                <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+                  <div>
+                    Grade: <span className="font-semibold text-slate-100">{getBetGrade(computeSignalScoreFromWindow(historyFirst, [historyFirst], MIN_EDGE_RATING)).grade}</span>
+                    {' '}
+                    → <span className="font-semibold text-slate-100">{getBetGrade(computeSignalScoreFromWindow(historyLast, historyEntries, MIN_EDGE_RATING)).grade}</span>
+                  </div>
+                  <div>
+                    Edge: <span className="font-semibold text-slate-100">{historyFirst.edgeRating}</span>
+                    {' '}
+                    → <span className="font-semibold text-slate-100">{historyLast.edgeRating}</span>
+                  </div>
+                  <div>
+                    Diff: <span className="font-semibold text-slate-100">{Math.round(historyFirst.scoreDifferential)}</span>
+                    {' '}
+                    → <span className="font-semibold text-slate-100">{Math.round(historyLast.scoreDifferential)}</span>
+                  </div>
+                  <div>
+                    Volume: <span className="font-semibold text-slate-100">
+                      {formatUsdCompact(historyFirst.sideA.totalValue + historyFirst.sideB.totalValue)}
+                    </span>
+                    {' '}
+                    → <span className="font-semibold text-slate-100">
+                      {formatUsdCompact(historyLast.sideA.totalValue + historyLast.sideB.totalValue)}
+                    </span>
+                  </div>
+                  <div className="sm:col-span-2">
+                    Odds: <span className="font-semibold text-slate-100">{formatOddsLine(historyFirst)}</span>
+                    {' '}
+                    → <span className="font-semibold text-slate-100">{formatOddsLine(historyLast)}</span>
+                  </div>
+                </div>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-left text-xs text-slate-300">
+                    <thead className="text-[0.65rem] uppercase tracking-wider text-slate-500">
+                      <tr>
+                        <th className="py-2 pr-3">Time</th>
+                        <th className="py-2 pr-3">Grade</th>
+                        <th className="py-2 pr-3">Edge</th>
+                        <th className="py-2 pr-3">Diff</th>
+                        <th className="py-2 pr-3">Volume</th>
+                        <th className="py-2">Odds</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historySlice.map((snapshot) => {
+                        const windowStart = snapshot.recordedAt - 60 * 60
+                        const window = historyEntries.filter((entry) => entry.recordedAt >= windowStart && entry.recordedAt <= snapshot.recordedAt)
+                        return (
+                        <tr key={snapshot.recordedAt} className="border-t border-slate-800/60">
+                          <td className="py-2 pr-3 text-slate-400">
+                            {formatRelativeTime(snapshot.recordedAt)}
+                          </td>
+                          <td className="py-2 pr-3 font-semibold text-slate-100">
+                            {getBetGrade(computeSignalScoreFromWindow(snapshot, window, MIN_EDGE_RATING)).grade}
+                          </td>
+                          <td className="py-2 pr-3">{snapshot.edgeRating}</td>
+                          <td className="py-2 pr-3">{Math.round(snapshot.scoreDifferential)}</td>
+                          <td className="py-2 pr-3">
+                            {formatUsdCompact(snapshot.sideA.totalValue + snapshot.sideB.totalValue)}
+                          </td>
+                          <td className="py-2">{formatOddsLine(snapshot)}</td>
+                        </tr>
+                      )})}
+                    </tbody>
+                  </table>
+                </div>
+                {historyEntries.length > historySlice.length && (
+                  <div className="mt-2 text-[0.65rem] text-slate-500">
+                    Showing last {historySlice.length} of {historyEntries.length} snapshots.
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

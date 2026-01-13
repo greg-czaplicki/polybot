@@ -12,6 +12,7 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const AUTH_TTL_DAYS = 30
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -20,8 +21,10 @@ function LoginPage() {
 
     try {
       await verifyPasswordFn({ data: { password } })
-      // Store authentication in sessionStorage
-      sessionStorage.setItem('polywhaler_authenticated', 'true')
+      // Store authentication in localStorage with TTL
+      const expiresAt = Date.now() + AUTH_TTL_DAYS * 24 * 60 * 60 * 1000
+      localStorage.setItem('polywhaler_authenticated', 'true')
+      localStorage.setItem('polywhaler_auth_expires_at', String(expiresAt))
       // Redirect to primary app
       navigate({ to: '/sharp' })
     } catch (err) {

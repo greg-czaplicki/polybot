@@ -4,7 +4,6 @@ import {
 } from '@tanstack/react-start/server'
 
 import type { Env, RequestContext } from './server/env'
-import { runSharpMoneyCron } from './server/jobs/sharp-money-cron'
 import { SharpPipeline, handleSharpQueue } from './server/pipeline/sharp-pipeline'
 import { getPipelineStub } from './server/pipeline/sharp-pipeline-utils'
 
@@ -14,24 +13,6 @@ const serverEntry = {
   async fetch(request: Request, env: Env, executionCtx: ExecutionContext) {
     const url = new URL(request.url)
     
-    // Sharp money cron trigger - separate due to rate limits
-    if (url.pathname === '/_cron/sharp-money' && request.method === 'POST') {
-      try {
-        console.log('[manual-cron] Starting sharp money cron run...')
-        await runSharpMoneyCron(env)
-        console.log('[manual-cron] Sharp money cron completed successfully')
-        return new Response(JSON.stringify({ success: true, message: 'Sharp money cron completed' }), {
-          headers: { 'Content-Type': 'application/json' },
-        })
-      } catch (error) {
-        console.error('[manual-cron] Sharp money error:', error)
-        return new Response(JSON.stringify({ success: false, error: String(error) }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-    }
-
     // Trigger background sharp pipeline refresh
     if (url.pathname === '/_pipeline/trigger' && request.method === 'POST') {
       try {
