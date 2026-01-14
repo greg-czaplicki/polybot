@@ -1,5 +1,4 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Lock } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { verifyPasswordFn } from '../server/api/auth'
 
@@ -38,11 +37,16 @@ function LoginPage() {
       <div className="w-full max-w-md">
         <div className="bg-slate-950/70 border border-slate-900 rounded-2xl p-8 space-y-6">
           <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-cyan-500/10 border border-cyan-500/20 mb-4">
-              <Lock className="h-8 w-8 text-cyan-400" />
+            <div className="mb-4 flex flex-col items-center gap-3">
+              <img
+                src="/logo-trans.png"
+                alt="Polywhaler"
+                className="h-22 w-auto"
+              />
+              <h1 className="text-3xl font-black text-white uppercase tracking-wider">
+                Poly<span className="text-cyan-400">whaler</span>
+              </h1>
             </div>
-            <h1 className="text-3xl font-black text-white">Polywhaler</h1>
-            <p className="text-gray-400">Enter password to access</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
