@@ -387,9 +387,10 @@ export async function listSharpMoneyCache(
   options?: {
     sportSeriesId?: number
     limit?: number
+    windowHours?: number
   },
 ): Promise<SharpMoneyCacheEntry[]> {
-  const { sportSeriesId, limit = 50 } = options ?? {}
+  const { sportSeriesId, limit = 50, windowHours = 24 } = options ?? {}
 
   let query = `SELECT * FROM sharp_money_cache`
   const params: unknown[] = []
@@ -397,12 +398,12 @@ export async function listSharpMoneyCache(
 
   const now = new Date()
   const nowIso = now.toISOString()
-  const easternOffset = getEasternOffset(now)
+  const windowEndIso = new Date(now.getTime() + windowHours * 60 * 60 * 1000).toISOString()
   whereClauses.push(`event_time IS NOT NULL`)
-  whereClauses.push(`date(event_time, ?) = date(?, ?)`)
-  params.push(easternOffset, nowIso, easternOffset)
   whereClauses.push(`datetime(event_time) >= datetime(?)`)
   params.push(nowIso)
+  whereClauses.push(`datetime(event_time) <= datetime(?)`)
+  params.push(windowEndIso)
 
   if (sportSeriesId !== undefined) {
     whereClauses.push(`sport_series_id = ?`)
