@@ -51,6 +51,8 @@ const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60;
 const UNIT_SIZE_SAMPLE_LIMIT = 20;
 const UNIT_SIZE_POSITION_LIMIT = 100;
 const MIN_UNIT_SIZE_SAMPLES = 3;
+const GAMMA_EVENTS_PAGE_LIMIT = 200;
+const GAMMA_EVENTS_MAX_PAGES = 6;
 
 const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188];
 
@@ -194,6 +196,10 @@ function getEasternDateString(date: Date): string {
 		day: "2-digit",
 	});
 	return formatter.format(date);
+}
+
+function isSameEasternDate(date: Date, easternDate: string): boolean {
+	return getEasternDateString(date) === easternDate;
 }
 
 type ClosedPosition = {
@@ -601,7 +607,6 @@ export async function fetchTrendingSportsMarkets(
 		const now = new Date();
 		const easternToday = getEasternDateString(now);
 		const endDateMin = easternToday;
-		const endDateMax = easternToday;
 
 		console.log(`[sharp-money] Fetching games for ${endDateMin} (Eastern)`);
 		console.log(
@@ -625,24 +630,57 @@ export async function fetchTrendingSportsMarkets(
 				continue;
 			}
 
-			const eventsUrl = new URL("/events", POLYMARKET_GAMMA_API);
-			eventsUrl.searchParams.set("series_id", seriesId.toString());
-			eventsUrl.searchParams.set("tag_id", GAME_BETS_TAG_ID.toString());
-			eventsUrl.searchParams.set("active", "true");
-			eventsUrl.searchParams.set("closed", "false");
-			eventsUrl.searchParams.set("order", "startTime");
-			eventsUrl.searchParams.set("ascending", "true");
+			let expandedCount = 0;
+			let eventCount = 0;
+			let reachedPastToday = false;
 
 			try {
-				const response = await fetch(eventsUrl);
-				if (response.ok) {
+				for (let page = 0; page < GAMMA_EVENTS_MAX_PAGES; page += 1) {
+					const eventsUrl = new URL("/events", POLYMARKET_GAMMA_API);
+					eventsUrl.searchParams.set("series_id", seriesId.toString());
+					eventsUrl.searchParams.set("tag_id", GAME_BETS_TAG_ID.toString());
+					eventsUrl.searchParams.set("active", "true");
+					eventsUrl.searchParams.set("closed", "false");
+					eventsUrl.searchParams.set("order", "startTime");
+					eventsUrl.searchParams.set("ascending", "false");
+					eventsUrl.searchParams.set(
+						"limit",
+						GAMMA_EVENTS_PAGE_LIMIT.toString(),
+					);
+					eventsUrl.searchParams.set(
+						"offset",
+						String(page * GAMMA_EVENTS_PAGE_LIMIT),
+					);
+
+					const response = await fetch(eventsUrl);
+					if (!response.ok) {
+						break;
+					}
+
 					const events = (await response.json()) as GammaEvent[];
-					let expandedCount = 0;
+					if (events.length === 0) {
+						break;
+					}
+
+					eventCount += events.length;
+
 					for (const event of events) {
 						const rawMarkets = event.markets ?? [];
 						if (rawMarkets.length === 0) {
 							continue;
 						}
+
+						if (event.startTime) {
+							const eventDate = getEasternDateString(new Date(event.startTime));
+							if (eventDate < easternToday) {
+								reachedPastToday = true;
+								continue;
+							}
+							if (eventDate !== easternToday) {
+								continue;
+							}
+						}
+
 						const normalizedMarkets = rawMarkets.map((market) => ({
 							...market,
 							event_slug: event.slug ?? market.event_slug,
@@ -660,36 +698,40 @@ export async function fetchTrendingSportsMarkets(
 							rawMarketCount: rawMarkets.length,
 						});
 					}
-					eventStats.push({
-						tag,
-						seriesId,
-						eventCount: events.length,
-						marketCount: expandedCount,
-					});
-					const filteredTagMarkets = tagMarkets.filter((market) => {
-						const marketVolume = market.volumeNum ?? market.volume ?? 0;
-						if (!includeLowVolume && marketVolume < MIN_VOLUME_USD)
-							return false;
-						return isMainMarketTitle(market.question ?? "");
-					});
-					tagStats.push({
-						tag,
-						seriesId,
-						count: filteredTagMarkets.length,
-						markets: filteredTagMarkets.map((market) => ({
-							title: market.question ?? "",
-							volume: market.volumeNum ?? market.volume ?? 0,
-							eventSlug: getEventSlug(market),
-							slug: market.slug ?? undefined,
-						})),
-					});
-					allSportsMarkets.push(...tagMarkets);
-				} else {
-					tagStats.push({ tag, seriesId, count: 0, markets: [] });
-					eventStats.push({ tag, seriesId, eventCount: 0, marketCount: 0 });
+
+					if (reachedPastToday) {
+						break;
+					}
 				}
-			} catch (err) {
-				console.warn(`[sharp-money] Failed to fetch events for ${tag}:`, err);
+
+				eventStats.push({
+					tag,
+					seriesId,
+					eventCount,
+					marketCount: expandedCount,
+				});
+
+				const filteredTagMarkets = tagMarkets.filter((market) => {
+					const marketVolume = market.volumeNum ?? market.volume ?? 0;
+					if (!includeLowVolume && marketVolume < MIN_VOLUME_USD) return false;
+					return isMainMarketTitle(market.question ?? "");
+				});
+
+				tagStats.push({
+					tag,
+					seriesId,
+					count: filteredTagMarkets.length,
+					markets: filteredTagMarkets.map((market) => ({
+						title: market.question ?? "",
+						volume: market.volumeNum ?? market.volume ?? 0,
+						eventSlug: getEventSlug(market),
+						slug: market.slug ?? undefined,
+					})),
+				});
+
+				allSportsMarkets.push(...tagMarkets);
+			} catch (error) {
+				console.warn(`[sharp-money] Failed to fetch events for ${tag}:`, error);
 				tagStats.push({ tag, seriesId, count: 0, markets: [] });
 				eventStats.push({ tag, seriesId, eventCount: 0, marketCount: 0 });
 			}
@@ -762,7 +804,7 @@ export async function fetchTrendingSportsMarkets(
 					const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
 					if (gameTime.getTime() < now.getTime() - startBufferMs) return false;
 					// Exclude games not on today's Eastern date
-					if (getEasternDateString(gameTime) !== easternToday) return false;
+					if (!isSameEasternDate(gameTime, easternToday)) return false;
 				}
 			}
 			const marketVolume = market.volumeNum ?? market.volume ?? 0;

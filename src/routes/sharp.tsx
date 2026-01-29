@@ -1699,7 +1699,7 @@ function SharpMoneyCard({
 		: null;
 	const isStartingSoon =
 		minutesToStart !== null &&
-		minutesToStart >= 0 &&
+		minutesToStart >= -START_TIME_BUFFER_MINUTES &&
 		minutesToStart <= STARTING_SOON_MINUTES;
 	return (
 		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
@@ -2355,7 +2355,7 @@ function UnifiedEdgeBar({
 	return (
 		<div className="space-y-2">
 			{/* Labels row - sharp side highlighted with checkmark, showing scores and odds */}
-			<div className="flex items-center justify-between text-xs">
+			<div className="flex items-center justify-between text-sm">
 				<div className="flex items-center gap-1.5">
 					{isSharpA && (
 						<CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
@@ -2372,7 +2372,7 @@ function UnifiedEdgeBar({
 					</span>
 					{sideAOdds && (
 						<span
-							className={`${isSharpA ? "text-emerald-300" : "text-gray-500"}`}
+							className={`rounded-md px-2 py-0.5 text-sm font-semibold ${isSharpA ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-900/60 text-gray-200"}`}
 						>
 							{sideAOdds}
 						</span>
@@ -2381,7 +2381,7 @@ function UnifiedEdgeBar({
 				<div className="flex items-center gap-1.5">
 					{sideBOdds && (
 						<span
-							className={`${!isSharpA ? "text-emerald-300" : "text-gray-500"}`}
+							className={`rounded-md px-2 py-0.5 text-sm font-semibold ${!isSharpA ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-900/60 text-gray-200"}`}
 						>
 							{sideBOdds}
 						</span>
