@@ -325,7 +325,10 @@ export async function upsertSharpMoneyCache(
 		minHolderCount >= MIN_READY_HOLDER_COUNT;
 
 	if (existing?.is_ready === 1 && !isReady) {
-		return;
+		console.warn(
+			`[sharp-money] Ready flag downgraded for ${input.conditionId}. ` +
+				`minHolders=${minHolderCount}, pnlCoverage=${pnlCoverage ?? "null"}`,
+		);
 	}
 
 	await run(
@@ -576,6 +579,50 @@ export async function getSharpMoneyCacheStats(db: Db): Promise<{
 		byConfidence,
 		oldestEntry: timestamps?.oldest,
 		newestEntry: timestamps?.newest,
+	};
+}
+
+export async function getSharpMoneyCacheFreshnessStats(
+	db: Db,
+	staleThresholdSeconds: number,
+): Promise<{
+	total: number;
+	missingHistory: number;
+	staleHistory: number;
+	oldestHistory?: number;
+	newestHistory?: number;
+	oldestComputed?: number;
+	newestComputed?: number;
+	cutoff: number;
+}> {
+	const cutoff = nowUnixSeconds() - staleThresholdSeconds;
+	const stats = await first<{
+		total?: number;
+		missing_history?: number;
+		stale_history?: number;
+		oldest_history?: number | null;
+		newest_history?: number | null;
+		oldest_computed?: number | null;
+		newest_computed?: number | null;
+	}>(db, `SELECT
+    COUNT(*) as total,
+    SUM(CASE WHEN history_updated_at IS NULL THEN 1 ELSE 0 END) as missing_history,
+    SUM(CASE WHEN history_updated_at IS NOT NULL AND history_updated_at < ? THEN 1 ELSE 0 END) as stale_history,
+    MIN(history_updated_at) as oldest_history,
+    MAX(history_updated_at) as newest_history,
+    MIN(computed_at) as oldest_computed,
+    MAX(computed_at) as newest_computed
+  FROM sharp_money_cache`, cutoff);
+
+	return {
+		total: stats?.total ?? 0,
+		missingHistory: stats?.missing_history ?? 0,
+		staleHistory: stats?.stale_history ?? 0,
+		oldestHistory: stats?.oldest_history ?? undefined,
+		newestHistory: stats?.newest_history ?? undefined,
+		oldestComputed: stats?.oldest_computed ?? undefined,
+		newestComputed: stats?.newest_computed ?? undefined,
+		cutoff,
 	};
 }
 

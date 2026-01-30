@@ -30,6 +30,7 @@ import {
 	getSharpMoneyCacheStatsFn,
 	getSharpMoneyEdgeStatsHistoryFn,
 	getSharpMoneyGradesFn,
+	getRuntimeMarketStatsFn,
 	getSharpMoneyHistoryFn,
 	refreshMarketSharpnessFn,
 	type SharpMoneyCacheEntry,
@@ -157,7 +158,7 @@ function selectRecentHistory(
 const STARTING_SOON_MINUTES = 30;
 const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
-const UPCOMING_WINDOW_HOURS = 24;
+const UPCOMING_WINDOW_HOURS = 12;
 const START_TIME_BUFFER_MINUTES = 10;
 const STALE_HISTORY_MINUTES = 15;
 
@@ -324,6 +325,10 @@ function SharpMoneyPage() {
 		withWarnings?: number;
 		warningCounts?: Record<string, number>;
 	}>({});
+	const [healthStatus, setHealthStatus] = useState<{
+		label: "Good" | "Warn" | "Unknown";
+		detail?: string;
+	}>({ label: "Unknown" });
 	const [pendingPicks, setPendingPicks] = useState<ManualPickEntry[]>([]);
 	const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(
 		null,
@@ -985,6 +990,58 @@ function SharpMoneyPage() {
 		}
 	}, [baseEntries]);
 
+	const refreshHealth = useCallback(async () => {
+		try {
+			const result = await getRuntimeMarketStatsFn({ data: {} });
+			const stats = result.stats;
+			if (!stats) {
+				setHealthStatus({ label: "Unknown", detail: "no runtime stats" });
+				return;
+			}
+			const freshness = stats.cacheFreshness;
+			if (!freshness || freshness.total === 0) {
+				setHealthStatus({ label: "Unknown", detail: "no freshness stats" });
+				return;
+			}
+			if ((stats.paginationCapHits ?? []).length > 0) {
+				setHealthStatus({ label: "Warn", detail: "pagination cap" });
+				return;
+			}
+			if ((stats.retryCount ?? 0) > 0) {
+				setHealthStatus({ label: "Warn", detail: "retries" });
+				return;
+			}
+			const staleRatio = freshness.staleHistory / freshness.total;
+			if (staleRatio > 0.1) {
+				setHealthStatus({
+					label: "Warn",
+					detail: `${Math.round(staleRatio * 100)}% stale`,
+				});
+				return;
+			}
+			setHealthStatus({
+				label: "Good",
+				detail: `${Math.round(staleRatio * 100)}% stale`,
+			});
+		} catch (error) {
+			console.error("Failed to load health stats:", error);
+			setHealthStatus({ label: "Unknown", detail: "error" });
+		}
+	}, []);
+
+	const ensureHealthStats = useCallback(async () => {
+		try {
+			const result = await getRuntimeMarketStatsFn({ data: {} });
+			if (!result.stats) {
+				await fetchTrendingSportsMarketsFn({
+					data: { limit: 50, includeLowVolume: true },
+				});
+			}
+		} catch (error) {
+			console.error("Failed to warm runtime stats:", error);
+		}
+	}, []);
+
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
@@ -992,19 +1049,28 @@ function SharpMoneyPage() {
 			await refreshSignalHistory();
 			await refreshGrades();
 			await refreshPicks();
+			await ensureHealthStats();
+			await refreshHealth();
 		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [refreshSignalHistory, refreshGrades, refreshPicks]);
+	}, [
+		refreshSignalHistory,
+		refreshGrades,
+		refreshPicks,
+		ensureHealthStats,
+		refreshHealth,
+	]);
 
 	useEffect(() => {
 		const interval = setInterval(() => {
 			void refreshSignalHistory();
 			void refreshGrades();
+			void refreshHealth();
 		}, 60_000);
 		return () => clearInterval(interval);
-	}, [refreshSignalHistory, refreshGrades]);
+	}, [refreshSignalHistory, refreshGrades, refreshHealth]);
 
 	const sortedEntries = useMemo(() => {
 		const entriesToSort = [...filteredEntries];
@@ -1102,6 +1168,18 @@ function SharpMoneyPage() {
 										<h1 className="text-2xl sm:text-4xl font-bold text-white uppercase tracking-wider whitespace-normal sm:whitespace-nowrap leading-tight">
 											Poly<span className="text-cyan-400">whaler</span>
 										</h1>
+										<span
+											className={`rounded-full px-2 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.2em] ${
+												healthStatus.label === "Good"
+													? "bg-emerald-500/15 text-emerald-200"
+													: healthStatus.label === "Warn"
+														? "bg-amber-500/15 text-amber-200"
+														: "bg-slate-800/60 text-slate-300"
+											}`}
+											title={healthStatus.detail ?? ""}
+										>
+											{healthStatus.label}
+										</span>
 									</div>
 									<div className="hidden text-[0.55rem] text-gray-500">
 										Updated{" "}

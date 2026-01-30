@@ -6,6 +6,7 @@ import {
 	clearAllSharpMoneyCache,
 	getSharpMoneyCacheByConditionId,
 	getSharpMoneyCacheStats,
+	getSharpMoneyCacheFreshnessStats,
 	insertSharpMoneyHistory,
 	listSharpMoneyCache,
 	listSharpMoneyCacheByConditionIds,
@@ -53,7 +54,7 @@ const SPORTS_SERIES_IDS: Partial<Record<string, number>> = {
 const GAME_BETS_TAG_ID = 100639;
 
 // Minimum volume to show in sharp money (filters out low-liquidity games)
-const MIN_VOLUME_USD = 50000;
+const MIN_VOLUME_USD = 10_000;
 const START_TIME_BUFFER_MINUTES = 10;
 const MAX_SUBREQUESTS = 50;
 const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60;
@@ -62,6 +63,8 @@ const UNIT_SIZE_POSITION_LIMIT = 100;
 const MIN_UNIT_SIZE_SAMPLES = 3;
 const GAMMA_EVENTS_PAGE_LIMIT = 200;
 const GAMMA_EVENTS_MAX_PAGES = 6;
+const GAMMA_RETRY_LIMIT = 3;
+const GAMMA_RETRY_BASE_MS = 250;
 
 const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188];
 
@@ -70,6 +73,8 @@ export type TrendingSportsPayload = {
 	seriesIds?: number[];
 	includeAllMarkets?: boolean;
 	includeLowVolume?: boolean;
+	windowHours?: number;
+	minVolumeUsd?: number;
 };
 
 export type TrendingSportsMarket = {
@@ -136,6 +141,22 @@ function isTargetSeriesId(seriesId?: number | null): boolean {
 
 type RuntimeMarketStats = {
 	fetchedAt: number;
+	retryCount: number;
+	paginationCapHits: Array<{
+		tag: string;
+		seriesId: number;
+		eventCount: number;
+	}>;
+	cacheFreshness?: {
+		total: number;
+		missingHistory: number;
+		staleHistory: number;
+		oldestHistory?: number;
+		newestHistory?: number;
+		oldestComputed?: number;
+		newestComputed?: number;
+		cutoff: number;
+	};
 	tagStats: Array<{
 		tag: string;
 		seriesId: number;
@@ -349,8 +370,17 @@ function getEventSlug(market: GammaMarket): string | undefined {
 	return market.eventSlug ?? market.event_slug ?? undefined;
 }
 
+function isPlayerPropTitle(title: string): boolean {
+	const normalized = title.toLowerCase();
+	if (!normalized.includes(":")) return false;
+	return /:\s*(points|rebounds|assists|threes|three pointers|goals|shots|saves|strikeouts|hits|rbis|home runs|yards|touchdowns|completions|passing|rushing|receiving)\b/i.test(
+		title,
+	);
+}
+
 function isMainMarketTitle(title: string): boolean {
 	const normalized = title.toLowerCase();
+	if (isPlayerPropTitle(title)) return false;
 	if (normalized.includes("spread:")) return true;
 	if (normalized.includes("o/u") || normalized.includes("over/under"))
 		return true;
@@ -400,6 +430,30 @@ function parseGammaNumber(value?: string | number | null): number | undefined {
 		}
 	}
 	return undefined;
+}
+
+async function fetchWithRetry(
+	url: string,
+	options?: RequestInit,
+	maxRetries: number = GAMMA_RETRY_LIMIT,
+): Promise<{ response: Response; retries: number } | null> {
+	let attempt = 0;
+	while (attempt <= maxRetries) {
+		try {
+			const response = await fetch(url, options);
+			if (response.ok) return { response, retries: attempt };
+			if (response.status < 500 && response.status !== 429) {
+				return null;
+			}
+		} catch {
+			// retry below
+		}
+		attempt += 1;
+		if (attempt > maxRetries) break;
+		const backoffMs = GAMMA_RETRY_BASE_MS * 2 ** (attempt - 1);
+		await new Promise((resolve) => setTimeout(resolve, backoffMs));
+	}
+	return null;
 }
 
 /**
@@ -613,7 +667,7 @@ interface ClobMarket {
 }
 
 /**
- * Fetch trending sports markets - tries CLOB API first, then Gamma
+ * Fetch sports markets via Gamma API.
  */
 export async function fetchTrendingSportsMarkets(
 	payload: TrendingSportsPayload,
@@ -622,6 +676,14 @@ export async function fetchTrendingSportsMarkets(
 	const limit = payload.limit;
 	const includeAllMarkets = payload.includeAllMarkets ?? false;
 	const includeLowVolume = payload.includeLowVolume ?? false;
+	const windowHours =
+		typeof payload.windowHours === "number" && payload.windowHours > 0
+			? payload.windowHours
+			: 24;
+	const minVolumeUsd =
+		typeof payload.minVolumeUsd === "number" && payload.minVolumeUsd >= 0
+			? payload.minVolumeUsd
+			: MIN_VOLUME_USD;
 	const seriesIds =
 		payload.seriesIds && payload.seriesIds.length > 0
 			? payload.seriesIds
@@ -635,12 +697,15 @@ export async function fetchTrendingSportsMarkets(
 
 	// Use Gamma API with tag_id filtering for sports markets
 	try {
-		// Date range: today only (Eastern)
 		const now = new Date();
+		const endWindowMs = now.getTime() + windowHours * 60 * 60 * 1000;
+		const endWindowDate = new Date(endWindowMs);
 		const easternToday = getEasternDateString(now);
-		const endDateMin = easternToday;
+		const easternEnd = getEasternDateString(endWindowDate);
 
-		console.log(`[sharp-money] Fetching games for ${endDateMin} (Eastern)`);
+		console.log(
+			`[sharp-money] Fetching games for ${easternToday} -> ${easternEnd} (Eastern)`,
+		);
 		console.log(
 			`[sharp-money] Fetching markets for series IDs: ${seriesIds.join(", ")}`,
 		);
@@ -650,8 +715,12 @@ export async function fetchTrendingSportsMarkets(
 		const tagStats: RuntimeMarketStats["tagStats"] = [];
 		const eventStats: RuntimeMarketStats["eventStats"] = [];
 		const eventDetails: RuntimeMarketStats["eventDetails"] = [];
+		const paginationCapHits: RuntimeMarketStats["paginationCapHits"] = [];
+		let retryCount = 0;
 
-		for (const seriesId of seriesIds) {
+		const CONCURRENCY = 3;
+		const seriesQueue = [...seriesIds];
+		const fetchSeries = async (seriesId: number) => {
 			const tag = SERIES_ID_TO_TAG.get(seriesId) ?? `series-${seriesId}`;
 			const tagMarkets: GammaMarket[] = [];
 
@@ -659,13 +728,11 @@ export async function fetchTrendingSportsMarkets(
 				console.warn(`[sharp-money] Missing series_id for ${tag}`);
 				tagStats.push({ tag, seriesId: -1, count: 0, markets: [] });
 				eventStats.push({ tag, seriesId: -1, eventCount: 0, marketCount: 0 });
-				continue;
+				return;
 			}
 
 			let expandedCount = 0;
 			let eventCount = 0;
-			let reachedPastToday = false;
-
 			try {
 				for (let page = 0; page < GAMMA_EVENTS_MAX_PAGES; page += 1) {
 					const eventsUrl = new URL("/events", POLYMARKET_GAMMA_API);
@@ -684,12 +751,11 @@ export async function fetchTrendingSportsMarkets(
 						String(page * GAMMA_EVENTS_PAGE_LIMIT),
 					);
 
-					const response = await fetch(eventsUrl);
-					if (!response.ok) {
-						break;
-					}
+					const responseResult = await fetchWithRetry(eventsUrl.toString());
+					if (!responseResult) break;
+					retryCount += responseResult.retries;
 
-					const events = (await response.json()) as GammaEvent[];
+					const events = (await responseResult.response.json()) as GammaEvent[];
 					if (events.length === 0) {
 						break;
 					}
@@ -703,14 +769,10 @@ export async function fetchTrendingSportsMarkets(
 						}
 
 						if (event.startTime) {
-							const eventDate = getEasternDateString(new Date(event.startTime));
-							if (eventDate < easternToday) {
-								reachedPastToday = true;
-								continue;
-							}
-							if (eventDate !== easternToday) {
-								continue;
-							}
+							const eventStart = new Date(event.startTime);
+							if (Number.isNaN(eventStart.getTime())) continue;
+							if (eventStart.getTime() < now.getTime()) continue;
+							if (eventStart.getTime() > endWindowMs) continue;
 						}
 
 						const normalizedMarkets = rawMarkets.map((market) => ({
@@ -731,9 +793,18 @@ export async function fetchTrendingSportsMarkets(
 						});
 					}
 
-					if (reachedPastToday) {
-						break;
-					}
+				}
+
+				if (eventCount >= GAMMA_EVENTS_PAGE_LIMIT * GAMMA_EVENTS_MAX_PAGES) {
+					console.warn(
+						`[sharp-money] Event pagination cap hit for ${tag}. ` +
+							`Fetched ${eventCount} events (${GAMMA_EVENTS_MAX_PAGES} pages).`,
+					);
+					paginationCapHits.push({
+						tag,
+						seriesId,
+						eventCount,
+					});
 				}
 
 				eventStats.push({
@@ -745,7 +816,7 @@ export async function fetchTrendingSportsMarkets(
 
 				const filteredTagMarkets = tagMarkets.filter((market) => {
 					const marketVolume = market.volumeNum ?? market.volume ?? 0;
-					if (!includeLowVolume && marketVolume < MIN_VOLUME_USD) return false;
+					if (!includeLowVolume && marketVolume < minVolumeUsd) return false;
 					return isMainMarketTitle(market.question ?? "");
 				});
 
@@ -770,7 +841,16 @@ export async function fetchTrendingSportsMarkets(
 
 			// Small delay between requests
 			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
+		};
+
+		const workers = Array.from({ length: CONCURRENCY }, async () => {
+			while (seriesQueue.length > 0) {
+				const next = seriesQueue.shift();
+				if (next === undefined) break;
+				await fetchSeries(next);
+			}
+		});
+		await Promise.all(workers);
 
 		console.log(
 			`[sharp-money] Total sports markets found: ${allSportsMarkets.length}`,
@@ -799,6 +879,8 @@ export async function fetchTrendingSportsMarkets(
 
 		lastRuntimeMarketStats = {
 			fetchedAt: Math.floor(Date.now() / 1000),
+			retryCount,
+			paginationCapHits,
 			tagStats,
 			combinedTagStats: [...combinedTagMap.entries()].map(([tag, markets]) => ({
 				tag,
@@ -832,15 +914,13 @@ export async function fetchTrendingSportsMarkets(
 			if (eventTime) {
 				const gameTime = parseEventTime(eventTime);
 				if (gameTime) {
-					// Exclude games that have been started beyond the buffer window
 					const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
 					if (gameTime.getTime() < now.getTime() - startBufferMs) return false;
-					// Exclude games not on today's Eastern date
-					if (!isSameEasternDate(gameTime, easternToday)) return false;
+					if (gameTime.getTime() > endWindowMs) return false;
 				}
 			}
 			const marketVolume = market.volumeNum ?? market.volume ?? 0;
-			if (!includeLowVolume && marketVolume < MIN_VOLUME_USD) return false;
+			if (!includeLowVolume && marketVolume < minVolumeUsd) return false;
 			if (!includeAllMarkets && !isMainMarketTitle(market.question ?? ""))
 				return false;
 			seenIds.add(market.conditionId);
@@ -2760,12 +2840,14 @@ export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
  */
 export const getRuntimeMarketStatsFn = createServerFn({
 	method: "POST",
-}).handler(async () => {
+}).handler(async ({ context }) => {
 	if (!lastRuntimeMarketStats) {
 		return { stats: null };
 	}
 
-	return { stats: lastRuntimeMarketStats };
+	const db = getDb(context);
+	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(db, 15 * 60);
+	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
 });
 
 export const getSharpMoneyGradesFn = createServerFn({

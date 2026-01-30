@@ -68,6 +68,18 @@ function RuntimePage() {
       marketCount: number
       rawMarketCount: number
     }>
+    retryCount: number
+    paginationCapHits: Array<{ tag: string; seriesId: number; eventCount: number }>
+    cacheFreshness?: {
+      total: number
+      missingHistory: number
+      staleHistory: number
+      oldestHistory?: number
+      newestHistory?: number
+      oldestComputed?: number
+      newestComputed?: number
+      cutoff: number
+    }
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -124,11 +136,21 @@ function RuntimePage() {
                 Last fetched: {formatRelativeTime(stats?.fetchedAt)}
               </p>
               <p className="text-sm text-slate-400">
-                Filtered markets (today): {filteredTotalMarkets}
+                Filtered markets (window): {filteredTotalMarkets}
               </p>
               <p className="text-sm text-slate-400">
                 Expanded events: {stats?.expandedEventCount ?? 0} • Expanded markets: {stats?.expandedMarketCount ?? 0}
               </p>
+              <p className="text-sm text-slate-400">
+                Retries: {stats?.retryCount ?? 0} • Pagination caps: {stats?.paginationCapHits?.length ?? 0}
+              </p>
+              {stats?.cacheFreshness && (
+                <p className="text-sm text-slate-400">
+                  Cache freshness: {stats.cacheFreshness.total} total •{' '}
+                  {stats.cacheFreshness.staleHistory} stale •{' '}
+                  {stats.cacheFreshness.missingHistory} missing history
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -195,6 +217,14 @@ function RuntimePage() {
             <p className="mt-1 text-sm text-slate-400">
               Includes event-level expansion and 24h window filtering.
             </p>
+            {stats.paginationCapHits.length > 0 && (
+              <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-100">
+                Pagination cap hit for:{" "}
+                {stats.paginationCapHits
+                  .map((hit) => `${hit.tag} (${hit.eventCount})`)
+                  .join(", ")}
+              </div>
+            )}
             <div className="mt-4 space-y-6">
               {stats.filteredTagStats.map((entry) => (
                 <div key={`filtered-${entry.tag}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
