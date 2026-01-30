@@ -65,6 +65,10 @@ const GAMMA_EVENTS_PAGE_LIMIT = 200;
 const GAMMA_EVENTS_MAX_PAGES = 6;
 const GAMMA_RETRY_LIMIT = 3;
 const GAMMA_RETRY_BASE_MS = 250;
+const MIN_READY_HOLDER_COUNT = 10;
+const MIN_READY_PNL_COVERAGE = 0.6;
+// -250 implied probability ≈ 0.7142857
+const LOW_ROI_PRICE_THRESHOLD = 0.7143;
 
 const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188];
 
@@ -142,6 +146,10 @@ function isTargetSeriesId(seriesId?: number | null): boolean {
 type RuntimeMarketStats = {
 	fetchedAt: number;
 	retryCount: number;
+	failureCount: number;
+	totalRuns: number;
+	totalRetries: number;
+	totalFailures: number;
 	paginationCapHits: Array<{
 		tag: string;
 		seriesId: number;
@@ -208,6 +216,11 @@ type RuntimeMarketStats = {
 };
 
 let lastRuntimeMarketStats: RuntimeMarketStats | null = null;
+const runtimeFetchMetrics = {
+	totalRuns: 0,
+	totalRetries: 0,
+	totalFailures: 0,
+};
 
 /**
  * Parse outcomes from Gamma API - can be JSON array string or comma-separated
@@ -717,6 +730,8 @@ export async function fetchTrendingSportsMarkets(
 		const eventDetails: RuntimeMarketStats["eventDetails"] = [];
 		const paginationCapHits: RuntimeMarketStats["paginationCapHits"] = [];
 		let retryCount = 0;
+		let failureCount = 0;
+		runtimeFetchMetrics.totalRuns += 1;
 
 		const CONCURRENCY = 3;
 		const seriesQueue = [...seriesIds];
@@ -752,8 +767,15 @@ export async function fetchTrendingSportsMarkets(
 					);
 
 					const responseResult = await fetchWithRetry(eventsUrl.toString());
-					if (!responseResult) break;
+					if (!responseResult) {
+						failureCount += 1;
+						runtimeFetchMetrics.totalFailures += 1;
+						break;
+					}
 					retryCount += responseResult.retries;
+					if (responseResult.retries > 0) {
+						runtimeFetchMetrics.totalRetries += responseResult.retries;
+					}
 
 					const events = (await responseResult.response.json()) as GammaEvent[];
 					if (events.length === 0) {
@@ -880,6 +902,10 @@ export async function fetchTrendingSportsMarkets(
 		lastRuntimeMarketStats = {
 			fetchedAt: Math.floor(Date.now() / 1000),
 			retryCount,
+			failureCount,
+			totalRuns: runtimeFetchMetrics.totalRuns,
+			totalRetries: runtimeFetchMetrics.totalRetries,
+			totalFailures: runtimeFetchMetrics.totalFailures,
 			paginationCapHits,
 			tagStats,
 			combinedTagStats: [...combinedTagMap.entries()].map(([tag, markets]) => ({
@@ -2920,8 +2946,32 @@ export const getSharpMoneyGradesFn = createServerFn({
 			typeof historyUpdatedAt === "number" &&
 			now - historyUpdatedAt > staleThresholdMinutes * 60;
 		const warnings: string[] = [];
+		const minHolderCount = Math.min(
+			entry.sideA.holderCount,
+			entry.sideB.holderCount,
+		);
+		if (minHolderCount < MIN_READY_HOLDER_COUNT) {
+			warnings.push("low_holders");
+		}
+		if (
+			typeof entry.pnlCoverage === "number" &&
+			entry.pnlCoverage < MIN_READY_PNL_COVERAGE
+		) {
+			warnings.push("low_pnl_coverage");
+		}
 		if (entry.sharpSide === "EVEN") warnings.push("no_edge");
 		if (!entry.isReady) warnings.push("not_ready");
+		if (entry.sharpSide !== "EVEN") {
+			const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
+			const sharpSidePrice = sharpSideData.price;
+			if (
+				typeof sharpSidePrice === "number" &&
+				Number.isFinite(sharpSidePrice) &&
+				sharpSidePrice >= LOW_ROI_PRICE_THRESHOLD
+			) {
+				warnings.push("low_roi");
+			}
+		}
 		if ((entry.sharpSideValueRatio ?? 0.5) < 0.35) {
 			warnings.push("low_conviction");
 		}

@@ -297,6 +297,7 @@ function SharpMoneyPage() {
 	);
 	const [showAllEntries, setShowAllEntries] = useState(false);
 	const [showEdgeStats, setShowEdgeStats] = useState(true);
+	const [showAPlusOnly, setShowAPlusOnly] = useState(false);
 	const [edgeStatsWindowHours, setEdgeStatsWindowHours] = useState(24 * 7);
 	const [edgeStatsHistory, setEdgeStatsHistory] = useState<EdgeStatsBucket[]>(
 		[],
@@ -784,11 +785,14 @@ function SharpMoneyPage() {
 			if (!showAllEntries) {
 				const signalScore =
 					signalScoreByConditionId[e.conditionId] ?? e.edgeRating;
-				const signalGrade = signalScoreToGradeLabel(signalScore, {
-					edgeRating: e.edgeRating,
-					scoreDifferential: e.scoreDifferential,
-				});
+				const signalGrade =
+					gradesByConditionId[e.conditionId]?.grade ??
+					signalScoreToGradeLabel(signalScore, {
+						edgeRating: e.edgeRating,
+						scoreDifferential: e.scoreDifferential,
+					});
 				if (signalGrade === "C" || signalGrade === "D") return false;
+				if (showAPlusOnly && signalGrade !== "A+") return false;
 			}
 			return true;
 		});
@@ -798,7 +802,14 @@ function SharpMoneyPage() {
 			);
 		}
 		return filtered;
-	}, [baseEntries, selectedSeriesId, showAllEntries, signalScoreByConditionId]);
+	}, [
+		baseEntries,
+		selectedSeriesId,
+		showAllEntries,
+		showAPlusOnly,
+		signalScoreByConditionId,
+		gradesByConditionId,
+	]);
 
 	const debugInfoById = useMemo(() => {
 		if (!showRefreshDebug) return {};
@@ -1258,23 +1269,45 @@ function SharpMoneyPage() {
 									</option>
 								))}
 							</select>
+							<button
+								type="button"
+								onClick={() => setShowAPlusOnly((prev) => !prev)}
+								className={`mt-3 w-full rounded-lg px-3 py-2 text-sm font-semibold uppercase tracking-wide transition-colors ${
+									showAPlusOnly
+										? "bg-emerald-500 text-white"
+										: "bg-slate-800/60 text-slate-200 hover:bg-slate-800"
+								}`}
+							>
+								A+ only {showAPlusOnly ? "on" : "off"}
+							</button>
 						</div>
-						<div className="hidden flex-wrap gap-2 sm:flex">
-							{SPORT_FILTERS.map((filter) => (
-								<button
-									type="button"
-									key={filter.value}
-									onClick={() => setSelectedSeriesId(filter.value)}
-									className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-										selectedSeriesId === filter.value
-											? "bg-cyan-500 text-white"
-											: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
-									}`}
-								>
-									{filter.label}
-								</button>
-							))}
-						</div>
+					<div className="hidden flex-wrap gap-2 sm:flex">
+						{SPORT_FILTERS.map((filter) => (
+							<button
+								type="button"
+								key={filter.value}
+								onClick={() => setSelectedSeriesId(filter.value)}
+								className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+									selectedSeriesId === filter.value
+										? "bg-cyan-500 text-white"
+										: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
+								}`}
+							>
+								{filter.label}
+							</button>
+						))}
+						<button
+							type="button"
+							onClick={() => setShowAPlusOnly((prev) => !prev)}
+							className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+								showAPlusOnly
+									? "bg-emerald-500 text-white"
+									: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
+							}`}
+						>
+							A+ only
+						</button>
+					</div>
 					</div>
 
 					{showEdgeStats && edgeStats && (
@@ -1795,12 +1828,6 @@ function SharpMoneyCard({
 	const sideBOdds = formatAmericanOdds(entry.sideB.price);
 	// Determine which side is "sharp"
 	const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
-	const minHolderCount = Math.min(
-		entry.sideA.holderCount,
-		entry.sideB.holderCount,
-	);
-	const hasLowHolderCount = minHolderCount < 15;
-	const hasLowConviction = (entry.sharpSideValueRatio ?? 0.5) < 0.35;
 	const sharpSideTopHolders = sharpSideData.topHolders
 		.slice()
 		.sort((a, b) => b.amount - a.amount);
@@ -1809,16 +1836,6 @@ function SharpMoneyCard({
 		.slice(0, 3)
 		.reduce((sum, holder) => sum + holder.amount, 0);
 	const sharpSideTotal = sharpSideData.totalValue;
-	const hasHighConcentration =
-		sharpSideTotal > 0 &&
-		(sharpTop1 / sharpSideTotal >= 0.6 || sharpTop3 / sharpSideTotal >= 0.8);
-	const LOW_ROI_PRICE_THRESHOLD = 0.8;
-	const sharpSidePrice = sharpSideData.price;
-	const hasLowRoi =
-		entry.sharpSide !== "EVEN" &&
-		typeof sharpSidePrice === "number" &&
-		Number.isFinite(sharpSidePrice) &&
-		sharpSidePrice >= LOW_ROI_PRICE_THRESHOLD;
 	const historyUpdatedAt =
 		gradeData?.historyUpdatedAt ?? entry.historyUpdatedAt ?? entry.updatedAt;
 	const historyAgeSeconds =
@@ -2064,10 +2081,17 @@ function SharpMoneyCard({
 										>
 											{isPickLogged ? "Pick logged" : "Log pick"}
 										</button>
-										{hasLowHolderCount && (
+										{gradeWarnings.includes("low_holders") && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Low holders ({minHolderCount})
+													Low holders
+												</span>
+											</div>
+										)}
+										{gradeWarnings.includes("low_pnl_coverage") && (
+											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+													Low PnL coverage
 												</span>
 											</div>
 										)}
@@ -2085,7 +2109,7 @@ function SharpMoneyCard({
 												</span>
 											</div>
 										)}
-										{hasLowConviction && (
+										{gradeWarnings.includes("low_conviction") && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
 													Low conviction
@@ -2106,7 +2130,7 @@ function SharpMoneyCard({
 												</span>
 											</div>
 										)}
-										{hasLowRoi && (
+										{gradeWarnings.includes("low_roi") && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
 													Low ROI
@@ -2287,10 +2311,17 @@ function SharpMoneyCard({
 									>
 										{isPickLogged ? "Pick logged" : "Log pick"}
 									</button>
-									{hasLowHolderCount && (
+									{gradeWarnings.includes("low_holders") && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Low holders ({minHolderCount})
+												Low holders
+											</span>
+										</div>
+									)}
+									{gradeWarnings.includes("low_pnl_coverage") && (
+										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+												Low PnL coverage
 											</span>
 										</div>
 									)}
@@ -2308,7 +2339,7 @@ function SharpMoneyCard({
 											</span>
 										</div>
 									)}
-									{hasLowConviction && (
+									{gradeWarnings.includes("low_conviction") && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
 												Low conviction
@@ -2329,7 +2360,7 @@ function SharpMoneyCard({
 											</span>
 										</div>
 									)}
-									{hasLowRoi && (
+									{gradeWarnings.includes("low_roi") && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
 												Low ROI

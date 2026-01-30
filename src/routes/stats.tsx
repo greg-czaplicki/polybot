@@ -81,6 +81,20 @@ function StatsPage() {
 		return { total, wins, losses, pushes, winRate };
 	}, [filteredPicks]);
 
+	const statsByGrade = useMemo(() => {
+		const grades = ["A+", "A", "B"] as const;
+		return grades.map((grade) => {
+			const picks = filteredPicks.filter((pick) => pick.grade === grade);
+			const wins = picks.filter((pick) => pick.status === "win").length;
+			const losses = picks.filter((pick) => pick.status === "loss").length;
+			const pushes = picks.filter((pick) => pick.status === "push").length;
+			const total = picks.length;
+			const denom = wins + losses;
+			const winRate = denom > 0 ? Math.round((wins / denom) * 100) : 0;
+			return { grade, total, wins, losses, pushes, winRate };
+		});
+	}, [filteredPicks]);
+
 	return (
 		<AuthGate>
 			<div className="min-h-screen bg-slate-950 text-white">
@@ -167,6 +181,35 @@ function StatsPage() {
 										>
 											{pick.status}
 										</span>
+									</div>
+								</div>
+							))}
+						</div>
+					</div>
+
+					<div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+						<div className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+							Win Rate by Grade
+						</div>
+						<div className="grid gap-3 sm:grid-cols-3">
+							{statsByGrade.map((row) => (
+								<div
+									key={row.grade}
+									className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-3"
+								>
+									<div className="text-sm font-semibold text-slate-100">
+										{row.grade}
+									</div>
+									<div className="mt-1 text-[0.65rem] text-slate-400">
+										{row.total} total
+									</div>
+									<div className="mt-2 text-[0.65rem] text-slate-400">
+										<span className="text-emerald-300">{row.wins}W</span> ·{" "}
+										<span className="text-red-300">{row.losses}L</span> ·{" "}
+										<span className="text-slate-300">{row.pushes}P</span>
+									</div>
+									<div className="mt-2 text-xs font-semibold text-slate-200">
+										Win% {row.winRate}
 									</div>
 								</div>
 							))}

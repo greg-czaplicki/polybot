@@ -69,6 +69,10 @@ function RuntimePage() {
       rawMarketCount: number
     }>
     retryCount: number
+    failureCount: number
+    totalRuns: number
+    totalRetries: number
+    totalFailures: number
     paginationCapHits: Array<{ tag: string; seriesId: number; eventCount: number }>
     cacheFreshness?: {
       total: number
@@ -142,7 +146,10 @@ function RuntimePage() {
                 Expanded events: {stats?.expandedEventCount ?? 0} • Expanded markets: {stats?.expandedMarketCount ?? 0}
               </p>
               <p className="text-sm text-slate-400">
-                Retries: {stats?.retryCount ?? 0} • Pagination caps: {stats?.paginationCapHits?.length ?? 0}
+                Retries: {stats?.retryCount ?? 0} • Failures: {stats?.failureCount ?? 0} • Pagination caps: {stats?.paginationCapHits?.length ?? 0}
+              </p>
+              <p className="text-sm text-slate-400">
+                Totals: {stats?.totalRuns ?? 0} runs • {stats?.totalRetries ?? 0} retries • {stats?.totalFailures ?? 0} failures
               </p>
               {stats?.cacheFreshness && (
                 <p className="text-sm text-slate-400">
