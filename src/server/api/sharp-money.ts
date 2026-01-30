@@ -1,21 +1,30 @@
 import { createServerFn } from "@tanstack/react-start";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
-import { getDb } from "../env";
+import { getDb, nowUnixSeconds } from "../env";
 import {
 	clearAllSharpMoneyCache,
 	getSharpMoneyCacheByConditionId,
 	getSharpMoneyCacheStats,
 	insertSharpMoneyHistory,
 	listSharpMoneyCache,
+	listSharpMoneyCacheByConditionIds,
 	listSharpMoneyHistory,
+	listSharpMoneyHistoryByConditionIds,
 	listSharpMoneyHistoryWindow,
 	type SharpMoneyCacheEntry,
 	type SharpMoneyHistoryEntry,
 	type TopHolderPnlData,
+	type SharpMoneyHistoryEntryByConditionId,
 	type UpsertSharpMoneyCacheInput,
 	upsertSharpMoneyCache,
 } from "../repositories/sharp-money";
+import {
+	computeSignalScoreFromHistory,
+	MIN_EDGE_RATING,
+	signalScoreToGradeLabel,
+	type GradeLabel,
+} from "../../lib/sharp-grade";
 
 // Re-export types for frontend use
 export type {
@@ -76,6 +85,29 @@ export type TrendingSportsMarket = {
 	bestBid?: number;
 	bestAsk?: number;
 	endDate?: string;
+};
+
+const DEFAULT_HISTORY_WINDOW_MINUTES = 60;
+const DEFAULT_STALE_THRESHOLD_MINUTES = 15;
+const MAX_GRADE_REQUEST_ITEMS = 200;
+
+export type SharpGradePayload = {
+	conditionIds: string[];
+	historyWindowMinutes?: number;
+	staleThresholdMinutes?: number;
+};
+
+export type SharpGradeResult = {
+	conditionId: string;
+	grade: GradeLabel | null;
+	signalScore?: number;
+	edgeRating?: number;
+	scoreDifferential?: number;
+	isReady?: boolean;
+	warnings: string[];
+	computedAt: number;
+	historyUpdatedAt?: number;
+	error?: "not_found";
 };
 
 export type SharpAnalysisPayload = {
@@ -2736,6 +2768,117 @@ export const getRuntimeMarketStatsFn = createServerFn({
 	return { stats: lastRuntimeMarketStats };
 });
 
+export const getSharpMoneyGradesFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as SharpGradePayload;
+	const conditionIds = Array.isArray(payload.conditionIds)
+		? payload.conditionIds.filter((id) => typeof id === "string")
+		: [];
+	if (conditionIds.length === 0) {
+		return { results: [], error: "conditionIds_required" };
+	}
+	const uniqueConditionIds = Array.from(new Set(conditionIds)).slice(
+		0,
+		MAX_GRADE_REQUEST_ITEMS,
+	);
+	const db = getDb(context);
+	const now = nowUnixSeconds();
+	const historyWindowMinutes =
+		payload.historyWindowMinutes &&
+		payload.historyWindowMinutes > 0 &&
+		Number.isFinite(payload.historyWindowMinutes)
+			? payload.historyWindowMinutes
+			: DEFAULT_HISTORY_WINDOW_MINUTES;
+	const staleThresholdMinutes =
+		payload.staleThresholdMinutes &&
+		payload.staleThresholdMinutes > 0 &&
+		Number.isFinite(payload.staleThresholdMinutes)
+			? payload.staleThresholdMinutes
+			: DEFAULT_STALE_THRESHOLD_MINUTES;
+	const historyCutoff = now - historyWindowMinutes * 60;
+
+	const [cacheEntries, historyByConditionId] = await Promise.all([
+		listSharpMoneyCacheByConditionIds(db, uniqueConditionIds),
+		listSharpMoneyHistoryByConditionIds(db, uniqueConditionIds, historyCutoff),
+	]);
+	const cacheByConditionId = new Map(
+		cacheEntries.map((entry) => [entry.conditionId, entry]),
+	);
+
+	const results: SharpGradeResult[] = uniqueConditionIds.map((conditionId) => {
+		const entry = cacheByConditionId.get(conditionId);
+		if (!entry) {
+			return {
+				conditionId,
+				grade: null,
+				warnings: [],
+				computedAt: now,
+				error: "not_found",
+			};
+		}
+		const history =
+			(historyByConditionId as SharpMoneyHistoryEntryByConditionId)[
+				conditionId
+			] ?? [];
+		const signalScore = computeSignalScoreFromHistory(
+			{
+				edgeRating: entry.edgeRating,
+				scoreDifferential: entry.scoreDifferential,
+			},
+			history,
+			MIN_EDGE_RATING,
+		);
+		const grade = signalScoreToGradeLabel(signalScore, {
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential,
+		});
+		const historyUpdatedAt = entry.historyUpdatedAt ?? entry.updatedAt;
+		const isHistoryStale =
+			typeof historyUpdatedAt === "number" &&
+			now - historyUpdatedAt > staleThresholdMinutes * 60;
+		const warnings: string[] = [];
+		if (entry.sharpSide === "EVEN") warnings.push("no_edge");
+		if (!entry.isReady) warnings.push("not_ready");
+		if ((entry.sharpSideValueRatio ?? 0.5) < 0.35) {
+			warnings.push("low_conviction");
+		}
+		if (entry.sharpSide !== "EVEN") {
+			const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
+			const sharpSideTopHolders = sharpSideData.topHolders
+				.slice()
+				.sort((a, b) => b.amount - a.amount);
+			const sharpTop1 = sharpSideTopHolders[0]?.amount ?? 0;
+			const sharpTop3 = sharpSideTopHolders
+				.slice(0, 3)
+				.reduce((sum, holder) => sum + holder.amount, 0);
+			const sharpSideTotal = sharpSideData.totalValue;
+			if (
+				sharpSideTotal > 0 &&
+				(sharpTop1 / sharpSideTotal >= 0.6 ||
+					sharpTop3 / sharpSideTotal >= 0.8)
+			) {
+				warnings.push("high_concentration");
+			}
+		}
+		if (isHistoryStale) warnings.push("stale_data");
+
+		return {
+			conditionId,
+			grade,
+			signalScore,
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential,
+			isReady: entry.isReady,
+			warnings,
+			computedAt: now,
+			historyUpdatedAt,
+		};
+	});
+
+	return { results };
+});
+
 /**
  * Clear all cached sharp money data
  */
@@ -2777,6 +2920,7 @@ export async function refreshMarketSharpness(
 		return { success: false, error };
 	}
 
+	const computedAt = nowUnixSeconds();
 	const cacheInput: UpsertSharpMoneyCacheInput = {
 		conditionId: analysis.conditionId,
 		marketTitle: analysis.marketTitle,
@@ -2785,6 +2929,8 @@ export async function refreshMarketSharpness(
 		sportSeriesId: analysis.sportSeriesId,
 		eventTime: analysis.eventTime,
 		pnlCoverage: analysis.pnlCoverage,
+		computedAt,
+		historyUpdatedAt: computedAt,
 		sideA: analysis.sideA,
 		sideB: analysis.sideB,
 		sharpSide: analysis.sharpSide,
@@ -2797,6 +2943,8 @@ export async function refreshMarketSharpness(
 	await upsertSharpMoneyCache(env.POLYWHALER_DB, cacheInput);
 	await insertSharpMoneyHistory(env.POLYWHALER_DB, {
 		conditionId: analysis.conditionId,
+		recordedAt: computedAt,
+		computedAt,
 		marketTitle: analysis.marketTitle,
 		eventTime: analysis.eventTime,
 		sportSeriesId: analysis.sportSeriesId,

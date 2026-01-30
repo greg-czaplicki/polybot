@@ -56,6 +56,8 @@ export interface SharpMoneyCacheRow {
 	score_differential: number;
 	sharp_side_value_ratio?: number | null;
 	edge_rating?: number | null;
+	computed_at?: number | null;
+	history_updated_at?: number | null;
 	updated_at: number;
 }
 
@@ -93,12 +95,15 @@ export interface SharpMoneyCacheEntry {
 	scoreDifferential: number;
 	sharpSideValueRatio?: number;
 	edgeRating: number;
+	computedAt?: number;
+	historyUpdatedAt?: number;
 	updatedAt: number;
 }
 
 export interface SharpMoneyHistoryEntry {
 	conditionId: string;
 	recordedAt: number;
+	computedAt?: number;
 	marketTitle: string;
 	eventTime?: string;
 	sportSeriesId?: number;
@@ -121,6 +126,11 @@ export interface SharpMoneyHistoryEntry {
 	edgeRating: number;
 	pnlCoverage?: number;
 }
+
+export type SharpMoneyHistoryEntryByConditionId = Record<
+	string,
+	SharpMoneyHistoryEntry[]
+>;
 
 /**
  * Input for upserting a sharp money cache entry
@@ -154,6 +164,8 @@ export interface UpsertSharpMoneyCacheInput {
 	scoreDifferential: number;
 	sharpSideValueRatio?: number;
 	edgeRating: number;
+	computedAt?: number;
+	historyUpdatedAt?: number;
 }
 
 const MIN_READY_HOLDER_COUNT = 10;
@@ -181,6 +193,8 @@ function generateId(): string {
 }
 
 function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
+	const computedAt = row.computed_at ?? row.updated_at;
+	const historyUpdatedAt = row.history_updated_at ?? row.updated_at;
 	return {
 		id: row.id,
 		conditionId: row.condition_id,
@@ -216,6 +230,8 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
 		scoreDifferential: row.score_differential,
 		sharpSideValueRatio: row.sharp_side_value_ratio ?? undefined,
 		edgeRating: row.edge_rating ?? 0,
+		computedAt,
+		historyUpdatedAt,
 		updatedAt: row.updated_at,
 	};
 }
@@ -223,6 +239,7 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
 interface SharpMoneyHistoryRow {
 	condition_id: string;
 	recorded_at: number;
+	computed_at?: number | null;
 	market_title: string;
 	event_time?: string | null;
 	sport_series_id?: number | null;
@@ -246,6 +263,7 @@ function parseHistoryRow(row: SharpMoneyHistoryRow): SharpMoneyHistoryEntry {
 	return {
 		conditionId: row.condition_id,
 		recordedAt: row.recorded_at,
+		computedAt: row.computed_at ?? row.recorded_at,
 		marketTitle: row.market_title,
 		eventTime: row.event_time ?? undefined,
 		sportSeriesId: row.sport_series_id ?? undefined,
@@ -283,6 +301,8 @@ export async function upsertSharpMoneyCache(
 	input: UpsertSharpMoneyCacheInput,
 ): Promise<void> {
 	const now = nowUnixSeconds();
+	const computedAt = input.computedAt ?? now;
+	const historyUpdatedAt = input.historyUpdatedAt ?? computedAt;
 
 	// Check if entry exists
 	const existing = await first<
@@ -314,8 +334,8 @@ export async function upsertSharpMoneyCache(
       id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time, pnl_coverage, is_ready,
       side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_price, side_a_top_holders,
       side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_price, side_b_top_holders,
-      sharp_side, confidence, score_differential, sharp_side_value_ratio, edge_rating, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sharp_side, confidence, score_differential, sharp_side_value_ratio, edge_rating, computed_at, history_updated_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
@@ -341,6 +361,8 @@ export async function upsertSharpMoneyCache(
       score_differential = excluded.score_differential,
       sharp_side_value_ratio = excluded.sharp_side_value_ratio,
       edge_rating = excluded.edge_rating,
+      computed_at = excluded.computed_at,
+      history_updated_at = excluded.history_updated_at,
       updated_at = excluded.updated_at`,
 		id,
 		input.conditionId,
@@ -368,6 +390,8 @@ export async function upsertSharpMoneyCache(
 		input.scoreDifferential,
 		input.sharpSideValueRatio ?? null,
 		input.edgeRating,
+		computedAt,
+		historyUpdatedAt,
 		now,
 	);
 }
@@ -443,6 +467,20 @@ export async function listSharpMoneyCache(
 	params.push(limit);
 
 	const rows = await all<SharpMoneyCacheRow>(db, query, ...params);
+	return rows.map(parseRow);
+}
+
+export async function listSharpMoneyCacheByConditionIds(
+	db: Db,
+	conditionIds: string[],
+): Promise<SharpMoneyCacheEntry[]> {
+	if (conditionIds.length === 0) return [];
+	const placeholders = conditionIds.map(() => "?").join(", ");
+	const rows = await all<SharpMoneyCacheRow>(
+		db,
+		`SELECT * FROM sharp_money_cache WHERE condition_id IN (${placeholders})`,
+		...conditionIds,
+	);
 	return rows.map(parseRow);
 }
 
@@ -546,6 +584,7 @@ export async function insertSharpMoneyHistory(
 	input: {
 		conditionId: string;
 		recordedAt?: number;
+		computedAt?: number;
 		marketTitle: string;
 		eventTime?: string;
 		sportSeriesId?: number;
@@ -570,6 +609,7 @@ export async function insertSharpMoneyHistory(
 	},
 ): Promise<void> {
 	const now = input.recordedAt ?? nowUnixSeconds();
+	const computedAt = input.computedAt ?? now;
 	const cutoff = now - HISTORY_RETENTION_HOURS * 60 * 60;
 
 	await run(
@@ -583,6 +623,7 @@ export async function insertSharpMoneyHistory(
 		`INSERT OR REPLACE INTO sharp_money_history (
       condition_id,
       recorded_at,
+      computed_at,
       market_title,
       event_time,
       sport_series_id,
@@ -600,9 +641,10 @@ export async function insertSharpMoneyHistory(
       sharp_side_value_ratio,
       edge_rating,
       pnl_coverage
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.conditionId,
 		now,
+		computedAt,
 		input.marketTitle,
 		input.eventTime ?? null,
 		input.sportSeriesId ?? null,
@@ -640,6 +682,33 @@ export async function listSharpMoneyHistory(
 		cutoff,
 	);
 	return rows.map(parseHistoryRow);
+}
+
+export async function listSharpMoneyHistoryByConditionIds(
+	db: Db,
+	conditionIds: string[],
+	sinceSeconds: number,
+): Promise<SharpMoneyHistoryEntryByConditionId> {
+	if (conditionIds.length === 0) return {};
+	const placeholders = conditionIds.map(() => "?").join(", ");
+	const rows = await all<SharpMoneyHistoryRow>(
+		db,
+		`SELECT * FROM sharp_money_history
+     WHERE condition_id IN (${placeholders})
+       AND recorded_at >= ?
+     ORDER BY condition_id ASC, recorded_at ASC`,
+		...conditionIds,
+		sinceSeconds,
+	);
+	const grouped: SharpMoneyHistoryEntryByConditionId = {};
+	for (const row of rows) {
+		const entry = parseHistoryRow(row);
+		if (!grouped[entry.conditionId]) {
+			grouped[entry.conditionId] = [];
+		}
+		grouped[entry.conditionId].push(entry);
+	}
+	return grouped;
 }
 
 export async function listSharpMoneyHistoryWindow(

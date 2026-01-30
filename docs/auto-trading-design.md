@@ -2,10 +2,12 @@
 
 Status: Draft
 Owner: TBD
-Date: TBD
+Date: 2026-01-30
 
 ## Background
 We want an auto-trading bot for Polymarket that places moneyline bets in the final 5 minutes before event start. The bot should prioritize high-quality "A" bets (and optionally "B" bets) and integrate with existing sharp analysis in this repo.
+
+This design aligns with the manual-first hardening roadmap in `docs/roadmap-bot.md`.
 
 ## Current Bet Grading (Audit Summary)
 Source: `src/server/api/sharp-money.ts`, `src/routes/sharp.tsx`.
@@ -20,13 +22,19 @@ Source: `src/server/api/sharp-money.ts`, `src/routes/sharp.tsx`.
 - Final edge rating is `baseEdgeRating * edgePenalty`, clamped to 0-100.
 
 ### Grade mapping and filtering (UI)
-- Grade thresholds:
-  - A+ >= 90
-  - A >= 80
-  - B >= 70
-  - C >= 65
-  - D < 65
-- `MIN_EDGE_RATING = 65` filters lower-quality entries from the default view.
+- Grades are derived from `signalScore` (0-100), not raw edge rating.
+- `signalScore` is computed from:
+  - `edgeRating` (70%)
+  - normalized score differential (20%)
+  - trend/volume/stability deltas from recent history
+  - fallback to `edgeRating * 0.75 + diffScore * 0.25` if insufficient history
+- Grade thresholds and floors (current UI logic):
+  - A+ if `signalScore >= 92` AND `edgeRating >= 80` AND `scoreDifferential >= 30`
+  - A if `signalScore >= 85` AND `edgeRating >= 72` AND `scoreDifferential >= 20`
+  - B if `signalScore >= 75`
+  - C if `signalScore >= 65`
+  - D otherwise
+- `MIN_EDGE_RATING = 66` is used for stability scoring and filtering.
 
 ## Assumptions
 - Personal-use only; no multi-user access or external exposure required.
@@ -35,6 +43,7 @@ Source: `src/server/api/sharp-money.ts`, `src/routes/sharp.tsx`.
 ## Goals
 - Auto-execute Polymarket moneyline bets within a 5-minute window before event start.
 - Default to "A" bets; allow configurable inclusion of "B" bets.
+- Base trading decisions on server-side `signalScore` + grade (not client-only).
 - Maintain risk limits and a kill switch.
 - Provide auditability for decisions and executed orders.
 
@@ -45,30 +54,31 @@ Source: `src/server/api/sharp-money.ts`, `src/routes/sharp.tsx`.
 ## Requirements
 - Moneyline only (current Polymarket market types).
 - Trades placed only in a time window `event_start - 5m` to `event_start`.
-- A bet threshold based on edge rating (default: >= 80).
-- Optional B bet threshold (default: 70-79).
+- Bet threshold based on `signalScore`/grade (A+ or A), not raw edge rating.
+- Optional B bets (default: off).
+- `isReady` must be met (min holder count + PnL coverage).
 - Configurable max stake per market and daily loss cap.
 - Safe retry behavior and idempotent order placement.
 
-## Proposed Architecture (Rust Service)
-Single Rust service first; split later if needed.
+## Proposed Architecture (Service + Shared Grading)
+Single service first; split later if needed.
 
 ### Components
 - Market data client: fetches Polymarket markets and prices.
-- Strategy engine: filters markets and computes bet decision from edge rating + timing.
+- Strategy engine: filters markets and computes bet decision from grade + timing.
 - Risk engine: enforces stake limits, daily caps, and cooldowns.
 - Execution engine: sends orders, monitors fills, handles retries/cancels.
 - Storage/logging: local DB or remote store for audit trail and metrics.
 
 ### Integration options
-1) Pull sharp analysis from the existing backend endpoints and reuse edge rating.
-2) Port the analysis to Rust for fully local decisions.
-3) Hybrid: use existing analysis for selection, add Rust-only execution layer.
+1) Use server-side grading endpoint (bulk) as the source of truth.
+2) Share grading logic via a common module used by both UI and server.
+3) Hybrid: server grades + local execution layer.
 
 ## Strategy Logic (Initial)
 - Only consider markets with `eventTime` within 5 minutes.
-- Require `edgeRating >= 80` for A bets (configurable).
-- Optional: allow B bets when `70 <= edgeRating < 80` if enabled.
+- Require grade A+ or A (configurable).
+- Optional: allow B bets if enabled.
 - Skip "EVEN" sharp side unless a separate rule allows it.
 - Avoid low-confidence signals if warnings include low PnL coverage or low conviction.
 
@@ -81,7 +91,7 @@ Single Rust service first; split later if needed.
 
 ## API Exposure
 - Single-user: no public or shared API. Use local config and logs only.
-- Optional local-only control surface if needed later (e.g., CLI or localhost dashboard).
+- Local-only grading endpoint for UI + bot (bulk grades).
 
 ## Observability and Audit
 - Append-only trade log with inputs (edge rating, side, price, time).
@@ -95,8 +105,8 @@ Single Rust service first; split later if needed.
 4) Expand to larger stakes and broader market coverage.
 
 ## Open Questions
-- Confirm "A" bet threshold and edge rating mapping for auto-trades.
-- Decide whether to consume existing sharp analysis or port to Rust.
+- Confirm A+/A thresholds and grade floors for auto-trades.
+- Decide whether to consume server grading endpoint or embed shared logic in bot.
 - Validate Polymarket API rate limits and fill semantics.
 - Define exact start-time source and latency tolerance.
 - Determine how to cross-check FanDuel lines (manual vs automated).

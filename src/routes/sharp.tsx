@@ -14,19 +14,34 @@ import {
 	Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import {
+	computeSignalScoreFromHistory,
+	computeSignalScoreFromWindow,
+	gradeWeight,
+	MIN_EDGE_RATING,
+	signalScoreToGradeLabel,
+} from "@/lib/sharp-grade";
 import {
 	clearSharpMoneyCacheFn,
 	getSharpMoneyCacheFn,
 	getSharpMoneyCacheStatsFn,
 	getSharpMoneyEdgeStatsHistoryFn,
+	getSharpMoneyGradesFn,
 	getSharpMoneyHistoryFn,
 	refreshMarketSharpnessFn,
 	type SharpMoneyCacheEntry,
 	type SharpMoneyHistoryEntry,
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
+import {
+	createManualPickFn,
+	listManualPicksFn,
+	updateManualPickOutcomeFn,
+} from "../server/api/manual-picks";
+import type { ManualPickEntry } from "../server/repositories/manual-picks";
 
 export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
@@ -129,89 +144,6 @@ type EdgeStatsBucket = {
 	max: number;
 };
 
-function clamp(value: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, value));
-}
-
-function computeSignalScoreFromHistory(
-	entry: SharpMoneyCacheEntry,
-	history: SharpMoneyHistoryEntry[] | undefined,
-	minEdgeRating: number,
-): number {
-	const edgeScore = clamp(entry.edgeRating, 0, 100);
-	const diffScore = (clamp(entry.scoreDifferential ?? 0, 0, 60) / 60) * 100;
-
-	if (!history || history.length < 2) {
-		return clamp(edgeScore * 0.75 + diffScore * 0.25, 0, 100);
-	}
-
-	const start = history[0];
-	const end = history[history.length - 1];
-	const startVolume = start.sideA.totalValue + start.sideB.totalValue;
-	const endVolume = end.sideA.totalValue + end.sideB.totalValue;
-	const edgeDelta = end.edgeRating - start.edgeRating;
-	const diffDelta = end.scoreDifferential - start.scoreDifferential;
-	const volumeDelta = endVolume - startVolume;
-
-	let stabilityCount = 0;
-	for (let i = history.length - 1; i >= 0; i -= 1) {
-		if (history[i].edgeRating < minEdgeRating) break;
-		stabilityCount += 1;
-	}
-
-	const trendScore = clamp(edgeDelta, -20, 20) * 1.0;
-	const diffTrendScore = clamp(diffDelta, -20, 20) * 0.5;
-	const volumeScore = (clamp(volumeDelta, -50_000, 150_000) / 150_000) * 15;
-	const stabilityScore = Math.min(stabilityCount, 5) * 2;
-
-	const total =
-		edgeScore * 0.7 +
-		diffScore * 0.2 +
-		trendScore +
-		diffTrendScore +
-		volumeScore +
-		stabilityScore;
-
-	return clamp(total, 0, 100);
-}
-
-function computeSignalScoreFromWindow(
-	snapshot: SharpMoneyHistoryEntry,
-	window: SharpMoneyHistoryEntry[],
-	minEdgeRating: number,
-): number {
-	const edgeScore = clamp(snapshot.edgeRating, 0, 100);
-	const diffScore = (clamp(snapshot.scoreDifferential ?? 0, 0, 60) / 60) * 100;
-	if (window.length < 2) {
-		return clamp(edgeScore * 0.75 + diffScore * 0.25, 0, 100);
-	}
-	const start = window[0];
-	const end = window[window.length - 1];
-	const volumeDelta =
-		end.sideA.totalValue +
-		end.sideB.totalValue -
-		(start.sideA.totalValue + start.sideB.totalValue);
-	const edgeDelta = end.edgeRating - start.edgeRating;
-	const diffDelta = end.scoreDifferential - start.scoreDifferential;
-	let stabilityCount = 0;
-	for (let i = window.length - 1; i >= 0; i -= 1) {
-		if (window[i].edgeRating < minEdgeRating) break;
-		stabilityCount += 1;
-	}
-	const trendScore = clamp(edgeDelta, -20, 20) * 1.0;
-	const diffTrendScore = clamp(diffDelta, -20, 20) * 0.5;
-	const volumeScore = (clamp(volumeDelta, -50_000, 150_000) / 150_000) * 15;
-	const stabilityScore = Math.min(stabilityCount, 5) * 2;
-	const total =
-		edgeScore * 0.7 +
-		diffScore * 0.2 +
-		trendScore +
-		diffTrendScore +
-		volumeScore +
-		stabilityScore;
-	return clamp(total, 0, 100);
-}
-
 function selectRecentHistory(
 	history: SharpMoneyHistoryEntry[] | undefined,
 	windowMinutes: number,
@@ -222,57 +154,12 @@ function selectRecentHistory(
 	return recent.length > 0 ? recent : history;
 }
 
-function signalScoreToGradeLabel(
-	score: number,
-	options?: { edgeRating?: number; scoreDifferential?: number | null },
-): "A+" | "A" | "B" | "C" | "D" {
-	const edgeRating = options?.edgeRating ?? 0;
-	const scoreDifferential = options?.scoreDifferential ?? 0;
-	if (score >= 92) {
-		if (
-			edgeRating < A_PLUS_EDGE_FLOOR ||
-			scoreDifferential < A_PLUS_DIFF_FLOOR
-		) {
-			return "A";
-		}
-		return "A+";
-	}
-	if (score >= 85) {
-		if (edgeRating < A_EDGE_FLOOR || scoreDifferential < A_DIFF_FLOOR) {
-			return "B";
-		}
-		return "A";
-	}
-	if (score >= 75) return "B";
-	if (score >= 65) return "C";
-	return "D";
-}
-
-function gradeWeight(grade: "A+" | "A" | "B" | "C" | "D"): number {
-	switch (grade) {
-		case "A+":
-			return 100;
-		case "A":
-			return 80;
-		case "B":
-			return 60;
-		case "C":
-			return 40;
-		default:
-			return 20;
-	}
-}
-
-const MIN_EDGE_RATING = 66;
 const STARTING_SOON_MINUTES = 30;
 const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
 const UPCOMING_WINDOW_HOURS = 24;
 const START_TIME_BUFFER_MINUTES = 10;
-const A_PLUS_EDGE_FLOOR = 80;
-const A_PLUS_DIFF_FLOOR = 30;
-const A_EDGE_FLOOR = 72;
-const A_DIFF_FLOOR = 20;
+const STALE_HISTORY_MINUTES = 15;
 
 function getPnlCoverage(holders: TopHolderPnlData[]): number {
 	if (holders.length === 0) return 0;
@@ -420,6 +307,24 @@ function SharpMoneyPage() {
 	const [signalHistoryFetchedAt, setSignalHistoryFetchedAt] = useState<
 		Record<string, number>
 	>({});
+	const [gradesByConditionId, setGradesByConditionId] = useState<
+		Record<
+			string,
+			{
+				grade: string;
+				signalScore: number;
+				warnings: string[];
+				historyUpdatedAt?: number;
+			}
+		>
+	>({});
+	const [gradeStatus, setGradeStatus] = useState<{
+		updatedAt?: number;
+		total?: number;
+		withWarnings?: number;
+		warningCounts?: Record<string, number>;
+	}>({});
+	const [pendingPicks, setPendingPicks] = useState<ManualPickEntry[]>([]);
 	const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(
 		null,
 	);
@@ -716,6 +621,51 @@ function SharpMoneyPage() {
 		[loadCache, refreshingEntryId],
 	);
 
+	const refreshPicks = useCallback(async () => {
+		try {
+			const pendingResult = await listManualPicksFn({
+				data: { status: "pending", limit: 25 },
+			});
+			setPendingPicks(pendingResult.picks ?? []);
+		} catch (error) {
+			console.error("Failed to load manual picks:", error);
+		}
+	}, []);
+
+	const handleLogPick = useCallback(
+		async (payload: {
+			conditionId: string;
+			marketTitle: string;
+			eventTime?: string;
+			grade?: string;
+			signalScore?: number;
+			edgeRating?: number;
+			scoreDifferential?: number;
+			sharpSide?: string;
+			price?: number;
+		}) => {
+			try {
+				await createManualPickFn({ data: payload });
+				await refreshPicks();
+			} catch (error) {
+				console.error("Failed to log manual pick:", error);
+			}
+		},
+		[refreshPicks],
+	);
+
+	const handleSettlePick = useCallback(
+		async (id: string, status: "win" | "loss" | "push") => {
+			try {
+				await updateManualPickOutcomeFn({ data: { id, status } });
+				await refreshPicks();
+			} catch (error) {
+				console.error("Failed to update pick:", error);
+			}
+		},
+		[refreshPicks],
+	);
+
 	useEffect(() => {
 		if (!pipelineStatus?.inProgress) {
 			return;
@@ -793,6 +743,11 @@ function SharpMoneyPage() {
 	const signalScoreByConditionId = useMemo(() => {
 		const map: Record<string, number> = {};
 		for (const entry of baseEntries) {
+			const serverGrade = gradesByConditionId[entry.conditionId];
+			if (serverGrade) {
+				map[entry.conditionId] = serverGrade.signalScore;
+				continue;
+			}
 			const recentSignalHistory = signalHistoryByConditionId[entry.conditionId];
 			const fallbackHistory = historyByConditionId[entry.conditionId];
 			const history =
@@ -806,7 +761,7 @@ function SharpMoneyPage() {
 			);
 		}
 		return map;
-	}, [baseEntries, signalHistoryByConditionId, historyByConditionId]);
+	}, [baseEntries, signalHistoryByConditionId, historyByConditionId, gradesByConditionId]);
 	const filteredEntries = useMemo(() => {
 		const now = new Date();
 		const cutoff = new Date(
@@ -861,10 +816,12 @@ function SharpMoneyPage() {
 		for (const entry of baseEntries) {
 			const score =
 				signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
-			const grade = signalScoreToGradeLabel(score, {
-				edgeRating: entry.edgeRating,
-				scoreDifferential: entry.scoreDifferential,
-			});
+			const grade =
+				gradesByConditionId[entry.conditionId]?.grade ??
+				signalScoreToGradeLabel(score, {
+					edgeRating: entry.edgeRating,
+					scoreDifferential: entry.scoreDifferential,
+				});
 			const gameTime = parseEventTime(entry.eventTime);
 			const timeOk = !gameTime || (gameTime >= now && gameTime <= cutoff);
 			info[entry.id] = {
@@ -878,7 +835,7 @@ function SharpMoneyPage() {
 			};
 		}
 		return info;
-	}, [baseEntries, showRefreshDebug, signalScoreByConditionId]);
+	}, [baseEntries, showRefreshDebug, signalScoreByConditionId, gradesByConditionId]);
 
 	const statsEntries = useMemo(() => {
 		let filtered = baseEntries.filter((entry) => entry.sharpSide !== "EVEN");
@@ -889,6 +846,11 @@ function SharpMoneyPage() {
 		}
 		return filtered;
 	}, [baseEntries, selectedSeriesId]);
+
+	const pendingConditionIds = useMemo(() => {
+		return new Set(pendingPicks.map((pick) => pick.conditionId));
+	}, [pendingPicks]);
+
 
 	const edgeStats = useMemo(() => {
 		if (statsEntries.length === 0) return null;
@@ -976,37 +938,91 @@ function SharpMoneyPage() {
 		setIsInitialSortReady(true);
 	}, [baseEntries, isLoading, signalHistoryFetchedAt]);
 
+	const refreshGrades = useCallback(async () => {
+		if (baseEntries.length === 0) return;
+		const conditionIds = baseEntries.map((entry) => entry.conditionId);
+		try {
+			const result = await getSharpMoneyGradesFn({
+				data: {
+					conditionIds,
+				},
+			});
+			const next: Record<
+				string,
+				{
+					grade: string;
+					signalScore: number;
+					warnings: string[];
+					historyUpdatedAt?: number;
+				}
+			> = {};
+			let warningsCount = 0;
+			const warningCounts: Record<string, number> = {};
+			for (const gradeResult of result.results ?? []) {
+				if (gradeResult.error || !gradeResult.grade) continue;
+				next[gradeResult.conditionId] = {
+					grade: gradeResult.grade,
+					signalScore: gradeResult.signalScore ?? 0,
+					warnings: gradeResult.warnings ?? [],
+					historyUpdatedAt: gradeResult.historyUpdatedAt,
+				};
+				if ((gradeResult.warnings ?? []).length > 0) {
+					warningsCount += 1;
+					for (const warning of gradeResult.warnings ?? []) {
+						warningCounts[warning] = (warningCounts[warning] ?? 0) + 1;
+					}
+				}
+			}
+			setGradesByConditionId(next);
+			setGradeStatus({
+				updatedAt: Date.now(),
+				total: Object.keys(next).length,
+				withWarnings: warningsCount,
+				warningCounts,
+			});
+		} catch (error) {
+			console.error("Failed to refresh grades:", error);
+		}
+	}, [baseEntries]);
+
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
 			if (cancelled) return;
 			await refreshSignalHistory();
+			await refreshGrades();
+			await refreshPicks();
 		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [refreshSignalHistory]);
+	}, [refreshSignalHistory, refreshGrades, refreshPicks]);
 
 	useEffect(() => {
 		const interval = setInterval(() => {
 			void refreshSignalHistory();
+			void refreshGrades();
 		}, 60_000);
 		return () => clearInterval(interval);
-	}, [refreshSignalHistory]);
+	}, [refreshSignalHistory, refreshGrades]);
 
 	const sortedEntries = useMemo(() => {
 		const entriesToSort = [...filteredEntries];
 		entriesToSort.sort((a, b) => {
 			const signalA = signalScoreByConditionId[a.conditionId] ?? 0;
 			const signalB = signalScoreByConditionId[b.conditionId] ?? 0;
-			const gradeA = signalScoreToGradeLabel(signalA, {
-				edgeRating: a.edgeRating,
-				scoreDifferential: a.scoreDifferential,
-			});
-			const gradeB = signalScoreToGradeLabel(signalB, {
-				edgeRating: b.edgeRating,
-				scoreDifferential: b.scoreDifferential,
-			});
+			const gradeA =
+				gradesByConditionId[a.conditionId]?.grade ??
+				signalScoreToGradeLabel(signalA, {
+					edgeRating: a.edgeRating,
+					scoreDifferential: a.scoreDifferential,
+				});
+			const gradeB =
+				gradesByConditionId[b.conditionId]?.grade ??
+				signalScoreToGradeLabel(signalB, {
+					edgeRating: b.edgeRating,
+					scoreDifferential: b.scoreDifferential,
+				});
 			const compositeA = gradeWeight(gradeA) + signalA;
 			const compositeB = gradeWeight(gradeB) + signalB;
 			if (compositeA !== compositeB) return compositeB - compositeA;
@@ -1117,6 +1133,13 @@ function SharpMoneyPage() {
 									<Trash2 className="h-4 w-4" />
 									<span className="hidden sm:inline">Reset Data</span>
 								</button>
+								<a
+									href="/stats"
+									className="flex items-center gap-1 sm:gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-2 sm:px-3 text-sm font-medium text-slate-200 hover:bg-slate-800/60 transition-colors"
+								>
+									<span className="hidden sm:inline">Stats</span>
+									<span className="sm:hidden">Stats</span>
+								</a>
 							</div>
 						</div>
 					</div>
@@ -1360,6 +1383,80 @@ function SharpMoneyPage() {
 							</span>
 						</div>
 					)}
+					{gradeStatus.updatedAt && (
+						<div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.65rem] text-slate-300">
+							<span className="uppercase tracking-[0.2em] text-slate-400">
+								Grades
+							</span>
+							<span>
+								{gradeStatus.total ?? 0} loaded
+							</span>
+							{typeof gradeStatus.withWarnings === "number" && (
+								<span>
+									{gradeStatus.withWarnings} with warnings
+								</span>
+							)}
+							{gradeStatus.warningCounts && (
+								<span className="text-slate-400">
+									{Object.entries(gradeStatus.warningCounts)
+										.map(([key, value]) => `${key}:${value}`)
+										.join(" ")}
+								</span>
+							)}
+							<span>
+								Updated {formatRelativeTime(Math.floor(gradeStatus.updatedAt / 1000))}
+							</span>
+						</div>
+					)}
+					{pendingPicks.length > 0 && (
+						<div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.7rem] text-slate-200">
+							<div className="mb-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-400">
+								Pending Picks
+							</div>
+							<div className="space-y-2">
+								{pendingPicks.map((pick) => (
+									<div
+										key={pick.id}
+										className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800/70 bg-slate-950/40 px-2 py-1.5"
+									>
+										<div className="min-w-0">
+											<div className="truncate text-xs font-semibold text-slate-100">
+												{pick.marketTitle}
+											</div>
+											<div className="text-[0.6rem] text-slate-400">
+												{pick.grade ?? "—"} ·{" "}
+												{pick.signalScore?.toFixed(1) ?? "—"} ·{" "}
+												{formatRelativeTime(pick.pickedAt)}
+											</div>
+										</div>
+										<div className="flex items-center gap-1.5">
+											<button
+												type="button"
+												onClick={() => handleSettlePick(pick.id, "win")}
+												className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/25"
+											>
+												Win
+											</button>
+											<button
+												type="button"
+												onClick={() => handleSettlePick(pick.id, "loss")}
+												className="rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 hover:bg-red-500/25"
+											>
+												Loss
+											</button>
+											<button
+												type="button"
+												onClick={() => handleSettlePick(pick.id, "push")}
+												className="rounded border border-slate-500/40 bg-slate-700/30 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-200 hover:bg-slate-700/50"
+											>
+												Push
+											</button>
+										</div>
+									</div>
+								))}
+							</div>
+						</div>
+					)}
 					{showRefreshDebug && (
 						<div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.65rem] text-slate-300">
 							<div>refreshDebug=1</div>
@@ -1540,6 +1637,9 @@ function SharpMoneyPage() {
 										history={historyByConditionId[entry.conditionId]}
 										isHistoryLoading={historyLoading.has(entry.conditionId)}
 										signalScore={signalScoreByConditionId[entry.conditionId]}
+										gradeData={gradesByConditionId[entry.conditionId]}
+										isPickLogged={pendingConditionIds.has(entry.conditionId)}
+										onLogPick={handleLogPick}
 										onRefresh={() => handleRefreshEntry(entry)}
 										isRefreshing={refreshingEntryId === entry.id}
 										disableRefresh={Boolean(pipelineStatus?.inProgress)}
@@ -1563,6 +1663,9 @@ function SharpMoneyCard({
 	history,
 	isHistoryLoading,
 	signalScore,
+	gradeData,
+	isPickLogged,
+	onLogPick,
 	onRefresh,
 	isRefreshing,
 	disableRefresh,
@@ -1576,6 +1679,24 @@ function SharpMoneyCard({
 	history?: SharpMoneyHistoryEntry[];
 	isHistoryLoading: boolean;
 	signalScore?: number;
+	gradeData?: {
+		grade: string;
+		signalScore: number;
+		warnings: string[];
+		historyUpdatedAt?: number;
+	};
+	isPickLogged: boolean;
+	onLogPick: (payload: {
+		conditionId: string;
+		marketTitle: string;
+		eventTime?: string;
+		grade?: string;
+		signalScore?: number;
+		edgeRating?: number;
+		scoreDifferential?: number;
+		sharpSide?: string;
+		price?: number;
+	}) => void;
 	onRefresh: () => void;
 	isRefreshing: boolean;
 	disableRefresh: boolean;
@@ -1620,6 +1741,16 @@ function SharpMoneyCard({
 		typeof sharpSidePrice === "number" &&
 		Number.isFinite(sharpSidePrice) &&
 		sharpSidePrice >= LOW_ROI_PRICE_THRESHOLD;
+	const historyUpdatedAt =
+		gradeData?.historyUpdatedAt ?? entry.historyUpdatedAt ?? entry.updatedAt;
+	const historyAgeSeconds =
+		typeof historyUpdatedAt === "number"
+			? Math.floor(Date.now() / 1000) - historyUpdatedAt
+			: null;
+	const isHistoryStale =
+		historyAgeSeconds !== null &&
+		historyAgeSeconds > STALE_HISTORY_MINUTES * 60;
+	const gradeWarnings = gradeData?.warnings ?? [];
 
 	// Calculate volume percentage and get heat map color
 	const totalVolume = entry.sideA.totalValue + entry.sideB.totalValue;
@@ -1675,10 +1806,14 @@ function SharpMoneyCard({
 	};
 
 	const scoreForGrade = signalScore ?? entry.edgeRating;
-	const betGradeLabel = signalScoreToGradeLabel(scoreForGrade, {
-		edgeRating: entry.edgeRating,
-		scoreDifferential: entry.scoreDifferential,
-	});
+	const betGradeLabel =
+		gradeData?.grade ??
+		signalScoreToGradeLabel(scoreForGrade, {
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential,
+		});
+	const logSignalScore = gradeData?.signalScore ?? scoreForGrade;
+	const logGrade = gradeData?.grade ?? betGradeLabel;
 	const betGrade = getBetGrade(betGradeLabel);
 	const compositeScoreDisplay = (
 		gradeWeight(betGradeLabel) + scoreForGrade
@@ -1701,6 +1836,21 @@ function SharpMoneyCard({
 		minutesToStart !== null &&
 		minutesToStart >= -START_TIME_BUFFER_MINUTES &&
 		minutesToStart <= STARTING_SOON_MINUTES;
+	const handleLogPickClick = (event: MouseEvent<HTMLButtonElement>) => {
+		event.stopPropagation();
+		if (isPickLogged) return;
+		onLogPick({
+			conditionId: entry.conditionId,
+			marketTitle: entry.marketTitle,
+			eventTime: entry.eventTime,
+			grade: logGrade,
+			signalScore: logSignalScore,
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential,
+			sharpSide: entry.sharpSide,
+			price: sharpSideData.price ?? undefined,
+		});
+	};
 	return (
 		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
 			{showDebug && debugInfo && (
@@ -1753,8 +1903,13 @@ function SharpMoneyCard({
 						</div>
 						<div className="flex items-center gap-1">
 							<span className="text-[0.6rem] text-gray-500">
-								Updated {formatRelativeTime(entry.updatedAt)}
+								History {formatRelativeTime(historyUpdatedAt)}
 							</span>
+							{isHistoryStale && (
+								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+									Stale
+								</span>
+							)}
 							{polymarketUrl && (
 								<a
 									href={polymarketUrl}
@@ -1766,6 +1921,24 @@ function SharpMoneyCard({
 									<ExternalLink className="h-4 w-4" />
 								</a>
 							)}
+							<button
+								type="button"
+								onClick={handleLogPickClick}
+								className="p-1.5 text-gray-400 hover:text-emerald-400 transition-colors flex-shrink-0 disabled:opacity-50"
+								disabled={isPickLogged || entry.sharpSide === "EVEN"}
+								title={isPickLogged ? "Pick logged" : "Log pick"}
+							>
+								<Target className="h-4 w-4" />
+							</button>
+							<button
+								type="button"
+								onClick={handleLogPickClick}
+								className="p-1.5 text-gray-400 hover:text-emerald-400 transition-colors flex-shrink-0 disabled:opacity-50"
+								disabled={isPickLogged || entry.sharpSide === "EVEN"}
+								title={isPickLogged ? "Pick logged" : "Log pick"}
+							>
+								<Target className="h-4 w-4" />
+							</button>
 							{!disableRefresh && (
 								<button
 									type="button"
@@ -1805,10 +1978,32 @@ function SharpMoneyCard({
 												Bet: {sharpSideData.label}
 											</span>
 										</div>
+										<button
+											type="button"
+											onClick={handleLogPickClick}
+											disabled={isPickLogged || entry.sharpSide === "EVEN"}
+											className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+										>
+											{isPickLogged ? "Pick logged" : "Log pick"}
+										</button>
 										{hasLowHolderCount && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
 													Low holders ({minHolderCount})
+												</span>
+											</div>
+										)}
+										{gradeWarnings.includes("not_ready") && (
+											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
+													Not ready
+												</span>
+											</div>
+										)}
+										{gradeWarnings.includes("no_edge") && (
+											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-600/60">
+												<span className="text-[0.65rem] font-semibold text-slate-300 uppercase tracking-wide">
+													No edge
 												</span>
 											</div>
 										)}
@@ -1819,10 +2014,17 @@ function SharpMoneyCard({
 												</span>
 											</div>
 										)}
-										{hasHighConcentration && (
+										{gradeWarnings.includes("high_concentration") && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Concentrated
+													High concentration
+												</span>
+											</div>
+										)}
+										{gradeWarnings.includes("stale_data") && (
+											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-red-500/15 border border-red-500/40">
+												<span className="text-[0.65rem] font-semibold text-red-200 uppercase tracking-wide">
+													Stale data
 												</span>
 											</div>
 										)}
@@ -1943,8 +2145,13 @@ function SharpMoneyCard({
 						</div>
 						<div className="flex items-center gap-1">
 							<span className="text-[0.6rem] text-gray-500">
-								Updated {formatRelativeTime(entry.updatedAt)}
+								History {formatRelativeTime(historyUpdatedAt)}
 							</span>
+							{isHistoryStale && (
+								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+									Stale
+								</span>
+							)}
 							{polymarketUrl && (
 								<a
 									href={polymarketUrl}
@@ -1994,10 +2201,32 @@ function SharpMoneyCard({
 											Bet: {sharpSideData.label}
 										</span>
 									</div>
+									<button
+										type="button"
+										onClick={handleLogPickClick}
+										disabled={isPickLogged || entry.sharpSide === "EVEN"}
+										className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+									>
+										{isPickLogged ? "Pick logged" : "Log pick"}
+									</button>
 									{hasLowHolderCount && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
 												Low holders ({minHolderCount})
+											</span>
+										</div>
+									)}
+									{gradeWarnings.includes("not_ready") && (
+										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+												Not ready
+											</span>
+										</div>
+									)}
+									{gradeWarnings.includes("no_edge") && (
+										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-600/60">
+											<span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">
+												No edge
 											</span>
 										</div>
 									)}
@@ -2008,10 +2237,17 @@ function SharpMoneyCard({
 											</span>
 										</div>
 									)}
-									{hasHighConcentration && (
+									{gradeWarnings.includes("high_concentration") && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Concentrated
+												High concentration
+											</span>
+										</div>
+									)}
+									{gradeWarnings.includes("stale_data") && (
+										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-500/40">
+											<span className="text-xs font-semibold text-red-200 uppercase tracking-wide">
+												Stale data
 											</span>
 										</div>
 									)}

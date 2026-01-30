@@ -9,12 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DebugRouteImport } from './routes/debug'
 import { Route as IndexRouteImport } from './routes/index'
 
+const StatsRoute = StatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SharpRoute = SharpRouteImport.update({
   id: '/sharp',
   path: '/sharp',
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRoute
+  '/stats': typeof StatsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRoute
+  '/stats': typeof StatsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,13 +70,14 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRoute
+  '/stats': typeof StatsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/debug' | '/login' | '/runtime' | '/sharp'
+  fullPaths: '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/debug' | '/login' | '/runtime' | '/sharp'
-  id: '__root__' | '/' | '/debug' | '/login' | '/runtime' | '/sharp'
+  to: '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
+  id: '__root__' | '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -77,10 +86,18 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   RuntimeRoute: typeof RuntimeRoute
   SharpRoute: typeof SharpRoute
+  StatsRoute: typeof StatsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/stats': {
+      id: '/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof StatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sharp': {
       id: '/sharp'
       path: '/sharp'
@@ -125,6 +142,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RuntimeRoute: RuntimeRoute,
   SharpRoute: SharpRoute,
+  StatsRoute: StatsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
