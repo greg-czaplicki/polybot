@@ -109,6 +109,12 @@ function StatsPage() {
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
+							<a
+								href="/sharp"
+								className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-200 transition-colors hover:bg-slate-800/60"
+							>
+								Back to Sharp
+							</a>
 							<span>{stats.total} total</span>
 							<span className="text-emerald-300">{stats.wins} W</span>
 							<span className="text-red-300">{stats.losses} L</span>

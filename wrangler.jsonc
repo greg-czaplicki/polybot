@@ -79,7 +79,7 @@
 			}
 		}
 	},
-	// Set APP_PASSWORD as a secret using: wrangler secret put APP_PASSWORD
+	// Set secrets using: wrangler secret put APP_PASSWORD / BOT_API_KEY
 	"triggers": {
 		"crons": [
 			"*/2 * * * *"

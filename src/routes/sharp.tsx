@@ -259,6 +259,32 @@ function formatEventTime(isoDate?: string): string | null {
 	}
 }
 
+function getMarketTypeLabel(marketTitle: string): string {
+	const lower = marketTitle.toLowerCase();
+	if (
+		lower.includes("o/u") ||
+		lower.includes("over/under") ||
+		lower.includes("total")
+	) {
+		return "total";
+	}
+	if (lower.includes("spread")) return "spread";
+	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
+	return "other";
+}
+
+function normalizeMatchupTitle(marketTitle: string): string {
+	const [matchup] = marketTitle.split(":", 1);
+	return matchup.trim().toLowerCase();
+}
+
+function getMarketGroupKey(entry: SharpMoneyCacheEntry): string {
+	const base = entry.eventSlug ?? normalizeMatchupTitle(entry.marketTitle);
+	const type = getMarketTypeLabel(entry.marketTitle);
+	const sport = entry.sportSeriesId ?? "na";
+	return `${sport}|${base}|${type}`;
+}
+
 function getSeriesLabel(seriesId?: number): string | null {
 	if (!seriesId) return null;
 	return SERIES_LABELS[seriesId] ?? `Series ${seriesId}`;
@@ -781,6 +807,15 @@ function SharpMoneyPage() {
 			if (gameTime) {
 				if (gameTime.getTime() < now.getTime() - startBufferMs) return false;
 				if (gameTime > cutoff) return false;
+				if (showAPlusOnly) {
+					const minutesToStart = (gameTime.getTime() - now.getTime()) / 60000;
+					const isStartingSoon =
+						minutesToStart >= -START_TIME_BUFFER_MINUTES &&
+						minutesToStart <= STARTING_SOON_MINUTES;
+					if (!isStartingSoon) return false;
+				}
+			} else if (showAPlusOnly) {
+				return false;
 			}
 			if (!showAllEntries) {
 				const signalScore =
@@ -801,7 +836,64 @@ function SharpMoneyPage() {
 				(e) => e.sportSeriesId === Number(selectedSeriesId),
 			);
 		}
-		return filtered;
+		const deduped = new Map<string, SharpMoneyCacheEntry>();
+		for (const entry of filtered) {
+			const key = getMarketGroupKey(entry);
+			const existing = deduped.get(key);
+			if (!existing) {
+				deduped.set(key, entry);
+				continue;
+			}
+			const entryScore =
+				signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
+			const existingScore =
+				signalScoreByConditionId[existing.conditionId] ?? existing.edgeRating;
+			const entryGrade =
+				gradesByConditionId[entry.conditionId]?.grade ??
+				signalScoreToGradeLabel(entryScore, {
+					edgeRating: entry.edgeRating,
+					scoreDifferential: entry.scoreDifferential,
+				});
+			const existingGrade =
+				gradesByConditionId[existing.conditionId]?.grade ??
+				signalScoreToGradeLabel(existingScore, {
+					edgeRating: existing.edgeRating,
+					scoreDifferential: existing.scoreDifferential,
+				});
+			const entryWeight = gradeWeight(entryGrade);
+			const existingWeight = gradeWeight(existingGrade);
+			if (entryWeight > existingWeight) {
+				deduped.set(key, entry);
+				continue;
+			}
+			if (entryWeight < existingWeight) {
+				continue;
+			}
+			if (entryScore > existingScore) {
+				deduped.set(key, entry);
+				continue;
+			}
+			if (entryScore < existingScore) {
+				continue;
+			}
+			if (entry.edgeRating > existing.edgeRating) {
+				deduped.set(key, entry);
+				continue;
+			}
+			if (entry.edgeRating < existing.edgeRating) {
+				continue;
+			}
+			if ((entry.scoreDifferential ?? 0) > (existing.scoreDifferential ?? 0)) {
+				deduped.set(key, entry);
+				continue;
+			}
+			const entryTime = parseEventTime(entry.eventTime)?.getTime() ?? 0;
+			const existingTime = parseEventTime(existing.eventTime)?.getTime() ?? 0;
+			if (entryTime > 0 && existingTime > 0 && entryTime < existingTime) {
+				deduped.set(key, entry);
+			}
+		}
+		return [...deduped.values()];
 	}, [
 		baseEntries,
 		selectedSeriesId,
@@ -1003,7 +1095,9 @@ function SharpMoneyPage() {
 
 	const refreshHealth = useCallback(async () => {
 		try {
-			const result = await getRuntimeMarketStatsFn({ data: {} });
+			const result = await getRuntimeMarketStatsFn({
+				data: { minimal: true },
+			});
 			const stats = result.stats;
 			if (!stats) {
 				setHealthStatus({ label: "Unknown", detail: "no runtime stats" });
@@ -2016,24 +2110,6 @@ function SharpMoneyCard({
 									<ExternalLink className="h-4 w-4" />
 								</a>
 							)}
-							<button
-								type="button"
-								onClick={handleLogPickClick}
-								className="p-1.5 text-gray-400 hover:text-emerald-400 transition-colors flex-shrink-0 disabled:opacity-50"
-								disabled={isPickLogged || entry.sharpSide === "EVEN"}
-								title={isPickLogged ? "Pick logged" : "Log pick"}
-							>
-								<Target className="h-4 w-4" />
-							</button>
-							<button
-								type="button"
-								onClick={handleLogPickClick}
-								className="p-1.5 text-gray-400 hover:text-emerald-400 transition-colors flex-shrink-0 disabled:opacity-50"
-								disabled={isPickLogged || entry.sharpSide === "EVEN"}
-								title={isPickLogged ? "Pick logged" : "Log pick"}
-							>
-								<Target className="h-4 w-4" />
-							</button>
 							{!disableRefresh && (
 								<button
 									type="button"

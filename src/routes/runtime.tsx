@@ -125,12 +125,20 @@ function RuntimePage() {
     <AuthGate>
       <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
-        <header>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Runtime</p>
-          <h1 className="text-3xl font-semibold text-slate-50">Market Fetch Stats</h1>
-          <p className="mt-2 text-sm text-slate-400">
-            Verify how many markets we pull per sport tag and which ones dominate by volume.
-          </p>
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Runtime</p>
+            <h1 className="text-3xl font-semibold text-slate-50">Market Fetch Stats</h1>
+            <p className="mt-2 text-sm text-slate-400">
+              Verify how many markets we pull per sport tag and which ones dominate by volume.
+            </p>
+          </div>
+          <a
+            href="/sharp"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition-colors hover:bg-slate-800/60"
+          >
+            Back to Sharp
+          </a>
         </header>
 
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">

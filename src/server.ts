@@ -4,6 +4,7 @@ import {
 } from '@tanstack/react-start/server'
 
 import type { Env, RequestContext } from './server/env'
+import { handleBotRequest } from './server/api/bot'
 import { SharpPipeline, handleSharpQueue } from './server/pipeline/sharp-pipeline'
 import { getPipelineStub } from './server/pipeline/sharp-pipeline-utils'
 
@@ -12,6 +13,11 @@ const startFetch = createStartHandler(defaultStreamHandler)
 const serverEntry = {
   async fetch(request: Request, env: Env, executionCtx: ExecutionContext) {
     const url = new URL(request.url)
+
+    const botResponse = await handleBotRequest(request, env)
+    if (botResponse) {
+      return botResponse
+    }
     
     // Trigger background sharp pipeline refresh
     if (url.pathname === '/_pipeline/trigger' && request.method === 'POST') {

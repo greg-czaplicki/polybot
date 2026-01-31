@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
@@ -117,6 +118,15 @@ export type SharpGradeResult = {
 	computedAt: number;
 	historyUpdatedAt?: number;
 	error?: "not_found";
+};
+
+export type SharpGradeComputeResult = {
+	results: SharpGradeResult[];
+	requested: number;
+	returned: number;
+	truncated: boolean;
+	computedAt: number;
+	error?: "conditionIds_required";
 };
 
 export type SharpAnalysisPayload = {
@@ -2866,31 +2876,41 @@ export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
  */
 export const getRuntimeMarketStatsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context }) => {
+}).handler(async ({ context, data }) => {
+	const db = getDb(context);
+	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(db, 15 * 60);
+	const payload = (data ?? {}) as { minimal?: boolean };
+
 	if (!lastRuntimeMarketStats) {
+		if (payload.minimal) {
+			return { stats: { cacheFreshness } };
+		}
 		return { stats: null };
 	}
 
-	const db = getDb(context);
-	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(db, 15 * 60);
 	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
 });
 
-export const getSharpMoneyGradesFn = createServerFn({
-	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as SharpGradePayload;
+export async function computeSharpMoneyGrades(
+	db: Db,
+	payload: SharpGradePayload,
+): Promise<SharpGradeComputeResult> {
 	const conditionIds = Array.isArray(payload.conditionIds)
 		? payload.conditionIds.filter((id) => typeof id === "string")
 		: [];
 	if (conditionIds.length === 0) {
-		return { results: [], error: "conditionIds_required" };
+		return {
+			results: [],
+			requested: 0,
+			returned: 0,
+			truncated: false,
+			computedAt: nowUnixSeconds(),
+			error: "conditionIds_required",
+		};
 	}
-	const uniqueConditionIds = Array.from(new Set(conditionIds)).slice(
-		0,
-		MAX_GRADE_REQUEST_ITEMS,
-	);
-	const db = getDb(context);
+	const uniqueRequested = Array.from(new Set(conditionIds));
+	const truncated = uniqueRequested.length > MAX_GRADE_REQUEST_ITEMS;
+	const uniqueConditionIds = uniqueRequested.slice(0, MAX_GRADE_REQUEST_ITEMS);
 	const now = nowUnixSeconds();
 	const historyWindowMinutes =
 		payload.historyWindowMinutes &&
@@ -3008,7 +3028,25 @@ export const getSharpMoneyGradesFn = createServerFn({
 		};
 	});
 
-	return { results };
+	return {
+		results,
+		requested: uniqueRequested.length,
+		returned: results.length,
+		truncated,
+		computedAt: now,
+	};
+}
+
+export const getSharpMoneyGradesFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as SharpGradePayload;
+	const db = getDb(context);
+	const computed = await computeSharpMoneyGrades(db, payload);
+	if (computed.error) {
+		return { results: [], error: computed.error };
+	}
+	return { results: computed.results };
 });
 
 /**

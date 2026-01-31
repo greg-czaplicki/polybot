@@ -4,6 +4,8 @@ export interface Env {
   SHARP_PIPELINE_QUEUE: Queue
   // Password protection
   APP_PASSWORD?: string
+  // Bot API auth
+  BOT_API_KEY?: string
 }
 
 export interface RequestContext {
