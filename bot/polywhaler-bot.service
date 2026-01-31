@@ -1,0 +1,15 @@
+[Unit]
+Description=Polywhaler Bot
+After=network.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/home/bot/polywhaler
+ExecStart=/usr/bin/python3 /home/bot/polywhaler/bot/bot.py
+Restart=always
+RestartSec=5
+Environment=BOT_ENV_PATH=/home/bot/polywhaler/bot/.env
+
+[Install]
+WantedBy=multi-user.target

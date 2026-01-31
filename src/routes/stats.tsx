@@ -31,12 +31,9 @@ function StatsPage() {
 		const load = async () => {
 			setIsLoading(true);
 			try {
-			const result = await listManualPicksFn({ data: { limit: 500 } });
+				const result = await listManualPicksFn({ data: { limit: 500 } });
 				if (cancelled) return;
-				const settled = (result.picks ?? []).filter(
-					(pick) => pick.status !== "pending",
-				);
-				setSettledPicks(settled);
+				setSettledPicks(result.picks ?? []);
 			} catch (error) {
 				console.error("Failed to load settled picks:", error);
 			} finally {
@@ -70,15 +67,25 @@ function StatsPage() {
 
 	const stats = useMemo(() => {
 		if (filteredPicks.length === 0) {
-			return { total: 0, wins: 0, losses: 0, pushes: 0, winRate: 0 };
+			return {
+				total: 0,
+				wins: 0,
+				losses: 0,
+				pushes: 0,
+				pending: 0,
+				winRate: 0,
+			};
 		}
 		const wins = filteredPicks.filter((pick) => pick.status === "win").length;
 		const losses = filteredPicks.filter((pick) => pick.status === "loss").length;
 		const pushes = filteredPicks.filter((pick) => pick.status === "push").length;
+		const pending = filteredPicks.filter(
+			(pick) => pick.status === "pending",
+		).length;
 		const total = filteredPicks.length;
 		const denom = wins + losses;
 		const winRate = denom > 0 ? Math.round((wins / denom) * 100) : 0;
-		return { total, wins, losses, pushes, winRate };
+		return { total, wins, losses, pushes, pending, winRate };
 	}, [filteredPicks]);
 
 	const statsByGrade = useMemo(() => {
@@ -105,7 +112,7 @@ function StatsPage() {
 								Pick Stats
 							</h1>
 							<p className="text-sm text-slate-400">
-								Manual settled picks (win/loss/push).
+								Manual and bot picks (pending + settled).
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
@@ -119,6 +126,9 @@ function StatsPage() {
 							<span className="text-emerald-300">{stats.wins} W</span>
 							<span className="text-red-300">{stats.losses} L</span>
 							<span className="text-slate-300">{stats.pushes} P</span>
+							<span className="text-slate-400">
+								{stats.pending} pending
+							</span>
 							<span>Win% {stats.winRate}</span>
 						</div>
 					</div>
@@ -153,7 +163,7 @@ function StatsPage() {
 						)}
 						{!isLoading && filteredPicks.length === 0 && (
 							<div className="text-sm text-slate-400">
-								No settled picks yet.
+								No picks yet.
 							</div>
 						)}
 						<div className="space-y-2">

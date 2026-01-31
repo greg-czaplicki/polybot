@@ -4,6 +4,7 @@ import {
 	getSharpMoneyCacheFreshnessStats,
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
+import { createManualPick } from "../repositories/manual-picks";
 import {
 	computeSharpMoneyGrades,
 	type GradeLabel,
@@ -96,6 +97,40 @@ function parseMinGrade(value: string | null): GradeLabel | null {
 	return null;
 }
 
+function getMarketTypeLabel(
+	marketTitle: string,
+): "total" | "spread" | "moneyline" | "other" {
+	const lower = marketTitle.toLowerCase();
+	if (
+		lower.includes("o/u") ||
+		lower.includes("over/under") ||
+		lower.includes("total")
+	) {
+		return "total";
+	}
+	if (lower.includes("spread")) return "spread";
+	if (!marketTitle.includes(":") && marketTitle.includes(" vs "))
+		return "moneyline";
+	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
+	return "other";
+}
+
+function normalizeMatchupTitle(marketTitle: string): string {
+	const [matchup] = marketTitle.split(":", 1);
+	return matchup.trim().toLowerCase();
+}
+
+function getMarketGroupKey(entry: {
+	marketTitle: string;
+	eventSlug?: string;
+	sportSeriesId?: number;
+}): string {
+	const base = entry.eventSlug ?? normalizeMatchupTitle(entry.marketTitle);
+	const type = getMarketTypeLabel(entry.marketTitle);
+	const sport = entry.sportSeriesId ?? "na";
+	return `${sport}|${base}|${type}`;
+}
+
 function toSlimCandidate(entry: {
 	conditionId: string;
 	marketTitle: string;
@@ -110,6 +145,7 @@ function toSlimCandidate(entry: {
 	sideB: { label: string; price?: number | null };
 }) {
 	const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
+	const marketType = getMarketTypeLabel(entry.marketTitle);
 	return {
 		conditionId: entry.conditionId,
 		marketTitle: entry.marketTitle,
@@ -118,6 +154,7 @@ function toSlimCandidate(entry: {
 		sportSeriesId: entry.sportSeriesId,
 		eventTime: entry.eventTime,
 		sharpSide: entry.sharpSide,
+		marketType,
 		sideA: {
 			label: entry.sideA.label,
 			price: entry.sideA.price ?? null,
@@ -215,6 +252,8 @@ export async function handleBotRequest(
 			windowHours,
 		});
 		const upcomingEntries = entries.filter((entry) => {
+			const marketType = getMarketTypeLabel(entry.marketTitle);
+			if (marketType === "other") return false;
 			if (shouldRequireReady && !entry.isReady) return false;
 			const eventTime = parseEventTime(entry.eventTime);
 			if (!eventTime) return false;
@@ -250,6 +289,8 @@ export async function handleBotRequest(
 					grade: {
 						grade: grade.grade,
 						signalScore: grade.signalScore,
+						edgeRating: grade.edgeRating,
+						scoreDifferential: grade.scoreDifferential,
 						isReady: grade.isReady,
 						warnings: grade.warnings,
 						computedAt: grade.computedAt,
@@ -258,10 +299,63 @@ export async function handleBotRequest(
 				};
 			})
 			.filter((candidate) => candidate !== null);
+		const deduped = new Map<string, (typeof candidates)[number]>();
+		for (const candidate of candidates) {
+			if (!candidate) continue;
+			const key = getMarketGroupKey(candidate.entry);
+			const existing = deduped.get(key);
+			if (!existing) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			const candidateGrade = candidate.grade.grade;
+			const existingGrade = existing.grade.grade;
+			const candidateRank = GRADE_RANK[candidateGrade];
+			const existingRank = GRADE_RANK[existingGrade];
+			if (candidateRank > existingRank) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			if (candidateRank < existingRank) {
+				continue;
+			}
+			const candidateScore = candidate.grade.signalScore ?? 0;
+			const existingScore = existing.grade.signalScore ?? 0;
+			if (candidateScore > existingScore) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			if (candidateScore < existingScore) {
+				continue;
+			}
+			const candidateEdge = candidate.grade.edgeRating ?? 0;
+			const existingEdge = existing.grade.edgeRating ?? 0;
+			if (candidateEdge > existingEdge) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			if (candidateEdge < existingEdge) {
+				continue;
+			}
+			const candidateDiff = candidate.grade.scoreDifferential ?? 0;
+			const existingDiff = existing.grade.scoreDifferential ?? 0;
+			if (candidateDiff > existingDiff) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			const candidateTime =
+				parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
+			const existingTime =
+				parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
+			if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
+				deduped.set(key, candidate);
+			}
+		}
+		const dedupedCandidates = [...deduped.values()];
 		return jsonResponse({
-			candidates,
+			candidates: dedupedCandidates,
 			requested: gradesResult.requested,
-			returned: candidates.length,
+			returned: dedupedCandidates.length,
 			truncated: gradesResult.truncated,
 			computedAt: gradesResult.computedAt,
 		});
@@ -281,6 +375,38 @@ export async function handleBotRequest(
 			return jsonResponse({ error: result.error }, { status: 400 });
 		}
 		return jsonResponse(result);
+	}
+
+	if (url.pathname === "/api/bot/picks") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			conditionId?: string;
+			marketTitle?: string;
+			eventTime?: string;
+			grade?: string;
+			signalScore?: number;
+			edgeRating?: number;
+			scoreDifferential?: number;
+			sharpSide?: string;
+			price?: number;
+		}>(request);
+		if (!payload?.conditionId || !payload?.marketTitle) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const pick = await createManualPick(env.POLYWHALER_DB, {
+			conditionId: payload.conditionId,
+			marketTitle: payload.marketTitle,
+			eventTime: payload.eventTime,
+			grade: payload.grade,
+			signalScore: payload.signalScore,
+			edgeRating: payload.edgeRating,
+			scoreDifferential: payload.scoreDifferential,
+			sharpSide: payload.sharpSide,
+			price: payload.price,
+		});
+		return jsonResponse({ pick });
 	}
 
 	return jsonResponse({ error: "not_found" }, { status: 404 });

@@ -29,20 +29,16 @@ import {
 	getSharpMoneyCacheFn,
 	getSharpMoneyCacheStatsFn,
 	getSharpMoneyEdgeStatsHistoryFn,
+	getSharpMoneyGradeMixFn,
 	getSharpMoneyGradesFn,
 	getRuntimeMarketStatsFn,
 	getSharpMoneyHistoryFn,
 	refreshMarketSharpnessFn,
 	type SharpMoneyCacheEntry,
 	type SharpMoneyHistoryEntry,
+	type SharpMoneyGradeMix,
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
-import {
-	createManualPickFn,
-	listManualPicksFn,
-	updateManualPickOutcomeFn,
-} from "../server/api/manual-picks";
-import type { ManualPickEntry } from "../server/repositories/manual-picks";
 
 export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
@@ -88,6 +84,12 @@ const UNIT_FORMATTER = new Intl.NumberFormat("en-US", {
 	maximumFractionDigits: 1,
 });
 
+const EDGE_TARGETS = {
+	aPlus: { min: 0.03, max: 0.08 },
+	aPlusOrA: { min: 0.12, max: 0.2 },
+	minEdge: { min: 0.45, max: 0.6 },
+};
+
 function formatUsdCompact(value: number | null | undefined): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) {
 		return "$0";
@@ -103,6 +105,78 @@ function formatUnits(value: number | null | undefined): string | null {
 		return null;
 	}
 	return UNIT_FORMATTER.format(value);
+}
+
+function formatPercent(value: number | null | undefined): string {
+	if (value === null || value === undefined || !Number.isFinite(value)) {
+		return "0%";
+	}
+	return `${Math.round(value * 100)}%`;
+}
+
+function getTargetTone(
+	value: number,
+	target: { min: number; max: number },
+): "low" | "high" | "ok" {
+	if (value < target.min) return "low";
+	if (value > target.max) return "high";
+	return "ok";
+}
+
+function getTargetToneClass(
+	value: number,
+	target: { min: number; max: number },
+): string {
+	const tone = getTargetTone(value, target);
+	if (tone === "ok") return "text-emerald-300";
+	if (tone === "low") return "text-amber-300";
+	return "text-rose-300";
+}
+
+function buildGradeMix(
+	entries: SharpMoneyCacheEntry[],
+	gradesByConditionId: Record<
+		string,
+		{
+			grade: string;
+			signalScore: number;
+		}
+	>,
+	signalScoreByConditionId: Record<string, number>,
+): SharpMoneyGradeMix | null {
+	if (entries.length === 0) return null;
+	let total = 0;
+	let passing = 0;
+	let aPlusCount = 0;
+	let aPlusOrACount = 0;
+	for (const entry of entries) {
+		const score = signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
+		if (!Number.isFinite(score)) continue;
+		total += 1;
+		if (entry.edgeRating >= MIN_EDGE_RATING) passing += 1;
+		const grade =
+			gradesByConditionId[entry.conditionId]?.grade ??
+			signalScoreToGradeLabel(score, {
+				edgeRating: entry.edgeRating,
+				scoreDifferential: entry.scoreDifferential,
+			});
+		if (grade === "A+") {
+			aPlusCount += 1;
+			aPlusOrACount += 1;
+		} else if (grade === "A") {
+			aPlusOrACount += 1;
+		}
+	}
+	if (total === 0) return null;
+	return {
+		total,
+		passing,
+		passingRate: passing / total,
+		aPlusCount,
+		aPlusRate: aPlusCount / total,
+		aPlusOrACount,
+		aPlusOrARate: aPlusOrACount / total,
+	};
 }
 
 function formatAmericanOdds(price?: number | null): string | null {
@@ -132,6 +206,14 @@ function formatHourLabel(timestampSeconds: number): string {
 	return date.toLocaleTimeString("en-US", {
 		hour: "numeric",
 		minute: "2-digit",
+	});
+}
+
+function formatDayLabel(timestampSeconds: number): string {
+	const date = new Date(timestampSeconds * 1000);
+	return date.toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
 	});
 }
 
@@ -329,6 +411,10 @@ function SharpMoneyPage() {
 		[],
 	);
 	const [edgeStatsHistoryLoading, setEdgeStatsHistoryLoading] = useState(false);
+	const [edgeStatsGradeMix, setEdgeStatsGradeMix] =
+		useState<SharpMoneyGradeMix | null>(null);
+	const [edgeStatsGradeMixLoading, setEdgeStatsGradeMixLoading] =
+		useState(false);
 	const [signalHistoryByConditionId, setSignalHistoryByConditionId] = useState<
 		Record<string, SharpMoneyHistoryEntry[]>
 	>({});
@@ -356,7 +442,6 @@ function SharpMoneyPage() {
 		label: "Good" | "Warn" | "Unknown";
 		detail?: string;
 	}>({ label: "Unknown" });
-	const [pendingPicks, setPendingPicks] = useState<ManualPickEntry[]>([]);
 	const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(
 		null,
 	);
@@ -464,7 +549,10 @@ function SharpMoneyPage() {
 		setEdgeStatsHistoryLoading(true);
 		try {
 			const result = await getSharpMoneyEdgeStatsHistoryFn({
-				data: { windowHours: edgeStatsWindowHours },
+				data: {
+					windowHours: edgeStatsWindowHours,
+					bucketHours: edgeStatsWindowHours === 24 ? 1 : 24,
+				},
 			});
 			setEdgeStatsHistory(result.buckets ?? []);
 		} catch (error) {
@@ -474,17 +562,40 @@ function SharpMoneyPage() {
 		}
 	}, [edgeStatsWindowHours]);
 
+	const loadEdgeStatsGradeMix = useCallback(async () => {
+		setEdgeStatsGradeMixLoading(true);
+		try {
+			const result = await getSharpMoneyGradeMixFn({
+				data: {
+					windowHours: 24 * 7,
+					sportSeriesId:
+						selectedSeriesId === "all" ? undefined : Number(selectedSeriesId),
+					includeEven: false,
+					gradeFiltered: !showAllEntries,
+					aPlusOnly: showAPlusOnly,
+				},
+			});
+			setEdgeStatsGradeMix(result.mix ?? null);
+		} catch (error) {
+			console.error("Failed to load edge stats grade mix:", error);
+		} finally {
+			setEdgeStatsGradeMixLoading(false);
+		}
+	}, [selectedSeriesId, showAllEntries, showAPlusOnly]);
+
 	useEffect(() => {
 		if (!showEdgeStats) return;
 		loadEdgeStatsHistory();
+		loadEdgeStatsGradeMix();
 		const interval = setInterval(
 			() => {
 				loadEdgeStatsHistory();
+				loadEdgeStatsGradeMix();
 			},
 			5 * 60 * 1000,
 		);
 		return () => clearInterval(interval);
-	}, [loadEdgeStatsHistory, showEdgeStats]);
+	}, [loadEdgeStatsHistory, loadEdgeStatsGradeMix, showEdgeStats]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -653,50 +764,6 @@ function SharpMoneyPage() {
 		[loadCache, refreshingEntryId],
 	);
 
-	const refreshPicks = useCallback(async () => {
-		try {
-			const pendingResult = await listManualPicksFn({
-				data: { status: "pending", limit: 25 },
-			});
-			setPendingPicks(pendingResult.picks ?? []);
-		} catch (error) {
-			console.error("Failed to load manual picks:", error);
-		}
-	}, []);
-
-	const handleLogPick = useCallback(
-		async (payload: {
-			conditionId: string;
-			marketTitle: string;
-			eventTime?: string;
-			grade?: string;
-			signalScore?: number;
-			edgeRating?: number;
-			scoreDifferential?: number;
-			sharpSide?: string;
-			price?: number;
-		}) => {
-			try {
-				await createManualPickFn({ data: payload });
-				await refreshPicks();
-			} catch (error) {
-				console.error("Failed to log manual pick:", error);
-			}
-		},
-		[refreshPicks],
-	);
-
-	const handleSettlePick = useCallback(
-		async (id: string, status: "win" | "loss" | "push") => {
-			try {
-				await updateManualPickOutcomeFn({ data: { id, status } });
-				await refreshPicks();
-			} catch (error) {
-				console.error("Failed to update pick:", error);
-			}
-		},
-		[refreshPicks],
-	);
 
 	useEffect(() => {
 		if (!pipelineStatus?.inProgress) {
@@ -946,19 +1013,8 @@ function SharpMoneyPage() {
 	}, [baseEntries, showRefreshDebug, signalScoreByConditionId, gradesByConditionId]);
 
 	const statsEntries = useMemo(() => {
-		let filtered = baseEntries.filter((entry) => entry.sharpSide !== "EVEN");
-		if (selectedSeriesId !== "all") {
-			filtered = filtered.filter(
-				(entry) => entry.sportSeriesId === Number(selectedSeriesId),
-			);
-		}
-		return filtered;
-	}, [baseEntries, selectedSeriesId]);
-
-	const pendingConditionIds = useMemo(() => {
-		return new Set(pendingPicks.map((pick) => pick.conditionId));
-	}, [pendingPicks]);
-
+		return filteredEntries;
+	}, [filteredEntries]);
 
 	const edgeStats = useMemo(() => {
 		if (statsEntries.length === 0) return null;
@@ -967,26 +1023,70 @@ function SharpMoneyPage() {
 			.filter((value) => Number.isFinite(value))
 			.sort((a, b) => a - b);
 		if (values.length === 0) return null;
+		const total = values.length;
 		const average =
-			values.reduce((sum, value) => sum + value, 0) / values.length;
+			values.reduce((sum, value) => sum + value, 0) / total;
 		const pickPercentile = (percent: number) => {
-			const index = Math.round((percent / 100) * (values.length - 1));
-			return values[Math.max(0, Math.min(values.length - 1, index))];
+			const index = Math.round((percent / 100) * (total - 1));
+			return values[Math.max(0, Math.min(total - 1, index))];
 		};
 		const passingCount = values.filter(
 			(value) => value >= MIN_EDGE_RATING,
 		).length;
+		let aPlusCount = 0;
+		let aPlusOrACount = 0;
+		for (const entry of statsEntries) {
+			const score =
+				signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
+			if (!Number.isFinite(score)) continue;
+			const grade =
+				gradesByConditionId[entry.conditionId]?.grade ??
+				signalScoreToGradeLabel(score, {
+					edgeRating: entry.edgeRating,
+					scoreDifferential: entry.scoreDifferential,
+				});
+			if (grade === "A+") {
+				aPlusCount += 1;
+				aPlusOrACount += 1;
+			} else if (grade === "A") {
+				aPlusOrACount += 1;
+			}
+		}
+		const passingRate = passingCount / total;
+		const aPlusRate = aPlusCount / total;
+		const aPlusOrARate = aPlusOrACount / total;
 		return {
-			total: values.length,
+			total,
 			passing: passingCount,
+			passingRate,
+			aPlusCount,
+			aPlusRate,
+			aPlusOrACount,
+			aPlusOrARate,
 			average: Math.round(average),
 			p50: pickPercentile(50),
 			p75: pickPercentile(75),
 			p90: pickPercentile(90),
 			max: values[values.length - 1],
 		};
-	}, [statsEntries]);
+	}, [statsEntries, gradesByConditionId, signalScoreByConditionId]);
 
+	const isEdgeStatsDaily = edgeStatsWindowHours > 24;
+	const edgeStatsHistoryView = useMemo(() => {
+		if (edgeStatsHistory.length === 0) return [];
+		const limit = isEdgeStatsDaily ? 7 : 24;
+		return edgeStatsHistory.slice(-limit);
+	}, [edgeStatsHistory, isEdgeStatsDaily]);
+
+	const edgeStatsCurrentMix = useMemo(
+		() =>
+			buildGradeMix(
+				filteredEntries,
+				gradesByConditionId,
+				signalScoreByConditionId,
+			),
+		[filteredEntries, gradesByConditionId, signalScoreByConditionId],
+	);
 	const refreshSignalHistory = useCallback(async () => {
 		const historyCandidates = baseEntries.filter(
 			(entry) => entry.sharpSide !== "EVEN",
@@ -1153,7 +1253,6 @@ function SharpMoneyPage() {
 			if (cancelled) return;
 			await refreshSignalHistory();
 			await refreshGrades();
-			await refreshPicks();
 			await ensureHealthStats();
 			await refreshHealth();
 		})();
@@ -1163,7 +1262,6 @@ function SharpMoneyPage() {
 	}, [
 		refreshSignalHistory,
 		refreshGrades,
-		refreshPicks,
 		ensureHealthStats,
 		refreshHealth,
 	]);
@@ -1464,6 +1562,143 @@ function SharpMoneyPage() {
 									</div>
 								</div>
 							</div>
+							<div className="mt-3 grid gap-2 text-[0.65rem] sm:grid-cols-3">
+								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+									<div className="uppercase text-slate-500">A+ share</div>
+									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
+										<span>Current</span>
+										<span>7d</span>
+									</div>
+									<div className="mt-1 flex items-center justify-between">
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsCurrentMix
+													? getTargetToneClass(
+															edgeStatsCurrentMix.aPlusRate,
+															EDGE_TARGETS.aPlus,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsCurrentMix
+												? formatPercent(edgeStatsCurrentMix.aPlusRate)
+												: "—"}
+										</span>
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsGradeMix
+													? getTargetToneClass(
+															edgeStatsGradeMix.aPlusRate,
+															EDGE_TARGETS.aPlus,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
+												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
+											) : edgeStatsGradeMix ? (
+												formatPercent(edgeStatsGradeMix.aPlusRate)
+											) : (
+												"—"
+											)}
+										</span>
+									</div>
+									<div className="mt-1 text-[0.6rem] text-slate-500">
+										Target {formatPercent(EDGE_TARGETS.aPlus.min)}–
+										{formatPercent(EDGE_TARGETS.aPlus.max)}
+									</div>
+								</div>
+								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+									<div className="uppercase text-slate-500">A/A+ share</div>
+									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
+										<span>Current</span>
+										<span>7d</span>
+									</div>
+									<div className="mt-1 flex items-center justify-between">
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsCurrentMix
+													? getTargetToneClass(
+															edgeStatsCurrentMix.aPlusOrARate,
+															EDGE_TARGETS.aPlusOrA,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsCurrentMix
+												? formatPercent(edgeStatsCurrentMix.aPlusOrARate)
+												: "—"}
+										</span>
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsGradeMix
+													? getTargetToneClass(
+															edgeStatsGradeMix.aPlusOrARate,
+															EDGE_TARGETS.aPlusOrA,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
+												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
+											) : edgeStatsGradeMix ? (
+												formatPercent(edgeStatsGradeMix.aPlusOrARate)
+											) : (
+												"—"
+											)}
+										</span>
+									</div>
+									<div className="mt-1 text-[0.6rem] text-slate-500">
+										Target {formatPercent(EDGE_TARGETS.aPlusOrA.min)}–
+										{formatPercent(EDGE_TARGETS.aPlusOrA.max)}
+									</div>
+								</div>
+								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+									<div className="uppercase text-slate-500">≥ {MIN_EDGE_RATING}</div>
+									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
+										<span>Current</span>
+										<span>7d</span>
+									</div>
+									<div className="mt-1 flex items-center justify-between">
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsCurrentMix
+													? getTargetToneClass(
+															edgeStatsCurrentMix.passingRate,
+															EDGE_TARGETS.minEdge,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsCurrentMix
+												? formatPercent(edgeStatsCurrentMix.passingRate)
+												: "—"}
+										</span>
+										<span
+											className={`text-sm font-semibold ${
+												edgeStatsGradeMix
+													? getTargetToneClass(
+															edgeStatsGradeMix.passingRate,
+															EDGE_TARGETS.minEdge,
+														)
+													: "text-slate-500"
+											}`}
+										>
+											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
+												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
+											) : edgeStatsGradeMix ? (
+												formatPercent(edgeStatsGradeMix.passingRate)
+											) : (
+												"—"
+											)}
+										</span>
+									</div>
+									<div className="mt-1 text-[0.6rem] text-slate-500">
+										Target {formatPercent(EDGE_TARGETS.minEdge.min)}–
+										{formatPercent(EDGE_TARGETS.minEdge.max)}
+									</div>
+								</div>
+							</div>
 							<div className="mt-4 border-t border-slate-800/60 pt-3">
 								<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
 									<span>
@@ -1515,7 +1750,9 @@ function SharpMoneyPage() {
 										<table className="w-full min-w-[520px] text-left text-xs text-slate-300">
 											<thead className="text-[0.6rem] uppercase tracking-wider text-slate-500">
 												<tr>
-													<th className="py-2 pr-3">Hour</th>
+													<th className="py-2 pr-3">
+														{isEdgeStatsDaily ? "Day" : "Hour"}
+													</th>
 													<th className="py-2 pr-3">Count</th>
 													<th className="py-2 pr-3">Avg</th>
 													<th className="py-2 pr-3">P50</th>
@@ -1524,13 +1761,15 @@ function SharpMoneyPage() {
 												</tr>
 											</thead>
 											<tbody>
-												{edgeStatsHistory.slice(-6).map((bucket) => (
+												{edgeStatsHistoryView.map((bucket) => (
 													<tr
 														key={bucket.start}
 														className="border-t border-slate-800/60"
 													>
 														<td className="py-2 pr-3 text-slate-400">
-															{formatHourLabel(bucket.start)}
+															{isEdgeStatsDaily
+																? formatDayLabel(bucket.start)
+																: formatHourLabel(bucket.start)}
 														</td>
 														<td className="py-2 pr-3">{bucket.count}</td>
 														<td className="py-2 pr-3">{bucket.average}</td>
@@ -1541,9 +1780,11 @@ function SharpMoneyPage() {
 												))}
 											</tbody>
 										</table>
-										{edgeStatsHistory.length > 6 && (
+										{edgeStatsHistory.length > edgeStatsHistoryView.length && (
 											<div className="mt-2 text-[0.65rem] text-slate-500">
-												Showing last 6 hours of{" "}
+												Showing last{" "}
+												{edgeStatsHistoryView.length}{" "}
+												{isEdgeStatsDaily ? "days" : "hours"} of{" "}
 												{edgeStatsWindowHours === 24 ? "24h" : "7d"} history.
 											</div>
 										)}
@@ -1611,55 +1852,6 @@ function SharpMoneyPage() {
 							<span>
 								Updated {formatRelativeTime(Math.floor(gradeStatus.updatedAt / 1000))}
 							</span>
-						</div>
-					)}
-					{pendingPicks.length > 0 && (
-						<div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.7rem] text-slate-200">
-							<div className="mb-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-400">
-								Pending Picks
-							</div>
-							<div className="space-y-2">
-								{pendingPicks.map((pick) => (
-									<div
-										key={pick.id}
-										className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800/70 bg-slate-950/40 px-2 py-1.5"
-									>
-										<div className="min-w-0">
-											<div className="truncate text-xs font-semibold text-slate-100">
-												{pick.marketTitle}
-											</div>
-											<div className="text-[0.6rem] text-slate-400">
-												{pick.grade ?? "—"} ·{" "}
-												{pick.signalScore?.toFixed(1) ?? "—"} ·{" "}
-												{formatRelativeTime(pick.pickedAt)}
-											</div>
-										</div>
-										<div className="flex items-center gap-1.5">
-											<button
-												type="button"
-												onClick={() => handleSettlePick(pick.id, "win")}
-												className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/25"
-											>
-												Win
-											</button>
-											<button
-												type="button"
-												onClick={() => handleSettlePick(pick.id, "loss")}
-												className="rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 hover:bg-red-500/25"
-											>
-												Loss
-											</button>
-											<button
-												type="button"
-												onClick={() => handleSettlePick(pick.id, "push")}
-												className="rounded border border-slate-500/40 bg-slate-700/30 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-200 hover:bg-slate-700/50"
-											>
-												Push
-											</button>
-										</div>
-									</div>
-								))}
-							</div>
 						</div>
 					)}
 					{showRefreshDebug && (
@@ -1843,8 +2035,6 @@ function SharpMoneyPage() {
 										isHistoryLoading={historyLoading.has(entry.conditionId)}
 										signalScore={signalScoreByConditionId[entry.conditionId]}
 										gradeData={gradesByConditionId[entry.conditionId]}
-										isPickLogged={pendingConditionIds.has(entry.conditionId)}
-										onLogPick={handleLogPick}
 										onRefresh={() => handleRefreshEntry(entry)}
 										isRefreshing={refreshingEntryId === entry.id}
 										disableRefresh={Boolean(pipelineStatus?.inProgress)}
@@ -1869,8 +2059,6 @@ function SharpMoneyCard({
 	isHistoryLoading,
 	signalScore,
 	gradeData,
-	isPickLogged,
-	onLogPick,
 	onRefresh,
 	isRefreshing,
 	disableRefresh,
@@ -1890,18 +2078,6 @@ function SharpMoneyCard({
 		warnings: string[];
 		historyUpdatedAt?: number;
 	};
-	isPickLogged: boolean;
-	onLogPick: (payload: {
-		conditionId: string;
-		marketTitle: string;
-		eventTime?: string;
-		grade?: string;
-		signalScore?: number;
-		edgeRating?: number;
-		scoreDifferential?: number;
-		sharpSide?: string;
-		price?: number;
-	}) => void;
 	onRefresh: () => void;
 	isRefreshing: boolean;
 	disableRefresh: boolean;
@@ -2001,8 +2177,6 @@ function SharpMoneyCard({
 			edgeRating: entry.edgeRating,
 			scoreDifferential: entry.scoreDifferential,
 		});
-	const logSignalScore = gradeData?.signalScore ?? scoreForGrade;
-	const logGrade = gradeData?.grade ?? betGradeLabel;
 	const betGrade = getBetGrade(betGradeLabel);
 	const compositeScoreDisplay = (
 		gradeWeight(betGradeLabel) + scoreForGrade
@@ -2025,21 +2199,6 @@ function SharpMoneyCard({
 		minutesToStart !== null &&
 		minutesToStart >= -START_TIME_BUFFER_MINUTES &&
 		minutesToStart <= STARTING_SOON_MINUTES;
-	const handleLogPickClick = (event: MouseEvent<HTMLButtonElement>) => {
-		event.stopPropagation();
-		if (isPickLogged) return;
-		onLogPick({
-			conditionId: entry.conditionId,
-			marketTitle: entry.marketTitle,
-			eventTime: entry.eventTime,
-			grade: logGrade,
-			signalScore: logSignalScore,
-			edgeRating: entry.edgeRating,
-			scoreDifferential: entry.scoreDifferential,
-			sharpSide: entry.sharpSide,
-			price: sharpSideData.price ?? undefined,
-		});
-	};
 	return (
 		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
 			{showDebug && debugInfo && (
@@ -2149,14 +2308,6 @@ function SharpMoneyCard({
 												Bet: {sharpSideData.label}
 											</span>
 										</div>
-										<button
-											type="button"
-											onClick={handleLogPickClick}
-											disabled={isPickLogged || entry.sharpSide === "EVEN"}
-											className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
-										>
-											{isPickLogged ? "Pick logged" : "Log pick"}
-										</button>
 										{gradeWarnings.includes("low_holders") && (
 											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
@@ -2379,14 +2530,6 @@ function SharpMoneyCard({
 											Bet: {sharpSideData.label}
 										</span>
 									</div>
-									<button
-										type="button"
-										onClick={handleLogPickClick}
-										disabled={isPickLogged || entry.sharpSide === "EVEN"}
-										className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
-									>
-										{isPickLogged ? "Pick logged" : "Log pick"}
-									</button>
 									{gradeWarnings.includes("low_holders") && (
 										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
 											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">

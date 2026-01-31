@@ -13,6 +13,7 @@ import {
 	listSharpMoneyCacheByConditionIds,
 	listSharpMoneyHistory,
 	listSharpMoneyHistoryByConditionIds,
+	listSharpMoneyHistoryLatest,
 	listSharpMoneyHistoryWindow,
 	type SharpMoneyCacheEntry,
 	type SharpMoneyHistoryEntry,
@@ -59,9 +60,10 @@ const MIN_VOLUME_USD = 10_000;
 const START_TIME_BUFFER_MINUTES = 10;
 const MAX_SUBREQUESTS = 50;
 const UNIT_SIZE_CACHE_TTL_SEC = 6 * 60 * 60;
-const UNIT_SIZE_SAMPLE_LIMIT = 20;
+const UNIT_SIZE_SAMPLE_LIMIT = 50;
 const UNIT_SIZE_POSITION_LIMIT = 100;
 const MIN_UNIT_SIZE_SAMPLES = 3;
+const UNIT_SIZE_TOP_SAMPLE = 10;
 const GAMMA_EVENTS_PAGE_LIMIT = 200;
 const GAMMA_EVENTS_MAX_PAGES = 6;
 const GAMMA_RETRY_LIMIT = 3;
@@ -140,6 +142,16 @@ export type SharpAnalysisPayload = {
 	bestAsk?: number;
 	endDate?: string;
 	includeDebug?: boolean;
+};
+
+export type SharpMoneyGradeMix = {
+	total: number;
+	passing: number;
+	passingRate: number;
+	aPlusCount: number;
+	aPlusRate: number;
+	aPlusOrACount: number;
+	aPlusOrARate: number;
 };
 
 const SERIES_ID_TO_TAG = new Map<number, string>(
@@ -315,6 +327,16 @@ function calculateMedianTopHalf(values: number[]): number | null {
 	const start = Math.floor(sorted.length / 2);
 	const topHalf = sorted.slice(start);
 	return calculateMedian(topHalf);
+}
+
+function calculateMedianTopN(
+	values: number[],
+	count: number,
+): number | null {
+	if (values.length === 0) return null;
+	const sorted = [...values].sort((a, b) => b - a);
+	const top = sorted.slice(0, Math.max(1, Math.min(count, sorted.length)));
+	return calculateMedian(top);
 }
 
 function normalizePnl(
@@ -1446,23 +1468,32 @@ async function fetchWalletUnitSize(
 	walletAddress: string,
 ): Promise<number | null> {
 	try {
-		const openStakes = await fetchOpenPositionStakes(
-			walletAddress,
-			UNIT_SIZE_POSITION_LIMIT,
-		);
-		if (openStakes.length >= MIN_UNIT_SIZE_SAMPLES) {
-			return calculateMedianTopHalf(openStakes);
-		}
-
 		const closedStakes = await fetchClosedPositionStakes(
 			walletAddress,
 			UNIT_SIZE_SAMPLE_LIMIT,
 		);
-		if (closedStakes.length < MIN_UNIT_SIZE_SAMPLES) {
+		const openStakes = await fetchOpenPositionStakes(
+			walletAddress,
+			UNIT_SIZE_POSITION_LIMIT,
+		);
+
+		const hasClosed = closedStakes.length >= MIN_UNIT_SIZE_SAMPLES;
+		const hasOpen = openStakes.length >= MIN_UNIT_SIZE_SAMPLES;
+
+		const stakes = hasClosed
+			? closedStakes
+			: hasOpen
+				? openStakes
+				: [...closedStakes, ...openStakes];
+
+		if (stakes.length < MIN_UNIT_SIZE_SAMPLES) {
 			return null;
 		}
 
-		return calculateMedianTopHalf(closedStakes);
+		return (
+			calculateMedianTopN(stakes, UNIT_SIZE_TOP_SAMPLE) ??
+			calculateMedianTopHalf(stakes)
+		);
 	} catch {
 		return null;
 	}
@@ -2824,18 +2855,23 @@ export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
 	const db = getDb(context);
-	const payload = (data ?? {}) as { windowHours?: number };
+	const payload = (data ?? {}) as { windowHours?: number; bucketHours?: number };
 	const now = Math.floor(Date.now() / 1000);
 	const windowHours =
 		payload.windowHours && payload.windowHours > 0
 			? Math.min(payload.windowHours, 24 * 30)
 			: 7 * 24;
+	const bucketHours =
+		payload.bucketHours && payload.bucketHours > 0
+			? Math.min(payload.bucketHours, 24)
+			: 1;
 	const since = now - windowHours * 60 * 60;
 	const rows = await listSharpMoneyHistoryWindow(db, since);
 	const buckets = new Map<number, number[]>();
 
 	for (const row of rows) {
-		const bucketStart = row.recordedAt - (row.recordedAt % 3600);
+		const bucketStart =
+			row.recordedAt - (row.recordedAt % (bucketHours * 3600));
 		if (!buckets.has(bucketStart)) {
 			buckets.set(bucketStart, []);
 		}
@@ -2869,6 +2905,81 @@ export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
 		});
 
 	return { buckets: bucketList };
+});
+
+export const getSharpMoneyGradeMixFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const db = getDb(context);
+	const payload = (data ?? {}) as {
+		windowHours?: number;
+		sportSeriesId?: number;
+		includeEven?: boolean;
+		gradeFiltered?: boolean;
+		aPlusOnly?: boolean;
+	};
+	const now = Math.floor(Date.now() / 1000);
+	const windowHours =
+		payload.windowHours && payload.windowHours > 0
+			? Math.min(payload.windowHours, 24 * 30)
+			: 7 * 24;
+	const since = now - windowHours * 60 * 60;
+	const rows = await listSharpMoneyHistoryLatest(
+		db,
+		since,
+		payload.sportSeriesId,
+	);
+
+	let total = 0;
+	let passing = 0;
+	let aPlusCount = 0;
+	let aPlusOrACount = 0;
+
+	for (const row of rows) {
+		const sharpSide = row.sharpSide ?? "EVEN";
+		if (!payload.includeEven && sharpSide === "EVEN") {
+			continue;
+		}
+		const edgeRating = row.edgeRating ?? 0;
+		const scoreDifferential = row.scoreDifferential ?? 0;
+		const signalScore = computeSignalScoreFromHistory(
+			{ edgeRating, scoreDifferential },
+			undefined,
+			MIN_EDGE_RATING,
+		);
+		const grade = signalScoreToGradeLabel(signalScore, {
+			edgeRating,
+			scoreDifferential,
+		}) as GradeLabel;
+
+		if (payload.gradeFiltered && (grade === "C" || grade === "D")) {
+			continue;
+		}
+		if (payload.aPlusOnly && grade !== "A+") {
+			continue;
+		}
+
+		total += 1;
+		if (edgeRating >= MIN_EDGE_RATING) passing += 1;
+		if (grade === "A+") {
+			aPlusCount += 1;
+			aPlusOrACount += 1;
+		} else if (grade === "A") {
+			aPlusOrACount += 1;
+		}
+	}
+
+	const mix: SharpMoneyGradeMix = {
+		total,
+		passing,
+		passingRate: total > 0 ? passing / total : 0,
+		aPlusCount,
+		aPlusRate: total > 0 ? aPlusCount / total : 0,
+		aPlusOrACount,
+		aPlusOrARate: total > 0 ? aPlusOrACount / total : 0,
+	};
+
+	return { mix };
 });
 
 /**

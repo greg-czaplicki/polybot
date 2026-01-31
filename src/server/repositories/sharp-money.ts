@@ -293,6 +293,15 @@ interface SharpMoneyHistoryStatRow {
 	edge_rating?: number | null;
 }
 
+interface SharpMoneyHistoryLatestRow {
+	condition_id: string;
+	recorded_at: number;
+	edge_rating?: number | null;
+	score_differential: number;
+	sharp_side?: string | null;
+	sport_series_id?: number | null;
+}
+
 /**
  * Upsert a sharp money cache entry
  */
@@ -775,4 +784,49 @@ export async function listSharpMoneyHistoryWindow(
 			edgeRating: row.edge_rating ?? 0,
 		}))
 		.filter((row) => Number.isFinite(row.edgeRating));
+}
+
+export async function listSharpMoneyHistoryLatest(
+	db: Db,
+	sinceSeconds: number,
+	sportSeriesId?: number,
+): Promise<
+	Array<{
+		conditionId: string;
+		recordedAt: number;
+		edgeRating: number;
+		scoreDifferential: number;
+		sharpSide: "A" | "B" | "EVEN";
+		sportSeriesId?: number;
+	}>
+> {
+	let whereClause = "recorded_at >= ?";
+	const params: Array<number> = [sinceSeconds];
+	if (sportSeriesId !== undefined) {
+		whereClause += " AND sport_series_id = ?";
+		params.push(sportSeriesId);
+	}
+
+	const rows = await all<SharpMoneyHistoryLatestRow>(
+		db,
+		`SELECT h.condition_id, h.recorded_at, h.edge_rating, h.score_differential, h.sharp_side, h.sport_series_id
+     FROM sharp_money_history h
+     INNER JOIN (
+       SELECT condition_id, MAX(recorded_at) as max_time
+       FROM sharp_money_history
+       WHERE ${whereClause}
+       GROUP BY condition_id
+     ) latest
+     ON h.condition_id = latest.condition_id AND h.recorded_at = latest.max_time`,
+		...params,
+	);
+
+	return rows.map((row) => ({
+		conditionId: row.condition_id,
+		recordedAt: row.recorded_at,
+		edgeRating: row.edge_rating ?? 0,
+		scoreDifferential: row.score_differential ?? 0,
+		sharpSide: (row.sharp_side as "A" | "B" | "EVEN") ?? "EVEN",
+		sportSeriesId: row.sport_series_id ?? undefined,
+	}));
 }

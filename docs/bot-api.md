@@ -65,6 +65,7 @@ Response:
         "sportSeriesId": 10346,
         "eventTime": "2026-01-31T19:30:00Z",
         "sharpSide": "A",
+        "marketType": "total",
         "sideA": { "label": "Capitals", "price": 0.52 },
         "sideB": { "label": "Red Wings", "price": 0.48 },
         "sharpSidePrice": 0.52,
@@ -74,6 +75,8 @@ Response:
       "grade": {
         "grade": "A",
         "signalScore": 88.2,
+        "edgeRating": 78,
+        "scoreDifferential": 24,
         "isReady": true,
         "warnings": [],
         "computedAt": 1738195200,
@@ -121,6 +124,29 @@ Response:
 }
 ```
 
+### POST /api/bot/picks
+Log a bot (paper) pick into the app so `/stats` can display it.
+
+Request:
+```json
+{
+  "conditionId": "...",
+  "marketTitle": "...",
+  "eventTime": "2026-01-31T19:30:00Z",
+  "grade": "A",
+  "signalScore": 88.2,
+  "edgeRating": 78,
+  "scoreDifferential": 24,
+  "sharpSide": "A",
+  "price": 0.52
+}
+```
+
+Response:
+```json
+{ "pick": { /* ManualPickEntry */ } }
+```
+
 ## Error codes
 - `401 unauthorized` for missing/invalid auth
 - `400 conditionIds_required` when request payload is invalid
@@ -148,6 +174,13 @@ curl -H "Authorization: Bearer $BOT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"conditionIds":["...","..."]}' \
   https://<your-domain>/api/bot/grades
+```
+
+```bash
+curl -H "Authorization: Bearer $BOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"conditionId":"...","marketTitle":"..."}' \
+  https://<your-domain>/api/bot/picks
 ```
 
 ## Verification checklist
