@@ -152,3 +152,7 @@ export async function updateManualPickOutcome(
 	);
 	return row ? parsePickRow(row) : null;
 }
+
+export async function clearManualPicks(db: Db): Promise<void> {
+	await run(db, `DELETE FROM manual_picks`);
+}

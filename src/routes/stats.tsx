@@ -2,7 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
-import { listManualPicksFn } from "../server/api/manual-picks";
+import {
+	clearManualPicksFn,
+	listManualPicksFn,
+	updateManualPickOutcomeFn,
+} from "../server/api/manual-picks";
 import type { ManualPickEntry } from "../server/repositories/manual-picks";
 
 export const Route = createFileRoute("/stats")({
@@ -22,6 +26,8 @@ function formatRelativeTime(timestamp: number): string {
 function StatsPage() {
 	const [settledPicks, setSettledPicks] = useState<ManualPickEntry[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
+	const [isClearing, setIsClearing] = useState(false);
+	const [updatingId, setUpdatingId] = useState<string | null>(null);
 	const [windowFilter, setWindowFilter] = useState<
 		"day" | "week" | "month" | "all"
 	>("week");
@@ -47,6 +53,42 @@ function StatsPage() {
 			cancelled = true;
 		};
 	}, []);
+
+	const handleClear = async () => {
+		if (isClearing) return;
+		if (!confirm("Clear all picks? This cannot be undone.")) return;
+		setIsClearing(true);
+		try {
+			await clearManualPicksFn({ data: {} });
+			setSettledPicks([]);
+		} catch (error) {
+			console.error("Failed to clear picks:", error);
+		} finally {
+			setIsClearing(false);
+		}
+	};
+
+	const handleUpdateStatus = async (
+		pickId: string,
+		status: ManualPickEntry["status"],
+	) => {
+		if (updatingId) return;
+		setUpdatingId(pickId);
+		try {
+			const result = await updateManualPickOutcomeFn({
+				data: { id: pickId, status },
+			});
+			const updated = result.pick;
+			if (!updated) return;
+			setSettledPicks((prev) =>
+				prev.map((pick) => (pick.id === pickId ? updated : pick)),
+			);
+		} catch (error) {
+			console.error("Failed to update pick status:", error);
+		} finally {
+			setUpdatingId(null);
+		}
+	};
 
 	const filteredPicks = useMemo(() => {
 		if (windowFilter === "all") return settledPicks;
@@ -122,6 +164,14 @@ function StatsPage() {
 							>
 								Back to Sharp
 							</a>
+							<button
+								type="button"
+								onClick={handleClear}
+								disabled={isClearing}
+								className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-rose-200 transition-colors hover:bg-rose-500/20 disabled:opacity-50"
+							>
+								{isClearing ? "Clearing..." : "Clear Picks"}
+							</button>
 							<span>{stats.total} total</span>
 							<span className="text-emerald-300">{stats.wins} W</span>
 							<span className="text-red-300">{stats.losses} L</span>
@@ -197,6 +247,27 @@ function StatsPage() {
 										>
 											{pick.status}
 										</span>
+										<div className="flex items-center gap-1">
+											{(["win", "loss", "push", "pending"] as const).map(
+												(status) => (
+													<button
+														key={status}
+														type="button"
+														onClick={() =>
+															handleUpdateStatus(pick.id, status)
+														}
+														disabled={updatingId === pick.id}
+														className={`rounded border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide transition-colors ${
+															pick.status === status
+																? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+																: "border-slate-700/60 bg-slate-900/60 text-slate-300 hover:bg-slate-800/60"
+														}`}
+													>
+														{status}
+													</button>
+												),
+											)}
+										</div>
 									</div>
 								</div>
 							))}

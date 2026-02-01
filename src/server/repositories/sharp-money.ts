@@ -721,6 +721,70 @@ export async function insertSharpMoneyHistory(
 	);
 }
 
+export async function backfillSharpMoneyHistory(db: Db): Promise<number> {
+	const rows = await all<SharpMoneyCacheRow>(
+		db,
+		`SELECT * FROM sharp_money_cache WHERE history_updated_at IS NULL`,
+	);
+	if (rows.length === 0) return 0;
+	const now = nowUnixSeconds();
+	for (const row of rows) {
+		const recordedAt = row.updated_at ?? now;
+		await run(
+			db,
+			`INSERT OR REPLACE INTO sharp_money_history (
+      condition_id,
+      recorded_at,
+      computed_at,
+      market_title,
+      event_time,
+      sport_series_id,
+      side_a_label,
+      side_b_label,
+      side_a_total_value,
+      side_b_total_value,
+      side_a_sharp_score,
+      side_b_sharp_score,
+      side_a_price,
+      side_b_price,
+      sharp_side,
+      confidence,
+      score_differential,
+      sharp_side_value_ratio,
+      edge_rating,
+      pnl_coverage
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.condition_id,
+			recordedAt,
+			row.computed_at ?? recordedAt,
+			row.market_title,
+			row.event_time,
+			row.sport_series_id,
+			row.side_a_label,
+			row.side_b_label,
+			row.side_a_total_value,
+			row.side_b_total_value,
+			row.side_a_sharp_score,
+			row.side_b_sharp_score,
+			row.side_a_price ?? null,
+			row.side_b_price ?? null,
+			row.sharp_side ?? null,
+			row.confidence ?? null,
+			row.score_differential,
+			row.sharp_side_value_ratio ?? null,
+			row.edge_rating ?? null,
+			row.pnl_coverage ?? null,
+		);
+		await run(
+			db,
+			`UPDATE sharp_money_cache SET history_updated_at = ? WHERE condition_id = ?`,
+			recordedAt,
+			row.condition_id,
+		);
+	}
+	return rows.length;
+}
+
 export async function listSharpMoneyHistory(
 	db: Db,
 	conditionId: string,

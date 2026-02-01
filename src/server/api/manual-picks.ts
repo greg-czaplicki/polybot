@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getDb } from "../env";
 import {
 	createManualPick,
+	clearManualPicks,
 	listManualPicks,
 	updateManualPickOutcome,
 	type CreateManualPickInput,
@@ -45,4 +46,12 @@ export const updateManualPickOutcomeFn = createServerFn({
 	const db = getDb(context);
 	const pick = await updateManualPickOutcome(db, payload);
 	return { pick };
+});
+
+export const clearManualPicksFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context }) => {
+	const db = getDb(context);
+	await clearManualPicks(db);
+	return { ok: true };
 });

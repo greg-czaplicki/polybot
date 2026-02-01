@@ -259,6 +259,7 @@ export async function handleBotRequest(
 			if (!eventTime) return false;
 			const diffMs = eventTime.getTime() - now;
 			if (!allowStarted && diffMs < 0) return false;
+			if (allowStarted && diffMs < -cutoffMs) return false;
 			return diffMs <= cutoffMs;
 		});
 		if (upcomingEntries.length === 0) {

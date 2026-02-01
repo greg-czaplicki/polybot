@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { AuthGate } from '@/components/auth-gate'
 import {
+  backfillSharpMoneyHistoryFn,
   fetchTrendingSportsMarketsFn,
   getRuntimeMarketStatsFn,
 } from '../server/api/sharp-money'
@@ -86,6 +87,7 @@ function RuntimePage() {
     }
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isBackfilling, setIsBackfilling] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const filteredTotalMarkets = stats
@@ -116,6 +118,21 @@ function RuntimePage() {
       setIsLoading(false)
     }
   }, [loadStats])
+
+  const handleBackfill = useCallback(async () => {
+    if (isBackfilling) return
+    if (!confirm('Backfill history for cache entries missing it?')) return
+    setIsBackfilling(true)
+    try {
+      await backfillSharpMoneyHistoryFn({ data: {} })
+      await loadStats()
+    } catch (err) {
+      console.error('Failed to backfill history', err)
+      setError('Failed to backfill history')
+    } finally {
+      setIsBackfilling(false)
+    }
+  }, [isBackfilling, loadStats])
 
   useEffect(() => {
     void loadStats()
@@ -167,14 +184,24 @@ function RuntimePage() {
                 </p>
               )}
             </div>
-            <button
-              type="button"
-              onClick={refreshStats}
-              disabled={isLoading}
-              className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
-            >
-              {isLoading ? 'Refreshing…' : 'Refresh Stats'}
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={refreshStats}
+                disabled={isLoading}
+                className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+              >
+                {isLoading ? 'Refreshing…' : 'Refresh Stats'}
+              </button>
+              <button
+                type="button"
+                onClick={handleBackfill}
+                disabled={isBackfilling}
+                className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-60"
+              >
+                {isBackfilling ? 'Backfilling…' : 'Backfill History'}
+              </button>
+            </div>
           </div>
 
           {error && (

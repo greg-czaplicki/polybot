@@ -8,6 +8,7 @@ import {
 	getSharpMoneyCacheByConditionId,
 	getSharpMoneyCacheStats,
 	getSharpMoneyCacheFreshnessStats,
+	backfillSharpMoneyHistory,
 	insertSharpMoneyHistory,
 	listSharpMoneyCache,
 	listSharpMoneyCacheByConditionIds,
@@ -3000,6 +3001,14 @@ export const getRuntimeMarketStatsFn = createServerFn({
 	}
 
 	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
+});
+
+export const backfillSharpMoneyHistoryFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context }) => {
+	const db = getDb(context);
+	const updated = await backfillSharpMoneyHistory(db);
+	return { updated };
 });
 
 export async function computeSharpMoneyGrades(
