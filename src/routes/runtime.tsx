@@ -90,6 +90,18 @@ function coverageStatus(
 	};
 }
 
+function sampleClassName(count: number): string {
+	if (count < 20) return "bg-rose-950/20";
+	if (count < 50) return "bg-amber-950/20";
+	return "";
+}
+
+function sampleBadge(count: number): string | null {
+	if (count < 20) return "low sample";
+	if (count < 50) return "small sample";
+	return null;
+}
+
 type RuntimeStats = {
 	fetchedAt: number;
 	totalMarkets: number;
@@ -873,9 +885,16 @@ function RuntimePage() {
 												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Time Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
 												<tbody>
 													{segment.byTimeToStart.map((row) => (
-														<tr key={`${segment.key}-${row.bucket}`} className="border-t border-slate-800">
+														<tr key={`${segment.key}-${row.bucket}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
 															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
-															<td className="py-2 pr-4">{row.count}</td>
+															<td className="py-2 pr-4">
+																{row.count}
+																{sampleBadge(row.count) ? (
+																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																		{sampleBadge(row.count)}
+																	</span>
+																) : null}
+															</td>
 															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
 															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
 															<td className="py-2">{formatBps(row.avgClvBps)}</td>
@@ -925,9 +944,16 @@ function RuntimePage() {
 													<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Window</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
 													<tbody>
 														{segment.rows.map((row) => (
-															<tr key={`${segment.key}-${row.windowKey}`} className="border-t border-slate-800">
+															<tr key={`${segment.key}-${row.windowKey}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
 																<td className="py-2 pr-4 font-semibold text-slate-100">{row.windowLabel}</td>
-																<td className="py-2 pr-4">{row.count}</td>
+																<td className="py-2 pr-4">
+																	{row.count}
+																	{sampleBadge(row.count) ? (
+																		<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																			{sampleBadge(row.count)}
+																		</span>
+																	) : null}
+																</td>
 																<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
 																<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
 																<td className="py-2">{formatBps(row.avgClvBps)}</td>
@@ -974,9 +1000,16 @@ function RuntimePage() {
 											<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Sport</th><th className="pb-2">All Count</th><th className="pb-2">All Hit</th><th className="pb-2">All ROI</th><th className="pb-2">All CLV</th><th className="pb-2">Q Count</th><th className="pb-2">Q Hit</th><th className="pb-2">Q ROI</th><th className="pb-2">Q CLV</th></tr></thead>
 											<tbody>
 												{sportPerformanceResult.rows.map((row) => (
-													<tr key={row.sportTag} className="border-t border-slate-800">
+													<tr key={row.sportTag} className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}>
 														<td className="py-2 pr-4 font-semibold text-slate-100">{row.label}</td>
-														<td className="py-2 pr-4">{row.totalCount}</td>
+														<td className="py-2 pr-4">
+															{row.totalCount}
+															{sampleBadge(row.totalCount) ? (
+																<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	{sampleBadge(row.totalCount)}
+																</span>
+															) : null}
+														</td>
 														<td className="py-2 pr-4">{formatPercent(row.winRate)}</td>
 														<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
 														<td className="py-2 pr-4">{formatBps(row.avgClvBps)}</td>
@@ -1053,9 +1086,16 @@ function RuntimePage() {
 												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Count</th><th className="pb-2">Win Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
 												<tbody>
 													{table.rows.map((row) => (
-														<tr key={`${table.title}-${row.label}`} className="border-t border-slate-800">
+														<tr key={`${table.title}-${row.label}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
 															<td className="py-2 pr-4 font-semibold text-slate-100">{row.label}</td>
-															<td className="py-2 pr-4">{row.count}</td>
+															<td className="py-2 pr-4">
+																{row.count}
+																{sampleBadge(row.count) ? (
+																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																		{sampleBadge(row.count)}
+																	</span>
+																) : null}
+															</td>
 															<td className="py-2 pr-4">{formatPercent(row.winRate)}</td>
 															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
 															<td className="py-2">{formatBps(row.avgClvBps)}</td>
@@ -1098,9 +1138,16 @@ function RuntimePage() {
 												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
 												<tbody>
 													{table.rows.map((row) => (
-														<tr key={`${table.title}-${row.bucket}`} className="border-t border-slate-800">
+														<tr key={`${table.title}-${row.bucket}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
 															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
-															<td className="py-2 pr-4">{row.count}</td>
+															<td className="py-2 pr-4">
+																{row.count}
+																{sampleBadge(row.count) ? (
+																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																		{sampleBadge(row.count)}
+																	</span>
+																) : null}
+															</td>
 															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
 															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
 															<td className="py-2">{formatBps(row.avgClvBps)}</td>
