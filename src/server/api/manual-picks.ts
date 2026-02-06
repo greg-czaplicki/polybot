@@ -6,6 +6,7 @@ import {
 	clearManualPicks,
 	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
+	getManualPicksClvTimingSummary,
 	getManualPicksSummary,
 	listManualPicks,
 	settleManualPick,
@@ -291,6 +292,18 @@ export const getManualPicksBucketPerformanceFn = createServerFn({
 		limit: payload.limit,
 	});
 	return { performance };
+});
+
+export const getManualPicksClvTimingFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const db = getDb(context);
+	const timing = await getManualPicksClvTimingSummary(db, {
+		limit: payload.limit,
+		qualityThreshold: payload.qualityThreshold,
+	});
+	return { timing };
 });
 
 export const updateManualPickOutcomeFn = createServerFn({

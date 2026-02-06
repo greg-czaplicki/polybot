@@ -138,6 +138,21 @@ export interface ManualPickBucketPerformanceSummary {
 	byL2Disagreement: BucketPerformanceRow[];
 }
 
+export interface ManualPickClvTimingSegment {
+	key: string;
+	label: string;
+	matchedPicks: number;
+	withEventTime: number;
+	byTimeToStart: BucketPerformanceRow[];
+}
+
+export interface ManualPickClvTimingSummary {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	segments: ManualPickClvTimingSegment[];
+}
+
 export interface CreateManualPickInput {
 	clientPickId?: string;
 	conditionId: string;
@@ -644,6 +659,27 @@ function resolveMarketQualityScore(pick: ManualPickEntry): number | null {
 	return extractNumber(pick.decisionSnapshot, ["marketQualityScore"]);
 }
 
+function buildTimeToStartRows(
+	picks: ManualPickEntry[],
+): { withEventTime: number; rows: BucketPerformanceRow[] } {
+	const buckets = createMutableBuckets(
+		TIME_TO_START_BUCKETS.map((bucket) => bucket.label),
+	);
+	let withEventTime = 0;
+	for (const pick of picks) {
+		if (!pick.eventTime) continue;
+		const eventTimeMs = new Date(pick.eventTime).getTime();
+		if (!Number.isFinite(eventTimeMs)) continue;
+		const minutesToStart = (eventTimeMs - pick.pickedAt * 1000) / 60000;
+		if (!Number.isFinite(minutesToStart) || minutesToStart < 0) continue;
+		const index = bucketIndexFromRange(minutesToStart, TIME_TO_START_BUCKETS);
+		if (index < 0) continue;
+		withEventTime += 1;
+		applyPickToBucket(buckets[index], pick);
+	}
+	return { withEventTime, rows: toPerformanceRows(buckets) };
+}
+
 export async function getManualPicksCalibrationSummary(
 	db: Db,
 	options?: { limit?: number },
@@ -793,5 +829,68 @@ export async function getManualPicksBucketPerformanceSummary(
 		bySignalScore: toPerformanceRows(signalBuckets),
 		byL2ImbalanceNearMid: toPerformanceRows(l2ImbalanceBuckets),
 		byL2Disagreement: toPerformanceRows(l2DisagreementBuckets),
+	};
+}
+
+export async function getManualPicksClvTimingSummary(
+	db: Db,
+	options?: { limit?: number; qualityThreshold?: number },
+): Promise<ManualPickClvTimingSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const qualityThreshold =
+		typeof options?.qualityThreshold === "number" &&
+		Number.isFinite(options.qualityThreshold)
+			? options.qualityThreshold
+			: 0.72;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter((pick) => pick.status !== "pending");
+	const segments = [
+		{
+			key: "all",
+			label: "All settled",
+			filter: (_pick: ManualPickEntry) => true,
+		},
+		{
+			key: "grade_a_plus",
+			label: "Grade A+",
+			filter: (pick: ManualPickEntry) => pick.grade === "A+",
+		},
+		{
+			key: "grade_a_or_better",
+			label: "Grade A/A+",
+			filter: (pick: ManualPickEntry) => pick.grade === "A+" || pick.grade === "A",
+		},
+		{
+			key: "quality_threshold",
+			label: `Quality >= ${qualityThreshold.toFixed(2)}`,
+			filter: (pick: ManualPickEntry) =>
+				(resolveMarketQualityScore(pick) ?? Number.NEGATIVE_INFINITY) >=
+				qualityThreshold,
+		},
+		{
+			key: "grade_and_quality",
+			label: `Grade A/A+ and Quality >= ${qualityThreshold.toFixed(2)}`,
+			filter: (pick: ManualPickEntry) =>
+				(pick.grade === "A+" || pick.grade === "A") &&
+				(resolveMarketQualityScore(pick) ?? Number.NEGATIVE_INFINITY) >=
+					qualityThreshold,
+		},
+	] as const;
+
+	return {
+		computedAt: nowUnixSeconds(),
+		settledPicks: settled.length,
+		qualityThreshold,
+		segments: segments.map((segment) => {
+			const matchedPicks = settled.filter((pick) => segment.filter(pick));
+			const timeRows = buildTimeToStartRows(matchedPicks);
+			return {
+				key: segment.key,
+				label: segment.label,
+				matchedPicks: matchedPicks.length,
+				withEventTime: timeRows.withEventTime,
+				byTimeToStart: timeRows.rows,
+			};
+		}),
 	};
 }

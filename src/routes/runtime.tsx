@@ -6,6 +6,7 @@ import { getBotEvalFn } from "../server/api/bot-eval";
 import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
+	getManualPicksClvTimingFn,
 } from "../server/api/manual-picks";
 import {
 	backfillSharpMoneyHistoryFn,
@@ -188,6 +189,21 @@ type BucketPerformanceResult = {
 	byL2Disagreement: PerformanceBucket[];
 };
 
+type ClvTimingSegment = {
+	key: string;
+	label: string;
+	matchedPicks: number;
+	withEventTime: number;
+	byTimeToStart: PerformanceBucket[];
+};
+
+type ClvTimingResult = {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	segments: ClvTimingSegment[];
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -217,6 +233,11 @@ function RuntimePage() {
 		null,
 	);
 	const isBucketPerformanceLoadingRef = useRef(false);
+	const [clvTimingResult, setClvTimingResult] = useState<ClvTimingResult | null>(null);
+	const [isClvTimingLoading, setIsClvTimingLoading] = useState(false);
+	const [clvTimingError, setClvTimingError] = useState<string | null>(null);
+	const [clvQualityThreshold, setClvQualityThreshold] = useState("0.72");
+	const isClvTimingLoadingRef = useRef(false);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -291,6 +312,36 @@ function RuntimePage() {
 			isBucketPerformanceLoadingRef.current = false;
 		}
 	}, []);
+
+	const loadClvTiming = useCallback(
+		async (requestedLimit?: number, requestedThreshold?: number) => {
+			if (isClvTimingLoadingRef.current) return;
+			isClvTimingLoadingRef.current = true;
+			setIsClvTimingLoading(true);
+			setClvTimingError(null);
+			try {
+				const limitValue = requestedLimit ?? 2000;
+				const thresholdValue = requestedThreshold ?? 0.72;
+				const result = await getManualPicksClvTimingFn({
+					data: {
+						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						qualityThreshold:
+							Number.isFinite(thresholdValue) && thresholdValue > 0
+								? thresholdValue
+								: 0.72,
+					},
+				});
+				setClvTimingResult((result.timing ?? null) as ClvTimingResult | null);
+			} catch (err) {
+				console.error("Failed to load CLV timing", err);
+				setClvTimingError("Failed to load CLV timing");
+			} finally {
+				setIsClvTimingLoading(false);
+				isClvTimingLoadingRef.current = false;
+			}
+		},
+		[],
+	);
 
 	const refreshStats = useCallback(async () => {
 		setIsLoading(true);
@@ -380,7 +431,8 @@ function RuntimePage() {
 		void loadStats();
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
-	}, [loadStats, loadCalibration, loadBucketPerformance]);
+		void loadClvTiming(2000, 0.72);
+	}, [loadStats, loadCalibration, loadBucketPerformance, loadClvTiming]);
 
 	return (
 		<AuthGate>
@@ -553,6 +605,68 @@ function RuntimePage() {
 										</table>
 									</div>
 								</div>
+							)}
+						</div>
+					</section>
+
+					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+						<div className="flex flex-col gap-4">
+							<div>
+								<h2 className="text-lg font-semibold text-slate-50">CLV Timing Dashboard</h2>
+								<p className="mt-1 text-sm text-slate-400">
+									Compare CLV and ROI by entry timing, split by grade and quality threshold.
+								</p>
+							</div>
+							<div className="flex flex-wrap items-end gap-3">
+								<div>
+									<label htmlFor="clv-quality-threshold" className="block text-xs text-slate-400">Quality threshold</label>
+									<input id="clv-quality-threshold" value={clvQualityThreshold} onChange={(event) => setClvQualityThreshold(event.target.value)} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+								</div>
+								<button
+									type="button"
+									onClick={() =>
+										void loadClvTiming(
+											Number(calibrationLimit),
+											Number(clvQualityThreshold),
+										)
+									}
+									disabled={isClvTimingLoading}
+									className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+								>
+									{isClvTimingLoading ? "Refreshing..." : "Refresh CLV Timing"}
+								</button>
+							</div>
+							{clvTimingError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{clvTimingError}</div>}
+							{clvTimingResult ? (
+								<div className="space-y-5">
+									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										Settled picks: {clvTimingResult.settledPicks} • Quality threshold: {clvTimingResult.qualityThreshold.toFixed(2)}
+									</div>
+									{clvTimingResult.segments.map((segment) => (
+										<div key={segment.key} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+											<p className="text-sm font-semibold text-slate-100">{segment.label}</p>
+											<p className="mt-1 text-xs text-slate-400">
+												Matched: {segment.matchedPicks} • With event time: {segment.withEventTime}
+											</p>
+											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Time Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+												<tbody>
+													{segment.byTimeToStart.map((row) => (
+														<tr key={`${segment.key}-${row.bucket}`} className="border-t border-slate-800">
+															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
+															<td className="py-2 pr-4">{row.count}</td>
+															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
+															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
+															<td className="py-2">{formatBps(row.avgClvBps)}</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+									))}
+								</div>
+							) : (
+								<p className="text-sm text-slate-400">No CLV timing data yet.</p>
 							)}
 						</div>
 					</section>
