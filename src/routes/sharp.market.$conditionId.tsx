@@ -180,6 +180,13 @@ function levelRowClass(
 	return base;
 }
 
+function levelBarWidthPercent(notional: number, maxNotional: number): number {
+	if (!Number.isFinite(notional) || notional <= 0) return 0;
+	if (!Number.isFinite(maxNotional) || maxNotional <= 0) return 0;
+	const raw = (notional / maxNotional) * 100;
+	return Math.max(6, Math.min(100, raw));
+}
+
 function SharpMarketDepthPage() {
 	const { conditionId } = Route.useParams();
 	const [snapshot, setSnapshot] = useState<ClobDepthSnapshot | null>(null);
@@ -188,6 +195,7 @@ function SharpMarketDepthPage() {
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [levelLimit, setLevelLimit] = useState(10);
+	const [imbalanceMode, setImbalanceMode] = useState<"all" | "near_mid">("all");
 	const [trendByTokenId, setTrendByTokenId] = useState<
 		Record<string, BookTrendPoint[]>
 	>({});
@@ -290,6 +298,30 @@ function SharpMarketDepthPage() {
 								<option value={15}>15</option>
 								<option value={20}>20</option>
 							</select>
+							<div className="inline-flex overflow-hidden rounded-md border border-slate-700">
+								<button
+									type="button"
+									onClick={() => setImbalanceMode("all")}
+									className={`px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.15em] ${
+										imbalanceMode === "all"
+											? "bg-cyan-500 text-slate-950"
+											: "bg-slate-900/70 text-slate-300"
+									}`}
+								>
+									All
+								</button>
+								<button
+									type="button"
+									onClick={() => setImbalanceMode("near_mid")}
+									className={`px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.15em] ${
+										imbalanceMode === "near_mid"
+											? "bg-cyan-500 text-slate-950"
+											: "bg-slate-900/70 text-slate-300"
+									}`}
+								>
+									Near-mid
+								</button>
+							</div>
 							<button
 								type="button"
 								onClick={() => void loadSnapshot(false)}
@@ -338,22 +370,45 @@ function SharpMarketDepthPage() {
 								0,
 								...book.asks.map((level) => level.notional),
 							);
-							const trendPoints = trendByTokenId[book.tokenId] ?? [];
-							return (
+								const trendPoints = trendByTokenId[book.tokenId] ?? [];
+								const currentImbalance =
+									imbalanceMode === "near_mid"
+										? book.imbalanceNearMid
+										: book.imbalance;
+								const imbalanceDisagree =
+									book.imbalance !== null &&
+									book.imbalanceNearMid !== null &&
+									Math.sign(book.imbalance) !== Math.sign(book.imbalanceNearMid) &&
+									Math.abs(book.imbalance - book.imbalanceNearMid) > 0.1;
+								return (
 								<div
 									key={book.tokenId}
 									className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"
 								>
 									<div className="mb-3 flex items-start justify-between gap-3">
 										<div>
-											<p className="text-sm font-semibold text-slate-100">{book.outcome}</p>
-											<p className="text-[0.65rem] text-slate-500 break-all">Token {book.tokenId}</p>
+											<p className="text-sm font-semibold text-slate-100">
+												{book.outcome} Order Book
+											</p>
+											{imbalanceDisagree && (
+												<p className="mt-1 inline-flex items-center rounded border border-amber-500/50 bg-amber-500/15 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.15em] text-amber-200">
+													Imbalance Disagrees
+												</p>
+											)}
 										</div>
 										<div className="text-right text-xs text-slate-300">
 											<div>Bid {formatPrice(book.bestBid)}</div>
 											<div>Ask {formatPrice(book.bestAsk)}</div>
 											<div>Spread {formatPercent(book.spread)}</div>
-											<div>Imb {formatPercent(book.imbalance)}</div>
+											<div>
+												Imb{" "}
+												{formatPercent(currentImbalance)}
+											</div>
+											{imbalanceMode === "near_mid" && (
+												<div className="text-[0.65rem] text-slate-500">
+													(±5c from mid)
+												</div>
+											)}
 										</div>
 									</div>
 
@@ -361,50 +416,76 @@ function SharpMarketDepthPage() {
 										<div className="mb-3">{renderTrendChart(trendPoints)}</div>
 									)}
 
-									<div className="grid grid-cols-2 gap-3">
-										<div>
-											<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Bids</p>
-											<div className="space-y-1">
-												{book.bids.map((level, index) => (
+								<div className="grid grid-cols-2 gap-3">
+									<div>
+										<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+											Bids
+										</p>
+										<div className="mb-1 grid grid-cols-3 gap-2 px-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-slate-500">
+											<span>Price</span>
+											<span className="text-right">Size</span>
+											<span className="text-right">Notional</span>
+										</div>
+										<div className="space-y-1">
+											{book.bids.map((level, index) => (
+												<div
+													key={`bid-${book.tokenId}-${index}`}
+													className={levelRowClass(
+														level.notional,
+														maxBidNotional,
+														bidWallThreshold,
+														"relative grid grid-cols-3 gap-2 overflow-hidden rounded bg-emerald-500/10 px-2 py-1 text-xs",
+														"bg-emerald-400/25",
+													)}
+												>
 													<div
-														key={`bid-${book.tokenId}-${index}`}
-														className={levelRowClass(
-															level.notional,
-															maxBidNotional,
-															bidWallThreshold,
-															"grid grid-cols-3 gap-2 rounded bg-emerald-500/10 px-2 py-1 text-xs",
-															"bg-emerald-400/25",
-														)}
-													>
-														<span>{formatPrice(level.price)}</span>
-														<span className="text-right">{formatSize(level.size)}</span>
-														<span className="text-right text-[0.65rem] text-emerald-200">
-															${formatSize(level.notional)}
-														</span>
+														className="pointer-events-none absolute inset-y-0 left-0 rounded bg-emerald-400/25"
+														style={{
+															width: `${levelBarWidthPercent(level.notional, maxBidNotional)}%`,
+														}}
+													/>
+													<span className="relative z-10">{formatPrice(level.price)}</span>
+													<span className="relative z-10 text-right">{formatSize(level.size)}</span>
+													<span className="relative z-10 text-right text-[0.65rem] text-emerald-200">
+														${formatSize(level.notional)}
+													</span>
 													</div>
 												))}
 												{book.bids.length === 0 && <p className="text-xs text-slate-500">No bids</p>}
 											</div>
+									</div>
+									<div>
+										<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">
+											Asks
+										</p>
+										<div className="mb-1 grid grid-cols-3 gap-2 px-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-slate-500">
+											<span>Price</span>
+											<span className="text-right">Size</span>
+											<span className="text-right">Notional</span>
 										</div>
-										<div>
-											<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Asks</p>
-											<div className="space-y-1">
-												{book.asks.map((level, index) => (
+										<div className="space-y-1">
+											{book.asks.map((level, index) => (
+												<div
+													key={`ask-${book.tokenId}-${index}`}
+													className={levelRowClass(
+														level.notional,
+														maxAskNotional,
+														askWallThreshold,
+														"relative grid grid-cols-3 gap-2 overflow-hidden rounded bg-rose-500/10 px-2 py-1 text-xs",
+														"bg-rose-400/25",
+													)}
+												>
 													<div
-														key={`ask-${book.tokenId}-${index}`}
-														className={levelRowClass(
-															level.notional,
-															maxAskNotional,
-															askWallThreshold,
-															"grid grid-cols-3 gap-2 rounded bg-rose-500/10 px-2 py-1 text-xs",
-															"bg-rose-400/25",
-														)}
-													>
-														<span>{formatPrice(level.price)}</span>
-														<span className="text-right">{formatSize(level.size)}</span>
-														<span className="text-right text-[0.65rem] text-rose-200">
-															${formatSize(level.notional)}
-														</span>
+														className="pointer-events-none absolute inset-y-0 left-0 rounded bg-rose-400/25"
+														style={{
+															width: `${levelBarWidthPercent(level.notional, maxAskNotional)}%`,
+														}}
+													/>
+													<span className="relative z-10">{formatPrice(level.price)}</span>
+													<span className="relative z-10 text-right">{formatSize(level.size)}</span>
+													<span className="relative z-10 text-right text-[0.65rem] text-rose-200">
+														${formatSize(level.notional)}
+													</span>
 													</div>
 												))}
 												{book.asks.length === 0 && <p className="text-xs text-slate-500">No asks</p>}

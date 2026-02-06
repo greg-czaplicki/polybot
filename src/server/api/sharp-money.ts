@@ -487,6 +487,7 @@ export type ClobOutcomeBook = {
 	mid: number | null;
 	spread: number | null;
 	imbalance: number | null;
+	imbalanceNearMid: number | null;
 };
 
 export type ClobDepthSnapshot = {
@@ -3307,6 +3308,24 @@ export const getClobDepthSnapshotFn = createServerFn({
 				bidNotional + askNotional > 0
 					? (bidNotional - askNotional) / (bidNotional + askNotional)
 					: null;
+			const nearMidBand = 0.05;
+			const nearMidBidNotional =
+				mid === null
+					? 0
+					: bids
+							.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+							.reduce((sum, level) => sum + level.notional, 0);
+			const nearMidAskNotional =
+				mid === null
+					? 0
+					: asks
+							.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+							.reduce((sum, level) => sum + level.notional, 0);
+			const imbalanceNearMid =
+				nearMidBidNotional + nearMidAskNotional > 0
+					? (nearMidBidNotional - nearMidAskNotional) /
+						(nearMidBidNotional + nearMidAskNotional)
+					: null;
 			return {
 				tokenId: token.tokenId,
 				outcome: token.outcome,
@@ -3317,6 +3336,7 @@ export const getClobDepthSnapshotFn = createServerFn({
 				mid,
 				spread,
 				imbalance,
+				imbalanceNearMid,
 			} satisfies ClobOutcomeBook;
 		}),
 	);
