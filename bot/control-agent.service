@@ -1,0 +1,19 @@
+[Unit]
+Description=Polywhaler Bot Control Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=BOT_SERVICE_NAME=polywhaler-bot
+Environment=CONTROL_BIND=127.0.0.1
+Environment=CONTROL_PORT=9102
+Environment=CONTROL_TOKEN=changeme
+Environment=CONTROL_ENV_FILE=/root/polywhaler-bot/.env
+Environment=CONTROL_ENV_ALLOWLIST=BOT_DRY_RUN,BOT_MAX_STAKE,BOT_MIN_STAKE,BOT_POLL_SECONDS
+ExecStart=/usr/bin/python3 /root/polywhaler/bot/control-agent.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

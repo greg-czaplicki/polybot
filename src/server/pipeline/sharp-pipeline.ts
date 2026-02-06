@@ -3,6 +3,7 @@ import type { DurableObjectState } from 'cloudflare:workers'
 import type { Env } from '../env'
 import { fetchTrendingSportsMarkets } from '../api/sharp-money'
 import { refreshMarketSharpness } from '../api/sharp-money'
+import { pruneSharpMoneyCacheToWindow } from '../repositories/sharp-money'
 import { getPipelineStub } from './sharp-pipeline-utils'
 
 export type SharpPipelineJob = {
@@ -15,6 +16,8 @@ export type SharpPipelineJob = {
   bestBid?: number
   bestAsk?: number
   endDate?: string
+  marketVolume?: number
+  marketLiquidity?: number
 }
 
 type PipelineStatus = {
@@ -27,6 +30,8 @@ type PipelineStatus = {
 
 const DEFAULT_INTERVAL_MS = 2 * 60 * 1000
 const QUEUE_BATCH_SIZE = 100
+const CACHE_FUTURE_WINDOW_HOURS = 24
+const CACHE_PAST_GRACE_HOURS = 2
 
 export class SharpPipeline extends DurableObject {
   private state: DurableObjectState
@@ -87,6 +92,16 @@ export class SharpPipeline extends DurableObject {
 
     await this.state.storage.put('lastRun', now)
 
+    try {
+      await pruneSharpMoneyCacheToWindow(
+        this.env.POLYWHALER_DB,
+        CACHE_FUTURE_WINDOW_HOURS,
+        CACHE_PAST_GRACE_HOURS,
+      )
+    } catch (error) {
+      console.error('[sharp-pipeline] Failed to prune cache', error)
+    }
+
     const { markets } = await fetchTrendingSportsMarkets({
       includeAllMarkets: false,
     })
@@ -111,6 +126,8 @@ export class SharpPipeline extends DurableObject {
       bestBid: market.bestBid,
       bestAsk: market.bestAsk,
       endDate: market.endDate,
+      marketVolume: market.volume,
+      marketLiquidity: market.liquidity,
     }))
 
     for (let i = 0; i < jobs.length; i += QUEUE_BATCH_SIZE) {

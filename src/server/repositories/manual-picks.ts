@@ -16,6 +16,13 @@ export interface ManualPickRow {
 	score_differential?: number | null;
 	sharp_side?: string | null;
 	price?: number | null;
+	confidence?: string | null;
+	fair_price?: number | null;
+	price_edge?: number | null;
+	resolved_outcome?: string | null;
+	close_price?: number | null;
+	roi?: number | null;
+	clv?: number | null;
 	status: ManualPickStatus;
 	settled_at?: number | null;
 }
@@ -32,8 +39,26 @@ export interface ManualPickEntry {
 	scoreDifferential?: number;
 	sharpSide?: string;
 	price?: number;
+	confidence?: string;
+	fairPrice?: number;
+	priceEdge?: number;
+	resolvedOutcome?: string;
+	closePrice?: number;
+	roi?: number;
+	clv?: number;
 	status: ManualPickStatus;
 	settledAt?: number;
+}
+
+export interface ManualPickSummary {
+	total: number;
+	settled: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	avgRoi: number | null;
+	totalRoi: number | null;
+	avgClv: number | null;
 }
 
 export interface CreateManualPickInput {
@@ -46,6 +71,9 @@ export interface CreateManualPickInput {
 	scoreDifferential?: number;
 	sharpSide?: string;
 	price?: number;
+	confidence?: string;
+	fairPrice?: number;
+	priceEdge?: number;
 }
 
 function parsePickRow(row: ManualPickRow): ManualPickEntry {
@@ -61,6 +89,13 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		scoreDifferential: row.score_differential ?? undefined,
 		sharpSide: row.sharp_side ?? undefined,
 		price: row.price ?? undefined,
+		confidence: row.confidence ?? undefined,
+		fairPrice: row.fair_price ?? undefined,
+		priceEdge: row.price_edge ?? undefined,
+		resolvedOutcome: row.resolved_outcome ?? undefined,
+		closePrice: row.close_price ?? undefined,
+		roi: row.roi ?? undefined,
+		clv: row.clv ?? undefined,
 		status: row.status,
 		settledAt: row.settled_at ?? undefined,
 	};
@@ -90,8 +125,11 @@ export async function createManualPick(
       score_differential,
       sharp_side,
       price,
+      confidence,
+      fair_price,
+      price_edge,
       status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
 		id,
 		input.conditionId,
 		input.marketTitle,
@@ -103,6 +141,9 @@ export async function createManualPick(
 		input.scoreDifferential ?? null,
 		input.sharpSide ?? null,
 		input.price ?? null,
+		input.confidence ?? null,
+		input.fairPrice ?? null,
+		input.priceEdge ?? null,
 		"pending",
 	);
 	const row = await first<ManualPickRow>(
@@ -133,6 +174,43 @@ export async function listManualPicks(
 	return rows.map(parsePickRow);
 }
 
+export async function getManualPicksSummary(
+	db: Db,
+): Promise<ManualPickSummary> {
+	const row = await first<{
+		total: number;
+		settled: number;
+		wins: number;
+		losses: number;
+		pushes: number;
+		avg_roi: number | null;
+		total_roi: number | null;
+		avg_clv: number | null;
+	}>(
+		db,
+		`SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) AS settled,
+      SUM(CASE WHEN status = 'win' THEN 1 ELSE 0 END) AS wins,
+      SUM(CASE WHEN status = 'loss' THEN 1 ELSE 0 END) AS losses,
+      SUM(CASE WHEN status = 'push' THEN 1 ELSE 0 END) AS pushes,
+      AVG(roi) AS avg_roi,
+      SUM(roi) AS total_roi,
+      AVG(clv) AS avg_clv
+    FROM manual_picks`,
+	);
+	return {
+		total: row?.total ?? 0,
+		settled: row?.settled ?? 0,
+		wins: row?.wins ?? 0,
+		losses: row?.losses ?? 0,
+		pushes: row?.pushes ?? 0,
+		avgRoi: row?.avg_roi ?? null,
+		totalRoi: row?.total_roi ?? null,
+		avgClv: row?.avg_clv ?? null,
+	};
+}
+
 export async function updateManualPickOutcome(
 	db: Db,
 	input: { id: string; status: ManualPickStatus },
@@ -143,6 +221,39 @@ export async function updateManualPickOutcome(
 		`UPDATE manual_picks SET status = ?, settled_at = ? WHERE id = ?`,
 		input.status,
 		settledAt,
+		input.id,
+	);
+	const row = await first<ManualPickRow>(
+		db,
+		`SELECT * FROM manual_picks WHERE id = ?`,
+		input.id,
+	);
+	return row ? parsePickRow(row) : null;
+}
+
+export async function settleManualPick(
+	db: Db,
+	input: {
+		id: string;
+		status: ManualPickStatus;
+		resolvedOutcome?: string | null;
+		closePrice?: number | null;
+		roi?: number | null;
+		clv?: number | null;
+	},
+): Promise<ManualPickEntry | null> {
+	const settledAt = input.status === "pending" ? null : nowUnixSeconds();
+	await run(
+		db,
+		`UPDATE manual_picks
+     SET status = ?, settled_at = ?, resolved_outcome = ?, close_price = ?, roi = ?, clv = ?
+     WHERE id = ?`,
+		input.status,
+		settledAt,
+		input.resolvedOutcome ?? null,
+		input.closePrice ?? null,
+		input.roi ?? null,
+		input.clv ?? null,
 		input.id,
 	);
 	const row = await first<ManualPickRow>(

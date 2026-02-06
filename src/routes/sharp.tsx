@@ -90,6 +90,11 @@ const EDGE_TARGETS = {
 	minEdge: { min: 0.45, max: 0.6 },
 };
 
+const VOLUME_COLOR_ANCHORS = {
+	low: 15_000,
+	mid: 650_000,
+};
+
 function formatUsdCompact(value: number | null | undefined): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) {
 		return "$0";
@@ -98,6 +103,53 @@ function formatUsdCompact(value: number | null | undefined): string {
 		return USD_COMPACT_FORMATTER.format(value);
 	}
 	return USD_FORMATTER.format(value);
+}
+
+function getEntryHolderVolume(entry: SharpMoneyCacheEntry): number {
+	return entry.sideA.totalValue + entry.sideB.totalValue;
+}
+
+function getEntryMarketVolume(entry: SharpMoneyCacheEntry): number {
+	return (
+		entry.marketVolume ??
+		entry.marketLiquidity ??
+		getEntryHolderVolume(entry)
+	);
+}
+
+function getVolumePercentLogScaled(
+	volume: number,
+	maxVolume: number,
+): number {
+	if (!Number.isFinite(volume) || volume <= 0) return 0;
+	if (!Number.isFinite(maxVolume) || maxVolume <= 0) return 0;
+	const safeVolume = Math.max(0, volume);
+	const safeMax = Math.max(1, maxVolume);
+	const numerator = Math.log10(safeVolume + 1);
+	const denominator = Math.log10(safeMax + 1);
+	if (denominator <= 0) return 0;
+	return Math.min((numerator / denominator) * 100, 100);
+}
+
+function getVolumeColorPercent(
+	volume: number,
+	maxVolume: number,
+): number {
+	if (!Number.isFinite(volume) || volume <= 0) return 0;
+	const low = VOLUME_COLOR_ANCHORS.low;
+	const mid = VOLUME_COLOR_ANCHORS.mid;
+	if (volume <= low) {
+		const base = Math.log10(volume + 1) / Math.log10(low + 1);
+		return Math.min(base * 75, 75);
+	}
+	if (volume <= mid) {
+		const base = Math.log10(volume / low) / Math.log10(mid / low);
+		return 75 + Math.min(Math.max(base, 0), 1) * 15;
+	}
+	const safeMax = Math.max(mid, maxVolume);
+	if (safeMax === mid) return 90;
+	const base = Math.log10(volume / mid) / Math.log10(safeMax / mid);
+	return Math.min(90 + Math.min(Math.max(base, 0), 1) * 10, 100);
 }
 
 function formatUnits(value: number | null | undefined): string | null {
@@ -752,6 +804,8 @@ function SharpMoneyPage() {
 						eventSlug: entry.eventSlug,
 						sportSeriesId: entry.sportSeriesId,
 						endDate: entry.eventTime,
+						marketVolume: entry.marketVolume,
+						marketLiquidity: entry.marketLiquidity,
 					},
 				});
 				await loadCache({ silent: true });
@@ -896,6 +950,8 @@ function SharpMoneyPage() {
 				if (signalGrade === "C" || signalGrade === "D") return false;
 				if (showAPlusOnly && signalGrade !== "A+") return false;
 			}
+			const gradeWarnings = gradesByConditionId[e.conditionId]?.warnings ?? [];
+			if (gradeWarnings.includes("no_price_edge")) return false;
 			return true;
 		});
 		if (selectedSeriesId !== "all") {
@@ -1196,7 +1252,7 @@ function SharpMoneyPage() {
 	const refreshHealth = useCallback(async () => {
 		try {
 			const result = await getRuntimeMarketStatsFn({
-				data: { minimal: true },
+				data: { minimal: true, freshnessWindowHours: 24 },
 			});
 			const stats = result.stats;
 			if (!stats) {
@@ -1314,7 +1370,7 @@ function SharpMoneyPage() {
 	const maxVolume = useMemo(() => {
 		if (displayEntries.length === 0) return 1;
 		return Math.max(
-			...displayEntries.map((e) => e.sideA.totalValue + e.sideB.totalValue),
+			...displayEntries.map((e) => getEntryMarketVolume(e)),
 			1,
 		);
 	}, [displayEntries]);
@@ -2118,8 +2174,10 @@ function SharpMoneyCard({
 	const gradeWarnings = gradeData?.warnings ?? [];
 
 	// Calculate volume percentage and get heat map color
-	const totalVolume = entry.sideA.totalValue + entry.sideB.totalValue;
-	const volumePercent = Math.min((totalVolume / maxVolume) * 100, 100);
+	const holderVolume = getEntryHolderVolume(entry);
+	const marketVolume = getEntryMarketVolume(entry);
+	const volumePercent = getVolumePercentLogScaled(marketVolume, maxVolume);
+	const volumeColorPercent = getVolumeColorPercent(marketVolume, maxVolume);
 	const getVolumeColor = (percent: number) => {
 		if (percent >= 80) return "bg-gradient-to-r from-red-500 to-orange-500"; // Hot - high volume
 		if (percent >= 60) return "bg-gradient-to-r from-orange-500 to-amber-500"; // Warm - medium-high
@@ -2430,13 +2488,14 @@ function SharpMoneyCard({
 								{/* Volume - Tertiary */}
 								<div className="flex flex-col items-center justify-center flex-1 h-[56px]">
 									<span className="text-lg font-bold text-gray-400 mb-1">
-										{formatUsdCompact(totalVolume)}
+										{formatUsdCompact(marketVolume)}
 									</span>
 									<div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mb-0.5">
 										<div
-											className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
+											className={`h-full ${getVolumeColor(volumeColorPercent)} rounded-full transition-all`}
 											style={{
 												width: `${volumePercent}%`,
+												minWidth: marketVolume > 0 ? "6px" : "0",
 											}}
 										/>
 									</div>
@@ -2654,13 +2713,17 @@ function SharpMoneyCard({
 							{entry.sharpSide !== "EVEN" ? (
 								<div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[60px]">
 									<span className="text-xl font-bold text-gray-400 mb-1">
-										{formatUsdCompact(totalVolume)}
+										{formatUsdCompact(marketVolume)}
 									</span>
-									<div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-0.5">
+									<div
+										className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-0.5 flex-shrink-0"
+										style={{ height: "6px", minHeight: "6px" }}
+									>
 										<div
-											className={`h-full ${getVolumeColor(volumePercent)} rounded-full transition-all`}
+											className={`h-full ${getVolumeColor(volumeColorPercent)} rounded-full transition-all`}
 											style={{
 												width: `${volumePercent}%`,
+												minWidth: marketVolume > 0 ? "6px" : "0",
 											}}
 										/>
 									</div>
@@ -2768,7 +2831,7 @@ function SharpMoneyCard({
 										</span>
 									</div>
 									<div>
-										Volume:{" "}
+										Holder value:{" "}
 										<span className="font-semibold text-slate-100">
 											{formatUsdCompact(
 												historyFirst.sideA.totalValue +
@@ -2802,7 +2865,7 @@ function SharpMoneyCard({
 												<th className="py-2 pr-3">Grade</th>
 												<th className="py-2 pr-3">Edge</th>
 												<th className="py-2 pr-3">Diff</th>
-												<th className="py-2 pr-3">Volume</th>
+												<th className="py-2 pr-3">Holder value</th>
 												<th className="py-2">Odds</th>
 											</tr>
 										</thead>
@@ -3068,7 +3131,7 @@ function SideDetails({
 
 			<div className="grid grid-cols-2 gap-2 text-sm mb-4">
 				<div>
-					<span className="text-gray-500">Total Value</span>
+					<span className="text-gray-500">Holder Value</span>
 					<p className="font-semibold text-white">
 						{formatUsdCompact(side.totalValue)}
 					</p>

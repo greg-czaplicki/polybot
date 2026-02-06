@@ -2,11 +2,13 @@ import type { Env } from "../env";
 import { nowUnixSeconds } from "../env";
 import {
 	getSharpMoneyCacheFreshnessStats,
+	getSharpMoneyCacheByConditionId,
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
 import { createManualPick } from "../repositories/manual-picks";
 import {
 	computeSharpMoneyGrades,
+	computePriceEdgeFromEntry,
 	type GradeLabel,
 	type SharpGradePayload,
 } from "./sharp-money";
@@ -285,6 +287,7 @@ export async function handleBotRequest(
 				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
 				if (!grade?.grade) return null;
 				if (GRADE_RANK[grade.grade] < GRADE_RANK[minGrade]) return null;
+				if ((grade.warnings ?? []).includes("no_price_edge")) return null;
 				return {
 					entry: toSlimCandidate(entry),
 					grade: {
@@ -396,16 +399,51 @@ export async function handleBotRequest(
 		if (!payload?.conditionId || !payload?.marketTitle) {
 			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 		}
+		const cacheEntry = await getSharpMoneyCacheByConditionId(
+			env.POLYWHALER_DB,
+			payload.conditionId,
+		);
+		const sharpSide = payload.sharpSide ?? cacheEntry?.sharpSide;
+		const price =
+			payload.price ??
+			(sharpSide === "A"
+				? cacheEntry?.sideA.price ?? undefined
+				: sharpSide === "B"
+					? cacheEntry?.sideB.price ?? undefined
+					: undefined);
+		const edgeRating = payload.edgeRating ?? cacheEntry?.edgeRating;
+		const scoreDifferential =
+			payload.scoreDifferential ?? cacheEntry?.scoreDifferential;
+		const confidence = cacheEntry?.confidence;
+		const priceEdgeResult =
+			cacheEntry && sharpSide
+				? computePriceEdgeFromEntry({
+						sharpSide,
+						confidence: cacheEntry.confidence,
+						edgeRating: cacheEntry.edgeRating,
+						sideA: {
+							sharpScore: cacheEntry.sideA.sharpScore,
+							price: cacheEntry.sideA.price ?? null,
+						},
+						sideB: {
+							sharpScore: cacheEntry.sideB.sharpScore,
+							price: cacheEntry.sideB.price ?? null,
+						},
+					})
+				: null;
 		const pick = await createManualPick(env.POLYWHALER_DB, {
 			conditionId: payload.conditionId,
-			marketTitle: payload.marketTitle,
-			eventTime: payload.eventTime,
+			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
+			eventTime: payload.eventTime ?? cacheEntry?.eventTime,
 			grade: payload.grade,
 			signalScore: payload.signalScore,
-			edgeRating: payload.edgeRating,
-			scoreDifferential: payload.scoreDifferential,
-			sharpSide: payload.sharpSide,
-			price: payload.price,
+			edgeRating,
+			scoreDifferential,
+			sharpSide,
+			price,
+			confidence,
+			fairPrice: priceEdgeResult?.fairPrice ?? null,
+			priceEdge: priceEdgeResult?.priceEdge ?? null,
 		});
 		return jsonResponse({ pick });
 	}

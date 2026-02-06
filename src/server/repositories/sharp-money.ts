@@ -37,6 +37,8 @@ export interface SharpMoneyCacheRow {
 	event_slug?: string | null;
 	sport_series_id?: number | null;
 	event_time?: string | null;
+	market_volume?: number | null;
+	market_liquidity?: number | null;
 	pnl_coverage?: number | null;
 	is_ready?: number | null;
 	side_a_label: string;
@@ -73,7 +75,11 @@ export interface SharpMoneyCacheEntry {
 	sportSeriesId?: number;
 	eventTime?: string;
 	pnlCoverage?: number;
+	marketVolume?: number;
+	marketLiquidity?: number;
 	isReady?: boolean;
+	marketVolume?: number;
+	marketLiquidity?: number;
 	sideA: {
 		label: string;
 		totalValue: number;
@@ -143,6 +149,8 @@ export interface UpsertSharpMoneyCacheInput {
 	sportSeriesId?: number;
 	eventTime?: string;
 	pnlCoverage?: number;
+	marketVolume?: number;
+	marketLiquidity?: number;
 	sideA: {
 		label: string;
 		totalValue: number;
@@ -205,6 +213,8 @@ function parseRow(row: SharpMoneyCacheRow): SharpMoneyCacheEntry {
 		eventTime: row.event_time ?? undefined,
 		pnlCoverage: row.pnl_coverage ?? undefined,
 		isReady: row.is_ready === 1,
+		marketVolume: row.market_volume ?? undefined,
+		marketLiquidity: row.market_liquidity ?? undefined,
 		sideA: {
 			label: row.side_a_label,
 			totalValue: row.side_a_total_value,
@@ -343,17 +353,19 @@ export async function upsertSharpMoneyCache(
 	await run(
 		db,
 		`INSERT INTO sharp_money_cache (
-      id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time, pnl_coverage, is_ready,
+      id, condition_id, market_title, market_slug, event_slug, sport_series_id, event_time, market_volume, market_liquidity, pnl_coverage, is_ready,
       side_a_label, side_a_total_value, side_a_sharp_score, side_a_holder_count, side_a_price, side_a_top_holders,
       side_b_label, side_b_total_value, side_b_sharp_score, side_b_holder_count, side_b_price, side_b_top_holders,
       sharp_side, confidence, score_differential, sharp_side_value_ratio, edge_rating, computed_at, history_updated_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(condition_id) DO UPDATE SET
       market_title = excluded.market_title,
       market_slug = excluded.market_slug,
       event_slug = excluded.event_slug,
       sport_series_id = excluded.sport_series_id,
       event_time = excluded.event_time,
+      market_volume = excluded.market_volume,
+      market_liquidity = excluded.market_liquidity,
       pnl_coverage = excluded.pnl_coverage,
       is_ready = excluded.is_ready,
       side_a_label = excluded.side_a_label,
@@ -383,6 +395,8 @@ export async function upsertSharpMoneyCache(
 		input.eventSlug ?? null,
 		input.sportSeriesId ?? null,
 		input.eventTime ?? null,
+		input.marketVolume ?? null,
+		input.marketLiquidity ?? null,
 		pnlCoverage,
 		isReady ? 1 : 0,
 		input.sideA.label,
@@ -519,6 +533,29 @@ export async function pruneSharpMoneyCache(
 	return (result.meta?.changes as number) ?? 0;
 }
 
+export async function pruneSharpMoneyCacheToWindow(
+	db: Db,
+	futureHours: number,
+	pastGraceHours: number,
+): Promise<number> {
+	const nowIso = new Date().toISOString();
+	const result = await run(
+		db,
+		`DELETE FROM sharp_money_cache
+     WHERE (event_time IS NOT NULL AND (
+       datetime(event_time) < datetime(?, ?)
+       OR datetime(event_time) > datetime(?, ?)
+     ))
+     OR (event_time IS NULL AND updated_at < ?)`,
+		nowIso,
+		`-${pastGraceHours} hours`,
+		nowIso,
+		`+${futureHours} hours`,
+		nowUnixSeconds() - futureHours * 60 * 60,
+	);
+	return (result.meta?.changes as number) ?? 0;
+}
+
 /**
  * Delete a specific cache entry
  */
@@ -594,6 +631,7 @@ export async function getSharpMoneyCacheStats(db: Db): Promise<{
 export async function getSharpMoneyCacheFreshnessStats(
 	db: Db,
 	staleThresholdSeconds: number,
+	windowSeconds?: number,
 ): Promise<{
 	total: number;
 	missingHistory: number;
@@ -605,6 +643,9 @@ export async function getSharpMoneyCacheFreshnessStats(
 	cutoff: number;
 }> {
 	const cutoff = nowUnixSeconds() - staleThresholdSeconds;
+	const now = nowUnixSeconds();
+	const windowStart =
+		windowSeconds && windowSeconds > 0 ? now - windowSeconds : null;
 	const stats = await first<{
 		total?: number;
 		missing_history?: number;
@@ -621,7 +662,12 @@ export async function getSharpMoneyCacheFreshnessStats(
     MAX(history_updated_at) as newest_history,
     MIN(computed_at) as oldest_computed,
     MAX(computed_at) as newest_computed
-  FROM sharp_money_cache`, cutoff);
+  FROM sharp_money_cache
+  WHERE (? IS NULL OR COALESCE(computed_at, updated_at) >= ?)`,
+		cutoff,
+		windowStart,
+		windowStart,
+	);
 
 	return {
 		total: stats?.total ?? 0,
@@ -721,10 +767,14 @@ export async function insertSharpMoneyHistory(
 	);
 }
 
-export async function backfillSharpMoneyHistory(db: Db): Promise<number> {
+export async function backfillSharpMoneyHistory(
+	db: Db,
+	limit: number,
+): Promise<number> {
 	const rows = await all<SharpMoneyCacheRow>(
 		db,
-		`SELECT * FROM sharp_money_cache WHERE history_updated_at IS NULL`,
+		`SELECT * FROM sharp_money_cache WHERE history_updated_at IS NULL ORDER BY updated_at DESC LIMIT ?`,
+		limit,
 	);
 	if (rows.length === 0) return 0;
 	const now = nowUnixSeconds();

@@ -14,6 +14,7 @@ import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DebugRouteImport } from './routes/debug'
+import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
 
 const StatsRoute = StatsRouteImport.update({
@@ -41,6 +42,11 @@ const DebugRoute = DebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BotRoute = BotRouteImport.update({
+  id: '/bot',
+  path: '/bot',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -49,6 +55,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/bot': typeof BotRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/bot': typeof BotRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/bot': typeof BotRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -74,14 +83,30 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
+  fullPaths:
+    | '/'
+    | '/bot'
+    | '/debug'
+    | '/login'
+    | '/runtime'
+    | '/sharp'
+    | '/stats'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
-  id: '__root__' | '/' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
+  to: '/' | '/bot' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
+  id:
+    | '__root__'
+    | '/'
+    | '/bot'
+    | '/debug'
+    | '/login'
+    | '/runtime'
+    | '/sharp'
+    | '/stats'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BotRoute: typeof BotRoute
   DebugRoute: typeof DebugRoute
   LoginRoute: typeof LoginRoute
   RuntimeRoute: typeof RuntimeRoute
@@ -126,6 +151,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DebugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bot': {
+      id: '/bot'
+      path: '/bot'
+      fullPath: '/bot'
+      preLoaderRoute: typeof BotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -138,6 +170,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BotRoute: BotRoute,
   DebugRoute: DebugRoute,
   LoginRoute: LoginRoute,
   RuntimeRoute: RuntimeRoute,

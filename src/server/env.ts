@@ -1,11 +1,17 @@
 export interface Env {
-  POLYWHALER_DB: D1Database
-  SHARP_PIPELINE: DurableObjectNamespace
-  SHARP_PIPELINE_QUEUE: Queue
-  // Password protection
-  APP_PASSWORD?: string
-  // Bot API auth
-  BOT_API_KEY?: string
+	POLYWHALER_DB: D1Database
+	SHARP_PIPELINE: DurableObjectNamespace
+	SHARP_PIPELINE_QUEUE: Queue
+	// Password protection
+	APP_PASSWORD?: string
+	APP_AUTH_SECRET?: string
+	// Bot API auth
+	BOT_API_KEY?: string
+	// Bot control proxy
+	BOT_CONTROL_URL?: string
+	BOT_CONTROL_TOKEN?: string
+	BOT_CONTROL_ACCESS_ID?: string
+	BOT_CONTROL_ACCESS_SECRET?: string
 }
 
 export interface RequestContext {

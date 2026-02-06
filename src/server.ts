@@ -5,6 +5,7 @@ import {
 
 import type { Env, RequestContext } from './server/env'
 import { handleBotRequest } from './server/api/bot'
+import { handleBotControlRequest } from './server/api/bot-control'
 import { SharpPipeline, handleSharpQueue } from './server/pipeline/sharp-pipeline'
 import { getPipelineStub } from './server/pipeline/sharp-pipeline-utils'
 
@@ -17,6 +18,11 @@ const serverEntry = {
     const botResponse = await handleBotRequest(request, env)
     if (botResponse) {
       return botResponse
+    }
+
+    const botControlResponse = await handleBotControlRequest(request, env)
+    if (botControlResponse) {
+      return botControlResponse
     }
     
     // Trigger background sharp pipeline refresh

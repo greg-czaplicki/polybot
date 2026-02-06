@@ -1,5 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 
+import { signAuthToken } from '../auth-token'
+
 export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
   async ({ data, context }) => {
     if (!context?.env) {
@@ -9,7 +11,13 @@ export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
     const password = context.env.APP_PASSWORD
     if (!password) {
       // If no password is set, allow access (backward compatibility)
-      return { success: true }
+      const authSecret = context.env.APP_AUTH_SECRET
+      if (!authSecret) {
+        return { success: true }
+      }
+      const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
+      const token = await signAuthToken(authSecret, expiresAt)
+      return { success: true, token, expiresAt }
     }
 
     const providedPassword = (data as { password?: string })?.password
@@ -22,6 +30,10 @@ export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
       throw new Error('Invalid password')
     }
 
-    return { success: true }
+    const authSecret = context.env.APP_AUTH_SECRET ?? password
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
+    const token = await signAuthToken(authSecret, expiresAt)
+
+    return { success: true, token, expiresAt }
   },
 )

@@ -202,6 +202,8 @@ function SharpDebugPage() {
         endDate?: string
         outcomes?: string[]
         useCache?: boolean
+        marketVolume?: number
+        marketLiquidity?: number
       } = {
         conditionId,
         useCache,
@@ -212,6 +214,10 @@ function SharpDebugPage() {
       if (eventSlug.trim()) payload.eventSlug = eventSlug.trim()
       if (sportSeriesId.trim()) payload.sportSeriesId = Number(sportSeriesId.trim())
       if (endDate.trim()) payload.endDate = endDate.trim()
+      if (useCache && cacheEntry) {
+        payload.marketVolume = cacheEntry.marketVolume
+        payload.marketLiquidity = cacheEntry.marketLiquidity
+      }
 
       const outcomes = parseOutcomes(outcomesInput)
       if (outcomes && outcomes.length > 0) payload.outcomes = outcomes
@@ -263,6 +269,7 @@ function SharpDebugPage() {
     outcomesInput,
     sportSeriesId,
     useCache,
+    cacheEntry,
   ])
 
   const handleOpenPositions = useCallback(async () => {
@@ -711,7 +718,10 @@ function SharpDebugPage() {
                     Outcome A ${debug.prices.sideA.toFixed(3)} • Outcome B ${debug.prices.sideB.toFixed(3)}
                   </p>
                   <p className="text-sm text-slate-300">
-                    Total value {formatUsd(debug.totals.totalMarketValue)}
+                    Holder value {formatUsd(debug.totals.holderMarketValue)}
+                  </p>
+                  <p className="text-sm text-slate-300">
+                    Market volume {formatUsd(debug.totals.marketVolume)}
                   </p>
                 </div>
               </div>

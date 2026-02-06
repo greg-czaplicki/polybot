@@ -19,11 +19,15 @@ function LoginPage() {
     setIsLoading(true)
 
     try {
-      await verifyPasswordFn({ data: { password } })
+      const result = await verifyPasswordFn({ data: { password } })
+      const expiresAt = result?.expiresAt ?? (Date.now() + AUTH_TTL_DAYS * 24 * 60 * 60 * 1000)
+
       // Store authentication in localStorage with TTL
-      const expiresAt = Date.now() + AUTH_TTL_DAYS * 24 * 60 * 60 * 1000
       localStorage.setItem('polywhaler_authenticated', 'true')
       localStorage.setItem('polywhaler_auth_expires_at', String(expiresAt))
+      if (result?.token) {
+        localStorage.setItem('polywhaler_auth_token', result.token)
+      }
       // Redirect to primary app
       navigate({ to: '/sharp' })
     } catch (err) {

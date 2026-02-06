@@ -102,6 +102,7 @@ export type TrendingSportsMarket = {
 
 const DEFAULT_HISTORY_WINDOW_MINUTES = 60;
 const DEFAULT_STALE_THRESHOLD_MINUTES = 15;
+const DEFAULT_FRESHNESS_WINDOW_HOURS = 24;
 const MAX_GRADE_REQUEST_ITEMS = 200;
 
 export type SharpGradePayload = {
@@ -142,6 +143,8 @@ export type SharpAnalysisPayload = {
 	bestBid?: number;
 	bestAsk?: number;
 	endDate?: string;
+	marketVolume?: number;
+	marketLiquidity?: number;
 	includeDebug?: boolean;
 };
 
@@ -540,6 +543,8 @@ export interface SharpAnalysisResult {
 	eventSlug?: string;
 	sportSeriesId?: number;
 	eventTime?: string; // ISO date string for when the event starts/ends
+	marketVolume?: number;
+	marketLiquidity?: number;
 	pnlCoverage?: number;
 	sideA: {
 		label: string;
@@ -573,6 +578,8 @@ export interface SharpAnalysisDebug {
 		sportSeriesId?: number;
 		outcomes?: string[];
 		endDate?: string;
+		marketVolume?: number;
+		marketLiquidity?: number;
 	};
 	prices: {
 		sideA: number;
@@ -593,7 +600,8 @@ export interface SharpAnalysisDebug {
 	totals: {
 		sideAValue: number;
 		sideBValue: number;
-		totalMarketValue: number;
+		holderMarketValue: number;
+		marketVolume: number;
 	};
 	rawScores: {
 		sideA: number;
@@ -695,6 +703,77 @@ function resolvePriceForLabel(
 	);
 	if (prefix?.price) return prefix.price;
 	return fallbackPrices[fallbackIndex] ?? null;
+}
+
+function clamp01(value: number): number {
+	return Math.max(0.01, Math.min(0.99, value));
+}
+
+function minPriceEdgeForConfidence(
+	confidence: "HIGH" | "MEDIUM" | "LOW",
+	edgeRating: number,
+): number {
+	const base =
+		confidence === "HIGH" ? 0.02 : confidence === "MEDIUM" ? 0.03 : 0.04;
+	const edgeBoost = Math.max(0, Math.min((edgeRating - 70) / 30, 1)) * 0.01;
+	return Math.max(0.01, base - edgeBoost);
+}
+
+export function computePriceEdgeFromEntry(entry: {
+	sharpSide: "A" | "B" | "EVEN";
+	confidence: "HIGH" | "MEDIUM" | "LOW";
+	edgeRating: number;
+	sideA: { sharpScore: number; price?: number | null };
+	sideB: { sharpScore: number; price?: number | null };
+}): {
+	fairPrice: number | null;
+	marketPrice: number | null;
+	priceEdge: number | null;
+	minPriceEdge: number | null;
+} {
+	if (entry.sharpSide === "EVEN") {
+		return {
+			fairPrice: null,
+			marketPrice: null,
+			priceEdge: null,
+			minPriceEdge: null,
+		};
+	}
+	const totalScore = entry.sideA.sharpScore + entry.sideB.sharpScore;
+	if (!Number.isFinite(totalScore) || totalScore <= 0) {
+		return {
+			fairPrice: null,
+			marketPrice: null,
+			priceEdge: null,
+			minPriceEdge: minPriceEdgeForConfidence(
+				entry.confidence,
+				entry.edgeRating,
+			),
+		};
+	}
+	const fairPriceA = clamp01(entry.sideA.sharpScore / totalScore);
+	const fairPriceB = clamp01(entry.sideB.sharpScore / totalScore);
+	const fairPrice = entry.sharpSide === "A" ? fairPriceA : fairPriceB;
+	const marketPrice =
+		entry.sharpSide === "A" ? entry.sideA.price ?? null : entry.sideB.price ?? null;
+	if (marketPrice === null || !Number.isFinite(marketPrice)) {
+		return {
+			fairPrice,
+			marketPrice: null,
+			priceEdge: null,
+			minPriceEdge: minPriceEdgeForConfidence(
+				entry.confidence,
+				entry.edgeRating,
+			),
+		};
+	}
+	const priceEdge = fairPrice - marketPrice;
+	return {
+		fairPrice,
+		marketPrice,
+		priceEdge,
+		minPriceEdge: minPriceEdgeForConfidence(entry.confidence, entry.edgeRating),
+	};
 }
 
 /**
@@ -1703,17 +1782,14 @@ function calculateSharpScore(
 			effectiveTotalValue > 0
 				? (holder.amount * (holder.stakeUnitWeight ?? 1)) / effectiveTotalValue
 				: holder.amount / totalValue;
-		const combinedWeight =
-			holder.momentumWeight *
-			holder.pnlTierWeight *
-			(holder.stakeUnitWeight ?? 1);
+		const combinedWeight = holder.momentumWeight * holder.pnlTierWeight;
 		weightedSum += positionWeight * combinedWeight;
 	}
 
 	// Normalize to 0-100 scale
-	// Average weight is ~1.0, max is 3.0 (1.5 * 2.0), min is 0.35 (0.5 * 0.7)
-	// Scale so that 1.0 = 50, 3.0 = 100, 0.35 = 0
-	const normalized = ((weightedSum - 0.35) / (3.0 - 0.35)) * 100;
+	// Average weight is ~1.0, max is 3.0 (1.5 * 2.0), min is 0.25 (0.5 * 0.5)
+	// Scale so that 1.0 = 50, 3.0 = 100, 0.25 = 0
+	const normalized = ((weightedSum - 0.25) / (3.0 - 0.25)) * 100;
 	return Math.max(0, Math.min(100, normalized));
 }
 
@@ -1788,7 +1864,7 @@ function calculateEdgeRatingBreakdown(
 	const volumeBonus = 5 * (1 - Math.exp(-totalVolume / 100_000));
 
 	// Holder quality bonus/penalty (-15 to +20 points)
-	// Combines recent momentum (day/week/month) AND all-time performance
+	// Combines recent momentum (day/week/month) AND all-time performance, unit-normalized
 	// Position-weighted: larger positions from better traders matter more
 	let qualityBonus = 0;
 	if (sharpSideTopHolders.length > 0) {
@@ -1805,15 +1881,20 @@ function calculateEdgeRatingBreakdown(
 				// Time-weighted recent performance: day 30%, week 40%, month 30%
 				// Week is most reliable (less noisy than day, more current than month)
 				// Day still matters but less weight since it's noisy
-				const dayPnL = holder.pnlDay ?? 0;
-				const weekPnL = holder.pnlWeek ?? 0;
-				const monthPnL = holder.pnlMonth ?? 0;
+				const dayPnL = normalizePnl(holder.pnlDay ?? null, holder.unitSize) ?? 0;
+				const weekPnL =
+					normalizePnl(holder.pnlWeek ?? null, holder.unitSize) ?? 0;
+				const monthPnL =
+					normalizePnl(holder.pnlMonth ?? null, holder.unitSize) ?? 0;
 
 				// Weighted recent PnL: day 30%, week 40%, month 30%
 				const recentPnL = dayPnL * 0.3 + weekPnL * 0.4 + monthPnL * 0.3;
 
 				// Long-term performance weight (60%): all-time PnL
-				const longTermPnL = holder.pnlAll ?? 0;
+				const longTermPnL =
+					holder.pnlAllUnits ??
+					normalizePnl(holder.pnlAll ?? null, holder.unitSize) ??
+					0;
 
 				// Combined quality score: 40% recent, 60% long-term
 				const holderQuality = recentPnL * 0.4 + longTermPnL * 0.6;
@@ -1824,19 +1905,19 @@ function calculateEdgeRatingBreakdown(
 				weightedQualitySum += holderQuality * positionWeight;
 			}
 
-			// Only apply quality bonus if average quality exceeds threshold ($5K)
+			// Only apply quality bonus if average quality exceeds threshold (units)
 			// This avoids rewarding marginal quality
-			const QUALITY_THRESHOLD = 5_000;
+			const QUALITY_THRESHOLD = 3;
 
 			if (weightedQualitySum >= QUALITY_THRESHOLD) {
-				// Positive avg: bonus up to 20 points ($100K+ avg = max)
+				// Positive avg: bonus up to 20 points (30+ units avg = max)
 				// Logarithmic curve for diminishing returns
 				qualityBonus =
-					20 * (1 - Math.exp(-Math.min(weightedQualitySum, 100_000) / 50_000));
+					20 * (1 - Math.exp(-Math.min(weightedQualitySum, 30) / 15));
 			} else if (weightedQualitySum < 0) {
-				// Negative avg: penalty up to -15 points (-$50K or worse = max penalty)
+				// Negative avg: penalty up to -15 points (-15 units or worse = max penalty)
 				// Linear penalty for negative performance
-				qualityBonus = Math.max((weightedQualitySum / 50_000) * 15, -15);
+				qualityBonus = Math.max(weightedQualitySum, -15);
 			}
 			// If between 0 and threshold, no bonus/penalty (neutral)
 		}
@@ -1905,6 +1986,8 @@ export async function analyzeMarketSharpness(
 		bestBid,
 		bestAsk,
 		endDate,
+		marketVolume,
+		marketLiquidity,
 		includeDebug,
 	} = payload;
 	console.log("[sharp-money] Analyzing:", { conditionId, marketTitle });
@@ -1975,11 +2058,31 @@ export async function analyzeMarketSharpness(
 
 		const normalizedBestAsk = normalizePrice(bestAsk);
 		const normalizedBestBid = normalizePrice(bestBid);
-		if (normalizedBestAsk && normalizedBestBid) {
-			displayPrices = [
-				normalizedBestAsk,
-				normalizePrice(1 - normalizedBestBid) ?? displayPrices[1],
-			];
+		const orderbookPrices = (() => {
+			if (normalizedBestAsk && normalizedBestBid) {
+				return {
+					priceA: normalizedBestAsk,
+					priceB: normalizePrice(1 - normalizedBestBid),
+				};
+			}
+			if (normalizedBestAsk) {
+				return {
+					priceA: normalizedBestAsk,
+					priceB: normalizePrice(1 - normalizedBestAsk),
+				};
+			}
+			if (normalizedBestBid) {
+				return {
+					priceA: normalizedBestBid,
+					priceB: normalizePrice(1 - normalizedBestBid),
+				};
+			}
+			return null;
+		})();
+
+		if (orderbookPrices?.priceA && orderbookPrices?.priceB) {
+			displayPrices = [orderbookPrices.priceA, orderbookPrices.priceB];
+			valuePrices = [orderbookPrices.priceA, orderbookPrices.priceB];
 			hasOrderbookPrices = true;
 			if (outcomes && outcomes.length >= 2) {
 				tokenOutcomes.push(
@@ -2005,8 +2108,8 @@ export async function analyzeMarketSharpness(
 				}));
 
 				valuePrices = [
-					parsedTokens[0]?.valuePrice ?? 1,
-					parsedTokens[1]?.valuePrice ?? 1,
+					parsedTokens[0]?.valuePrice ?? valuePrices[0],
+					parsedTokens[1]?.valuePrice ?? valuePrices[1],
 				];
 				if (!hasOrderbookPrices) {
 					displayPrices = [
@@ -2461,6 +2564,11 @@ export async function analyzeMarketSharpness(
 		// Step 5: Calculate totals and scores
 		const sideATotalValue = sideAHolders.reduce((sum, h) => sum + h.amount, 0);
 		const sideBTotalValue = sideBHolders.reduce((sum, h) => sum + h.amount, 0);
+		const holderMarketValue = sideATotalValue + sideBTotalValue;
+		const marketVolumeForBonus = Math.max(
+			0,
+			marketLiquidity ?? marketVolume ?? holderMarketValue,
+		);
 
 		// Calculate raw sharp scores
 		const sideARawScore = calculateSharpScore(sideATopHolders, sideATotalValue);
@@ -2514,12 +2622,11 @@ export async function analyzeMarketSharpness(
 		}
 
 		// Calculate sharp side's value ratio (conviction)
-		const totalMarketValue = sideATotalValue + sideBTotalValue;
 		let sharpSideValueRatio = 0.5; // Default to 50% if even
-		if (sharpSide === "A" && totalMarketValue > 0) {
-			sharpSideValueRatio = sideATotalValue / totalMarketValue;
-		} else if (sharpSide === "B" && totalMarketValue > 0) {
-			sharpSideValueRatio = sideBTotalValue / totalMarketValue;
+		if (sharpSide === "A" && holderMarketValue > 0) {
+			sharpSideValueRatio = sideATotalValue / holderMarketValue;
+		} else if (sharpSide === "B" && holderMarketValue > 0) {
+			sharpSideValueRatio = sideBTotalValue / holderMarketValue;
 		}
 
 		const confidence = determineConfidence(
@@ -2601,7 +2708,7 @@ export async function analyzeMarketSharpness(
 			? calculateEdgeRatingBreakdown(
 					scoreDifferential,
 					sharpSide === "A" ? sideATopHolders : sideBTopHolders,
-					totalMarketValue,
+					marketVolumeForBonus,
 				)
 			: { diffScore: 0, volumeBonus: 0, qualityBonus: 0, total: 0 };
 
@@ -2623,6 +2730,8 @@ export async function analyzeMarketSharpness(
 					sportSeriesId,
 					outcomes,
 					endDate,
+					marketVolume,
+					marketLiquidity,
 				},
 				prices: {
 					sideA: displayPrices[0],
@@ -2640,7 +2749,8 @@ export async function analyzeMarketSharpness(
 				totals: {
 					sideAValue: sideATotalValue,
 					sideBValue: sideBTotalValue,
-					totalMarketValue,
+					holderMarketValue,
+					marketVolume: marketVolumeForBonus,
 				},
 				rawScores: {
 					sideA: sideARawScore,
@@ -2685,6 +2795,8 @@ export async function analyzeMarketSharpness(
 				eventSlug,
 				sportSeriesId,
 				eventTime: endDate,
+				marketVolume,
+				marketLiquidity,
 				pnlCoverage,
 				sideA: {
 					label: sideALabel,
@@ -2729,6 +2841,8 @@ export async function analyzeMarketSharpness(
 			eventSlug,
 			sportSeriesId,
 			eventTime: endDate,
+			marketVolume,
+			marketLiquidity,
 			pnlCoverage,
 			sideA: {
 				label: sideALabel,
@@ -2990,8 +3104,19 @@ export const getRuntimeMarketStatsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
 	const db = getDb(context);
-	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(db, 15 * 60);
-	const payload = (data ?? {}) as { minimal?: boolean };
+	const payload = (data ?? {}) as {
+		minimal?: boolean;
+		freshnessWindowHours?: number;
+	};
+	const freshnessWindowHours =
+		payload.freshnessWindowHours && payload.freshnessWindowHours > 0
+			? Math.min(payload.freshnessWindowHours, 24 * 7)
+			: DEFAULT_FRESHNESS_WINDOW_HOURS;
+	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(
+		db,
+		15 * 60,
+		freshnessWindowHours * 60 * 60,
+	);
 
 	if (!lastRuntimeMarketStats) {
 		if (payload.minimal) {
@@ -3005,9 +3130,12 @@ export const getRuntimeMarketStatsFn = createServerFn({
 
 export const backfillSharpMoneyHistoryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context }) => {
+}).handler(async ({ context, data }) => {
 	const db = getDb(context);
-	const updated = await backfillSharpMoneyHistory(db);
+	const payload = (data ?? {}) as { limit?: number };
+	const limit =
+		payload.limit && payload.limit > 0 ? Math.min(payload.limit, 1000) : 100;
+	const updated = await backfillSharpMoneyHistory(db, limit);
 	return { updated };
 });
 
@@ -3110,6 +3238,22 @@ export async function computeSharpMoneyGrades(
 				sharpSidePrice >= LOW_ROI_PRICE_THRESHOLD
 			) {
 				warnings.push("low_roi");
+			}
+		}
+		if (entry.sharpSide !== "EVEN") {
+			const priceEdge = computePriceEdgeFromEntry({
+				sharpSide: entry.sharpSide,
+				confidence: entry.confidence,
+				edgeRating: entry.edgeRating,
+				sideA: { sharpScore: entry.sideA.sharpScore, price: entry.sideA.price },
+				sideB: { sharpScore: entry.sideB.sharpScore, price: entry.sideB.price },
+			});
+			if (
+				priceEdge.priceEdge === null ||
+				priceEdge.minPriceEdge === null ||
+				priceEdge.priceEdge < priceEdge.minPriceEdge
+			) {
+				warnings.push("no_price_edge");
 			}
 		}
 		if ((entry.sharpSideValueRatio ?? 0.5) < 0.35) {
@@ -3219,6 +3363,8 @@ export async function refreshMarketSharpness(
 		sportSeriesId: analysis.sportSeriesId,
 		eventTime: analysis.eventTime,
 		pnlCoverage: analysis.pnlCoverage,
+		marketVolume: analysis.marketVolume,
+		marketLiquidity: analysis.marketLiquidity,
 		computedAt,
 		historyUpdatedAt: computedAt,
 		sideA: analysis.sideA,
@@ -3275,6 +3421,8 @@ export const refreshMarketSharpnessFn = createServerFn({
 		bestBid?: number;
 		bestAsk?: number;
 		endDate?: string;
+		marketVolume?: number;
+		marketLiquidity?: number;
 	};
 
 	// Validate this is actually a sports market before processing
@@ -3313,6 +3461,8 @@ export const analyzeMarketSharpnessDebugFn = createServerFn({
 		outcomes?: string[];
 		endDate?: string;
 		useCache?: boolean;
+		marketVolume?: number;
+		marketLiquidity?: number;
 	};
 
 	if (!payload.conditionId) {
@@ -3337,6 +3487,8 @@ export const analyzeMarketSharpnessDebugFn = createServerFn({
 		sportSeriesId: payload.sportSeriesId ?? cacheEntry?.sportSeriesId,
 		outcomes: payload.outcomes,
 		endDate: payload.endDate ?? cacheEntry?.eventTime,
+		marketVolume: payload.marketVolume ?? cacheEntry?.marketVolume,
+		marketLiquidity: payload.marketLiquidity ?? cacheEntry?.marketLiquidity,
 		includeDebug: true,
 	};
 

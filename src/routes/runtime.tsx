@@ -89,6 +89,7 @@ function RuntimePage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isBackfilling, setIsBackfilling] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [backfillResult, setBackfillResult] = useState<string | null>(null)
 
   const filteredTotalMarkets = stats
     ? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -97,7 +98,7 @@ function RuntimePage() {
   const loadStats = useCallback(async () => {
     setError(null)
     try {
-      const result = await getRuntimeMarketStatsFn({ data: {} })
+      const result = await getRuntimeMarketStatsFn({ data: { freshnessWindowHours: 24 } })
       setStats(result.stats ?? null)
     } catch (err) {
       console.error('Failed to load runtime stats', err)
@@ -123,8 +124,20 @@ function RuntimePage() {
     if (isBackfilling) return
     if (!confirm('Backfill history for cache entries missing it?')) return
     setIsBackfilling(true)
+    setBackfillResult(null)
+    setError(null)
     try {
-      await backfillSharpMoneyHistoryFn({ data: {} })
+      let totalUpdated = 0
+      const batchLimit = 200
+      for (let i = 0; i < 5; i += 1) {
+        const result = await backfillSharpMoneyHistoryFn({
+          data: { limit: batchLimit },
+        })
+        const updated = result.updated ?? 0
+        totalUpdated += updated
+        if (updated < batchLimit) break
+      }
+      setBackfillResult(`Backfilled ${totalUpdated} entries`)
       await loadStats()
     } catch (err) {
       console.error('Failed to backfill history', err)
@@ -207,6 +220,11 @@ function RuntimePage() {
           {error && (
             <div className="mt-4 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
               {error}
+            </div>
+          )}
+          {backfillResult && (
+            <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+              {backfillResult}
             </div>
           )}
         </section>

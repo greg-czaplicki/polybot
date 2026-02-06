@@ -42,7 +42,6 @@ class BotConfig:
 	run_window_start: str
 	run_window_end: str
 	run_window_tz: str
-	include_started: bool
 	paper_bankroll: float
 	kelly_fraction: float
 	max_stake: float
@@ -113,7 +112,6 @@ def load_config() -> BotConfig:
 	run_window_start = os.getenv("BOT_RUN_WINDOW_START", "")
 	run_window_end = os.getenv("BOT_RUN_WINDOW_END", "")
 	run_window_tz = os.getenv("BOT_RUN_WINDOW_TZ", "America/New_York")
-	include_started = os.getenv("BOT_INCLUDE_STARTED", "false").lower() == "true"
 	if not dry_run:
 		poly_private_key = _prompt_missing(
 			poly_private_key, "POLY_PRIVATE_KEY", secret=True
@@ -150,7 +148,6 @@ def load_config() -> BotConfig:
 		run_window_start=run_window_start,
 		run_window_end=run_window_end,
 		run_window_tz=run_window_tz,
-		include_started=include_started,
 		paper_bankroll=float(os.getenv("BOT_PAPER_BANKROLL", "1000")),
 		kelly_fraction=float(os.getenv("BOT_KELLY_FRACTION", "0.25")),
 		max_stake=float(os.getenv("BOT_MAX_STAKE", "50")),
@@ -242,7 +239,6 @@ def fetch_candidates(config: BotConfig) -> List[Dict[str, Any]]:
 			"windowMinutes": str(config.window_minutes),
 			"minGrade": config.min_grade,
 			"limit": str(config.max_bets * 3),
-			"includeStarted": "true" if config.include_started else "false",
 		}
 	)
 	url = f"{config.base_url}/api/bot/candidates?{query}"
@@ -598,14 +594,14 @@ def place_bet(
 	candidate: Dict[str, Any],
 	config: BotConfig,
 	state: Dict[str, Any],
-) -> float:
+) -> bool:
 	entry = candidate["entry"]
 	grade = candidate["grade"]
 	grade_label = grade.get("grade", "D")
 	price = entry.get("sharpSidePrice")
 	if price is None:
 		print("[bot] skip missing price", entry.get("marketTitle"))
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 	if float(price) >= config.low_roi_threshold:
 		print(
 			"[bot] skip low ROI",
@@ -613,7 +609,7 @@ def place_bet(
 			"price",
 			price,
 		)
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 
 	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
 	kelly = kelly_fraction(prob, float(price))
@@ -623,7 +619,7 @@ def place_bet(
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 
 	trade = {
 		"timestamp": int(time.time()),
@@ -703,7 +699,7 @@ def place_bet(
 	state["bankroll"] = round(
 		state.get("bankroll", config.paper_bankroll) - stake, 2
 	)
-	return state["bankroll"]
+	return True
 
 def run_loop() -> None:
 	config = load_config()
@@ -777,12 +773,13 @@ def run_loop() -> None:
 					"grade",
 					(candidate.get("grade") or {}).get("grade"),
 				)
-				place_bet(candidate, config, state)
-				placed.add(condition_id)
-				new_bets += 1
-				if new_bets >= config.max_bets:
-					print("[bot] max bets reached", config.max_bets)
-					break
+				did_place = place_bet(candidate, config, state)
+				if did_place:
+					placed.add(condition_id)
+					new_bets += 1
+					if new_bets >= config.max_bets:
+						print("[bot] max bets reached", config.max_bets)
+						break
 			state["placed"] = sorted(placed)
 			save_state(config.state_path, state)
 		except Exception as exc:
