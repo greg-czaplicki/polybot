@@ -178,6 +178,63 @@ function toSlimCandidate(entry: {
 	};
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function buildDecisionSnapshot(input: {
+	payloadSnapshot?: unknown;
+	cacheEntry: Awaited<ReturnType<typeof getSharpMoneyCacheByConditionId>>;
+	conditionId: string;
+	marketTitle: string;
+	eventTime?: string;
+	sharpSide?: string;
+	price?: number;
+	grade?: string;
+	signalScore?: number;
+	edgeRating?: number;
+	scoreDifferential?: number;
+	marketQualityScore?: number;
+	thresholdUsed?: number;
+	warnings?: string[];
+	candidateComputedAt?: number;
+}): Record<string, unknown> {
+	const marketTitle = input.marketTitle || input.cacheEntry?.marketTitle || "";
+	const eventTime = input.eventTime ?? input.cacheEntry?.eventTime;
+	const eventTimeMs = eventTime ? new Date(eventTime).getTime() : Number.NaN;
+	const minutesToStartAtPick =
+		Number.isFinite(eventTimeMs)
+			? (eventTimeMs - Date.now()) / (60 * 1000)
+			: null;
+	const defaultSnapshot: Record<string, unknown> = {
+		conditionId: input.conditionId,
+		marketTitle,
+		marketType: getMarketTypeLabel(marketTitle),
+		marketSlug: input.cacheEntry?.marketSlug ?? null,
+		eventSlug: input.cacheEntry?.eventSlug ?? null,
+		sportSeriesId: input.cacheEntry?.sportSeriesId ?? null,
+		eventTime: eventTime ?? null,
+		minutesToStartAtPick,
+		sharpSide: input.sharpSide ?? null,
+		priceAtPick: input.price ?? null,
+		grade: input.grade ?? null,
+		signalScore: input.signalScore ?? null,
+		edgeRating: input.edgeRating ?? null,
+		scoreDifferential: input.scoreDifferential ?? null,
+		marketQualityScore: input.marketQualityScore ?? null,
+		thresholdUsed: input.thresholdUsed ?? null,
+		warnings: input.warnings ?? [],
+		candidateComputedAt: input.candidateComputedAt ?? null,
+	};
+	if (!isPlainObject(input.payloadSnapshot)) {
+		return defaultSnapshot;
+	}
+	return {
+		...defaultSnapshot,
+		...input.payloadSnapshot,
+	};
+}
+
 export async function handleBotRequest(
 	request: Request,
 	env: Env,
@@ -498,6 +555,23 @@ export async function handleBotRequest(
 						},
 					})
 				: null;
+		const decisionSnapshot = buildDecisionSnapshot({
+			payloadSnapshot: payload.decisionSnapshot,
+			cacheEntry,
+			conditionId: payload.conditionId,
+			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
+			eventTime: payload.eventTime ?? cacheEntry?.eventTime,
+			sharpSide,
+			price,
+			grade: payload.grade,
+			signalScore: payload.signalScore,
+			edgeRating,
+			scoreDifferential,
+			marketQualityScore: payload.marketQualityScore,
+			thresholdUsed: payload.thresholdUsed,
+			warnings: payload.warnings,
+			candidateComputedAt: payload.candidateComputedAt,
+		});
 			const pick = await createManualPick(env.POLYWHALER_DB, {
 				clientPickId: payload.clientPickId,
 				conditionId: payload.conditionId,
@@ -516,7 +590,7 @@ export async function handleBotRequest(
 				thresholdUsed: payload.thresholdUsed,
 				marketQualityScore: payload.marketQualityScore,
 				warnings: payload.warnings,
-				decisionSnapshot: payload.decisionSnapshot,
+				decisionSnapshot,
 				candidateComputedAt: payload.candidateComputedAt,
 			});
 			return jsonResponse({ pick });

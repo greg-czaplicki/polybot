@@ -95,6 +95,29 @@ export interface ManualPickSummary {
 	avgClv: number | null;
 }
 
+export interface ManualPickCalibrationBucket {
+	label: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+}
+
+export interface ManualPickCalibrationSummary {
+	computedAt: number;
+	totalPicks: number;
+	settledPicks: number;
+	withSignalScore: number;
+	withQualityScore: number;
+	withEventTime: number;
+	bySignalScore: ManualPickCalibrationBucket[];
+	byQualityScore: ManualPickCalibrationBucket[];
+	byTimeToStart: ManualPickCalibrationBucket[];
+}
+
 export interface CreateManualPickInput {
 	clientPickId?: string;
 	conditionId: string;
@@ -131,6 +154,30 @@ export interface UpdateManualPickExecutionInput {
 	exchangeTradeId?: string | null;
 	executionNotes?: string | null;
 }
+
+const SIGNAL_SCORE_BUCKETS = [
+	{ label: "<20", min: Number.NEGATIVE_INFINITY, max: 20 },
+	{ label: "20-40", min: 20, max: 40 },
+	{ label: "40-60", min: 40, max: 60 },
+	{ label: "60-80", min: 60, max: 80 },
+	{ label: "80+", min: 80, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const QUALITY_SCORE_BUCKETS = [
+	{ label: "<0.58", min: Number.NEGATIVE_INFINITY, max: 0.58 },
+	{ label: "0.58-0.62", min: 0.58, max: 0.62 },
+	{ label: "0.62-0.66", min: 0.62, max: 0.66 },
+	{ label: "0.66-0.70", min: 0.66, max: 0.7 },
+	{ label: "0.70-0.72", min: 0.7, max: 0.72 },
+	{ label: "0.72+", min: 0.72, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const TIME_TO_START_BUCKETS = [
+	{ label: "0-15m", min: 0, max: 15 },
+	{ label: "15-60m", min: 15, max: 60 },
+	{ label: "1-3h", min: 60, max: 180 },
+	{ label: "3h+", min: 180, max: Number.POSITIVE_INFINITY },
+] as const;
 
 function parseStringArray(value: string | null | undefined): string[] | undefined {
 	if (!value) return undefined;
@@ -432,4 +479,144 @@ export async function updateManualPickExecution(
 
 export async function clearManualPicks(db: Db): Promise<void> {
 	await run(db, `DELETE FROM manual_picks`);
+}
+
+type MutableBucketStats = {
+	label: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	roiSum: number;
+	roiCount: number;
+	clvBpsSum: number;
+	clvBpsCount: number;
+};
+
+function createMutableBuckets(labels: string[]): MutableBucketStats[] {
+	return labels.map((label) => ({
+		label,
+		count: 0,
+		wins: 0,
+		losses: 0,
+		pushes: 0,
+		roiSum: 0,
+		roiCount: 0,
+		clvBpsSum: 0,
+		clvBpsCount: 0,
+	}));
+}
+
+function bucketToOutput(bucket: MutableBucketStats): ManualPickCalibrationBucket {
+	return {
+		label: bucket.label,
+		count: bucket.count,
+		wins: bucket.wins,
+		losses: bucket.losses,
+		pushes: bucket.pushes,
+		winRate:
+			bucket.wins + bucket.losses > 0
+				? bucket.wins / (bucket.wins + bucket.losses)
+				: null,
+		avgRoi: bucket.roiCount > 0 ? bucket.roiSum / bucket.roiCount : null,
+		avgClvBps:
+			bucket.clvBpsCount > 0 ? bucket.clvBpsSum / bucket.clvBpsCount : null,
+	};
+}
+
+function bucketIndexFromRange(
+	value: number,
+	ranges: ReadonlyArray<{ min: number; max: number }>,
+): number {
+	return ranges.findIndex((range) => value >= range.min && value < range.max);
+}
+
+function applyPickToBucket(bucket: MutableBucketStats, pick: ManualPickEntry): void {
+	bucket.count += 1;
+	if (pick.status === "win") bucket.wins += 1;
+	if (pick.status === "loss") bucket.losses += 1;
+	if (pick.status === "push") bucket.pushes += 1;
+	if (typeof pick.roi === "number" && Number.isFinite(pick.roi)) {
+		bucket.roiSum += pick.roi;
+		bucket.roiCount += 1;
+	}
+	if (typeof pick.clv === "number" && Number.isFinite(pick.clv)) {
+		bucket.clvBpsSum += pick.clv * 10000;
+		bucket.clvBpsCount += 1;
+	}
+}
+
+export async function getManualPicksCalibrationSummary(
+	db: Db,
+	options?: { limit?: number },
+): Promise<ManualPickCalibrationSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter((pick) => pick.status !== "pending");
+	const signalBuckets = createMutableBuckets(
+		SIGNAL_SCORE_BUCKETS.map((bucket) => bucket.label),
+	);
+	const qualityBuckets = createMutableBuckets(
+		QUALITY_SCORE_BUCKETS.map((bucket) => bucket.label),
+	);
+	const timeBuckets = createMutableBuckets(
+		TIME_TO_START_BUCKETS.map((bucket) => bucket.label),
+	);
+
+	let withSignalScore = 0;
+	let withQualityScore = 0;
+	let withEventTime = 0;
+
+	for (const pick of settled) {
+		if (
+			typeof pick.signalScore === "number" &&
+			Number.isFinite(pick.signalScore)
+		) {
+			const index = bucketIndexFromRange(pick.signalScore, SIGNAL_SCORE_BUCKETS);
+			if (index >= 0) {
+				withSignalScore += 1;
+				applyPickToBucket(signalBuckets[index], pick);
+			}
+		}
+
+		if (
+			typeof pick.marketQualityScore === "number" &&
+			Number.isFinite(pick.marketQualityScore)
+		) {
+			const index = bucketIndexFromRange(
+				pick.marketQualityScore,
+				QUALITY_SCORE_BUCKETS,
+			);
+			if (index >= 0) {
+				withQualityScore += 1;
+				applyPickToBucket(qualityBuckets[index], pick);
+			}
+		}
+
+		if (pick.eventTime) {
+			const eventTimeMs = new Date(pick.eventTime).getTime();
+			if (Number.isFinite(eventTimeMs)) {
+				const minutesToStart = (eventTimeMs - pick.pickedAt * 1000) / 60000;
+				if (Number.isFinite(minutesToStart) && minutesToStart >= 0) {
+					const index = bucketIndexFromRange(minutesToStart, TIME_TO_START_BUCKETS);
+					if (index >= 0) {
+						withEventTime += 1;
+						applyPickToBucket(timeBuckets[index], pick);
+					}
+				}
+			}
+		}
+	}
+
+	return {
+		computedAt: nowUnixSeconds(),
+		totalPicks: picks.length,
+		settledPicks: settled.length,
+		withSignalScore,
+		withQualityScore,
+		withEventTime,
+		bySignalScore: signalBuckets.map(bucketToOutput),
+		byQualityScore: qualityBuckets.map(bucketToOutput),
+		byTimeToStart: timeBuckets.map(bucketToOutput),
+	};
 }

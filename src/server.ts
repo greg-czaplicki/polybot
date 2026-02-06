@@ -6,6 +6,7 @@ import {
 import type { Env, RequestContext } from './server/env'
 import { handleBotRequest } from './server/api/bot'
 import { handleBotControlRequest } from './server/api/bot-control'
+import { settlePendingManualPicks } from './server/api/manual-picks'
 import { SharpPipeline, handleSharpQueue } from './server/pipeline/sharp-pipeline'
 import { getPipelineStub } from './server/pipeline/sharp-pipeline-utils'
 
@@ -79,6 +80,19 @@ const serverEntry = {
       }).then(() => {}).catch((error) => {
         console.error('[sharp-pipeline] Scheduled tick failed', error)
       }),
+    )
+    executionCtx.waitUntil(
+      settlePendingManualPicks(env.POLYWHALER_DB, { limit: 100 })
+        .then((result) => {
+          if (result.updated > 0) {
+            console.log(
+              `[manual-picks] Scheduled settle updated ${result.updated}/${result.checked} pending picks`,
+            )
+          }
+        })
+        .catch((error) => {
+          console.error('[manual-picks] Scheduled settle failed', error)
+        }),
     )
   },
   async queue(batch: MessageBatch, env: Env, executionCtx: ExecutionContext) {

@@ -1,8 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { Db } from "../db/client";
 import { getDb } from "../env";
 import {
 	createManualPick,
 	clearManualPicks,
+	getManualPicksCalibrationSummary,
 	getManualPicksSummary,
 	listManualPicks,
 	settleManualPick,
@@ -49,16 +51,64 @@ async function fetchGammaMarket(
 ): Promise<GammaResolutionMarket | null> {
 	try {
 		const url = new URL("/markets", POLYMARKET_GAMMA_API);
-		url.searchParams.set("conditionId", conditionId);
+		url.searchParams.set("condition_ids", conditionId);
 		url.searchParams.set("limit", "1");
 		const response = await fetch(url);
 		if (!response.ok) return null;
 		const data = (await response.json()) as GammaResolutionMarket[];
 		if (!Array.isArray(data) || data.length === 0) return null;
-		return data[0] ?? null;
+		const target = conditionId.toLowerCase();
+		const exact = data.find(
+			(market) => (market.conditionId ?? "").toLowerCase() === target,
+		);
+		return exact ?? null;
 	} catch {
 		return null;
 	}
+}
+
+export async function settlePendingManualPicks(
+	db: Db,
+	options?: { limit?: number },
+): Promise<{ checked: number; updated: number }> {
+	const limit =
+		typeof options?.limit === "number" && options.limit > 0
+			? Math.min(options.limit, 100)
+			: 25;
+	const picks = await listManualPicks(db, { status: "pending", limit });
+	if (picks.length === 0) {
+		return { checked: 0, updated: 0 };
+	}
+
+	let updated = 0;
+	const now = Date.now();
+	for (const pick of picks) {
+		if (pick.eventTime) {
+			const eventTime = new Date(pick.eventTime).getTime();
+			if (Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000) {
+				continue;
+			}
+		}
+		const market = await fetchGammaMarket(pick.conditionId);
+		if (!market) continue;
+		const resolution = resolvePickResult({
+			sharpSide: pick.sharpSide,
+			entryPrice: pick.price,
+			market,
+		});
+		if (!resolution) continue;
+		await settleManualPick(db, {
+			id: pick.id,
+			status: resolution.status,
+			resolvedOutcome: resolution.resolvedOutcome ?? null,
+			closePrice: resolution.closePrice ?? null,
+			roi: resolution.roi ?? null,
+			clv: resolution.clv ?? null,
+		});
+		updated += 1;
+	}
+
+	return { checked: picks.length, updated };
 }
 
 function normalizeOutcome(value: string): string {
@@ -193,6 +243,17 @@ export const getManualPicksSummaryFn = createServerFn({
 	return { summary };
 });
 
+export const getManualPicksCalibrationFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number };
+	const db = getDb(context);
+	const calibration = await getManualPicksCalibrationSummary(db, {
+		limit: payload.limit,
+	});
+	return { calibration };
+});
+
 export const updateManualPickOutcomeFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
@@ -217,43 +278,6 @@ export const settleManualPicksFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
 	const payload = (data ?? {}) as { limit?: number };
-	const limit =
-		typeof payload.limit === "number" && payload.limit > 0
-			? Math.min(payload.limit, 100)
-			: 25;
 	const db = getDb(context);
-	const picks = await listManualPicks(db, { status: "pending", limit });
-	if (picks.length === 0) {
-		return { checked: 0, updated: 0 };
-	}
-
-	let updated = 0;
-	const now = Date.now();
-	for (const pick of picks) {
-		if (pick.eventTime) {
-			const eventTime = new Date(pick.eventTime).getTime();
-			if (Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000) {
-				continue;
-			}
-		}
-		const market = await fetchGammaMarket(pick.conditionId);
-		if (!market) continue;
-		const resolution = resolvePickResult({
-			sharpSide: pick.sharpSide,
-			entryPrice: pick.price,
-			market,
-		});
-		if (!resolution) continue;
-		await settleManualPick(db, {
-			id: pick.id,
-			status: resolution.status,
-			resolvedOutcome: resolution.resolvedOutcome ?? null,
-			closePrice: resolution.closePrice ?? null,
-			roi: resolution.roi ?? null,
-			clv: resolution.clv ?? null,
-		});
-		updated += 1;
-	}
-
-	return { checked: picks.length, updated };
+	return settlePendingManualPicks(db, { limit: payload.limit });
 });
