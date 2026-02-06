@@ -2004,7 +2004,8 @@ export async function analyzeMarketSharpness(
 
 		const holdersUrl = new URL("/holders", POLYMARKET_DATA_API);
 		holdersUrl.searchParams.set("market", conditionId);
-		holdersUrl.searchParams.set("limit", "200"); // Higher limit to reduce side imbalance after grouping
+		// Data API holders endpoint returns at most top 20 holders.
+		holdersUrl.searchParams.set("limit", "20");
 		holdersUrl.searchParams.set("minBalance", "1");
 
 		// Use CLOB API for accurate prices (Gamma API condition_id lookup is unreliable)
@@ -2166,10 +2167,10 @@ export async function analyzeMarketSharpness(
 				const tokenHoldersResults = await Promise.all(
 				tokenIds.map(async (tokenId) => {
 					try {
-						const tokenUrl = new URL("/holders", POLYMARKET_DATA_API);
-						tokenUrl.searchParams.set("token", tokenId);
-							tokenUrl.searchParams.set("limit", "100");
-							tokenUrl.searchParams.set("minBalance", "1");
+							const tokenUrl = new URL("/holders", POLYMARKET_DATA_API);
+							tokenUrl.searchParams.set("token", tokenId);
+								tokenUrl.searchParams.set("limit", "20");
+								tokenUrl.searchParams.set("minBalance", "1");
 							const tokenResponse = await fetch(tokenUrl);
 							if (!tokenResponse.ok) return null;
 							const tokenResponseData = (await tokenResponse.json()) as {
