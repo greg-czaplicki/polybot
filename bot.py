@@ -42,6 +42,8 @@ class BotConfig:
 	run_window_start: str
 	run_window_end: str
 	run_window_tz: str
+	placed_ttl_seconds: int
+	placed_event_grace_seconds: int
 	paper_bankroll: float
 	kelly_fraction: float
 	max_stake: float
@@ -148,6 +150,10 @@ def load_config() -> BotConfig:
 		run_window_start=run_window_start,
 		run_window_end=run_window_end,
 		run_window_tz=run_window_tz,
+		placed_ttl_seconds=int(os.getenv("BOT_PLACED_TTL_SECONDS", "21600")),
+		placed_event_grace_seconds=int(
+			os.getenv("BOT_PLACED_EVENT_GRACE_SECONDS", "1800")
+		),
 		paper_bankroll=float(os.getenv("BOT_PAPER_BANKROLL", "1000")),
 		kelly_fraction=float(os.getenv("BOT_KELLY_FRACTION", "0.25")),
 		max_stake=float(os.getenv("BOT_MAX_STAKE", "50")),
@@ -171,6 +177,88 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
 	os.makedirs(os.path.dirname(path), exist_ok=True)
 	with open(path, "w", encoding="utf-8") as handle:
 		json.dump(state, handle, indent=2, sort_keys=True)
+
+
+def parse_event_time_seconds(raw_value: Any) -> int | None:
+	if raw_value is None:
+		return None
+	try:
+		if isinstance(raw_value, (int, float)):
+			value = float(raw_value)
+			if value > 1_000_000_000_000:
+				value = value / 1000.0
+			if value > 0:
+				return int(value)
+			return None
+		text = str(raw_value).strip()
+		if not text:
+			return None
+		if re.fullmatch(r"\d+", text):
+			value = int(text)
+			if value > 1_000_000_000_000:
+				value = value // 1000
+			return value if value > 0 else None
+		import datetime
+
+		normalized = text.replace("Z", "+00:00")
+		dt = datetime.datetime.fromisoformat(normalized)
+		if dt.tzinfo is None:
+			dt = dt.replace(tzinfo=datetime.timezone.utc)
+		return int(dt.timestamp())
+	except Exception:
+		return None
+
+
+def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[str, Any]]:
+	meta_raw = state.get("placedMeta")
+	meta: Dict[str, Dict[str, Any]] = {}
+	if isinstance(meta_raw, dict):
+		for condition_id, value in meta_raw.items():
+			if not isinstance(condition_id, str) or not condition_id:
+				continue
+			row = value if isinstance(value, dict) else {}
+			placed_at_raw = row.get("placedAt")
+			try:
+				placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+			except Exception:
+				placed_at = now_ts
+			event_time = row.get("eventTime")
+			meta[condition_id] = {
+				"placedAt": placed_at,
+				"eventTime": event_time,
+			}
+		return meta
+
+	legacy = state.get("placed", [])
+	if isinstance(legacy, list):
+		for item in legacy:
+			if isinstance(item, str) and item:
+				meta[item] = {"placedAt": now_ts, "eventTime": None}
+	return meta
+
+
+def prune_placed_meta(
+	meta: Dict[str, Dict[str, Any]],
+	now_ts: int,
+	ttl_seconds: int,
+	event_grace_seconds: int,
+) -> Dict[str, Dict[str, Any]]:
+	pruned: Dict[str, Dict[str, Any]] = {}
+	for condition_id, row in meta.items():
+		event_ts = parse_event_time_seconds(row.get("eventTime"))
+		if event_ts is not None:
+			if now_ts <= event_ts + event_grace_seconds:
+				pruned[condition_id] = row
+			continue
+
+		placed_at_raw = row.get("placedAt")
+		try:
+			placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+		except Exception:
+			placed_at = now_ts
+		if now_ts - placed_at <= ttl_seconds:
+			pruned[condition_id] = row
+	return pruned
 
 
 def request_json(url: str, api_key: str) -> Dict[str, Any]:
@@ -594,14 +682,14 @@ def place_bet(
 	candidate: Dict[str, Any],
 	config: BotConfig,
 	state: Dict[str, Any],
-) -> float:
+) -> bool:
 	entry = candidate["entry"]
 	grade = candidate["grade"]
 	grade_label = grade.get("grade", "D")
 	price = entry.get("sharpSidePrice")
 	if price is None:
 		print("[bot] skip missing price", entry.get("marketTitle"))
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 	if float(price) >= config.low_roi_threshold:
 		print(
 			"[bot] skip low ROI",
@@ -609,7 +697,7 @@ def place_bet(
 			"price",
 			price,
 		)
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 
 	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
 	kelly = kelly_fraction(prob, float(price))
@@ -619,7 +707,7 @@ def place_bet(
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
-		return state.get("bankroll", config.paper_bankroll)
+		return False
 
 	trade = {
 		"timestamp": int(time.time()),
@@ -699,7 +787,7 @@ def place_bet(
 	state["bankroll"] = round(
 		state.get("bankroll", config.paper_bankroll) - stake, 2
 	)
-	return state["bankroll"]
+	return True
 
 def run_loop() -> None:
 	config = load_config()
@@ -707,7 +795,15 @@ def run_loop() -> None:
 		run_preflight(config)
 		return
 	state = load_state(config.state_path)
-	placed = set(state.get("placed", []))
+	now_init = int(time.time())
+	placed_meta = normalize_placed_meta(state, now_init)
+	placed_meta = prune_placed_meta(
+		placed_meta,
+		now_init,
+		config.placed_ttl_seconds,
+		config.placed_event_grace_seconds,
+	)
+	placed = set(placed_meta.keys())
 	if "bankroll" not in state:
 		state["bankroll"] = config.paper_bankroll
 
@@ -733,6 +829,13 @@ def run_loop() -> None:
 						continue
 
 			now = time.time()
+			placed_meta = prune_placed_meta(
+				placed_meta,
+				int(now),
+				config.placed_ttl_seconds,
+				config.placed_event_grace_seconds,
+			)
+			placed = set(placed_meta.keys())
 			call_timestamps = [t for t in call_timestamps if now - t < 3600]
 			if config.max_calls_per_hour > 0 and len(call_timestamps) >= config.max_calls_per_hour:
 				sleep_seconds = apply_jitter(config.poll_seconds, config.poll_jitter_ratio)
@@ -773,13 +876,19 @@ def run_loop() -> None:
 					"grade",
 					(candidate.get("grade") or {}).get("grade"),
 				)
-				place_bet(candidate, config, state)
-				placed.add(condition_id)
-				new_bets += 1
-				if new_bets >= config.max_bets:
-					print("[bot] max bets reached", config.max_bets)
-					break
+				did_place = place_bet(candidate, config, state)
+				if did_place:
+					placed.add(condition_id)
+					placed_meta[condition_id] = {
+						"placedAt": int(time.time()),
+						"eventTime": entry.get("eventTime"),
+					}
+					new_bets += 1
+					if new_bets >= config.max_bets:
+						print("[bot] max bets reached", config.max_bets)
+						break
 			state["placed"] = sorted(placed)
+			state["placedMeta"] = placed_meta
 			save_state(config.state_path, state)
 		except Exception as exc:
 			print("[bot] error:", exc)

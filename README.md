@@ -25,6 +25,8 @@ Minimal polling bot that calls the app's bot API and places bets.
   - `BOT_RUN_WINDOW_START` (optional, e.g. 17:00)
   - `BOT_RUN_WINDOW_END` (optional, e.g. 23:00)
   - `BOT_RUN_WINDOW_TZ` (default America/New_York)
+  - `BOT_PLACED_TTL_SECONDS` (default 21600, fallback dedupe TTL when eventTime is missing)
+  - `BOT_PLACED_EVENT_GRACE_SECONDS` (default 1800, keep dedupe until eventTime + grace)
   - `BOT_TRADE_LOG` (default bot/trades.jsonl)
   - `BOT_PREFLIGHT` (set true to validate CLOB creds and exit)
   - `BOT_PREFLIGHT_CONDITION_ID` (optional: validates token-id resolution + midpoint)
@@ -53,3 +55,29 @@ python bot/bot.py
   ```
 - Live trading uses the Polymarket CLOB client when `BOT_DRY_RUN=false`.
 - The bot writes a local `bot/state.json` file for idempotency.
+
+## Control Agent (systemd/journalctl API)
+To manage the bot from the `/bot` page in the Cloudflare app, run the lightweight
+control agent on the VPS and expose it via Cloudflare Tunnel.
+
+1. Copy the agent to the VPS:
+   ```bash
+   scp bot/control-agent.py root@your-vps:/root/polywhaler/bot/control-agent.py
+   ```
+2. Install the systemd unit:
+   ```bash
+   scp bot/control-agent.service root@your-vps:/etc/systemd/system/polywhaler-control-agent.service
+   ```
+3. Edit the unit to set `CONTROL_TOKEN` and allowed env keys, then:
+   ```bash
+   systemctl daemon-reload
+   systemctl enable --now polywhaler-control-agent
+   ```
+
+### Cloudflare Tunnel (recommended)
+- Bind the agent to `127.0.0.1` only (default).
+- Create a tunnel for `http://127.0.0.1:9102` and protect it with Cloudflare Access.
+- In the Cloudflare app, set:
+  - `BOT_CONTROL_URL` to the tunnel hostname (e.g. `https://bot-control.example.com`)
+  - `BOT_CONTROL_TOKEN` to the same `CONTROL_TOKEN`
+  - `BOT_CONTROL_ACCESS_ID` and `BOT_CONTROL_ACCESS_SECRET` to your Access service token
