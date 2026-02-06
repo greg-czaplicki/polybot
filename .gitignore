@@ -12,3 +12,6 @@ count.txt
 .vinxi
 todos.json
 polymarket_info.md
+__pycache__/
+*.pyc
+*.pyo
