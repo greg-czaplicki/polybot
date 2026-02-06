@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { Outlet, createFileRoute, useMatchRoute } from "@tanstack/react-router";
 import {
 	CheckCircle2,
 	ChevronDown,
@@ -438,6 +438,12 @@ function buildPolymarketProfileUrl(walletAddress: string): string {
 }
 
 function SharpMoneyPage() {
+	const matchRoute = useMatchRoute();
+	const marketDepthMatch = matchRoute({
+		to: "/sharp/market/$conditionId",
+		fuzzy: false,
+	});
+
 	const [entries, setEntries] = useState<SharpMoneyCacheEntry[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isRefreshing, setIsRefreshing] = useState(false);
@@ -1376,6 +1382,10 @@ function SharpMoneyPage() {
 	const pullReady = pullDistance >= PULL_THRESHOLD;
 	const pullIndicatorOffset = Math.min(pullDistance, PULL_MAX);
 	const showPullIndicator = pullIndicatorOffset > 0 || isRefreshing;
+
+	if (marketDepthMatch) {
+		return <Outlet />;
+	}
 
 	return (
 		<AuthGate>
