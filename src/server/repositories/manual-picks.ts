@@ -298,6 +298,16 @@ const SERIES_LABELS: Record<number, string> = {
 	10188: "Premier League",
 };
 
+const SPORT_TAG_TO_SERIES_ID: Record<string, number> = {
+	nfl: 10187,
+	nba: 10345,
+	cfb: 10210,
+	ncaab: 10470,
+	mlb: 3,
+	nhl: 10346,
+	epl: 10188,
+};
+
 function parseStringArray(value: string | null | undefined): string[] | undefined {
 	if (!value) return undefined;
 	try {
@@ -741,12 +751,15 @@ function extractSportSeriesId(pick: ManualPickEntry): number | null {
 	return Number.isFinite(asInt) && asInt > 0 ? asInt : null;
 }
 
-function resolveSportForPick(pick: ManualPickEntry): {
+function resolveSportForPick(
+	pick: ManualPickEntry,
+	fallbackSeriesId?: number,
+): {
 	sportTag: string;
 	label: string;
 	seriesId?: number;
 } {
-	const seriesId = extractSportSeriesId(pick);
+	const seriesId = extractSportSeriesId(pick) ?? fallbackSeriesId ?? null;
 	if (seriesId && SERIES_LABELS[seriesId]) {
 		return {
 			sportTag: `series_${seriesId}`,
@@ -763,6 +776,14 @@ function resolveSportForPick(pick: ManualPickEntry): {
 		slug: marketSlug,
 	});
 	if (detected) {
+		const mappedSeriesId = SPORT_TAG_TO_SERIES_ID[detected];
+		if (mappedSeriesId && SERIES_LABELS[mappedSeriesId]) {
+			return {
+				sportTag: `series_${mappedSeriesId}`,
+				label: SERIES_LABELS[mappedSeriesId],
+				seriesId: mappedSeriesId,
+			};
+		}
 		return {
 			sportTag: detected,
 			label: detected.toUpperCase(),
@@ -1252,6 +1273,22 @@ export async function getManualPicksSportPerformanceSummary(
 			: 0.72;
 	const picks = await listManualPicks(db, { limit });
 	const settled = picks.filter((pick) => pick.status !== "pending");
+	const conditionIds = Array.from(new Set(settled.map((pick) => pick.conditionId)));
+	const historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+		db,
+		conditionIds,
+		nowUnixSeconds() - 30 * 24 * 60 * 60,
+	);
+	const fallbackSeriesIdByConditionId = new Map<string, number>();
+	for (const [conditionId, rows] of Object.entries(historyByConditionId)) {
+		for (let i = rows.length - 1; i >= 0; i -= 1) {
+			const seriesId = rows[i].sportSeriesId;
+			if (typeof seriesId === "number" && Number.isFinite(seriesId)) {
+				fallbackSeriesIdByConditionId.set(conditionId, seriesId);
+				break;
+			}
+		}
+	}
 
 	const statsBySport = new Map<
 		string,
@@ -1265,7 +1302,10 @@ export async function getManualPicksSportPerformanceSummary(
 	>();
 
 	for (const pick of settled) {
-		const sport = resolveSportForPick(pick);
+		const sport = resolveSportForPick(
+			pick,
+			fallbackSeriesIdByConditionId.get(pick.conditionId),
+		);
 		const existing = statsBySport.get(sport.sportTag) ?? {
 			sportTag: sport.sportTag,
 			label: sport.label,
