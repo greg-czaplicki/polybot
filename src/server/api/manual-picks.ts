@@ -7,6 +7,7 @@ import {
 	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
 	getManualPicksClvTimingSummary,
+	getManualPicksShadowWindowSummary,
 	getManualPicksSummary,
 	listManualPicks,
 	settleManualPick,
@@ -304,6 +305,18 @@ export const getManualPicksClvTimingFn = createServerFn({
 		qualityThreshold: payload.qualityThreshold,
 	});
 	return { timing };
+});
+
+export const getManualPicksShadowWindowsFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const db = getDb(context);
+	const shadow = await getManualPicksShadowWindowSummary(db, {
+		limit: payload.limit,
+		qualityThreshold: payload.qualityThreshold,
+	});
+	return { shadow };
 });
 
 export const updateManualPickOutcomeFn = createServerFn({

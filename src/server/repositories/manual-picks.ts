@@ -1,6 +1,10 @@
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
+import {
+	listSharpMoneyHistoryByConditionIds,
+	type SharpMoneyHistoryEntryByConditionId,
+} from "./sharp-money";
 
 export type ManualPickStatus = "pending" | "win" | "loss" | "push";
 
@@ -151,6 +155,33 @@ export interface ManualPickClvTimingSummary {
 	settledPicks: number;
 	qualityThreshold: number;
 	segments: ManualPickClvTimingSegment[];
+}
+
+export interface ManualPickShadowWindowRow {
+	windowKey: string;
+	windowLabel: string;
+	leadMinutes: number | null;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	hitRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+}
+
+export interface ManualPickShadowWindowSegment {
+	key: string;
+	label: string;
+	matchedPicks: number;
+	rows: ManualPickShadowWindowRow[];
+}
+
+export interface ManualPickShadowWindowSummary {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	segments: ManualPickShadowWindowSegment[];
 }
 
 export interface CreateManualPickInput {
@@ -680,6 +711,68 @@ function buildTimeToStartRows(
 	return { withEventTime, rows: toPerformanceRows(buckets) };
 }
 
+function getPriceForSide(
+	entry: { sideA?: { price?: number | null }; sideB?: { price?: number | null } },
+	sharpSide: "A" | "B",
+): number | null {
+	const value = sharpSide === "A" ? entry.sideA?.price : entry.sideB?.price;
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? value
+		: null;
+}
+
+function findPriceAtOrBefore(
+	history: NonNullable<SharpMoneyHistoryEntryByConditionId[string]>,
+	sharpSide: "A" | "B",
+	targetSeconds: number,
+): number | null {
+	for (let i = history.length - 1; i >= 0; i -= 1) {
+		const row = history[i];
+		if (row.recordedAt > targetSeconds) continue;
+		const price = getPriceForSide(row, sharpSide);
+		if (price !== null) return price;
+	}
+	return null;
+}
+
+function initMutableBucket(label: string): MutableBucketStats {
+	return {
+		label,
+		count: 0,
+		wins: 0,
+		losses: 0,
+		pushes: 0,
+		roiSum: 0,
+		roiCount: 0,
+		clvBpsSum: 0,
+		clvBpsCount: 0,
+	};
+}
+
+function bucketToShadowWindowRow(
+	bucket: MutableBucketStats,
+	windowKey: string,
+	windowLabel: string,
+	leadMinutes: number | null,
+): ManualPickShadowWindowRow {
+	return {
+		windowKey,
+		windowLabel,
+		leadMinutes,
+		count: bucket.count,
+		wins: bucket.wins,
+		losses: bucket.losses,
+		pushes: bucket.pushes,
+		hitRate:
+			bucket.wins + bucket.losses > 0
+				? bucket.wins / (bucket.wins + bucket.losses)
+				: null,
+		avgRoi: bucket.roiCount > 0 ? bucket.roiSum / bucket.roiCount : null,
+		avgClvBps:
+			bucket.clvBpsCount > 0 ? bucket.clvBpsSum / bucket.clvBpsCount : null,
+	};
+}
+
 export async function getManualPicksCalibrationSummary(
 	db: Db,
 	options?: { limit?: number },
@@ -890,6 +983,173 @@ export async function getManualPicksClvTimingSummary(
 				matchedPicks: matchedPicks.length,
 				withEventTime: timeRows.withEventTime,
 				byTimeToStart: timeRows.rows,
+			};
+		}),
+	};
+}
+
+export async function getManualPicksShadowWindowSummary(
+	db: Db,
+	options?: { limit?: number; qualityThreshold?: number },
+): Promise<ManualPickShadowWindowSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const qualityThreshold =
+		typeof options?.qualityThreshold === "number" &&
+		Number.isFinite(options.qualityThreshold)
+			? options.qualityThreshold
+			: 0.72;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter(
+		(pick) => pick.status !== "pending" && (pick.sharpSide === "A" || pick.sharpSide === "B"),
+	);
+	const candidates = settled
+		.map((pick) => {
+			const eventTimeMs = pick.eventTime ? new Date(pick.eventTime).getTime() : Number.NaN;
+			if (!Number.isFinite(eventTimeMs)) return null;
+			return {
+				pick,
+				eventTimeSeconds: Math.floor(eventTimeMs / 1000),
+				sharpSide: pick.sharpSide as "A" | "B",
+			};
+		})
+		.filter((value): value is NonNullable<typeof value> => value !== null);
+
+	if (candidates.length === 0) {
+		return {
+			computedAt: nowUnixSeconds(),
+			settledPicks: settled.length,
+			qualityThreshold,
+			segments: [],
+		};
+	}
+
+	const earliestEventTime = Math.min(...candidates.map((entry) => entry.eventTimeSeconds));
+	const historySince = earliestEventTime - 4 * 60 * 60;
+	const conditionIds = Array.from(
+		new Set(candidates.map((entry) => entry.pick.conditionId)),
+	);
+	const historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+		db,
+		conditionIds,
+		historySince,
+	);
+
+	const windows = [
+		{ key: "actual", label: "Actual entry", leadMinutes: null as number | null },
+		{ key: "t120", label: "T-120m", leadMinutes: 120 },
+		{ key: "t60", label: "T-60m", leadMinutes: 60 },
+		{ key: "t30", label: "T-30m", leadMinutes: 30 },
+		{ key: "t15", label: "T-15m", leadMinutes: 15 },
+		{ key: "t5", label: "T-5m", leadMinutes: 5 },
+		{ key: "t2", label: "T-2m", leadMinutes: 2 },
+	] as const;
+
+	const segments = [
+		{
+			key: "all",
+			label: "All settled",
+			filter: (_pick: ManualPickEntry) => true,
+		},
+		{
+			key: "grade_a_plus",
+			label: "Grade A+",
+			filter: (pick: ManualPickEntry) => pick.grade === "A+",
+		},
+		{
+			key: "grade_a_or_better",
+			label: "Grade A/A+",
+			filter: (pick: ManualPickEntry) => pick.grade === "A+" || pick.grade === "A",
+		},
+		{
+			key: "quality_threshold",
+			label: `Quality >= ${qualityThreshold.toFixed(2)}`,
+			filter: (pick: ManualPickEntry) =>
+				(resolveMarketQualityScore(pick) ?? Number.NEGATIVE_INFINITY) >=
+				qualityThreshold,
+		},
+		{
+			key: "grade_and_quality",
+			label: `Grade A/A+ and Quality >= ${qualityThreshold.toFixed(2)}`,
+			filter: (pick: ManualPickEntry) =>
+				(pick.grade === "A+" || pick.grade === "A") &&
+				(resolveMarketQualityScore(pick) ?? Number.NEGATIVE_INFINITY) >=
+					qualityThreshold,
+		},
+	] as const;
+
+	return {
+		computedAt: nowUnixSeconds(),
+		settledPicks: settled.length,
+		qualityThreshold,
+		segments: segments.map((segment) => {
+			const segmentCandidates = candidates.filter(({ pick }) => segment.filter(pick));
+			const rows = windows.map((window) => {
+				const bucket = initMutableBucket(window.label);
+				for (const candidate of segmentCandidates) {
+					const history = historyByConditionId[candidate.pick.conditionId];
+					if (!history || history.length === 0) continue;
+					const closePrice = findPriceAtOrBefore(
+						history,
+						candidate.sharpSide,
+						candidate.eventTimeSeconds,
+					);
+					if (window.key === "actual") {
+						const entryPrice =
+							(typeof candidate.pick.price === "number" &&
+							Number.isFinite(candidate.pick.price) &&
+							candidate.pick.price > 0
+								? candidate.pick.price
+								: findPriceAtOrBefore(
+										history,
+										candidate.sharpSide,
+										candidate.pick.pickedAt,
+									)) ?? null;
+						if (entryPrice === null) continue;
+						applyPickToBucket(bucket, {
+							...candidate.pick,
+							clv:
+								closePrice !== null && Number.isFinite(closePrice)
+									? closePrice - entryPrice
+									: undefined,
+						});
+						continue;
+					}
+					const targetSeconds =
+						candidate.eventTimeSeconds - (window.leadMinutes ?? 0) * 60;
+					const entryPrice = findPriceAtOrBefore(
+						history,
+						candidate.sharpSide,
+						targetSeconds,
+					);
+					if (entryPrice === null) continue;
+					const syntheticRoi =
+						candidate.pick.status === "win"
+							? 1 / entryPrice - 1
+							: candidate.pick.status === "loss"
+								? -1
+								: 0;
+					applyPickToBucket(bucket, {
+						...candidate.pick,
+						price: entryPrice,
+						roi: syntheticRoi,
+						clv:
+							closePrice !== null && Number.isFinite(closePrice)
+								? closePrice - entryPrice
+								: undefined,
+					});
+				}
+				return bucketToShadowWindowRow(
+					bucket,
+					window.key,
+					window.label,
+					window.leadMinutes,
+				);
+			});
+			return {
+				key: segment.key,
+				label: segment.label,
+				matchedPicks: segmentCandidates.length,
+				rows,
 			};
 		}),
 	};

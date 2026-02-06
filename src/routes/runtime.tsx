@@ -7,6 +7,7 @@ import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
 	getManualPicksClvTimingFn,
+	getManualPicksShadowWindowsFn,
 } from "../server/api/manual-picks";
 import {
 	backfillSharpMoneyHistoryFn,
@@ -204,6 +205,33 @@ type ClvTimingResult = {
 	segments: ClvTimingSegment[];
 };
 
+type ShadowWindowRow = {
+	windowKey: string;
+	windowLabel: string;
+	leadMinutes: number | null;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	hitRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+};
+
+type ShadowWindowSegment = {
+	key: string;
+	label: string;
+	matchedPicks: number;
+	rows: ShadowWindowRow[];
+};
+
+type ShadowWindowResult = {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	segments: ShadowWindowSegment[];
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -238,6 +266,11 @@ function RuntimePage() {
 	const [clvTimingError, setClvTimingError] = useState<string | null>(null);
 	const [clvQualityThreshold, setClvQualityThreshold] = useState("0.72");
 	const isClvTimingLoadingRef = useRef(false);
+	const [shadowWindowResult, setShadowWindowResult] =
+		useState<ShadowWindowResult | null>(null);
+	const [isShadowWindowLoading, setIsShadowWindowLoading] = useState(false);
+	const [shadowWindowError, setShadowWindowError] = useState<string | null>(null);
+	const isShadowWindowLoadingRef = useRef(false);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -343,6 +376,36 @@ function RuntimePage() {
 		[],
 	);
 
+	const loadShadowWindows = useCallback(
+		async (requestedLimit?: number, requestedThreshold?: number) => {
+			if (isShadowWindowLoadingRef.current) return;
+			isShadowWindowLoadingRef.current = true;
+			setIsShadowWindowLoading(true);
+			setShadowWindowError(null);
+			try {
+				const limitValue = requestedLimit ?? 2000;
+				const thresholdValue = requestedThreshold ?? 0.72;
+				const result = await getManualPicksShadowWindowsFn({
+					data: {
+						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						qualityThreshold:
+							Number.isFinite(thresholdValue) && thresholdValue > 0
+								? thresholdValue
+								: 0.72,
+					},
+				});
+				setShadowWindowResult((result.shadow ?? null) as ShadowWindowResult | null);
+			} catch (err) {
+				console.error("Failed to load shadow windows", err);
+				setShadowWindowError("Failed to load shadow windows");
+			} finally {
+				setIsShadowWindowLoading(false);
+				isShadowWindowLoadingRef.current = false;
+			}
+		},
+		[],
+	);
+
 	const refreshStats = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
@@ -432,7 +495,14 @@ function RuntimePage() {
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
 		void loadClvTiming(2000, 0.72);
-	}, [loadStats, loadCalibration, loadBucketPerformance, loadClvTiming]);
+		void loadShadowWindows(2000, 0.72);
+	}, [
+		loadStats,
+		loadCalibration,
+		loadBucketPerformance,
+		loadClvTiming,
+		loadShadowWindows,
+	]);
 
 	return (
 		<AuthGate>
@@ -668,6 +738,59 @@ function RuntimePage() {
 							) : (
 								<p className="text-sm text-slate-400">No CLV timing data yet.</p>
 							)}
+							<div className="mt-6">
+								<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+									<p className="text-sm font-semibold text-slate-100">Shadow Entry Windows</p>
+									<button
+										type="button"
+										onClick={() =>
+											void loadShadowWindows(
+												Number(calibrationLimit),
+												Number(clvQualityThreshold),
+											)
+										}
+										disabled={isShadowWindowLoading}
+										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+									>
+										{isShadowWindowLoading ? "Refreshing..." : "Refresh Shadow Windows"}
+									</button>
+								</div>
+								<p className="text-xs text-slate-400">
+									Hypothetical windows use historical snapshots (T-120/T-60/T-30/T-15/T-5/T-2) without placing real bets.
+								</p>
+								{shadowWindowError && <div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{shadowWindowError}</div>}
+								{shadowWindowResult ? (
+									<div className="mt-4 space-y-5">
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											Settled picks: {shadowWindowResult.settledPicks} • Quality threshold: {shadowWindowResult.qualityThreshold.toFixed(2)}
+										</div>
+										{shadowWindowResult.segments.map((segment) => (
+											<div key={segment.key} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+												<p className="text-sm font-semibold text-slate-100">{segment.label}</p>
+												<p className="mt-1 text-xs text-slate-400">
+													Matched picks: {segment.matchedPicks}
+												</p>
+												<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+													<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Window</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+													<tbody>
+														{segment.rows.map((row) => (
+															<tr key={`${segment.key}-${row.windowKey}`} className="border-t border-slate-800">
+																<td className="py-2 pr-4 font-semibold text-slate-100">{row.windowLabel}</td>
+																<td className="py-2 pr-4">{row.count}</td>
+																<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
+																<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
+																<td className="py-2">{formatBps(row.avgClvBps)}</td>
+															</tr>
+														))}
+													</tbody>
+												</table>
+											</div>
+										))}
+									</div>
+								) : (
+									<p className="mt-3 text-sm text-slate-400">No shadow window data yet.</p>
+								)}
+							</div>
 						</div>
 					</section>
 
