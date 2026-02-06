@@ -6,6 +6,7 @@ export type ManualPickStatus = "pending" | "win" | "loss" | "push";
 
 export interface ManualPickRow {
 	id: string;
+	client_pick_id?: string | null;
 	condition_id: string;
 	market_title: string;
 	event_time?: string | null;
@@ -45,6 +46,7 @@ export interface ManualPickRow {
 
 export interface ManualPickEntry {
 	id: string;
+	clientPickId?: string;
 	conditionId: string;
 	marketTitle: string;
 	eventTime?: string;
@@ -94,6 +96,7 @@ export interface ManualPickSummary {
 }
 
 export interface CreateManualPickInput {
+	clientPickId?: string;
 	conditionId: string;
 	marketTitle: string;
 	eventTime?: string;
@@ -115,7 +118,8 @@ export interface CreateManualPickInput {
 }
 
 export interface UpdateManualPickExecutionInput {
-	id: string;
+	id?: string;
+	clientPickId?: string;
 	executionSubmittedAt?: number | null;
 	executionFilledAt?: number | null;
 	fillStatus?: string | null;
@@ -151,6 +155,7 @@ function parseJsonValue(value: string | null | undefined): unknown {
 function parsePickRow(row: ManualPickRow): ManualPickEntry {
 	return {
 		id: row.id,
+		clientPickId: row.client_pick_id ?? undefined,
 		conditionId: row.condition_id,
 		marketTitle: row.market_title,
 		eventTime: row.event_time ?? undefined,
@@ -197,12 +202,23 @@ export async function createManualPick(
 	db: Db,
 	input: CreateManualPickInput,
 ): Promise<ManualPickEntry> {
+	if (input.clientPickId) {
+		const existing = await first<ManualPickRow>(
+			db,
+			`SELECT * FROM manual_picks WHERE client_pick_id = ?`,
+			input.clientPickId,
+		);
+		if (existing) {
+			return parsePickRow(existing);
+		}
+	}
 	const now = nowUnixSeconds();
 	const id = generateId();
 	await run(
 		db,
 		`INSERT INTO manual_picks (
 	      id,
+	      client_pick_id,
 	      condition_id,
 	      market_title,
       event_time,
@@ -223,8 +239,9 @@ export async function createManualPick(
 	      decision_snapshot_json,
 	      candidate_computed_at,
 	      status
-	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
 			id,
+			input.clientPickId ?? null,
 			input.conditionId,
 			input.marketTitle,
 		input.eventTime ?? null,
@@ -334,7 +351,8 @@ export async function updateManualPickOutcome(
 export async function settleManualPick(
 	db: Db,
 	input: {
-		id: string;
+		id?: string;
+		clientPickId?: string;
 		status: ManualPickStatus;
 		resolvedOutcome?: string | null;
 		closePrice?: number | null;
@@ -342,24 +360,29 @@ export async function settleManualPick(
 		clv?: number | null;
 	},
 ): Promise<ManualPickEntry | null> {
+	if (!input.id && !input.clientPickId) {
+		throw new Error("id_or_clientPickId_required");
+	}
 	const settledAt = input.status === "pending" ? null : nowUnixSeconds();
+	const whereClause = input.id ? "id = ?" : "client_pick_id = ?";
+	const whereValue = input.id ?? input.clientPickId ?? null;
 	await run(
 		db,
 		`UPDATE manual_picks
      SET status = ?, settled_at = ?, resolved_outcome = ?, close_price = ?, roi = ?, clv = ?
-     WHERE id = ?`,
+     WHERE ${whereClause}`,
 		input.status,
 		settledAt,
 		input.resolvedOutcome ?? null,
 		input.closePrice ?? null,
 		input.roi ?? null,
 		input.clv ?? null,
-		input.id,
+		whereValue,
 	);
 	const row = await first<ManualPickRow>(
 		db,
-		`SELECT * FROM manual_picks WHERE id = ?`,
-		input.id,
+		`SELECT * FROM manual_picks WHERE ${whereClause}`,
+		whereValue,
 	);
 	return row ? parsePickRow(row) : null;
 }
@@ -368,6 +391,11 @@ export async function updateManualPickExecution(
 	db: Db,
 	input: UpdateManualPickExecutionInput,
 ): Promise<ManualPickEntry | null> {
+	if (!input.id && !input.clientPickId) {
+		throw new Error("id_or_clientPickId_required");
+	}
+	const whereClause = input.id ? "id = ?" : "client_pick_id = ?";
+	const whereValue = input.id ?? input.clientPickId ?? null;
 	await run(
 		db,
 		`UPDATE manual_picks
@@ -381,7 +409,7 @@ export async function updateManualPickExecution(
 	         order_id = COALESCE(?, order_id),
 	         exchange_trade_id = COALESCE(?, exchange_trade_id),
 	         execution_notes = COALESCE(?, execution_notes)
-	     WHERE id = ?`,
+	     WHERE ${whereClause}`,
 		input.executionSubmittedAt ?? null,
 		input.executionFilledAt ?? null,
 		input.fillStatus ?? null,
@@ -392,12 +420,12 @@ export async function updateManualPickExecution(
 		input.orderId ?? null,
 		input.exchangeTradeId ?? null,
 		input.executionNotes ?? null,
-		input.id,
+		whereValue,
 	);
 	const row = await first<ManualPickRow>(
 		db,
-		`SELECT * FROM manual_picks WHERE id = ?`,
-		input.id,
+		`SELECT * FROM manual_picks WHERE ${whereClause}`,
+		whereValue,
 	);
 	return row ? parsePickRow(row) : null;
 }

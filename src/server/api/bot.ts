@@ -446,6 +446,7 @@ export async function handleBotRequest(
 				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
 			}
 			const payload = await parseJson<{
+			clientPickId?: string;
 			conditionId?: string;
 			marketTitle?: string;
 			eventTime?: string;
@@ -498,6 +499,7 @@ export async function handleBotRequest(
 					})
 				: null;
 			const pick = await createManualPick(env.POLYWHALER_DB, {
+				clientPickId: payload.clientPickId,
 				conditionId: payload.conditionId,
 				marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
 				eventTime: payload.eventTime ?? cacheEntry?.eventTime,
@@ -526,6 +528,7 @@ export async function handleBotRequest(
 			}
 			const payload = await parseJson<{
 				id?: string;
+				clientPickId?: string;
 				executionSubmittedAt?: number;
 				executionFilledAt?: number;
 				fillStatus?: string;
@@ -537,11 +540,12 @@ export async function handleBotRequest(
 				exchangeTradeId?: string;
 				executionNotes?: string;
 			}>(request);
-			if (!payload?.id) {
+			if (!payload?.id && !payload?.clientPickId) {
 				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 			}
 			const pick = await updateManualPickExecution(env.POLYWHALER_DB, {
 				id: payload.id,
+				clientPickId: payload.clientPickId,
 				executionSubmittedAt: payload.executionSubmittedAt ?? null,
 				executionFilledAt: payload.executionFilledAt ?? null,
 				fillStatus: payload.fillStatus ?? null,
@@ -553,6 +557,9 @@ export async function handleBotRequest(
 				exchangeTradeId: payload.exchangeTradeId ?? null,
 				executionNotes: payload.executionNotes ?? null,
 			});
+			if (!pick) {
+				return jsonResponse({ error: "pick_not_found" }, { status: 404 });
+			}
 			return jsonResponse({ pick });
 		}
 
@@ -562,23 +569,28 @@ export async function handleBotRequest(
 			}
 			const payload = await parseJson<{
 				id?: string;
+				clientPickId?: string;
 				status?: ManualPickStatus;
 				resolvedOutcome?: string;
 				closePrice?: number;
 				roi?: number;
 				clv?: number;
 			}>(request);
-			if (!payload?.id || !payload.status) {
+			if ((!payload?.id && !payload?.clientPickId) || !payload.status) {
 				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 			}
 			const pick = await settleManualPick(env.POLYWHALER_DB, {
 				id: payload.id,
+				clientPickId: payload.clientPickId,
 				status: payload.status,
 				resolvedOutcome: payload.resolvedOutcome ?? null,
 				closePrice: payload.closePrice ?? null,
 				roi: payload.roi ?? null,
 				clv: payload.clv ?? null,
 			});
+			if (!pick) {
+				return jsonResponse({ error: "pick_not_found" }, { status: 404 });
+			}
 			return jsonResponse({ pick });
 		}
 
