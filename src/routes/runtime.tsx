@@ -56,6 +56,39 @@ function formatBps(value: number | null | undefined): string {
 	return `${value.toFixed(1)} bps`;
 }
 
+function coverageStatus(
+	covered: number,
+	total: number,
+): { label: "good" | "ok" | "low"; className: string; ratio: number } {
+	if (total <= 0) {
+		return {
+			label: "low",
+			className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+			ratio: 0,
+		};
+	}
+	const ratio = covered / total;
+	if (ratio >= 0.8) {
+		return {
+			label: "good",
+			className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+			ratio,
+		};
+	}
+	if (ratio >= 0.4) {
+		return {
+			label: "ok",
+			className: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+			ratio,
+		};
+	}
+	return {
+		label: "low",
+		className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+		ratio,
+	};
+}
+
 type RuntimeStats = {
 	fetchedAt: number;
 	totalMarkets: number;
@@ -288,6 +321,61 @@ function RuntimePage() {
 				: [],
 		[evalResult],
 	);
+
+	const coverageHealth = useMemo(() => {
+		const settled = calibrationResult?.settledPicks ?? 0;
+		const signalCovered = calibrationResult?.withSignalScore ?? 0;
+		const qualityCovered = calibrationResult?.withQualityScore ?? 0;
+		const eventTimeCovered = calibrationResult?.withEventTime ?? 0;
+		const l2ImbalanceCovered =
+			bucketPerformanceResult?.byL2ImbalanceNearMid.reduce(
+				(sum, row) => sum + row.count,
+				0,
+			) ?? 0;
+		const l2DisagreementCovered =
+			bucketPerformanceResult?.byL2Disagreement.reduce(
+				(sum, row) => sum + row.count,
+				0,
+			) ?? 0;
+
+		return [
+			{
+				key: "signal",
+				label: "Signal",
+				covered: signalCovered,
+				total: settled,
+				status: coverageStatus(signalCovered, settled),
+			},
+			{
+				key: "quality",
+				label: "Quality",
+				covered: qualityCovered,
+				total: settled,
+				status: coverageStatus(qualityCovered, settled),
+			},
+			{
+				key: "event-time",
+				label: "Event Time",
+				covered: eventTimeCovered,
+				total: settled,
+				status: coverageStatus(eventTimeCovered, settled),
+			},
+			{
+				key: "l2-imbalance",
+				label: "L2 Imbalance",
+				covered: l2ImbalanceCovered,
+				total: settled,
+				status: coverageStatus(l2ImbalanceCovered, settled),
+			},
+			{
+				key: "l2-disagreement",
+				label: "L2 Disagree",
+				covered: l2DisagreementCovered,
+				total: settled,
+				status: coverageStatus(l2DisagreementCovered, settled),
+			},
+		] as const;
+	}, [calibrationResult, bucketPerformanceResult]);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -799,6 +887,24 @@ function RuntimePage() {
 							<div>
 								<h2 className="text-lg font-semibold text-slate-50">Pick Calibration</h2>
 								<p className="mt-1 text-sm text-slate-400">Where picks are actually performing: by score and by time-to-start.</p>
+							</div>
+							<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+								<p className="text-sm font-semibold text-slate-100">Coverage Health</p>
+								<p className="mt-1 text-xs text-slate-400">
+									Checks whether new pick records are storing fields needed for calibration and filtering.
+								</p>
+								<div className="mt-3 flex flex-wrap gap-2">
+									{coverageHealth.map((item) => (
+										<div
+											key={item.key}
+											className={`rounded-lg border px-3 py-2 text-xs ${item.status.className}`}
+										>
+											<span className="font-semibold">{item.label}</span>{" "}
+											{item.covered}/{item.total} ({formatPercent(item.status.ratio)}) •{" "}
+											{item.status.label}
+										</div>
+									))}
+								</div>
 							</div>
 							<div className="flex flex-wrap items-end gap-3">
 								<div>
