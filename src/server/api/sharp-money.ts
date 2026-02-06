@@ -438,6 +438,65 @@ function parseGammaNumber(value?: string | number | null): number | undefined {
 	return undefined;
 }
 
+function parseClobNumber(value: unknown): number | null {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim() !== "") {
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return null;
+}
+
+type ClobMarketToken = {
+	outcome?: string;
+	token_id?: string;
+	tokenId?: string;
+	clobTokenId?: string;
+	id?: string;
+};
+
+type ClobMarketResponse = {
+	question?: string;
+	slug?: string;
+	tokens?: ClobMarketToken[];
+};
+
+type ClobBookLevelRaw = {
+	price?: string | number;
+	size?: string | number;
+};
+
+type ClobBookResponse = {
+	bids?: ClobBookLevelRaw[];
+	asks?: ClobBookLevelRaw[];
+};
+
+export type ClobBookLevel = {
+	price: number;
+	size: number;
+	notional: number;
+};
+
+export type ClobOutcomeBook = {
+	tokenId: string;
+	outcome: string;
+	bids: ClobBookLevel[];
+	asks: ClobBookLevel[];
+	bestBid: number | null;
+	bestAsk: number | null;
+	mid: number | null;
+	spread: number | null;
+	imbalance: number | null;
+};
+
+export type ClobDepthSnapshot = {
+	conditionId: string;
+	marketQuestion?: string;
+	marketSlug?: string;
+	fetchedAt: number;
+	outcomes: ClobOutcomeBook[];
+};
+
 async function fetchWithRetry(
 	url: string,
 	options?: RequestInit,
@@ -3138,6 +3197,139 @@ export const getRuntimeMarketStatsFn = createServerFn({
 	}
 
 	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
+});
+
+export const getClobDepthSnapshotFn = createServerFn({
+	method: "POST",
+}).handler(async ({ data }) => {
+	const payload = (data ?? {}) as {
+		conditionId?: string;
+		levelLimit?: number;
+	};
+	const conditionId = payload.conditionId?.trim();
+	if (!conditionId) {
+		return { error: "conditionId_required", snapshot: null };
+	}
+
+	const levelLimit =
+		typeof payload.levelLimit === "number" && payload.levelLimit > 0
+			? Math.min(Math.floor(payload.levelLimit), 20)
+			: 10;
+	const clobMarketUrl = `https://clob.polymarket.com/markets/${conditionId}`;
+	const marketResponse = await fetch(clobMarketUrl);
+	if (!marketResponse.ok) {
+		return {
+			error: `clob_market_failed_${marketResponse.status}`,
+			snapshot: null,
+		};
+	}
+
+	const market = (await marketResponse.json()) as ClobMarketResponse;
+	const tokens = (market.tokens ?? [])
+		.map((token) => {
+			const tokenId =
+				token.token_id ?? token.tokenId ?? token.clobTokenId ?? token.id;
+			const outcome = token.outcome?.trim();
+			if (!tokenId || !outcome) return null;
+			return { tokenId: String(tokenId), outcome };
+		})
+		.filter((token): token is { tokenId: string; outcome: string } =>
+			Boolean(token),
+		);
+
+	if (tokens.length === 0) {
+		return {
+			error: "clob_tokens_missing",
+			snapshot: null,
+		};
+	}
+
+	const books = await Promise.all(
+		tokens.map(async (token) => {
+			const bookUrl = new URL("https://clob.polymarket.com/book");
+			bookUrl.searchParams.set("token_id", token.tokenId);
+			const response = await fetch(bookUrl.toString());
+			if (!response.ok) return null;
+			const rawBook = (await response.json()) as ClobBookResponse;
+			const bids = (rawBook.bids ?? [])
+				.map((level) => {
+					const price = parseClobNumber(level.price);
+					const size = parseClobNumber(level.size);
+					if (
+						price === null ||
+						size === null ||
+						price <= 0 ||
+						price >= 1 ||
+						size <= 0
+					) {
+						return null;
+					}
+					return {
+						price,
+						size,
+						notional: price * size,
+					};
+				})
+				.filter((level): level is ClobBookLevel => Boolean(level))
+				.sort((a, b) => b.price - a.price)
+				.slice(0, levelLimit);
+			const asks = (rawBook.asks ?? [])
+				.map((level) => {
+					const price = parseClobNumber(level.price);
+					const size = parseClobNumber(level.size);
+					if (
+						price === null ||
+						size === null ||
+						price <= 0 ||
+						price >= 1 ||
+						size <= 0
+					) {
+						return null;
+					}
+					return {
+						price,
+						size,
+						notional: price * size,
+					};
+				})
+				.filter((level): level is ClobBookLevel => Boolean(level))
+				.sort((a, b) => a.price - b.price)
+				.slice(0, levelLimit);
+			const bestBid = bids[0]?.price ?? null;
+			const bestAsk = asks[0]?.price ?? null;
+			const mid =
+				bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
+			const spread =
+				bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
+			const bidNotional = bids.reduce((sum, level) => sum + level.notional, 0);
+			const askNotional = asks.reduce((sum, level) => sum + level.notional, 0);
+			const imbalance =
+				bidNotional + askNotional > 0
+					? (bidNotional - askNotional) / (bidNotional + askNotional)
+					: null;
+			return {
+				tokenId: token.tokenId,
+				outcome: token.outcome,
+				bids,
+				asks,
+				bestBid,
+				bestAsk,
+				mid,
+				spread,
+				imbalance,
+			} satisfies ClobOutcomeBook;
+		}),
+	);
+
+	const outcomes = books.filter((book): book is ClobOutcomeBook => Boolean(book));
+	const snapshot: ClobDepthSnapshot = {
+		conditionId,
+		marketQuestion: market.question,
+		marketSlug: market.slug,
+		fetchedAt: nowUnixSeconds(),
+		outcomes,
+	};
+	return { snapshot };
 });
 
 export const backfillSharpMoneyHistoryFn = createServerFn({

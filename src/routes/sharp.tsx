@@ -2298,14 +2298,21 @@ function SharpMoneyCard({
 								</>
 							)}
 						</div>
-						<div className="flex items-center gap-1">
-							<span className="text-[0.6rem] text-gray-500">
-								History {formatRelativeTime(historyUpdatedAt)}
-							</span>
-							{isHistoryStale && (
-								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-									Stale
+							<div className="flex items-center gap-1">
+								<span className="text-[0.6rem] text-gray-500">
+									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								<a
+									href={`/sharp/market/${entry.conditionId}`}
+									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
+									onClick={(e) => e.stopPropagation()}
+								>
+									Depth
+								</a>
+								{isHistoryStale && (
+									<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+										Stale
+									</span>
 							)}
 							{polymarketUrl && (
 								<a
@@ -2522,14 +2529,21 @@ function SharpMoneyCard({
 								</>
 							)}
 						</div>
-						<div className="flex items-center gap-1">
-							<span className="text-[0.6rem] text-gray-500">
-								History {formatRelativeTime(historyUpdatedAt)}
-							</span>
-							{isHistoryStale && (
-								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-									Stale
+							<div className="flex items-center gap-1">
+								<span className="text-[0.6rem] text-gray-500">
+									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								<a
+									href={`/sharp/market/${entry.conditionId}`}
+									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
+									onClick={(e) => e.stopPropagation()}
+								>
+									Depth
+								</a>
+								{isHistoryStale && (
+									<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+										Stale
+									</span>
 							)}
 							{polymarketUrl && (
 								<a

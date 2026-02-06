@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DebugRouteImport } from './routes/debug'
 import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SharpMarketConditionIdRouteImport } from './routes/sharp.market.$conditionId'
 
 const StatsRoute = StatsRouteImport.update({
   id: '/stats',
@@ -52,6 +53,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SharpMarketConditionIdRoute = SharpMarketConditionIdRouteImport.update({
+  id: '/market/$conditionId',
+  path: '/market/$conditionId',
+  getParentRoute: () => SharpRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -59,8 +65,9 @@ export interface FileRoutesByFullPath {
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
-  '/sharp': typeof SharpRoute
+  '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -68,8 +75,9 @@ export interface FileRoutesByTo {
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
-  '/sharp': typeof SharpRoute
+  '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -78,8 +86,9 @@ export interface FileRoutesById {
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
-  '/sharp': typeof SharpRoute
+  '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,8 +100,17 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sharp'
     | '/stats'
+    | '/sharp/market/$conditionId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/bot' | '/debug' | '/login' | '/runtime' | '/sharp' | '/stats'
+  to:
+    | '/'
+    | '/bot'
+    | '/debug'
+    | '/login'
+    | '/runtime'
+    | '/sharp'
+    | '/stats'
+    | '/sharp/market/$conditionId'
   id:
     | '__root__'
     | '/'
@@ -102,6 +120,7 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sharp'
     | '/stats'
+    | '/sharp/market/$conditionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -110,7 +129,7 @@ export interface RootRouteChildren {
   DebugRoute: typeof DebugRoute
   LoginRoute: typeof LoginRoute
   RuntimeRoute: typeof RuntimeRoute
-  SharpRoute: typeof SharpRoute
+  SharpRoute: typeof SharpRouteWithChildren
   StatsRoute: typeof StatsRoute
 }
 
@@ -165,8 +184,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sharp/market/$conditionId': {
+      id: '/sharp/market/$conditionId'
+      path: '/market/$conditionId'
+      fullPath: '/sharp/market/$conditionId'
+      preLoaderRoute: typeof SharpMarketConditionIdRouteImport
+      parentRoute: typeof SharpRoute
+    }
   }
 }
+
+interface SharpRouteChildren {
+  SharpMarketConditionIdRoute: typeof SharpMarketConditionIdRoute
+}
+
+const SharpRouteChildren: SharpRouteChildren = {
+  SharpMarketConditionIdRoute: SharpMarketConditionIdRoute,
+}
+
+const SharpRouteWithChildren = SharpRoute._addFileChildren(SharpRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -174,7 +210,7 @@ const rootRouteChildren: RootRouteChildren = {
   DebugRoute: DebugRoute,
   LoginRoute: LoginRoute,
   RuntimeRoute: RuntimeRoute,
-  SharpRoute: SharpRoute,
+  SharpRoute: SharpRouteWithChildren,
   StatsRoute: StatsRoute,
 }
 export const routeTree = rootRouteImport
