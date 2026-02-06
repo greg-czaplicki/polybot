@@ -352,15 +352,18 @@ function BotPage() {
 									{envPayload.path && (
 										<div className="text-xs text-slate-500 break-all">File: {envPayload.path}</div>
 									)}
-									<div className="space-y-2 max-h-64 overflow-auto pr-1">
-										{Object.entries(envEdits).map(([key, value]) => (
-											<div key={key} className="space-y-1">
-												<label className="text-xs text-slate-400">{key}</label>
-												<input
-													value={value}
-													onChange={(event) =>
-														setEnvEdits((prev) => ({ ...prev, [key]: event.target.value }))
-													}
+										<div className="space-y-2 max-h-64 overflow-auto pr-1">
+											{Object.entries(envEdits).map(([key, value]) => (
+												<div key={key} className="space-y-1">
+													<label htmlFor={`env-${key}`} className="text-xs text-slate-400">
+														{key}
+													</label>
+													<input
+														id={`env-${key}`}
+														value={value}
+														onChange={(event) =>
+															setEnvEdits((prev) => ({ ...prev, [key]: event.target.value }))
+														}
 													className="w-full rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-sm text-white focus:border-cyan-400 focus:outline-none"
 												/>
 											</div>

@@ -14,7 +14,6 @@ import {
 	Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import {
@@ -1354,7 +1353,7 @@ function SharpMoneyPage() {
 			return b.edgeRating - a.edgeRating;
 		});
 		return entriesToSort;
-	}, [filteredEntries, signalScoreByConditionId]);
+	}, [filteredEntries, signalScoreByConditionId, gradesByConditionId]);
 
 	const isSortingHold = !isInitialSortReady;
 	const displayEntries = !isSortingHold ? sortedEntries : [];
@@ -2154,14 +2153,6 @@ function SharpMoneyCard({
 	const sideBOdds = formatAmericanOdds(entry.sideB.price);
 	// Determine which side is "sharp"
 	const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
-	const sharpSideTopHolders = sharpSideData.topHolders
-		.slice()
-		.sort((a, b) => b.amount - a.amount);
-	const sharpTop1 = sharpSideTopHolders[0]?.amount ?? 0;
-	const sharpTop3 = sharpSideTopHolders
-		.slice(0, 3)
-		.reduce((sum, holder) => sum + holder.amount, 0);
-	const sharpSideTotal = sharpSideData.totalValue;
 	const historyUpdatedAt =
 		gradeData?.historyUpdatedAt ?? entry.historyUpdatedAt ?? entry.updatedAt;
 	const historyAgeSeconds =
@@ -2174,7 +2165,6 @@ function SharpMoneyCard({
 	const gradeWarnings = gradeData?.warnings ?? [];
 
 	// Calculate volume percentage and get heat map color
-	const holderVolume = getEntryHolderVolume(entry);
 	const marketVolume = getEntryMarketVolume(entry);
 	const volumePercent = getVolumePercentLogScaled(marketVolume, maxVolume);
 	const volumeColorPercent = getVolumeColorPercent(marketVolume, maxVolume);
@@ -2272,6 +2262,7 @@ function SharpMoneyCard({
 				</div>
 			)}
 			{/* Card Header */}
+			{/* biome-ignore lint/a11y/useSemanticElements: The header includes nested actionable controls, so wrapping as a button is invalid. */}
 			<div
 				className="w-full text-left cursor-pointer hover:bg-slate-800/30 transition-colors"
 				role="button"

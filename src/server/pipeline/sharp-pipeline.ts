@@ -155,7 +155,7 @@ export class SharpPipeline extends DurableObject {
 export async function handleSharpQueue(
   batch: MessageBatch<SharpPipelineJob>,
   env: Env,
-  executionCtx: ExecutionContext,
+  _executionCtx: ExecutionContext,
 ) {
   for (const message of batch.messages) {
     try {

@@ -181,21 +181,6 @@ const MIN_READY_PNL_COVERAGE = 0.6;
 const HISTORY_RETENTION_HOURS = 24 * 7;
 const HISTORY_EVENT_WINDOW_HOURS = 24;
 
-function getEasternOffset(date: Date): string {
-	const parts = new Intl.DateTimeFormat("en-US", {
-		timeZone: "America/New_York",
-		timeZoneName: "shortOffset",
-	}).formatToParts(date);
-	const offsetPart =
-		parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT-0";
-	const match = offsetPart.match(/GMT([+-]\d{1,2})/);
-	if (!match) return "+00:00";
-	const hours = Number(match[1]);
-	const sign = hours >= 0 ? "+" : "-";
-	const absHours = Math.abs(hours).toString().padStart(2, "0");
-	return `${sign}${absHours}:00`;
-}
-
 function generateId(): string {
 	return `sharp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -879,6 +864,23 @@ export async function listSharpMoneyHistoryByConditionIds(
 		grouped[entry.conditionId].push(entry);
 	}
 	return grouped;
+}
+
+export async function listSharpMoneyHistorySince(
+	db: Db,
+	sinceSeconds: number,
+	limit: number = 5000,
+): Promise<SharpMoneyHistoryEntry[]> {
+	const rows = await all<SharpMoneyHistoryRow>(
+		db,
+		`SELECT * FROM sharp_money_history
+	     WHERE recorded_at >= ?
+	     ORDER BY condition_id ASC, recorded_at ASC
+	     LIMIT ?`,
+		sinceSeconds,
+		limit,
+	);
+	return rows.map(parseHistoryRow);
 }
 
 export async function listSharpMoneyHistoryWindow(

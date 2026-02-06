@@ -328,16 +328,20 @@ function SharpDebugPage() {
 
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl shadow-black/30">
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                Cached markets
-              </label>
-              <div className="flex flex-col gap-2 md:flex-row">
-                <select
-                  value={selectedId}
-                  onChange={(event) => setSelectedId(event.target.value)}
-                  className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                >
+	            <div className="flex flex-col gap-2">
+	              <label
+	                htmlFor="debug-cached-market"
+	                className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	              >
+	                Cached markets
+	              </label>
+	              <div className="flex flex-col gap-2 md:flex-row">
+	                <select
+	                  id="debug-cached-market"
+	                  value={selectedId}
+	                  onChange={(event) => setSelectedId(event.target.value)}
+	                  className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                >
                   <option value="">Select a cached market</option>
                   {availableEntries.map((entry) => (
                     <option key={entry.id} value={entry.conditionId}>
@@ -355,74 +359,102 @@ function SharpDebugPage() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Condition ID
-                </label>
-                <input
-                  value={conditionId}
-                  onChange={(event) => setConditionId(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Market title
-                </label>
-                <input
-                  value={marketTitle}
-                  onChange={(event) => setMarketTitle(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Market slug
-                </label>
-                <input
-                  value={marketSlug}
-                  onChange={(event) => setMarketSlug(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Event slug
-                </label>
-                <input
-                  value={eventSlug}
-                  onChange={(event) => setEventSlug(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Series ID
-                </label>
-                <input
-                  value={sportSeriesId}
-                  onChange={(event) => setSportSeriesId(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Event time (ISO)
-                </label>
-                <input
-                  value={endDate}
-                  onChange={(event) => setEndDate(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                  Outcomes (comma separated)
-                </label>
-                <input
-                  value={outcomesInput}
-                  onChange={(event) => setOutcomesInput(event.target.value)}
+	            <div className="grid gap-4 md:grid-cols-2">
+	              <div>
+	                <label
+	                  htmlFor="debug-condition-id"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Condition ID
+	                </label>
+	                <input
+	                  id="debug-condition-id"
+	                  value={conditionId}
+	                  onChange={(event) => setConditionId(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div>
+	                <label
+	                  htmlFor="debug-market-title"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Market title
+	                </label>
+	                <input
+	                  id="debug-market-title"
+	                  value={marketTitle}
+	                  onChange={(event) => setMarketTitle(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div>
+	                <label
+	                  htmlFor="debug-market-slug"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Market slug
+	                </label>
+	                <input
+	                  id="debug-market-slug"
+	                  value={marketSlug}
+	                  onChange={(event) => setMarketSlug(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div>
+	                <label
+	                  htmlFor="debug-event-slug"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Event slug
+	                </label>
+	                <input
+	                  id="debug-event-slug"
+	                  value={eventSlug}
+	                  onChange={(event) => setEventSlug(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div>
+	                <label
+	                  htmlFor="debug-series-id"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Series ID
+	                </label>
+	                <input
+	                  id="debug-series-id"
+	                  value={sportSeriesId}
+	                  onChange={(event) => setSportSeriesId(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div>
+	                <label
+	                  htmlFor="debug-event-time"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Event time (ISO)
+	                </label>
+	                <input
+	                  id="debug-event-time"
+	                  value={endDate}
+	                  onChange={(event) => setEndDate(event.target.value)}
+	                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+	                />
+	              </div>
+	              <div className="md:col-span-2">
+	                <label
+	                  htmlFor="debug-outcomes"
+	                  className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
+	                >
+	                  Outcomes (comma separated)
+	                </label>
+	                <input
+	                  id="debug-outcomes"
+	                  value={outcomesInput}
+	                  onChange={(event) => setOutcomesInput(event.target.value)}
                   placeholder="Yes, No"
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
                 />

@@ -16,7 +16,6 @@ import {
 	listSharpMoneyHistoryByConditionIds,
 	listSharpMoneyHistoryLatest,
 	listSharpMoneyHistoryWindow,
-	type SharpMoneyCacheEntry,
 	type SharpMoneyHistoryEntry,
 	type TopHolderPnlData,
 	type SharpMoneyHistoryEntryByConditionId,
@@ -38,7 +37,6 @@ export type {
 } from "../repositories/sharp-money";
 
 const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
-const POLYMARKET_CLOB_API = "https://clob.polymarket.com";
 const POLYMARKET_DATA_API = "https://data-api.polymarket.com";
 
 // Sport tags we want to track for sharp money
@@ -73,6 +71,7 @@ const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
 // -250 implied probability ≈ 0.7142857
 const LOW_ROI_PRICE_THRESHOLD = 0.7143;
+const MIN_MICROSTRUCTURE_SCORE = 0.58;
 
 const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188];
 
@@ -117,6 +116,7 @@ export type SharpGradeResult = {
 	signalScore?: number;
 	edgeRating?: number;
 	scoreDifferential?: number;
+	microstructureScore?: number;
 	isReady?: boolean;
 	warnings: string[];
 	computedAt: number;
@@ -290,10 +290,6 @@ function getEasternDateString(date: Date): string {
 	return formatter.format(date);
 }
 
-function isSameEasternDate(date: Date, easternDate: string): boolean {
-	return getEasternDateString(date) === easternDate;
-}
-
 type ClosedPosition = {
 	conditionId?: string;
 	title?: string;
@@ -408,13 +404,6 @@ interface GammaEvent {
 	markets?: GammaMarket[];
 }
 
-interface GammaSport {
-	id: number;
-	slug?: string;
-	name?: string;
-	short_name?: string;
-}
-
 function getEventSlug(market: GammaMarket): string | undefined {
 	return market.eventSlug ?? market.event_slug ?? undefined;
 }
@@ -434,38 +423,6 @@ function isMainMarketTitle(title: string): boolean {
 	if (normalized.includes("o/u") || normalized.includes("over/under"))
 		return true;
 	return /\bvs\.?\b|\bvs\b|\bat\b|@/i.test(title);
-}
-
-function mapSportToTag(sport: GammaSport): string | undefined {
-	const candidates = [sport.slug, sport.name, sport.short_name].filter(
-		Boolean,
-	) as string[];
-	const value = candidates.join(" ").toLowerCase();
-
-	if (value.includes("nfl")) return "nfl";
-	if (value.includes("nba")) return "nba";
-	if (value.includes("mlb")) return "mlb";
-	if (value.includes("nhl")) return "nhl";
-	if (value.includes("premier league") || value.includes("epl")) return "epl";
-	if (value.includes("soccer")) return "soccer";
-	if (
-		value.includes("college football") ||
-		value.includes("ncaaf") ||
-		value.includes("cfb") ||
-		value.includes("ncaa football")
-	) {
-		return "ncaaf";
-	}
-	if (
-		value.includes("college basketball") ||
-		value.includes("ncaab") ||
-		value.includes("cbb") ||
-		value.includes("ncaa basketball")
-	) {
-		return "ncaab";
-	}
-
-	return undefined;
 }
 
 function parseGammaNumber(value?: string | number | null): number | undefined {
@@ -709,6 +666,66 @@ function clamp01(value: number): number {
 	return Math.max(0.01, Math.min(0.99, value));
 }
 
+function clampUnit(value: number): number {
+	return Math.max(0, Math.min(1, value));
+}
+
+function normalizeMarketPrice(price?: number | null): number | null {
+	if (typeof price !== "number" || !Number.isFinite(price)) return null;
+	if (price <= 0 || price >= 1) return null;
+	return price;
+}
+
+function computeMicrostructureScoreFromEntry(entry: {
+	sharpSide: "A" | "B" | "EVEN";
+	sideA: { price?: number | null };
+	sideB: { price?: number | null };
+	marketVolume?: number;
+	marketLiquidity?: number;
+}): number {
+	const sideAPrice = normalizeMarketPrice(entry.sideA.price);
+	const sideBPrice = normalizeMarketPrice(entry.sideB.price);
+	const hasBothPrices = sideAPrice !== null && sideBPrice !== null;
+	const complementGap = hasBothPrices
+		? Math.abs(sideAPrice + sideBPrice - 1)
+		: 0.08;
+	const complementScore = hasBothPrices ? clampUnit(1 - complementGap / 0.08) : 0.45;
+
+	const sharpSidePrice =
+		entry.sharpSide === "A"
+			? sideAPrice
+			: entry.sharpSide === "B"
+				? sideBPrice
+				: null;
+	const priceBandScore =
+		sharpSidePrice === null
+			? 0.5
+			: clampUnit(1 - Math.abs(sharpSidePrice - 0.5) / 0.4);
+
+	let depthScore = 0.5;
+	if (
+		typeof entry.marketLiquidity === "number" &&
+		Number.isFinite(entry.marketLiquidity) &&
+		entry.marketLiquidity > 0 &&
+		typeof entry.marketVolume === "number" &&
+		Number.isFinite(entry.marketVolume) &&
+		entry.marketVolume > 0
+	) {
+		const depthRatio = entry.marketLiquidity / Math.max(entry.marketVolume, 1);
+		depthScore = clampUnit(depthRatio / 0.35);
+	} else if (
+		typeof entry.marketLiquidity === "number" &&
+		Number.isFinite(entry.marketLiquidity) &&
+		entry.marketLiquidity > 0
+	) {
+		depthScore = clampUnit(entry.marketLiquidity / 200_000);
+	}
+
+	return clampUnit(
+		complementScore * 0.45 + depthScore * 0.35 + priceBandScore * 0.2,
+	);
+}
+
 function minPriceEdgeForConfidence(
 	confidence: "HIGH" | "MEDIUM" | "LOW",
 	edgeRating: number,
@@ -774,21 +791,6 @@ export function computePriceEdgeFromEntry(entry: {
 		priceEdge,
 		minPriceEdge: minPriceEdgeForConfidence(entry.confidence, entry.edgeRating),
 	};
-}
-
-/**
- * CLOB API market response type
- */
-interface ClobMarket {
-	condition_id: string;
-	question: string;
-	slug?: string;
-	end_date_iso?: string;
-	game_start_time?: string;
-	category?: string;
-	active?: boolean;
-	closed?: boolean;
-	tokens?: Array<{ outcome: string }>;
 }
 
 /**
@@ -2146,24 +2148,33 @@ export async function analyzeMarketSharpness(
 			return { analysis: null, error: "No holders data" };
 		}
 
-		// Re-fetch holders per token to avoid market-level limit skewing sides
-		const tokenIds = holdersData
-			.map((tokenData) => tokenData.token)
-			.filter(Boolean);
-		let tokenHoldersCounts: Array<{ token: string; count: number }> | undefined;
-		if (tokenIds.length > 0) {
-			const tokenHoldersResults = await Promise.all(
+			// Re-fetch holders per token to avoid market-level limit skewing sides
+			const tokenIds = holdersData
+				.map((tokenData) => tokenData.token)
+				.filter(Boolean);
+			type TokenHolder = {
+				proxyWallet: string;
+				name?: string;
+				pseudonym?: string;
+				amount: number;
+				outcomeIndex?: number;
+				profileImage?: string;
+				profileImageOptimized?: string;
+			};
+			let tokenHoldersCounts: Array<{ token: string; count: number }> | undefined;
+			if (tokenIds.length > 0) {
+				const tokenHoldersResults = await Promise.all(
 				tokenIds.map(async (tokenId) => {
 					try {
 						const tokenUrl = new URL("/holders", POLYMARKET_DATA_API);
 						tokenUrl.searchParams.set("token", tokenId);
-						tokenUrl.searchParams.set("limit", "100");
-						tokenUrl.searchParams.set("minBalance", "1");
-						const tokenResponse = await fetch(tokenUrl);
-						if (!tokenResponse.ok) return null;
-						const tokenResponseData = (await tokenResponse.json()) as {
-							holders?: Array<any>;
-						};
+							tokenUrl.searchParams.set("limit", "100");
+							tokenUrl.searchParams.set("minBalance", "1");
+							const tokenResponse = await fetch(tokenUrl);
+							if (!tokenResponse.ok) return null;
+							const tokenResponseData = (await tokenResponse.json()) as {
+								holders?: TokenHolder[];
+							};
 						if (
 							!tokenResponseData.holders ||
 							tokenResponseData.holders.length === 0
@@ -2180,10 +2191,10 @@ export async function analyzeMarketSharpness(
 				}),
 			);
 
-			const filteredResults = tokenHoldersResults.filter(
-				(result): result is { token: string; holders: Array<any> } =>
-					Boolean(result),
-			);
+				const filteredResults = tokenHoldersResults.filter(
+					(result): result is { token: string; holders: TokenHolder[] } =>
+						Boolean(result),
+				);
 
 			if (filteredResults.length > 0) {
 				holdersData = filteredResults;
@@ -3213,6 +3224,13 @@ export async function computeSharpMoneyGrades(
 		const isHistoryStale =
 			typeof historyUpdatedAt === "number" &&
 			now - historyUpdatedAt > staleThresholdMinutes * 60;
+		const microstructureScore = computeMicrostructureScoreFromEntry({
+			sharpSide: entry.sharpSide,
+			sideA: { price: entry.sideA.price },
+			sideB: { price: entry.sideB.price },
+			marketVolume: entry.marketVolume,
+			marketLiquidity: entry.marketLiquidity,
+		});
 		const warnings: string[] = [];
 		const minHolderCount = Math.min(
 			entry.sideA.holderCount,
@@ -3259,6 +3277,9 @@ export async function computeSharpMoneyGrades(
 		if ((entry.sharpSideValueRatio ?? 0.5) < 0.35) {
 			warnings.push("low_conviction");
 		}
+		if (microstructureScore < MIN_MICROSTRUCTURE_SCORE) {
+			warnings.push("weak_microstructure");
+		}
 		if (entry.sharpSide !== "EVEN") {
 			const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
 			const sharpSideTopHolders = sharpSideData.topHolders
@@ -3271,8 +3292,7 @@ export async function computeSharpMoneyGrades(
 			const sharpSideTotal = sharpSideData.totalValue;
 			if (
 				sharpSideTotal > 0 &&
-				(sharpTop1 / sharpSideTotal >= 0.6 ||
-					sharpTop3 / sharpSideTotal >= 0.8)
+				(sharpTop1 / sharpSideTotal >= 0.6 || sharpTop3 / sharpSideTotal >= 0.8)
 			) {
 				warnings.push("high_concentration");
 			}
@@ -3285,6 +3305,7 @@ export async function computeSharpMoneyGrades(
 			signalScore,
 			edgeRating: entry.edgeRating,
 			scoreDifferential: entry.scoreDifferential,
+			microstructureScore,
 			isReady: entry.isReady,
 			warnings,
 			computedAt: now,

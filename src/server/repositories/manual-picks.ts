@@ -23,6 +23,22 @@ export interface ManualPickRow {
 	close_price?: number | null;
 	roi?: number | null;
 	clv?: number | null;
+	strategy_version?: string | null;
+	threshold_used?: number | null;
+	market_quality_score?: number | null;
+	warnings_json?: string | null;
+	decision_snapshot_json?: string | null;
+	candidate_computed_at?: number | null;
+	execution_submitted_at?: number | null;
+	execution_filled_at?: number | null;
+	fill_status?: string | null;
+	fill_price?: number | null;
+	fill_size?: number | null;
+	fill_notional?: number | null;
+	fill_slippage_bps?: number | null;
+	order_id?: string | null;
+	exchange_trade_id?: string | null;
+	execution_notes?: string | null;
 	status: ManualPickStatus;
 	settled_at?: number | null;
 }
@@ -46,6 +62,22 @@ export interface ManualPickEntry {
 	closePrice?: number;
 	roi?: number;
 	clv?: number;
+	strategyVersion?: string;
+	thresholdUsed?: number;
+	marketQualityScore?: number;
+	warnings?: string[];
+	decisionSnapshot?: unknown;
+	candidateComputedAt?: number;
+	executionSubmittedAt?: number;
+	executionFilledAt?: number;
+	fillStatus?: string;
+	fillPrice?: number;
+	fillSize?: number;
+	fillNotional?: number;
+	fillSlippageBps?: number;
+	orderId?: string;
+	exchangeTradeId?: string;
+	executionNotes?: string;
 	status: ManualPickStatus;
 	settledAt?: number;
 }
@@ -74,6 +106,46 @@ export interface CreateManualPickInput {
 	confidence?: string;
 	fairPrice?: number;
 	priceEdge?: number;
+	strategyVersion?: string;
+	thresholdUsed?: number;
+	marketQualityScore?: number;
+	warnings?: string[];
+	decisionSnapshot?: unknown;
+	candidateComputedAt?: number;
+}
+
+export interface UpdateManualPickExecutionInput {
+	id: string;
+	executionSubmittedAt?: number | null;
+	executionFilledAt?: number | null;
+	fillStatus?: string | null;
+	fillPrice?: number | null;
+	fillSize?: number | null;
+	fillNotional?: number | null;
+	fillSlippageBps?: number | null;
+	orderId?: string | null;
+	exchangeTradeId?: string | null;
+	executionNotes?: string | null;
+}
+
+function parseStringArray(value: string | null | undefined): string[] | undefined {
+	if (!value) return undefined;
+	try {
+		const parsed = JSON.parse(value);
+		if (!Array.isArray(parsed)) return undefined;
+		return parsed.filter((item) => typeof item === "string");
+	} catch {
+		return undefined;
+	}
+}
+
+function parseJsonValue(value: string | null | undefined): unknown {
+	if (!value) return undefined;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return undefined;
+	}
 }
 
 function parsePickRow(row: ManualPickRow): ManualPickEntry {
@@ -96,6 +168,22 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		closePrice: row.close_price ?? undefined,
 		roi: row.roi ?? undefined,
 		clv: row.clv ?? undefined,
+		strategyVersion: row.strategy_version ?? undefined,
+		thresholdUsed: row.threshold_used ?? undefined,
+		marketQualityScore: row.market_quality_score ?? undefined,
+		warnings: parseStringArray(row.warnings_json),
+		decisionSnapshot: parseJsonValue(row.decision_snapshot_json),
+		candidateComputedAt: row.candidate_computed_at ?? undefined,
+		executionSubmittedAt: row.execution_submitted_at ?? undefined,
+		executionFilledAt: row.execution_filled_at ?? undefined,
+		fillStatus: row.fill_status ?? undefined,
+		fillPrice: row.fill_price ?? undefined,
+		fillSize: row.fill_size ?? undefined,
+		fillNotional: row.fill_notional ?? undefined,
+		fillSlippageBps: row.fill_slippage_bps ?? undefined,
+		orderId: row.order_id ?? undefined,
+		exchangeTradeId: row.exchange_trade_id ?? undefined,
+		executionNotes: row.execution_notes ?? undefined,
 		status: row.status,
 		settledAt: row.settled_at ?? undefined,
 	};
@@ -114,9 +202,9 @@ export async function createManualPick(
 	await run(
 		db,
 		`INSERT INTO manual_picks (
-      id,
-      condition_id,
-      market_title,
+	      id,
+	      condition_id,
+	      market_title,
       event_time,
       picked_at,
       grade,
@@ -125,14 +213,20 @@ export async function createManualPick(
       score_differential,
       sharp_side,
       price,
-      confidence,
-      fair_price,
-      price_edge,
-      status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-		id,
-		input.conditionId,
-		input.marketTitle,
+	      confidence,
+	      fair_price,
+	      price_edge,
+	      strategy_version,
+	      threshold_used,
+	      market_quality_score,
+	      warnings_json,
+	      decision_snapshot_json,
+	      candidate_computed_at,
+	      status
+	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+			id,
+			input.conditionId,
+			input.marketTitle,
 		input.eventTime ?? null,
 		now,
 		input.grade ?? null,
@@ -141,11 +235,17 @@ export async function createManualPick(
 		input.scoreDifferential ?? null,
 		input.sharpSide ?? null,
 		input.price ?? null,
-		input.confidence ?? null,
-		input.fairPrice ?? null,
-		input.priceEdge ?? null,
-		"pending",
-	);
+			input.confidence ?? null,
+			input.fairPrice ?? null,
+			input.priceEdge ?? null,
+			input.strategyVersion ?? null,
+			input.thresholdUsed ?? null,
+			input.marketQualityScore ?? null,
+			input.warnings ? JSON.stringify(input.warnings) : null,
+			input.decisionSnapshot ? JSON.stringify(input.decisionSnapshot) : null,
+			input.candidateComputedAt ?? null,
+			"pending",
+		);
 	const row = await first<ManualPickRow>(
 		db,
 		`SELECT * FROM manual_picks WHERE id = ?`,
@@ -254,6 +354,44 @@ export async function settleManualPick(
 		input.closePrice ?? null,
 		input.roi ?? null,
 		input.clv ?? null,
+		input.id,
+	);
+	const row = await first<ManualPickRow>(
+		db,
+		`SELECT * FROM manual_picks WHERE id = ?`,
+		input.id,
+	);
+	return row ? parsePickRow(row) : null;
+}
+
+export async function updateManualPickExecution(
+	db: Db,
+	input: UpdateManualPickExecutionInput,
+): Promise<ManualPickEntry | null> {
+	await run(
+		db,
+		`UPDATE manual_picks
+	     SET execution_submitted_at = COALESCE(?, execution_submitted_at),
+	         execution_filled_at = COALESCE(?, execution_filled_at),
+	         fill_status = COALESCE(?, fill_status),
+	         fill_price = COALESCE(?, fill_price),
+	         fill_size = COALESCE(?, fill_size),
+	         fill_notional = COALESCE(?, fill_notional),
+	         fill_slippage_bps = COALESCE(?, fill_slippage_bps),
+	         order_id = COALESCE(?, order_id),
+	         exchange_trade_id = COALESCE(?, exchange_trade_id),
+	         execution_notes = COALESCE(?, execution_notes)
+	     WHERE id = ?`,
+		input.executionSubmittedAt ?? null,
+		input.executionFilledAt ?? null,
+		input.fillStatus ?? null,
+		input.fillPrice ?? null,
+		input.fillSize ?? null,
+		input.fillNotional ?? null,
+		input.fillSlippageBps ?? null,
+		input.orderId ?? null,
+		input.exchangeTradeId ?? null,
+		input.executionNotes ?? null,
 		input.id,
 	);
 	const row = await first<ManualPickRow>(

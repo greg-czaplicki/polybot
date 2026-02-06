@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useCallback, useEffect, useState } from 'react'
 
 import { AuthGate } from '@/components/auth-gate'
+import { getBotEvalFn } from '../server/api/bot-eval'
 import {
   backfillSharpMoneyHistoryFn,
   fetchTrendingSportsMarketsFn,
@@ -33,7 +34,58 @@ function formatRelativeTime(timestamp?: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function formatBps(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(1)} bps`
+}
+
 function RuntimePage() {
+  type EvalBucket = {
+    triggered: number
+    resolved: number
+    hitRate: number | null
+    avgMoveBps: number | null
+    medianMoveBps: number | null
+  }
+  type EvalStrategy = {
+    triggered: number
+    resolved: number
+    hitRate: number | null
+    avgMoveBps: number | null
+    medianMoveBps: number | null
+    byGrade: Record<string, EvalBucket>
+    byHourToStart: Record<string, EvalBucket>
+  }
+  type EvalResult = {
+    computedAt: number
+    windowHours: number
+    horizonMinutes: number
+    historyWindowMinutes: number
+    minGrade: string
+    includeStarted: boolean
+    totalHistoryRows: number
+    eligibleSnapshots: number
+    strategies: {
+      baseline: EvalStrategy
+      filtered: EvalStrategy
+    }
+    thresholdSweep: Array<{
+      threshold: number
+      triggered: number
+      resolved: number
+      hitRate: number | null
+      avgMoveBps: number | null
+      medianMoveBps: number | null
+      retainedRate: number | null
+      avgMoveDeltaBps: number | null
+    }>
+  }
+
   const [stats, setStats] = useState<{
     fetchedAt: number
     totalMarkets: number
@@ -90,10 +142,27 @@ function RuntimePage() {
   const [isBackfilling, setIsBackfilling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [backfillResult, setBackfillResult] = useState<string | null>(null)
+  const [evalResult, setEvalResult] = useState<EvalResult | null>(null)
+  const [isEvaluating, setIsEvaluating] = useState(false)
+  const [evalError, setEvalError] = useState<string | null>(null)
+  const [evalWindowHours, setEvalWindowHours] = useState('24')
+  const [evalHorizonMinutes, setEvalHorizonMinutes] = useState('15')
+  const [evalHistoryWindowMinutes, setEvalHistoryWindowMinutes] = useState('60')
+  const [evalMinGrade, setEvalMinGrade] = useState<'A+' | 'A' | 'B' | 'C' | 'D'>('A')
+  const [evalIncludeStarted, setEvalIncludeStarted] = useState(false)
+  const [evalSweepThresholds, setEvalSweepThresholds] = useState('0.58,0.62,0.66,0.70')
 
   const filteredTotalMarkets = stats
     ? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
     : 0
+  const evalHourBuckets = evalResult
+    ? Array.from(
+        new Set([
+          ...Object.keys(evalResult.strategies.baseline.byHourToStart),
+          ...Object.keys(evalResult.strategies.filtered.byHourToStart),
+        ]),
+      )
+    : []
 
   const loadStats = useCallback(async () => {
     setError(null)
@@ -146,6 +215,48 @@ function RuntimePage() {
       setIsBackfilling(false)
     }
   }, [isBackfilling, loadStats])
+
+  const runEval = useCallback(async () => {
+    if (isEvaluating) return
+    setIsEvaluating(true)
+    setEvalError(null)
+    try {
+      const windowHours = Number(evalWindowHours)
+      const horizonMinutes = Number(evalHorizonMinutes)
+      const historyWindowMinutes = Number(evalHistoryWindowMinutes)
+      const result = await getBotEvalFn({
+        data: {
+          windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
+          horizonMinutes: Number.isFinite(horizonMinutes) && horizonMinutes > 0 ? horizonMinutes : 15,
+          historyWindowMinutes:
+            Number.isFinite(historyWindowMinutes) && historyWindowMinutes > 0
+              ? historyWindowMinutes
+              : 60,
+          minGrade: evalMinGrade,
+          includeStarted: evalIncludeStarted,
+          limit: 10000,
+          sweepThresholds: evalSweepThresholds
+            .split(',')
+            .map((value) => Number(value.trim()))
+            .filter((value) => Number.isFinite(value)),
+        },
+      })
+      setEvalResult(result as EvalResult)
+    } catch (err) {
+      console.error('Failed to run eval', err)
+      setEvalError('Failed to run eval comparison')
+    } finally {
+      setIsEvaluating(false)
+    }
+  }, [
+    isEvaluating,
+    evalWindowHours,
+    evalHorizonMinutes,
+    evalHistoryWindowMinutes,
+    evalMinGrade,
+    evalIncludeStarted,
+    evalSweepThresholds,
+  ])
 
   useEffect(() => {
     void loadStats()
@@ -227,6 +338,188 @@ function RuntimePage() {
               {backfillResult}
             </div>
           )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+          <div className="flex flex-col gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-50">Eval Comparison</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Compare baseline candidate logic vs filtered market-quality logic using historical snapshots.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-6">
+              <div>
+                <label htmlFor="eval-window-hours" className="block text-xs text-slate-400">
+                  Window hours
+                </label>
+                <input
+                  id="eval-window-hours"
+                  value={evalWindowHours}
+                  onChange={(event) => setEvalWindowHours(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="eval-horizon-mins" className="block text-xs text-slate-400">
+                  Horizon (mins)
+                </label>
+                <input
+                  id="eval-horizon-mins"
+                  value={evalHorizonMinutes}
+                  onChange={(event) => setEvalHorizonMinutes(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="eval-history-mins" className="block text-xs text-slate-400">
+                  Signal window (mins)
+                </label>
+                <input
+                  id="eval-history-mins"
+                  value={evalHistoryWindowMinutes}
+                  onChange={(event) => setEvalHistoryWindowMinutes(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="eval-min-grade" className="block text-xs text-slate-400">
+                  Min grade
+                </label>
+                <select
+                  id="eval-min-grade"
+                  value={evalMinGrade}
+                  onChange={(event) => setEvalMinGrade(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+                >
+                  <option value="A+">A+</option>
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                  <option value="D">D</option>
+                </select>
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={runEval}
+                  disabled={isEvaluating}
+                  className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+                >
+                  {isEvaluating ? 'Running…' : 'Run Eval'}
+                </button>
+              </div>
+              <div className="md:col-span-6">
+                <label htmlFor="eval-thresholds" className="block text-xs text-slate-400">
+                  Sweep thresholds (comma separated)
+                </label>
+                <input
+                  id="eval-thresholds"
+                  value={evalSweepThresholds}
+                  onChange={(event) => setEvalSweepThresholds(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+                  placeholder="0.58,0.62,0.66,0.70"
+                />
+              </div>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                checked={evalIncludeStarted}
+                onChange={(event) => setEvalIncludeStarted(event.target.checked)}
+              />
+              Include started events
+            </label>
+            {evalError && (
+              <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+                {evalError}
+              </div>
+            )}
+            {evalResult && (
+              <div className="space-y-5">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <p className="text-sm font-semibold text-slate-100">Baseline</p>
+                    <p className="mt-2 text-sm text-slate-300">
+                      Triggered: {evalResult.strategies.baseline.triggered} • Resolved: {evalResult.strategies.baseline.resolved}
+                    </p>
+                    <p className="text-sm text-slate-300">
+                      Hit rate: {formatPercent(evalResult.strategies.baseline.hitRate)} • Avg move: {formatBps(evalResult.strategies.baseline.avgMoveBps)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <p className="text-sm font-semibold text-slate-100">Filtered</p>
+                    <p className="mt-2 text-sm text-slate-300">
+                      Triggered: {evalResult.strategies.filtered.triggered} • Resolved: {evalResult.strategies.filtered.resolved}
+                    </p>
+                    <p className="text-sm text-slate-300">
+                      Hit rate: {formatPercent(evalResult.strategies.filtered.hitRate)} • Avg move: {formatBps(evalResult.strategies.filtered.avgMoveBps)}
+                    </p>
+                  </div>
+                </div>
+                <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                  <p className="text-sm font-semibold text-slate-100">By hour to start</p>
+                  <table className="mt-3 min-w-full text-left text-sm text-slate-200">
+                    <thead>
+                      <tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        <th className="pb-2">Bucket</th>
+                        <th className="pb-2">Base Hit</th>
+                        <th className="pb-2">Base Avg</th>
+                        <th className="pb-2">Filt Hit</th>
+                        <th className="pb-2">Filt Avg</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {evalHourBuckets.map((bucket) => {
+                        const base = evalResult.strategies.baseline.byHourToStart[bucket]
+                        const filt = evalResult.strategies.filtered.byHourToStart[bucket]
+                        return (
+                          <tr key={bucket} className="border-t border-slate-800">
+                            <td className="py-2 pr-4 font-semibold text-slate-100">{bucket}</td>
+                            <td className="py-2 pr-4">{formatPercent(base?.hitRate)}</td>
+                            <td className="py-2 pr-4">{formatBps(base?.avgMoveBps)}</td>
+                            <td className="py-2 pr-4">{formatPercent(filt?.hitRate)}</td>
+                            <td className="py-2">{formatBps(filt?.avgMoveBps)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                  <p className="text-sm font-semibold text-slate-100">Threshold sweep</p>
+                  <table className="mt-3 min-w-full text-left text-sm text-slate-200">
+                    <thead>
+                      <tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        <th className="pb-2">Threshold</th>
+                        <th className="pb-2">Retained</th>
+                        <th className="pb-2">Hit Rate</th>
+                        <th className="pb-2">Avg Move</th>
+                        <th className="pb-2">Delta vs Base</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {evalResult.thresholdSweep.map((row) => (
+                        <tr key={row.threshold} className="border-t border-slate-800">
+                          <td className="py-2 pr-4 font-semibold text-slate-100">
+                            {row.threshold.toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-4">{formatPercent(row.retainedRate)}</td>
+                          <td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
+                          <td className="py-2 pr-4">{formatBps(row.avgMoveBps)}</td>
+                          <td className="py-2">
+                            {row.avgMoveDeltaBps === null || !Number.isFinite(row.avgMoveDeltaBps)
+                              ? '—'
+                              : `${row.avgMoveDeltaBps >= 0 ? '+' : ''}${row.avgMoveDeltaBps.toFixed(1)} bps`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-6">

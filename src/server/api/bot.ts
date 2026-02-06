@@ -5,7 +5,13 @@ import {
 	getSharpMoneyCacheByConditionId,
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
-import { createManualPick } from "../repositories/manual-picks";
+import {
+	createManualPick,
+	settleManualPick,
+	updateManualPickExecution,
+	type ManualPickStatus,
+} from "../repositories/manual-picks";
+import { computeBotEval } from "./bot-eval";
 import {
 	computeSharpMoneyGrades,
 	computePriceEdgeFromEntry,
@@ -17,6 +23,7 @@ const DEFAULT_CACHE_LIMIT = 200;
 const DEFAULT_CACHE_WINDOW_HOURS = 24;
 const DEFAULT_CANDIDATE_WINDOW_MINUTES = 5;
 const MAX_CANDIDATE_LIMIT = 500;
+const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.72;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	"A": 4,
@@ -231,20 +238,33 @@ export async function handleBotRequest(
 			return jsonResponse({ error: "invalid_minGrade" }, { status: 400 });
 		}
 		const windowMinutesParam = Number(url.searchParams.get("windowMinutes"));
-		const limitParam = Number(url.searchParams.get("limit"));
-		const requireReady = url.searchParams.get("requireReady");
-		const includeStarted = url.searchParams.get("includeStarted");
-		const windowMinutes =
-			Number.isFinite(windowMinutesParam) && windowMinutesParam > 0
-				? windowMinutesParam
-				: DEFAULT_CANDIDATE_WINDOW_MINUTES;
+			const limitParam = Number(url.searchParams.get("limit"));
+			const requireReady = url.searchParams.get("requireReady");
+			const includeStarted = url.searchParams.get("includeStarted");
+			const requireMicrostructure = url.searchParams.get("requireMicrostructure");
+			const marketQualityThresholdParam = Number(
+				url.searchParams.get("marketQualityThreshold"),
+			);
+			const windowMinutes =
+				Number.isFinite(windowMinutesParam) && windowMinutesParam > 0
+					? windowMinutesParam
+					: DEFAULT_CANDIDATE_WINDOW_MINUTES;
 		const limit =
 			Number.isFinite(limitParam) && limitParam > 0
 				? Math.min(limitParam, MAX_CANDIDATE_LIMIT)
 				: DEFAULT_CACHE_LIMIT;
 		const shouldRequireReady =
 			requireReady === null || requireReady.toLowerCase() === "true";
-		const allowStarted = includeStarted?.toLowerCase() === "true";
+			const shouldRequireMicrostructure =
+				requireMicrostructure === null ||
+				requireMicrostructure.toLowerCase() === "true";
+			const marketQualityThreshold =
+				Number.isFinite(marketQualityThresholdParam) &&
+				marketQualityThresholdParam >= 0 &&
+				marketQualityThresholdParam <= 1
+					? marketQualityThresholdParam
+					: DEFAULT_MARKET_QUALITY_THRESHOLD;
+			const allowStarted = includeStarted?.toLowerCase() === "true";
 		const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
 		const now = Date.now();
 		const cutoffMs = windowMinutes * 60 * 1000;
@@ -287,7 +307,13 @@ export async function handleBotRequest(
 				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
 				if (!grade?.grade) return null;
 				if (GRADE_RANK[grade.grade] < GRADE_RANK[minGrade]) return null;
-				if ((grade.warnings ?? []).includes("no_price_edge")) return null;
+					if ((grade.warnings ?? []).includes("no_price_edge")) return null;
+					if (
+						shouldRequireMicrostructure &&
+						(grade.microstructureScore ?? 0) < marketQualityThreshold
+					) {
+						return null;
+					}
 				return {
 					entry: toSlimCandidate(entry),
 					grade: {
@@ -295,6 +321,7 @@ export async function handleBotRequest(
 						signalScore: grade.signalScore,
 						edgeRating: grade.edgeRating,
 						scoreDifferential: grade.scoreDifferential,
+						microstructureScore: grade.microstructureScore,
 						isReady: grade.isReady,
 						warnings: grade.warnings,
 						computedAt: grade.computedAt,
@@ -341,6 +368,15 @@ export async function handleBotRequest(
 			if (candidateEdge < existingEdge) {
 				continue;
 			}
+			const candidateMicrostructure = candidate.grade.microstructureScore ?? 0;
+			const existingMicrostructure = existing.grade.microstructureScore ?? 0;
+			if (candidateMicrostructure > existingMicrostructure) {
+				deduped.set(key, candidate);
+				continue;
+			}
+			if (candidateMicrostructure < existingMicrostructure) {
+				continue;
+			}
 			const candidateDiff = candidate.grade.scoreDifferential ?? 0;
 			const existingDiff = existing.grade.scoreDifferential ?? 0;
 			if (candidateDiff > existingDiff) {
@@ -365,6 +401,30 @@ export async function handleBotRequest(
 		});
 	}
 
+	if (url.pathname === "/api/bot/eval") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			windowHours?: number;
+			horizonMinutes?: number;
+			historyWindowMinutes?: number;
+			minGrade?: string;
+			includeStarted?: boolean;
+			limit?: number;
+			sweepThresholds?: number[];
+		}>(request);
+		const minGrade = parseMinGrade(payload?.minGrade ?? null);
+		if (!minGrade) {
+			return jsonResponse({ error: "invalid_minGrade" }, { status: 400 });
+		}
+		const result = await computeBotEval(env.POLYWHALER_DB, {
+			...(payload ?? {}),
+			minGrade,
+		});
+		return jsonResponse(result);
+	}
+
 	if (url.pathname === "/api/bot/grades") {
 		if (request.method !== "POST") {
 			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
@@ -381,21 +441,27 @@ export async function handleBotRequest(
 		return jsonResponse(result);
 	}
 
-	if (url.pathname === "/api/bot/picks") {
-		if (request.method !== "POST") {
-			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
-		}
-		const payload = await parseJson<{
+		if (url.pathname === "/api/bot/picks") {
+			if (request.method !== "POST") {
+				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+			}
+			const payload = await parseJson<{
 			conditionId?: string;
 			marketTitle?: string;
 			eventTime?: string;
 			grade?: string;
 			signalScore?: number;
 			edgeRating?: number;
-			scoreDifferential?: number;
-			sharpSide?: string;
-			price?: number;
-		}>(request);
+				scoreDifferential?: number;
+				sharpSide?: string;
+				price?: number;
+				strategyVersion?: string;
+				thresholdUsed?: number;
+				marketQualityScore?: number;
+				warnings?: string[];
+				decisionSnapshot?: unknown;
+				candidateComputedAt?: number;
+			}>(request);
 		if (!payload?.conditionId || !payload?.marketTitle) {
 			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 		}
@@ -431,22 +497,90 @@ export async function handleBotRequest(
 						},
 					})
 				: null;
-		const pick = await createManualPick(env.POLYWHALER_DB, {
-			conditionId: payload.conditionId,
-			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
-			eventTime: payload.eventTime ?? cacheEntry?.eventTime,
-			grade: payload.grade,
+			const pick = await createManualPick(env.POLYWHALER_DB, {
+				conditionId: payload.conditionId,
+				marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
+				eventTime: payload.eventTime ?? cacheEntry?.eventTime,
+				grade: payload.grade,
 			signalScore: payload.signalScore,
 			edgeRating,
 			scoreDifferential,
 			sharpSide,
 			price,
-			confidence,
-			fairPrice: priceEdgeResult?.fairPrice ?? null,
-			priceEdge: priceEdgeResult?.priceEdge ?? null,
-		});
-		return jsonResponse({ pick });
-	}
+				confidence,
+				fairPrice: priceEdgeResult?.fairPrice ?? null,
+				priceEdge: priceEdgeResult?.priceEdge ?? null,
+				strategyVersion: payload.strategyVersion,
+				thresholdUsed: payload.thresholdUsed,
+				marketQualityScore: payload.marketQualityScore,
+				warnings: payload.warnings,
+				decisionSnapshot: payload.decisionSnapshot,
+				candidateComputedAt: payload.candidateComputedAt,
+			});
+			return jsonResponse({ pick });
+		}
+
+		if (url.pathname === "/api/bot/picks/execution") {
+			if (request.method !== "POST") {
+				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+			}
+			const payload = await parseJson<{
+				id?: string;
+				executionSubmittedAt?: number;
+				executionFilledAt?: number;
+				fillStatus?: string;
+				fillPrice?: number;
+				fillSize?: number;
+				fillNotional?: number;
+				fillSlippageBps?: number;
+				orderId?: string;
+				exchangeTradeId?: string;
+				executionNotes?: string;
+			}>(request);
+			if (!payload?.id) {
+				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+			}
+			const pick = await updateManualPickExecution(env.POLYWHALER_DB, {
+				id: payload.id,
+				executionSubmittedAt: payload.executionSubmittedAt ?? null,
+				executionFilledAt: payload.executionFilledAt ?? null,
+				fillStatus: payload.fillStatus ?? null,
+				fillPrice: payload.fillPrice ?? null,
+				fillSize: payload.fillSize ?? null,
+				fillNotional: payload.fillNotional ?? null,
+				fillSlippageBps: payload.fillSlippageBps ?? null,
+				orderId: payload.orderId ?? null,
+				exchangeTradeId: payload.exchangeTradeId ?? null,
+				executionNotes: payload.executionNotes ?? null,
+			});
+			return jsonResponse({ pick });
+		}
+
+		if (url.pathname === "/api/bot/picks/outcome") {
+			if (request.method !== "POST") {
+				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+			}
+			const payload = await parseJson<{
+				id?: string;
+				status?: ManualPickStatus;
+				resolvedOutcome?: string;
+				closePrice?: number;
+				roi?: number;
+				clv?: number;
+			}>(request);
+			if (!payload?.id || !payload.status) {
+				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+			}
+			const pick = await settleManualPick(env.POLYWHALER_DB, {
+				id: payload.id,
+				status: payload.status,
+				resolvedOutcome: payload.resolvedOutcome ?? null,
+				closePrice: payload.closePrice ?? null,
+				roi: payload.roi ?? null,
+				clv: payload.clv ?? null,
+			});
+			return jsonResponse({ pick });
+		}
 
 	return jsonResponse({ error: "not_found" }, { status: 404 });
 }
