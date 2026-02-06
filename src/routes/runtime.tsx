@@ -8,6 +8,7 @@ import {
 	getManualPicksCalibrationFn,
 	getManualPicksClvTimingFn,
 	getManualPicksShadowWindowsFn,
+	getManualPicksSportPerformanceFn,
 } from "../server/api/manual-picks";
 import {
 	backfillSharpMoneyHistoryFn,
@@ -265,6 +266,27 @@ type ShadowWindowResult = {
 	segments: ShadowWindowSegment[];
 };
 
+type SportPerformanceRow = {
+	sportTag: string;
+	label: string;
+	seriesId?: number;
+	totalCount: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	qualityCount: number;
+	qualityWinRate: number | null;
+	qualityAvgRoi: number | null;
+	qualityAvgClvBps: number | null;
+};
+
+type SportPerformanceResult = {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	rows: SportPerformanceRow[];
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -304,6 +326,13 @@ function RuntimePage() {
 	const [isShadowWindowLoading, setIsShadowWindowLoading] = useState(false);
 	const [shadowWindowError, setShadowWindowError] = useState<string | null>(null);
 	const isShadowWindowLoadingRef = useRef(false);
+	const [sportPerformanceResult, setSportPerformanceResult] =
+		useState<SportPerformanceResult | null>(null);
+	const [isSportPerformanceLoading, setIsSportPerformanceLoading] = useState(false);
+	const [sportPerformanceError, setSportPerformanceError] = useState<string | null>(
+		null,
+	);
+	const isSportPerformanceLoadingRef = useRef(false);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -494,6 +523,38 @@ function RuntimePage() {
 		[],
 	);
 
+	const loadSportPerformance = useCallback(
+		async (requestedLimit?: number, requestedThreshold?: number) => {
+			if (isSportPerformanceLoadingRef.current) return;
+			isSportPerformanceLoadingRef.current = true;
+			setIsSportPerformanceLoading(true);
+			setSportPerformanceError(null);
+			try {
+				const limitValue = requestedLimit ?? 2000;
+				const thresholdValue = requestedThreshold ?? 0.72;
+				const result = await getManualPicksSportPerformanceFn({
+					data: {
+						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						qualityThreshold:
+							Number.isFinite(thresholdValue) && thresholdValue > 0
+								? thresholdValue
+								: 0.72,
+					},
+				});
+				setSportPerformanceResult(
+					(result.sportPerformance ?? null) as SportPerformanceResult | null,
+				);
+			} catch (err) {
+				console.error("Failed to load sport performance", err);
+				setSportPerformanceError("Failed to load sport performance");
+			} finally {
+				setIsSportPerformanceLoading(false);
+				isSportPerformanceLoadingRef.current = false;
+			}
+		},
+		[],
+	);
+
 	const refreshStats = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
@@ -584,12 +645,14 @@ function RuntimePage() {
 		void loadBucketPerformance(2000);
 		void loadClvTiming(2000, 0.72);
 		void loadShadowWindows(2000, 0.72);
+		void loadSportPerformance(2000, 0.72);
 	}, [
 		loadStats,
 		loadCalibration,
 		loadBucketPerformance,
 		loadClvTiming,
 		loadShadowWindows,
+		loadSportPerformance,
 	]);
 
 	return (
@@ -879,6 +942,57 @@ function RuntimePage() {
 									<p className="mt-3 text-sm text-slate-400">No shadow window data yet.</p>
 								)}
 							</div>
+							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+								<summary className="cursor-pointer text-sm font-semibold text-slate-100">
+									Performance by Sport
+								</summary>
+								<p className="mt-2 text-xs text-slate-400">
+									Shows sport-level hit/ROI/CLV across all settled picks and the quality-threshold subset.
+								</p>
+								<div className="mt-3 flex flex-wrap items-center gap-3">
+									<button
+										type="button"
+										onClick={() =>
+											void loadSportPerformance(
+												Number(calibrationLimit),
+												Number(clvQualityThreshold),
+											)
+										}
+										disabled={isSportPerformanceLoading}
+										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+									>
+										{isSportPerformanceLoading ? "Refreshing..." : "Refresh Sport Performance"}
+									</button>
+								</div>
+								{sportPerformanceError && <div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{sportPerformanceError}</div>}
+								{sportPerformanceResult ? (
+									<div className="mt-4 overflow-auto">
+										<div className="mb-2 text-xs text-slate-400">
+											Settled picks: {sportPerformanceResult.settledPicks} • Quality threshold: {sportPerformanceResult.qualityThreshold.toFixed(2)}
+										</div>
+										<table className="min-w-full text-left text-sm text-slate-200">
+											<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Sport</th><th className="pb-2">All Count</th><th className="pb-2">All Hit</th><th className="pb-2">All ROI</th><th className="pb-2">All CLV</th><th className="pb-2">Q Count</th><th className="pb-2">Q Hit</th><th className="pb-2">Q ROI</th><th className="pb-2">Q CLV</th></tr></thead>
+											<tbody>
+												{sportPerformanceResult.rows.map((row) => (
+													<tr key={row.sportTag} className="border-t border-slate-800">
+														<td className="py-2 pr-4 font-semibold text-slate-100">{row.label}</td>
+														<td className="py-2 pr-4">{row.totalCount}</td>
+														<td className="py-2 pr-4">{formatPercent(row.winRate)}</td>
+														<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
+														<td className="py-2 pr-4">{formatBps(row.avgClvBps)}</td>
+														<td className="py-2 pr-4">{row.qualityCount}</td>
+														<td className="py-2 pr-4">{formatPercent(row.qualityWinRate)}</td>
+														<td className="py-2 pr-4">{formatSignedPercent(row.qualityAvgRoi)}</td>
+														<td className="py-2">{formatBps(row.qualityAvgClvBps)}</td>
+													</tr>
+												))}
+											</tbody>
+										</table>
+									</div>
+								) : (
+									<p className="mt-3 text-sm text-slate-400">No sport performance data yet.</p>
+								)}
+							</details>
 						</div>
 					</section>
 

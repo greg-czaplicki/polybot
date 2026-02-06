@@ -5,6 +5,7 @@ import {
 	listSharpMoneyHistoryByConditionIds,
 	type SharpMoneyHistoryEntryByConditionId,
 } from "./sharp-money";
+import { detectSportTag } from "../../lib/sports";
 
 export type ManualPickStatus = "pending" | "win" | "loss" | "push";
 
@@ -184,6 +185,27 @@ export interface ManualPickShadowWindowSummary {
 	segments: ManualPickShadowWindowSegment[];
 }
 
+export interface ManualPickSportPerformanceRow {
+	sportTag: string;
+	label: string;
+	seriesId?: number;
+	totalCount: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	qualityCount: number;
+	qualityWinRate: number | null;
+	qualityAvgRoi: number | null;
+	qualityAvgClvBps: number | null;
+}
+
+export interface ManualPickSportPerformanceSummary {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	rows: ManualPickSportPerformanceRow[];
+}
+
 export interface CreateManualPickInput {
 	clientPickId?: string;
 	conditionId: string;
@@ -264,6 +286,16 @@ const GRADE_TO_SIGNAL_SCORE: Record<string, number> = {
 	B: 70,
 	C: 55,
 	D: 40,
+};
+
+const SERIES_LABELS: Record<number, string> = {
+	10187: "NFL",
+	10345: "NBA",
+	10210: "College Football",
+	10470: "College Basketball",
+	3: "MLB",
+	10346: "NHL",
+	10188: "Premier League",
 };
 
 function parseStringArray(value: string | null | undefined): string[] | undefined {
@@ -688,6 +720,59 @@ function resolveMarketQualityScore(pick: ManualPickEntry): number | null {
 		return pick.marketQualityScore;
 	}
 	return extractNumber(pick.decisionSnapshot, ["marketQualityScore"]);
+}
+
+function extractString(obj: unknown, keys: string[]): string | null {
+	if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
+	const record = obj as Record<string, unknown>;
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	return null;
+}
+
+function extractSportSeriesId(pick: ManualPickEntry): number | null {
+	const raw =
+		extractNumber(pick.decisionSnapshot, ["sportSeriesId"]) ??
+		extractNumber(pick.decisionSnapshot, ["sport_series_id"]);
+	if (raw === null) return null;
+	const asInt = Math.trunc(raw);
+	return Number.isFinite(asInt) && asInt > 0 ? asInt : null;
+}
+
+function resolveSportForPick(pick: ManualPickEntry): {
+	sportTag: string;
+	label: string;
+	seriesId?: number;
+} {
+	const seriesId = extractSportSeriesId(pick);
+	if (seriesId && SERIES_LABELS[seriesId]) {
+		return {
+			sportTag: `series_${seriesId}`,
+			label: SERIES_LABELS[seriesId],
+			seriesId,
+		};
+	}
+
+	const eventSlug = extractString(pick.decisionSnapshot, ["eventSlug"]);
+	const marketSlug = extractString(pick.decisionSnapshot, ["marketSlug"]);
+	const detected = detectSportTag({
+		title: pick.marketTitle,
+		eventSlug,
+		slug: marketSlug,
+	});
+	if (detected) {
+		return {
+			sportTag: detected,
+			label: detected.toUpperCase(),
+		};
+	}
+
+	return {
+		sportTag: "unknown",
+		label: "Unknown",
+	};
 }
 
 function buildTimeToStartRows(
@@ -1152,5 +1237,86 @@ export async function getManualPicksShadowWindowSummary(
 				rows,
 			};
 		}),
+	};
+}
+
+export async function getManualPicksSportPerformanceSummary(
+	db: Db,
+	options?: { limit?: number; qualityThreshold?: number },
+): Promise<ManualPickSportPerformanceSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const qualityThreshold =
+		typeof options?.qualityThreshold === "number" &&
+		Number.isFinite(options.qualityThreshold)
+			? options.qualityThreshold
+			: 0.72;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter((pick) => pick.status !== "pending");
+
+	const statsBySport = new Map<
+		string,
+		{
+			sportTag: string;
+			label: string;
+			seriesId?: number;
+			all: MutableBucketStats;
+			quality: MutableBucketStats;
+		}
+	>();
+
+	for (const pick of settled) {
+		const sport = resolveSportForPick(pick);
+		const existing = statsBySport.get(sport.sportTag) ?? {
+			sportTag: sport.sportTag,
+			label: sport.label,
+			seriesId: sport.seriesId,
+			all: initMutableBucket("all"),
+			quality: initMutableBucket("quality"),
+		};
+		applyPickToBucket(existing.all, pick);
+		const qualityScore = resolveMarketQualityScore(pick);
+		if (
+			qualityScore !== null &&
+			Number.isFinite(qualityScore) &&
+			qualityScore >= qualityThreshold
+		) {
+			applyPickToBucket(existing.quality, pick);
+		}
+		statsBySport.set(sport.sportTag, existing);
+	}
+
+	const rows: ManualPickSportPerformanceRow[] = Array.from(statsBySport.values())
+		.map((entry) => {
+			const allRow = bucketToShadowWindowRow(entry.all, "all", "all", null);
+			const qualityRow = bucketToShadowWindowRow(
+				entry.quality,
+				"quality",
+				"quality",
+				null,
+			);
+			return {
+				sportTag: entry.sportTag,
+				label: entry.label,
+				seriesId: entry.seriesId,
+				totalCount: allRow.count,
+				winRate: allRow.hitRate,
+				avgRoi: allRow.avgRoi,
+				avgClvBps: allRow.avgClvBps,
+				qualityCount: qualityRow.count,
+				qualityWinRate: qualityRow.hitRate,
+				qualityAvgRoi: qualityRow.avgRoi,
+				qualityAvgClvBps: qualityRow.avgClvBps,
+			};
+		})
+		.sort((a, b) => {
+			if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+			return a.label.localeCompare(b.label);
+		});
+
+	return {
+		computedAt: nowUnixSeconds(),
+		settledPicks: settled.length,
+		qualityThreshold,
+		rows,
 	};
 }

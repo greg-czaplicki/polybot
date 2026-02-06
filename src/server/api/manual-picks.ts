@@ -8,6 +8,7 @@ import {
 	getManualPicksCalibrationSummary,
 	getManualPicksClvTimingSummary,
 	getManualPicksShadowWindowSummary,
+	getManualPicksSportPerformanceSummary,
 	getManualPicksSummary,
 	listManualPicks,
 	settleManualPick,
@@ -317,6 +318,18 @@ export const getManualPicksShadowWindowsFn = createServerFn({
 		qualityThreshold: payload.qualityThreshold,
 	});
 	return { shadow };
+});
+
+export const getManualPicksSportPerformanceFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const db = getDb(context);
+	const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
+		limit: payload.limit,
+		qualityThreshold: payload.qualityThreshold,
+	});
+	return { sportPerformance };
 });
 
 export const updateManualPickOutcomeFn = createServerFn({
