@@ -14,7 +14,8 @@
     "check": "biome check",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
-    "backfill:events": "node scripts/backfill-event-timestamps.mjs"
+    "backfill:events": "node scripts/backfill-event-timestamps.mjs",
+    "docs:polymarket": "python3 scripts/build-polymarket-docs-md.py"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.16.1",
