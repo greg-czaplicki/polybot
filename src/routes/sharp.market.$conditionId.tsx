@@ -7,6 +7,7 @@ import {
 	getClobDepthSnapshotFn,
 	getSharpMoneyCacheEntryFn,
 	type ClobDepthSnapshot,
+	type ClobOutcomeBook,
 } from "../server/api/sharp-money";
 
 export const Route = createFileRoute("/sharp/market/$conditionId")({
@@ -22,6 +23,14 @@ const SIZE_FORMATTER = new Intl.NumberFormat("en-US", {
 	notation: "compact",
 	maximumFractionDigits: 1,
 });
+
+const MAX_TREND_POINTS = 120;
+
+type BookTrendPoint = {
+	timestamp: number;
+	spread: number | null;
+	imbalance: number | null;
+};
 
 function formatPercent(value: number | null | undefined): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -54,6 +63,123 @@ function formatRelativeTime(timestamp?: number): string {
 	return `${Math.floor(diff / 3600)}h ago`;
 }
 
+function getDepthWallThreshold(levels: Array<{ notional: number }>): number {
+	if (levels.length === 0) return Number.POSITIVE_INFINITY;
+	const sorted = levels
+		.map((level) => level.notional)
+		.filter((value) => Number.isFinite(value) && value > 0)
+		.sort((a, b) => b - a);
+	if (sorted.length === 0) return Number.POSITIVE_INFINITY;
+	return sorted[Math.min(2, sorted.length - 1)] ?? sorted[0];
+}
+
+function buildSparkPath(
+	points: number[],
+	width: number,
+	height: number,
+	padding: number,
+): string {
+	if (points.length < 2) return "";
+	const min = Math.min(...points);
+	const max = Math.max(...points);
+	const range = max - min;
+	const safeRange = range === 0 ? Math.max(Math.abs(max), 1e-6) : range;
+	return points
+		.map((value, index) => {
+			const x =
+				padding + (index / (points.length - 1)) * (width - padding * 2);
+			const normalized = (value - min) / safeRange;
+			const y = height - padding - normalized * (height - padding * 2);
+			return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+		})
+		.join(" ");
+}
+
+function renderTrendChart(points: BookTrendPoint[]): JSX.Element {
+	const spreadPoints = points
+		.map((point) => point.spread)
+		.filter((value): value is number =>
+			typeof value === "number" && Number.isFinite(value),
+		);
+	const imbalancePoints = points
+		.map((point) => point.imbalance)
+		.filter((value): value is number =>
+			typeof value === "number" && Number.isFinite(value),
+		);
+
+	const width = 320;
+	const height = 68;
+	const padding = 8;
+	const spreadPath = buildSparkPath(spreadPoints, width, height, padding);
+	const imbalancePath = buildSparkPath(imbalancePoints, width, height, padding);
+
+	return (
+		<div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+			<div className="mb-1 flex items-center justify-between text-[0.65rem] text-slate-400">
+				<span>Trend (last {points.length} snapshots)</span>
+				<span>
+					Spread {formatPercent(spreadPoints.at(-1) ?? null)} • Imb {formatPercent(imbalancePoints.at(-1) ?? null)}
+				</span>
+			</div>
+			<svg
+				viewBox={`0 0 ${width} ${height}`}
+				className="h-16 w-full"
+				role="img"
+				aria-label="Spread and imbalance trend"
+			>
+				<title>Spread and imbalance trend</title>
+				<rect x="0" y="0" width={width} height={height} fill="transparent" />
+				<line
+					x1={padding}
+					y1={height / 2}
+					x2={width - padding}
+					y2={height / 2}
+					stroke="rgba(148,163,184,0.25)"
+					strokeWidth="1"
+					strokeDasharray="3 3"
+				/>
+				{spreadPath && (
+					<path
+						d={spreadPath}
+						fill="none"
+						stroke="rgb(34,211,238)"
+						strokeWidth="2"
+					/>
+				)}
+				{imbalancePath && (
+					<path
+						d={imbalancePath}
+						fill="none"
+						stroke="rgb(250,204,21)"
+						strokeWidth="2"
+					/>
+				)}
+			</svg>
+			<div className="mt-1 flex items-center gap-3 text-[0.65rem] text-slate-400">
+				<span className="inline-flex items-center gap-1">
+					<span className="h-2 w-2 rounded-full bg-cyan-400" /> Spread
+				</span>
+				<span className="inline-flex items-center gap-1">
+					<span className="h-2 w-2 rounded-full bg-yellow-300" /> Imbalance
+				</span>
+			</div>
+		</div>
+	);
+}
+
+function levelRowClass(
+	notional: number,
+	maxNotional: number,
+	wallThreshold: number,
+	base: string,
+	highlight: string,
+): string {
+	if (!Number.isFinite(notional) || notional <= 0) return base;
+	if (notional === maxNotional) return `${base} ${highlight} ring-1 ring-cyan-300/60`;
+	if (notional >= wallThreshold) return `${base} ${highlight}`;
+	return base;
+}
+
 function SharpMarketDepthPage() {
 	const { conditionId } = Route.useParams();
 	const [snapshot, setSnapshot] = useState<ClobDepthSnapshot | null>(null);
@@ -62,6 +188,9 @@ function SharpMarketDepthPage() {
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [levelLimit, setLevelLimit] = useState(10);
+	const [trendByTokenId, setTrendByTokenId] = useState<
+		Record<string, BookTrendPoint[]>
+	>({});
 
 	const loadSnapshot = useCallback(
 		async (initial?: boolean) => {
@@ -75,11 +204,11 @@ function SharpMarketDepthPage() {
 				const [cacheResult, depthResult] = await Promise.all([
 					getSharpMoneyCacheEntryFn({ data: { conditionId } }),
 					getClobDepthSnapshotFn({ data: { conditionId, levelLimit } }),
-				])
+				]);
 				setMarketTitle(cacheResult.entry?.marketTitle ?? null);
 				if (depthResult.error) {
 					setError(depthResult.error);
-					return
+					return;
 				}
 				setSnapshot((depthResult.snapshot ?? null) as ClobDepthSnapshot | null);
 			} catch (err) {
@@ -91,7 +220,7 @@ function SharpMarketDepthPage() {
 			}
 		},
 		[conditionId, levelLimit],
-	)
+	);
 
 	useEffect(() => {
 		void loadSnapshot(true);
@@ -104,6 +233,27 @@ function SharpMarketDepthPage() {
 		}, 3000);
 		return () => clearInterval(interval);
 	}, [loadSnapshot]);
+
+	useEffect(() => {
+		if (!snapshot) return;
+		setTrendByTokenId((prev) => {
+			const next: Record<string, BookTrendPoint[]> = {};
+			for (const outcome of snapshot.outcomes) {
+				const current = prev[outcome.tokenId] ?? [];
+				const point: BookTrendPoint = {
+					timestamp: snapshot.fetchedAt,
+					spread: outcome.spread,
+					imbalance: outcome.imbalance,
+				};
+				const deduped =
+					current.length > 0 && current[current.length - 1]?.timestamp === point.timestamp
+						? [...current.slice(0, -1), point]
+						: [...current, point];
+				next[outcome.tokenId] = deduped.slice(-MAX_TREND_POINTS);
+			}
+			return next;
+		});
+	}, [snapshot]);
 
 	const outcomeCards = useMemo(() => snapshot?.outcomes ?? [], [snapshot]);
 
@@ -146,7 +296,9 @@ function SharpMarketDepthPage() {
 								disabled={isRefreshing}
 								className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
 							>
-								<RefreshCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
+								<RefreshCw
+									className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`}
+								/>
 								Refresh
 							</button>
 						</div>
@@ -175,52 +327,96 @@ function SharpMarketDepthPage() {
 					)}
 
 					<div className="grid gap-4 md:grid-cols-2">
-						{outcomeCards.map((book) => (
-							<div key={book.tokenId} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-								<div className="mb-3 flex items-start justify-between gap-3">
-									<div>
-										<p className="text-sm font-semibold text-slate-100">{book.outcome}</p>
-										<p className="text-[0.65rem] text-slate-500 break-all">Token {book.tokenId}</p>
+						{outcomeCards.map((book: ClobOutcomeBook) => {
+							const bidWallThreshold = getDepthWallThreshold(book.bids);
+							const askWallThreshold = getDepthWallThreshold(book.asks);
+							const maxBidNotional = Math.max(
+								0,
+								...book.bids.map((level) => level.notional),
+							);
+							const maxAskNotional = Math.max(
+								0,
+								...book.asks.map((level) => level.notional),
+							);
+							const trendPoints = trendByTokenId[book.tokenId] ?? [];
+							return (
+								<div
+									key={book.tokenId}
+									className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"
+								>
+									<div className="mb-3 flex items-start justify-between gap-3">
+										<div>
+											<p className="text-sm font-semibold text-slate-100">{book.outcome}</p>
+											<p className="text-[0.65rem] text-slate-500 break-all">Token {book.tokenId}</p>
+										</div>
+										<div className="text-right text-xs text-slate-300">
+											<div>Bid {formatPrice(book.bestBid)}</div>
+											<div>Ask {formatPrice(book.bestAsk)}</div>
+											<div>Spread {formatPercent(book.spread)}</div>
+											<div>Imb {formatPercent(book.imbalance)}</div>
+										</div>
 									</div>
-									<div className="text-right text-xs text-slate-300">
-										<div>Bid {formatPrice(book.bestBid)}</div>
-										<div>Ask {formatPrice(book.bestAsk)}</div>
-										<div>Spread {formatPercent(book.spread)}</div>
-										<div>Imb {formatPercent(book.imbalance)}</div>
-									</div>
-								</div>
 
-								<div className="grid grid-cols-2 gap-3">
-									<div>
-										<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Bids</p>
-										<div className="space-y-1">
-											{book.bids.map((level, index) => (
-												<div key={`bid-${book.tokenId}-${index}`} className="grid grid-cols-2 gap-2 rounded bg-emerald-500/10 px-2 py-1 text-xs">
-													<span>{formatPrice(level.price)}</span>
-													<span className="text-right">{formatSize(level.size)}</span>
-												</div>
-											))}
-											{book.bids.length === 0 && <p className="text-xs text-slate-500">No bids</p>}
+									{trendPoints.length > 1 && (
+										<div className="mb-3">{renderTrendChart(trendPoints)}</div>
+									)}
+
+									<div className="grid grid-cols-2 gap-3">
+										<div>
+											<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Bids</p>
+											<div className="space-y-1">
+												{book.bids.map((level, index) => (
+													<div
+														key={`bid-${book.tokenId}-${index}`}
+														className={levelRowClass(
+															level.notional,
+															maxBidNotional,
+															bidWallThreshold,
+															"grid grid-cols-3 gap-2 rounded bg-emerald-500/10 px-2 py-1 text-xs",
+															"bg-emerald-400/25",
+														)}
+													>
+														<span>{formatPrice(level.price)}</span>
+														<span className="text-right">{formatSize(level.size)}</span>
+														<span className="text-right text-[0.65rem] text-emerald-200">
+															${formatSize(level.notional)}
+														</span>
+													</div>
+												))}
+												{book.bids.length === 0 && <p className="text-xs text-slate-500">No bids</p>}
+											</div>
 										</div>
-									</div>
-									<div>
-										<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Asks</p>
-										<div className="space-y-1">
-											{book.asks.map((level, index) => (
-												<div key={`ask-${book.tokenId}-${index}`} className="grid grid-cols-2 gap-2 rounded bg-rose-500/10 px-2 py-1 text-xs">
-													<span>{formatPrice(level.price)}</span>
-													<span className="text-right">{formatSize(level.size)}</span>
-												</div>
-											))}
-											{book.asks.length === 0 && <p className="text-xs text-slate-500">No asks</p>}
+										<div>
+											<p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Asks</p>
+											<div className="space-y-1">
+												{book.asks.map((level, index) => (
+													<div
+														key={`ask-${book.tokenId}-${index}`}
+														className={levelRowClass(
+															level.notional,
+															maxAskNotional,
+															askWallThreshold,
+															"grid grid-cols-3 gap-2 rounded bg-rose-500/10 px-2 py-1 text-xs",
+															"bg-rose-400/25",
+														)}
+													>
+														<span>{formatPrice(level.price)}</span>
+														<span className="text-right">{formatSize(level.size)}</span>
+														<span className="text-right text-[0.65rem] text-rose-200">
+															${formatSize(level.notional)}
+														</span>
+													</div>
+												))}
+												{book.asks.length === 0 && <p className="text-xs text-slate-500">No asks</p>}
+											</div>
 										</div>
 									</div>
 								</div>
-							</div>
-						))}
+							);
+						})}
 					</div>
 				</div>
 			</div>
 		</AuthGate>
-	)
+	);
 }
