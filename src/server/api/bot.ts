@@ -198,6 +198,10 @@ function buildDecisionSnapshot(input: {
 	thresholdUsed?: number;
 	warnings?: string[];
 	candidateComputedAt?: number;
+	l2Imbalance?: number;
+	l2ImbalanceNearMid?: number;
+	l2Spread?: number;
+	l2Disagreement?: boolean;
 }): Record<string, unknown> {
 	const marketTitle = input.marketTitle || input.cacheEntry?.marketTitle || "";
 	const eventTime = input.eventTime ?? input.cacheEntry?.eventTime;
@@ -225,6 +229,10 @@ function buildDecisionSnapshot(input: {
 		thresholdUsed: input.thresholdUsed ?? null,
 		warnings: input.warnings ?? [],
 		candidateComputedAt: input.candidateComputedAt ?? null,
+		l2Imbalance: input.l2Imbalance ?? null,
+		l2ImbalanceNearMid: input.l2ImbalanceNearMid ?? null,
+		l2Spread: input.l2Spread ?? null,
+		l2Disagreement: input.l2Disagreement ?? null,
 	};
 	if (!isPlainObject(input.payloadSnapshot)) {
 		return defaultSnapshot;
@@ -519,6 +527,10 @@ export async function handleBotRequest(
 				warnings?: string[];
 				decisionSnapshot?: unknown;
 				candidateComputedAt?: number;
+				l2Imbalance?: number;
+				l2ImbalanceNearMid?: number;
+				l2Spread?: number;
+				l2Disagreement?: boolean;
 			}>(request);
 		if (!payload?.conditionId || !payload?.marketTitle) {
 			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
@@ -567,11 +579,15 @@ export async function handleBotRequest(
 			signalScore: payload.signalScore,
 			edgeRating,
 			scoreDifferential,
-			marketQualityScore: payload.marketQualityScore,
-			thresholdUsed: payload.thresholdUsed,
-			warnings: payload.warnings,
-			candidateComputedAt: payload.candidateComputedAt,
-		});
+				marketQualityScore: payload.marketQualityScore,
+				thresholdUsed: payload.thresholdUsed,
+				warnings: payload.warnings,
+				candidateComputedAt: payload.candidateComputedAt,
+				l2Imbalance: payload.l2Imbalance,
+				l2ImbalanceNearMid: payload.l2ImbalanceNearMid,
+				l2Spread: payload.l2Spread,
+				l2Disagreement: payload.l2Disagreement,
+			});
 			const pick = await createManualPick(env.POLYWHALER_DB, {
 				clientPickId: payload.clientPickId,
 				conditionId: payload.conditionId,

@@ -25,6 +25,7 @@ import {
 } from "@/lib/sharp-grade";
 import {
 	clearSharpMoneyCacheFn,
+	fetchTrendingSportsMarketsFn,
 	getSharpMoneyCacheFn,
 	getSharpMoneyCacheStatsFn,
 	getSharpMoneyEdgeStatsHistoryFn,

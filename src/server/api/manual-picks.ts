@@ -4,6 +4,7 @@ import { getDb } from "../env";
 import {
 	createManualPick,
 	clearManualPicks,
+	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
 	getManualPicksSummary,
 	listManualPicks,
@@ -19,6 +20,7 @@ type GammaResolutionMarket = {
 	conditionId?: string;
 	resolved?: boolean;
 	resolution?: string | number | null;
+	umaResolutionStatus?: string | null;
 	outcomes?: string[] | string | null;
 	outcomePrices?: string[] | string | null;
 	closed?: boolean;
@@ -130,6 +132,7 @@ function resolvePickResult(input: {
 		input.market.resolved === true ||
 		(typeof input.market.closed === "boolean" && input.market.closed);
 	const resolution = input.market.resolution;
+	const umaResolutionStatus = input.market.umaResolutionStatus;
 	const outcomes = parseGammaList(input.market.outcomes);
 	const outcomePrices = parseGammaPrices(input.market.outcomePrices);
 
@@ -163,6 +166,31 @@ function resolvePickResult(input: {
 				resolvedOutcome = outcomes[index] ?? null;
 			}
 		}
+	}
+
+	// Fallback: some sports markets may have null resolution while outcome prices
+	// already reflect the winner (1/0 or near-1/near-0).
+	if (!resolvedSide && outcomePrices.length >= 2) {
+		const priceA = outcomePrices[0] ?? 0;
+		const priceB = outcomePrices[1] ?? 0;
+		const winThreshold = 0.98;
+		const loseThreshold = 0.02;
+		if (priceA >= winThreshold && priceB <= loseThreshold) {
+			resolvedSide = "A";
+			resolvedOutcome = outcomes[0] ?? "A";
+		} else if (priceB >= winThreshold && priceA <= loseThreshold) {
+			resolvedSide = "B";
+			resolvedOutcome = outcomes[1] ?? "B";
+		}
+	}
+
+	if (
+		status === "pending" &&
+		typeof umaResolutionStatus === "string" &&
+		(normalizeOutcome(umaResolutionStatus).includes("cancel") ||
+			normalizeOutcome(umaResolutionStatus).includes("invalid"))
+	) {
+		status = "push";
 	}
 
 	if (status === "push") {
@@ -252,6 +280,17 @@ export const getManualPicksCalibrationFn = createServerFn({
 		limit: payload.limit,
 	});
 	return { calibration };
+});
+
+export const getManualPicksBucketPerformanceFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number };
+	const db = getDb(context);
+	const performance = await getManualPicksBucketPerformanceSummary(db, {
+		limit: payload.limit,
+	});
+	return { performance };
 });
 
 export const updateManualPickOutcomeFn = createServerFn({

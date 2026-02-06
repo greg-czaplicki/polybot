@@ -3,7 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { getBotEvalFn } from "../server/api/bot-eval";
-import { getManualPicksCalibrationFn } from "../server/api/manual-picks";
+import {
+	getManualPicksBucketPerformanceFn,
+	getManualPicksCalibrationFn,
+} from "../server/api/manual-picks";
 import {
 	backfillSharpMoneyHistoryFn,
 	fetchTrendingSportsMarketsFn,
@@ -165,6 +168,26 @@ type CalibrationResult = {
 	byTimeToStart: CalibrationBucket[];
 };
 
+type PerformanceBucket = {
+	bucket: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	hitRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+};
+
+type BucketPerformanceResult = {
+	computedAt: number;
+	settledPicks: number;
+	byTimeToStart: PerformanceBucket[];
+	bySignalScore: PerformanceBucket[];
+	byL2ImbalanceNearMid: PerformanceBucket[];
+	byL2Disagreement: PerformanceBucket[];
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -187,6 +210,13 @@ function RuntimePage() {
 	const [calibrationError, setCalibrationError] = useState<string | null>(null);
 	const [calibrationLimit, setCalibrationLimit] = useState("2000");
 	const isCalibrationLoadingRef = useRef(false);
+	const [bucketPerformanceResult, setBucketPerformanceResult] =
+		useState<BucketPerformanceResult | null>(null);
+	const [isBucketPerformanceLoading, setIsBucketPerformanceLoading] = useState(false);
+	const [bucketPerformanceError, setBucketPerformanceError] = useState<string | null>(
+		null,
+	);
+	const isBucketPerformanceLoadingRef = useRef(false);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -235,6 +265,30 @@ function RuntimePage() {
 		} finally {
 			setIsCalibrationLoading(false);
 			isCalibrationLoadingRef.current = false;
+		}
+	}, []);
+
+	const loadBucketPerformance = useCallback(async (requestedLimit?: number) => {
+		if (isBucketPerformanceLoadingRef.current) return;
+		isBucketPerformanceLoadingRef.current = true;
+		setIsBucketPerformanceLoading(true);
+		setBucketPerformanceError(null);
+		try {
+			const limitValue = requestedLimit ?? 2000;
+			const result = await getManualPicksBucketPerformanceFn({
+				data: {
+					limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+				},
+			});
+			setBucketPerformanceResult(
+				(result.performance ?? null) as BucketPerformanceResult | null,
+			);
+		} catch (err) {
+			console.error("Failed to load bucket performance", err);
+			setBucketPerformanceError("Failed to load bucket performance");
+		} finally {
+			setIsBucketPerformanceLoading(false);
+			isBucketPerformanceLoadingRef.current = false;
 		}
 	}, []);
 
@@ -325,7 +379,8 @@ function RuntimePage() {
 	useEffect(() => {
 		void loadStats();
 		void loadCalibration(2000);
-	}, [loadStats, loadCalibration]);
+		void loadBucketPerformance(2000);
+	}, [loadStats, loadCalibration, loadBucketPerformance]);
 
 	return (
 		<AuthGate>
@@ -514,8 +569,17 @@ function RuntimePage() {
 									<input id="calibration-limit" value={calibrationLimit} onChange={(event) => setCalibrationLimit(event.target.value)} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
 								</div>
 								<button type="button" onClick={() => void loadCalibration(Number(calibrationLimit))} disabled={isCalibrationLoading} className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60">{isCalibrationLoading ? "Refreshing..." : "Refresh Calibration"}</button>
+								<button
+									type="button"
+									onClick={() => void loadBucketPerformance(Number(calibrationLimit))}
+									disabled={isBucketPerformanceLoading}
+									className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+								>
+									{isBucketPerformanceLoading ? "Refreshing..." : "Refresh Buckets"}
+								</button>
 							</div>
 							{calibrationError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{calibrationError}</div>}
+							{bucketPerformanceError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{bucketPerformanceError}</div>}
 							{calibrationResult ? (
 								<div className="space-y-5">
 									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
@@ -547,6 +611,51 @@ function RuntimePage() {
 								</div>
 							) : (
 								<p className="text-sm text-slate-400">No calibration data yet. Place bets and settle outcomes, then refresh.</p>
+							)}
+							{bucketPerformanceResult ? (
+								<div className="space-y-5">
+									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										Settled picks in bucket analysis: {bucketPerformanceResult.settledPicks}
+									</div>
+									{[
+										{
+											title: "Time to start buckets",
+											rows: bucketPerformanceResult.byTimeToStart,
+										},
+										{
+											title: "Signal score buckets",
+											rows: bucketPerformanceResult.bySignalScore,
+										},
+										{
+											title: "L2 near-mid imbalance buckets",
+											rows: bucketPerformanceResult.byL2ImbalanceNearMid,
+										},
+										{
+											title: "L2 disagreement buckets",
+											rows: bucketPerformanceResult.byL2Disagreement,
+										},
+									].map((table) => (
+										<div key={table.title} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+											<p className="text-sm font-semibold text-slate-100">{table.title}</p>
+											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+												<tbody>
+													{table.rows.map((row) => (
+														<tr key={`${table.title}-${row.bucket}`} className="border-t border-slate-800">
+															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
+															<td className="py-2 pr-4">{row.count}</td>
+															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
+															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
+															<td className="py-2">{formatBps(row.avgClvBps)}</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+									))}
+								</div>
+							) : (
+								<p className="text-sm text-slate-400">No bucket performance data yet.</p>
 							)}
 						</div>
 					</section>
