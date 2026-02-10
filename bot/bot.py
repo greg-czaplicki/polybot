@@ -16,6 +16,8 @@ class BotConfig:
 	base_url: str
 	api_key: str
 	min_grade: str
+	require_microstructure: bool
+	market_quality_threshold: float
 	window_minutes: int
 	poll_seconds: int
 	max_bets: int
@@ -124,6 +126,11 @@ def load_config() -> BotConfig:
 		base_url=base_url,
 		api_key=api_key,
 		min_grade=os.getenv("BOT_MIN_GRADE", "A"),
+		require_microstructure=os.getenv("BOT_REQUIRE_MICROSTRUCTURE", "false").lower()
+		== "true",
+		market_quality_threshold=float(
+			os.getenv("BOT_MARKET_QUALITY_THRESHOLD", "0.72")
+		),
 		window_minutes=int(os.getenv("BOT_WINDOW_MINUTES", "5")),
 		poll_seconds=int(os.getenv("BOT_POLL_SECONDS", "20")),
 		max_bets=int(os.getenv("BOT_MAX_BETS", "5")),
@@ -327,6 +334,8 @@ def fetch_candidates(config: BotConfig) -> List[Dict[str, Any]]:
 			"windowMinutes": str(config.window_minutes),
 			"minGrade": config.min_grade,
 			"limit": str(config.max_bets * 3),
+			"requireMicrostructure": "true" if config.require_microstructure else "false",
+			"marketQualityThreshold": str(config.market_quality_threshold),
 		}
 	)
 	url = f"{config.base_url}/api/bot/candidates?{query}"
@@ -720,6 +729,7 @@ def place_bet(
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
+	placed_successfully = False
 
 	if config.dry_run:
 		print(
@@ -732,6 +742,7 @@ def place_bet(
 			"stake",
 			round(stake, 2),
 		)
+		placed_successfully = True
 	else:
 		try:
 			result = execute_live_trade(entry, stake, config)
@@ -747,6 +758,7 @@ def place_bet(
 				"stake",
 				round(stake, 2),
 			)
+			placed_successfully = True
 		except Exception as exc:
 			trade["mode"] = "paper"
 			trade["error"] = str(exc)
@@ -766,6 +778,8 @@ def place_bet(
 			print(colorize("[error]", COLOR_RED), "live trade failed; defaulting to paper:", exc)
 
 	append_trade_log(config.trade_log_path, trade)
+	if not placed_successfully:
+		return False
 	try:
 		post_json(
 			f"{config.base_url}/api/bot/picks",
