@@ -32,6 +32,61 @@ const GRADE_RANK: Record<GradeLabel, number> = {
 	"D": 1,
 };
 
+function clampUnit(value: number): number {
+	return Math.max(0, Math.min(1, value));
+}
+
+function normalizeMarketPrice(price?: number | null): number | null {
+	if (typeof price !== "number" || !Number.isFinite(price)) return null;
+	if (price <= 0 || price >= 1) return null;
+	return price;
+}
+
+function computeMarketQualityScoreFromCacheEntry(input: {
+	sharpSide?: string;
+	sideA?: { price?: number | null };
+	sideB?: { price?: number | null };
+	marketVolume?: number;
+	marketLiquidity?: number;
+}): number | null {
+	if (!input.sharpSide || (input.sharpSide !== "A" && input.sharpSide !== "B")) {
+		return null;
+	}
+	const sideAPrice = normalizeMarketPrice(input.sideA?.price);
+	const sideBPrice = normalizeMarketPrice(input.sideB?.price);
+	const hasBothPrices = sideAPrice !== null && sideBPrice !== null;
+	const complementGap = hasBothPrices
+		? Math.abs(sideAPrice + sideBPrice - 1)
+		: 0.08;
+	const complementScore = hasBothPrices ? clampUnit(1 - complementGap / 0.08) : 0.45;
+	const sharpSidePrice = input.sharpSide === "A" ? sideAPrice : sideBPrice;
+	const priceBandScore =
+		sharpSidePrice === null
+			? 0.5
+			: clampUnit(1 - Math.abs(sharpSidePrice - 0.5) / 0.4);
+	let depthScore = 0.5;
+	if (
+		typeof input.marketLiquidity === "number" &&
+		Number.isFinite(input.marketLiquidity) &&
+		input.marketLiquidity > 0 &&
+		typeof input.marketVolume === "number" &&
+		Number.isFinite(input.marketVolume) &&
+		input.marketVolume > 0
+	) {
+		const depthRatio = input.marketLiquidity / Math.max(input.marketVolume, 1);
+		depthScore = clampUnit(depthRatio / 0.35);
+	} else if (
+		typeof input.marketLiquidity === "number" &&
+		Number.isFinite(input.marketLiquidity) &&
+		input.marketLiquidity > 0
+	) {
+		depthScore = clampUnit(input.marketLiquidity / 200_000);
+	}
+	return clampUnit(
+		complementScore * 0.45 + depthScore * 0.35 + priceBandScore * 0.2,
+	);
+}
+
 type BotAuthResult = { ok: true } | { ok: false; response: Response };
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -180,6 +235,49 @@ function toSlimCandidate(entry: {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractSnapshotNumber(
+	snapshot: Record<string, unknown> | null,
+	keys: string[],
+): number | null {
+	if (!snapshot) return null;
+	for (const key of keys) {
+		const value = snapshot[key];
+		if (typeof value === "number" && Number.isFinite(value)) return value;
+		if (typeof value === "string") {
+			const parsed = Number(value);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+	}
+	return null;
+}
+
+function extractSnapshotBoolean(
+	snapshot: Record<string, unknown> | null,
+	keys: string[],
+): boolean | null {
+	if (!snapshot) return null;
+	for (const key of keys) {
+		const value = snapshot[key];
+		if (typeof value === "boolean") return value;
+	}
+	return null;
+}
+
+function extractSnapshotStringArray(
+	snapshot: Record<string, unknown> | null,
+	keys: string[],
+): string[] | null {
+	if (!snapshot) return null;
+	for (const key of keys) {
+		const value = snapshot[key];
+		if (Array.isArray(value)) {
+			const values = value.filter((entry): entry is string => typeof entry === "string");
+			if (values.length > 0) return values;
+		}
+	}
+	return null;
 }
 
 function buildDecisionSnapshot(input: {
@@ -539,6 +637,9 @@ export async function handleBotRequest(
 			env.POLYWHALER_DB,
 			payload.conditionId,
 		);
+		const snapshot = isPlainObject(payload.decisionSnapshot)
+			? payload.decisionSnapshot
+			: null;
 		const sharpSide = payload.sharpSide ?? cacheEntry?.sharpSide;
 		const price =
 			payload.price ??
@@ -550,6 +651,51 @@ export async function handleBotRequest(
 		const edgeRating = payload.edgeRating ?? cacheEntry?.edgeRating;
 		const scoreDifferential =
 			payload.scoreDifferential ?? cacheEntry?.scoreDifferential;
+		const signalScore =
+			payload.signalScore ??
+			extractSnapshotNumber(snapshot, ["signalScore"]) ??
+			undefined;
+		const marketQualityScore =
+			payload.marketQualityScore ??
+			extractSnapshotNumber(snapshot, ["marketQualityScore", "microstructureScore"]) ??
+			(cacheEntry
+				? computeMarketQualityScoreFromCacheEntry({
+						sharpSide,
+						sideA: { price: cacheEntry.sideA.price ?? null },
+						sideB: { price: cacheEntry.sideB.price ?? null },
+						marketVolume: cacheEntry.marketVolume,
+						marketLiquidity: cacheEntry.marketLiquidity,
+					})
+				: null) ??
+			undefined;
+		const thresholdUsed =
+			payload.thresholdUsed ??
+			extractSnapshotNumber(snapshot, ["thresholdUsed"]) ??
+			undefined;
+		const warnings =
+			payload.warnings ??
+			extractSnapshotStringArray(snapshot, ["warnings"]) ??
+			undefined;
+		const candidateComputedAt =
+			payload.candidateComputedAt ??
+			extractSnapshotNumber(snapshot, ["candidateComputedAt"]) ??
+			undefined;
+		const l2Imbalance =
+			payload.l2Imbalance ??
+			extractSnapshotNumber(snapshot, ["l2Imbalance"]) ??
+			undefined;
+		const l2ImbalanceNearMid =
+			payload.l2ImbalanceNearMid ??
+			extractSnapshotNumber(snapshot, ["l2ImbalanceNearMid", "imbalanceNearMid"]) ??
+			undefined;
+		const l2Spread =
+			payload.l2Spread ??
+			extractSnapshotNumber(snapshot, ["l2Spread", "spread"]) ??
+			undefined;
+		const l2Disagreement =
+			payload.l2Disagreement ??
+			extractSnapshotBoolean(snapshot, ["l2Disagreement", "imbalanceDisagree"]) ??
+			undefined;
 		const confidence = cacheEntry?.confidence;
 		const priceEdgeResult =
 			cacheEntry && sharpSide
@@ -576,17 +722,17 @@ export async function handleBotRequest(
 			sharpSide,
 			price,
 			grade: payload.grade,
-			signalScore: payload.signalScore,
+			signalScore,
 			edgeRating,
 			scoreDifferential,
-				marketQualityScore: payload.marketQualityScore,
-				thresholdUsed: payload.thresholdUsed,
-				warnings: payload.warnings,
-				candidateComputedAt: payload.candidateComputedAt,
-				l2Imbalance: payload.l2Imbalance,
-				l2ImbalanceNearMid: payload.l2ImbalanceNearMid,
-				l2Spread: payload.l2Spread,
-				l2Disagreement: payload.l2Disagreement,
+				marketQualityScore,
+				thresholdUsed,
+				warnings,
+				candidateComputedAt,
+				l2Imbalance,
+				l2ImbalanceNearMid,
+				l2Spread,
+				l2Disagreement,
 			});
 			const pick = await createManualPick(env.POLYWHALER_DB, {
 				clientPickId: payload.clientPickId,
@@ -594,7 +740,7 @@ export async function handleBotRequest(
 				marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
 				eventTime: payload.eventTime ?? cacheEntry?.eventTime,
 				grade: payload.grade,
-			signalScore: payload.signalScore,
+			signalScore,
 			edgeRating,
 			scoreDifferential,
 			sharpSide,
@@ -603,11 +749,11 @@ export async function handleBotRequest(
 				fairPrice: priceEdgeResult?.fairPrice ?? null,
 				priceEdge: priceEdgeResult?.priceEdge ?? null,
 				strategyVersion: payload.strategyVersion,
-				thresholdUsed: payload.thresholdUsed,
-				marketQualityScore: payload.marketQualityScore,
-				warnings: payload.warnings,
+				thresholdUsed,
+				marketQualityScore,
+				warnings,
 				decisionSnapshot,
-				candidateComputedAt: payload.candidateComputedAt,
+				candidateComputedAt,
 			});
 			return jsonResponse({ pick });
 		}
