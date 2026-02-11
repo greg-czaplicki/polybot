@@ -348,31 +348,40 @@ def normalize_outcome(value: str) -> str:
 
 _token_cache: Dict[str, List[Dict[str, str]]] = {}
 
-def candidate_context(candidate: Dict[str, Any]) -> str:
+def log_event(event: str, **fields: Any) -> None:
+	normalized: Dict[str, Any] = {}
+	for key, value in fields.items():
+		if isinstance(value, float):
+			normalized[key] = round(value, 6)
+		else:
+			normalized[key] = value
+	print(
+		"[bot]",
+		event,
+		json.dumps(normalized, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+	)
+
+def candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
 	entry = candidate.get("entry") or {}
-	grade_label = (candidate.get("grade") or {}).get("grade")
-	signal_score = candidate.get("signalScore")
-	if signal_score is None:
-		signal_score = candidate.get("score")
-	quality_score = candidate.get("marketQualityScore")
-	if quality_score is None:
-		quality_score = candidate.get("marketQuality")
+	grade = candidate.get("grade") or {}
 	event_label = (
 		entry.get("eventTitle")
 		or entry.get("eventSlug")
 		or entry.get("marketSlug")
 		or "-"
 	)
-	return (
-		f"cid={entry.get('conditionId')} "
-		f"event={event_label!r} "
-		f"market={entry.get('marketTitle')!r} "
-		f"side={entry.get('sharpSide')!r} "
-		f"eventTime={entry.get('eventTime')} "
-		f"grade={grade_label} "
-		f"signal={signal_score} "
-		f"quality={quality_score}"
-	)
+	return {
+		"conditionId": entry.get("conditionId"),
+		"event": event_label,
+		"eventTime": entry.get("eventTime"),
+		"market": entry.get("marketTitle"),
+		"side": entry.get("sharpSide"),
+		"grade": grade.get("grade"),
+		"signalScore": grade.get("signalScore"),
+		"edgeRating": grade.get("edgeRating"),
+		"microstructureScore": grade.get("microstructureScore"),
+		"warnings": grade.get("warnings"),
+	}
 
 def fetch_clob_token_map(condition_id: str) -> List[Dict[str, str]]:
 	if not condition_id:
@@ -905,14 +914,13 @@ def run_loop() -> None:
 				excluded = candidate_debug.get("excluded") or {}
 				total_entries = candidate_debug.get("totalEntries")
 				upcoming_entries = candidate_debug.get("upcomingEntries")
-				print(
-					"[bot] candidate_debug",
-					"totalEntries",
-					total_entries,
-					"upcomingEntries",
-					upcoming_entries,
-					"excluded",
-					excluded,
+				log_event(
+					"candidate_debug",
+					totalEntries=total_entries,
+					upcomingEntries=upcoming_entries,
+					excluded=excluded,
+					dedupDropped=candidate_debug.get("dedupDropped"),
+					dedupReasons=candidate_debug.get("dedupReasons"),
 				)
 			new_bets = 0
 			skipped_already_placed = 0
@@ -920,26 +928,30 @@ def run_loop() -> None:
 			for idx, candidate in enumerate(candidates, start=1):
 				entry = candidate.get("entry") or {}
 				condition_id = entry.get("conditionId")
-				print("[bot] candidate", idx, candidate_context(candidate))
+				log_event("candidate", idx=idx, **candidate_context(candidate))
 				if not condition_id:
 					skipped_missing_condition += 1
-					print("[bot] skip missing conditionId", candidate_context(candidate))
+					log_event(
+						"candidate_skip_missing_condition_id",
+						idx=idx,
+						**candidate_context(candidate),
+					)
 					continue
 				if condition_id in placed:
 					skipped_already_placed += 1
 					placed_row = placed_meta.get(condition_id) or {}
-					print(
-						"[bot] skip already placed",
-						candidate_context(candidate),
-						"placedAt",
-						placed_row.get("placedAt"),
-						"placedEventTime",
-						placed_row.get("eventTime"),
+					log_event(
+						"candidate_skip_already_placed",
+						idx=idx,
+						placedAt=placed_row.get("placedAt"),
+						placedEventTime=placed_row.get("eventTime"),
+						**candidate_context(candidate),
 					)
 					continue
-				print(
-					"[bot] considering",
-					candidate_context(candidate),
+				log_event(
+					"candidate_considering",
+					idx=idx,
+					**candidate_context(candidate),
 				)
 				did_place = place_bet(candidate, config, state)
 				if did_place:
@@ -952,16 +964,12 @@ def run_loop() -> None:
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
 						break
-			print(
-				"[bot] poll_summary",
-				"raw",
-				len(candidates),
-				"skippedAlreadyPlaced",
-				skipped_already_placed,
-				"skippedMissingConditionId",
-				skipped_missing_condition,
-				"newPlaced",
-				new_bets,
+			log_event(
+				"poll_summary",
+				raw=len(candidates),
+				skippedAlreadyPlaced=skipped_already_placed,
+				skippedMissingConditionId=skipped_missing_condition,
+				newPlaced=new_bets,
 			)
 			state["placed"] = sorted(placed)
 			state["placedMeta"] = placed_meta
