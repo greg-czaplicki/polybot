@@ -817,6 +817,18 @@ def place_bet(
 	if not placed_successfully:
 		return False
 	try:
+		threshold_used = (
+			config.market_quality_threshold if config.require_microstructure else None
+		)
+		decision_snapshot = {
+			"signalScore": grade.get("signalScore"),
+			"edgeRating": entry.get("edgeRating"),
+			"scoreDifferential": entry.get("scoreDifferential"),
+			"marketQualityScore": grade.get("microstructureScore"),
+			"thresholdUsed": threshold_used,
+			"warnings": grade.get("warnings") or [],
+			"candidateComputedAt": grade.get("computedAt"),
+		}
 		post_json(
 			f"{config.base_url}/api/bot/picks",
 			config.api_key,
@@ -830,6 +842,11 @@ def place_bet(
 				"scoreDifferential": entry.get("scoreDifferential"),
 				"sharpSide": entry.get("sharpSide"),
 				"price": price,
+				"thresholdUsed": threshold_used,
+				"marketQualityScore": grade.get("microstructureScore"),
+				"warnings": grade.get("warnings") or [],
+				"candidateComputedAt": grade.get("computedAt"),
+				"decisionSnapshot": decision_snapshot,
 			},
 		)
 	except Exception as exc:
