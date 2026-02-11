@@ -161,6 +161,10 @@ function parseMinGrade(value: string | null): GradeLabel | null {
 	return null;
 }
 
+function incrementCounter(record: Record<string, number>, key: string): void {
+	record[key] = (record[key] ?? 0) + 1;
+}
+
 function getMarketTypeLabel(
 	marketTitle: string,
 ): "total" | "spread" | "moneyline" | "other" {
@@ -405,6 +409,9 @@ export async function handleBotRequest(
 			const requireReady = url.searchParams.get("requireReady");
 			const includeStarted = url.searchParams.get("includeStarted");
 			const requireMicrostructure = url.searchParams.get("requireMicrostructure");
+			const includeDebug =
+				url.searchParams.get("debug")?.toLowerCase() === "true";
+			const inspectConditionId = url.searchParams.get("inspectConditionId");
 			const marketQualityThresholdParam = Number(
 				url.searchParams.get("marketQualityThreshold"),
 			);
@@ -436,17 +443,117 @@ export async function handleBotRequest(
 			limit,
 			windowHours,
 		});
+		const debug: {
+			totalEntries: number;
+			upcomingEntries: number;
+			candidatesBeforeDedup: number;
+			returnedAfterDedup: number;
+			excluded: Record<string, number>;
+			dedupDropped: number;
+			dedupReasons: Record<string, number>;
+			inspect?: {
+				conditionId: string;
+				foundInEntries: boolean;
+				stage: string;
+				reason?: string;
+				dedupGroupKey?: string;
+				wonDedup?: boolean;
+			};
+		} = {
+			totalEntries: entries.length,
+			upcomingEntries: 0,
+			candidatesBeforeDedup: 0,
+			returnedAfterDedup: 0,
+			excluded: {},
+			dedupDropped: 0,
+			dedupReasons: {},
+		};
 		const upcomingEntries = entries.filter((entry) => {
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "entries",
+				};
+			}
 			const marketType = getMarketTypeLabel(entry.marketTitle);
-			if (marketType === "other") return false;
-			if (shouldRequireReady && !entry.isReady) return false;
+			if (marketType === "other") {
+				incrementCounter(debug.excluded, "market_type_other");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "market_type_other",
+					};
+				}
+				return false;
+			}
+			if (shouldRequireReady && !entry.isReady) {
+				incrementCounter(debug.excluded, "not_ready");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "not_ready",
+					};
+				}
+				return false;
+			}
 			const eventTime = parseEventTime(entry.eventTime);
-			if (!eventTime) return false;
+			if (!eventTime) {
+				incrementCounter(debug.excluded, "missing_event_time");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "missing_event_time",
+					};
+				}
+				return false;
+			}
 			const diffMs = eventTime.getTime() - now;
-			if (!allowStarted && diffMs < 0) return false;
-			if (allowStarted && diffMs < -cutoffMs) return false;
-			return diffMs <= cutoffMs;
+			if (!allowStarted && diffMs < 0) {
+				incrementCounter(debug.excluded, "started_excluded");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "started_excluded",
+					};
+				}
+				return false;
+			}
+			if (allowStarted && diffMs < -cutoffMs) {
+				incrementCounter(debug.excluded, "started_too_old");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "started_too_old",
+					};
+				}
+				return false;
+			}
+			const inWindow = diffMs <= cutoffMs;
+			if (!inWindow) {
+				incrementCounter(debug.excluded, "outside_window");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_pre",
+						reason: "outside_window",
+					};
+				}
+			}
+			return inWindow;
 		});
+		debug.upcomingEntries = upcomingEntries.length;
 		if (upcomingEntries.length === 0) {
 			return jsonResponse({
 				candidates: [],
@@ -454,6 +561,7 @@ export async function handleBotRequest(
 				returned: 0,
 				truncated: false,
 				computedAt: nowUnixSeconds(),
+				...(includeDebug ? { debug } : {}),
 			});
 		}
 		const gradesResult = await computeSharpMoneyGrades(env.POLYWHALER_DB, {
@@ -468,13 +576,55 @@ export async function handleBotRequest(
 		const candidates = upcomingEntries
 			.map((entry) => {
 				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
-				if (!grade?.grade) return null;
-				if (GRADE_RANK[grade.grade] < GRADE_RANK[minGrade]) return null;
-					if ((grade.warnings ?? []).includes("no_price_edge")) return null;
+				if (!grade?.grade) {
+					incrementCounter(debug.excluded, "missing_grade");
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "missing_grade",
+						};
+					}
+					return null;
+				}
+				if (GRADE_RANK[grade.grade] < GRADE_RANK[minGrade]) {
+					incrementCounter(debug.excluded, "below_min_grade");
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "below_min_grade",
+						};
+					}
+					return null;
+				}
+					if ((grade.warnings ?? []).includes("no_price_edge")) {
+						incrementCounter(debug.excluded, "no_price_edge");
+						if (inspectConditionId && entry.conditionId === inspectConditionId) {
+							debug.inspect = {
+								conditionId: inspectConditionId,
+								foundInEntries: true,
+								stage: "filtered_grade",
+								reason: "no_price_edge",
+							};
+						}
+						return null;
+					}
 					if (
 						shouldRequireMicrostructure &&
 						(grade.microstructureScore ?? 0) < marketQualityThreshold
 					) {
+						incrementCounter(debug.excluded, "below_microstructure_threshold");
+						if (inspectConditionId && entry.conditionId === inspectConditionId) {
+							debug.inspect = {
+								conditionId: inspectConditionId,
+								foundInEntries: true,
+								stage: "filtered_grade",
+								reason: "below_microstructure_threshold",
+							};
+						}
 						return null;
 					}
 				return {
@@ -493,6 +643,7 @@ export async function handleBotRequest(
 				};
 			})
 			.filter((candidate) => candidate !== null);
+		debug.candidatesBeforeDedup = candidates.length;
 		const deduped = new Map<string, (typeof candidates)[number]>();
 		for (const candidate of candidates) {
 			if (!candidate) continue;
@@ -500,6 +651,18 @@ export async function handleBotRequest(
 			const existing = deduped.get(key);
 			if (!existing) {
 				deduped.set(key, candidate);
+				if (
+					inspectConditionId &&
+					candidate.entry.conditionId === inspectConditionId
+				) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "dedup_seed",
+						dedupGroupKey: key,
+						wonDedup: true,
+					};
+				}
 				continue;
 			}
 			const candidateGrade = candidate.grade.grade;
@@ -507,42 +670,73 @@ export async function handleBotRequest(
 			const candidateRank = GRADE_RANK[candidateGrade];
 			const existingRank = GRADE_RANK[existingGrade];
 			if (candidateRank > existingRank) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "grade_rank");
 				deduped.set(key, candidate);
 				continue;
 			}
 			if (candidateRank < existingRank) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "grade_rank");
+				if (
+					inspectConditionId &&
+					candidate.entry.conditionId === inspectConditionId
+				) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "dedup_lost",
+						reason: "grade_rank",
+						dedupGroupKey: key,
+						wonDedup: false,
+					};
+				}
 				continue;
 			}
 			const candidateScore = candidate.grade.signalScore ?? 0;
 			const existingScore = existing.grade.signalScore ?? 0;
 			if (candidateScore > existingScore) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "signal_score");
 				deduped.set(key, candidate);
 				continue;
 			}
 			if (candidateScore < existingScore) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "signal_score");
 				continue;
 			}
 			const candidateEdge = candidate.grade.edgeRating ?? 0;
 			const existingEdge = existing.grade.edgeRating ?? 0;
 			if (candidateEdge > existingEdge) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "edge_rating");
 				deduped.set(key, candidate);
 				continue;
 			}
 			if (candidateEdge < existingEdge) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "edge_rating");
 				continue;
 			}
 			const candidateMicrostructure = candidate.grade.microstructureScore ?? 0;
 			const existingMicrostructure = existing.grade.microstructureScore ?? 0;
 			if (candidateMicrostructure > existingMicrostructure) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "microstructure");
 				deduped.set(key, candidate);
 				continue;
 			}
 			if (candidateMicrostructure < existingMicrostructure) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "microstructure");
 				continue;
 			}
 			const candidateDiff = candidate.grade.scoreDifferential ?? 0;
 			const existingDiff = existing.grade.scoreDifferential ?? 0;
 			if (candidateDiff > existingDiff) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "score_differential");
 				deduped.set(key, candidate);
 				continue;
 			}
@@ -551,16 +745,27 @@ export async function handleBotRequest(
 			const existingTime =
 				parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
 			if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
+				debug.dedupDropped += 1;
+				incrementCounter(debug.dedupReasons, "event_time");
 				deduped.set(key, candidate);
 			}
 		}
 		const dedupedCandidates = [...deduped.values()];
+		debug.returnedAfterDedup = dedupedCandidates.length;
+		if (inspectConditionId && !debug.inspect) {
+			debug.inspect = {
+				conditionId: inspectConditionId,
+				foundInEntries: false,
+				stage: "not_found_in_entries",
+			};
+		}
 		return jsonResponse({
 			candidates: dedupedCandidates,
 			requested: gradesResult.requested,
 			returned: dedupedCandidates.length,
 			truncated: gradesResult.truncated,
 			computedAt: gradesResult.computedAt,
+			...(includeDebug ? { debug } : {}),
 		});
 	}
 

@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 @dataclass
@@ -328,7 +328,7 @@ def request_json_public(url: str) -> Dict[str, Any]:
 		raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {body}") from exc
 
 
-def fetch_candidates(config: BotConfig) -> List[Dict[str, Any]]:
+def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 	query = urllib.parse.urlencode(
 		{
 			"windowMinutes": str(config.window_minutes),
@@ -336,11 +336,12 @@ def fetch_candidates(config: BotConfig) -> List[Dict[str, Any]]:
 			"limit": str(config.max_bets * 3),
 			"requireMicrostructure": "true" if config.require_microstructure else "false",
 			"marketQualityThreshold": str(config.market_quality_threshold),
+			"debug": "true",
 		}
 	)
 	url = f"{config.base_url}/api/bot/candidates?{query}"
 	data = request_json(url, config.api_key)
-	return data.get("candidates", [])
+	return data.get("candidates", []), data.get("debug", {})
 
 def normalize_outcome(value: str) -> str:
 	return " ".join(value.strip().lower().split())
@@ -872,8 +873,21 @@ def run_loop() -> None:
 				config.min_grade,
 			)
 			call_timestamps.append(time.time())
-			candidates = fetch_candidates(config)
+			candidates, candidate_debug = fetch_candidates(config)
 			print("[bot] candidates", len(candidates))
+			if len(candidates) == 0 and isinstance(candidate_debug, dict):
+				excluded = candidate_debug.get("excluded") or {}
+				total_entries = candidate_debug.get("totalEntries")
+				upcoming_entries = candidate_debug.get("upcomingEntries")
+				print(
+					"[bot] candidate_debug",
+					"totalEntries",
+					total_entries,
+					"upcomingEntries",
+					upcoming_entries,
+					"excluded",
+					excluded,
+				)
 			new_bets = 0
 			for candidate in candidates:
 				entry = candidate.get("entry") or {}
