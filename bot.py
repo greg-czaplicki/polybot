@@ -348,7 +348,7 @@ def normalize_outcome(value: str) -> str:
 
 _token_cache: Dict[str, List[Dict[str, str]]] = {}
 
-def log_event(event: str, **fields: Any) -> None:
+def log_event(event_name: str, **fields: Any) -> None:
 	normalized: Dict[str, Any] = {}
 	for key, value in fields.items():
 		if isinstance(value, float):
@@ -357,7 +357,7 @@ def log_event(event: str, **fields: Any) -> None:
 			normalized[key] = value
 	print(
 		"[bot]",
-		event,
+		event_name,
 		json.dumps(normalized, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
 	)
 
