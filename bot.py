@@ -348,6 +348,32 @@ def normalize_outcome(value: str) -> str:
 
 _token_cache: Dict[str, List[Dict[str, str]]] = {}
 
+def candidate_context(candidate: Dict[str, Any]) -> str:
+	entry = candidate.get("entry") or {}
+	grade_label = (candidate.get("grade") or {}).get("grade")
+	signal_score = candidate.get("signalScore")
+	if signal_score is None:
+		signal_score = candidate.get("score")
+	quality_score = candidate.get("marketQualityScore")
+	if quality_score is None:
+		quality_score = candidate.get("marketQuality")
+	event_label = (
+		entry.get("eventTitle")
+		or entry.get("eventSlug")
+		or entry.get("marketSlug")
+		or "-"
+	)
+	return (
+		f"cid={entry.get('conditionId')} "
+		f"event={event_label!r} "
+		f"market={entry.get('marketTitle')!r} "
+		f"side={entry.get('sharpSide')!r} "
+		f"eventTime={entry.get('eventTime')} "
+		f"grade={grade_label} "
+		f"signal={signal_score} "
+		f"quality={quality_score}"
+	)
+
 def fetch_clob_token_map(condition_id: str) -> List[Dict[str, str]]:
 	if not condition_id:
 		return []
@@ -889,20 +915,31 @@ def run_loop() -> None:
 					excluded,
 				)
 			new_bets = 0
-			for candidate in candidates:
+			skipped_already_placed = 0
+			skipped_missing_condition = 0
+			for idx, candidate in enumerate(candidates, start=1):
 				entry = candidate.get("entry") or {}
 				condition_id = entry.get("conditionId")
+				print("[bot] candidate", idx, candidate_context(candidate))
 				if not condition_id:
+					skipped_missing_condition += 1
+					print("[bot] skip missing conditionId", candidate_context(candidate))
 					continue
 				if condition_id in placed:
-					print("[bot] skip already placed", condition_id)
+					skipped_already_placed += 1
+					placed_row = placed_meta.get(condition_id) or {}
+					print(
+						"[bot] skip already placed",
+						candidate_context(candidate),
+						"placedAt",
+						placed_row.get("placedAt"),
+						"placedEventTime",
+						placed_row.get("eventTime"),
+					)
 					continue
 				print(
 					"[bot] considering",
-					entry.get("marketTitle"),
-					entry.get("sharpSide"),
-					"grade",
-					(candidate.get("grade") or {}).get("grade"),
+					candidate_context(candidate),
 				)
 				did_place = place_bet(candidate, config, state)
 				if did_place:
@@ -915,6 +952,17 @@ def run_loop() -> None:
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
 						break
+			print(
+				"[bot] poll_summary",
+				"raw",
+				len(candidates),
+				"skippedAlreadyPlaced",
+				skipped_already_placed,
+				"skippedMissingConditionId",
+				skipped_missing_condition,
+				"newPlaced",
+				new_bets,
+			)
 			state["placed"] = sorted(placed)
 			state["placedMeta"] = placed_meta
 			save_state(config.state_path, state)
