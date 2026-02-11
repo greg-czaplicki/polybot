@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 @dataclass
@@ -16,6 +16,8 @@ class BotConfig:
 	base_url: str
 	api_key: str
 	min_grade: str
+	require_microstructure: bool
+	market_quality_threshold: float
 	window_minutes: int
 	poll_seconds: int
 	max_bets: int
@@ -124,6 +126,11 @@ def load_config() -> BotConfig:
 		base_url=base_url,
 		api_key=api_key,
 		min_grade=os.getenv("BOT_MIN_GRADE", "A"),
+		require_microstructure=os.getenv("BOT_REQUIRE_MICROSTRUCTURE", "false").lower()
+		== "true",
+		market_quality_threshold=float(
+			os.getenv("BOT_MARKET_QUALITY_THRESHOLD", "0.72")
+		),
 		window_minutes=int(os.getenv("BOT_WINDOW_MINUTES", "5")),
 		poll_seconds=int(os.getenv("BOT_POLL_SECONDS", "20")),
 		max_bets=int(os.getenv("BOT_MAX_BETS", "5")),
@@ -321,17 +328,20 @@ def request_json_public(url: str) -> Dict[str, Any]:
 		raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {body}") from exc
 
 
-def fetch_candidates(config: BotConfig) -> List[Dict[str, Any]]:
+def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 	query = urllib.parse.urlencode(
 		{
 			"windowMinutes": str(config.window_minutes),
 			"minGrade": config.min_grade,
 			"limit": str(config.max_bets * 3),
+			"requireMicrostructure": "true" if config.require_microstructure else "false",
+			"marketQualityThreshold": str(config.market_quality_threshold),
+			"debug": "true",
 		}
 	)
 	url = f"{config.base_url}/api/bot/candidates?{query}"
 	data = request_json(url, config.api_key)
-	return data.get("candidates", [])
+	return data.get("candidates", []), data.get("debug", {})
 
 def normalize_outcome(value: str) -> str:
 	return " ".join(value.strip().lower().split())
@@ -720,6 +730,7 @@ def place_bet(
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
+	placed_successfully = False
 
 	if config.dry_run:
 		print(
@@ -732,6 +743,7 @@ def place_bet(
 			"stake",
 			round(stake, 2),
 		)
+		placed_successfully = True
 	else:
 		try:
 			result = execute_live_trade(entry, stake, config)
@@ -747,6 +759,7 @@ def place_bet(
 				"stake",
 				round(stake, 2),
 			)
+			placed_successfully = True
 		except Exception as exc:
 			trade["mode"] = "paper"
 			trade["error"] = str(exc)
@@ -766,6 +779,8 @@ def place_bet(
 			print(colorize("[error]", COLOR_RED), "live trade failed; defaulting to paper:", exc)
 
 	append_trade_log(config.trade_log_path, trade)
+	if not placed_successfully:
+		return False
 	try:
 		post_json(
 			f"{config.base_url}/api/bot/picks",
@@ -858,8 +873,21 @@ def run_loop() -> None:
 				config.min_grade,
 			)
 			call_timestamps.append(time.time())
-			candidates = fetch_candidates(config)
+			candidates, candidate_debug = fetch_candidates(config)
 			print("[bot] candidates", len(candidates))
+			if len(candidates) == 0 and isinstance(candidate_debug, dict):
+				excluded = candidate_debug.get("excluded") or {}
+				total_entries = candidate_debug.get("totalEntries")
+				upcoming_entries = candidate_debug.get("upcomingEntries")
+				print(
+					"[bot] candidate_debug",
+					"totalEntries",
+					total_entries,
+					"upcomingEntries",
+					upcoming_entries,
+					"excluded",
+					excluded,
+				)
 			new_bets = 0
 			for candidate in candidates:
 				entry = candidate.get("entry") or {}
