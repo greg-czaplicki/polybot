@@ -87,6 +87,168 @@ function computeMarketQualityScoreFromCacheEntry(input: {
 	);
 }
 
+function parseClobNumber(value: unknown): number | null {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string") {
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return null;
+}
+
+function normalizeOutcomeLabel(value: string): string {
+	return value.trim().toLowerCase();
+}
+
+async function fetchL2SignalsForPick(input: {
+	conditionId: string;
+	sharpSide?: string;
+	sideALabel?: string;
+	sideBLabel?: string;
+}): Promise<{
+	l2Imbalance?: number;
+	l2ImbalanceNearMid?: number;
+	l2Spread?: number;
+	l2Disagreement?: boolean;
+}> {
+	if (!input.sharpSide || (input.sharpSide !== "A" && input.sharpSide !== "B")) {
+		return {};
+	}
+	try {
+		const marketResponse = await fetch(
+			`https://clob.polymarket.com/markets/${input.conditionId}`,
+		);
+		if (!marketResponse.ok) return {};
+		const market = (await marketResponse.json()) as {
+			tokens?: Array<{
+				token_id?: string;
+				tokenId?: string;
+				clobTokenId?: string;
+				id?: string;
+				outcome?: string;
+			}>;
+		};
+		const tokens = (market.tokens ?? [])
+			.map((token, index) => {
+				const tokenId =
+					token.token_id ?? token.tokenId ?? token.clobTokenId ?? token.id;
+				const outcome = token.outcome?.trim();
+				if (!tokenId || !outcome) return null;
+				return { tokenId: String(tokenId), outcome, index };
+			})
+			.filter(
+				(token): token is { tokenId: string; outcome: string; index: number } =>
+					Boolean(token),
+			);
+		if (tokens.length === 0) return {};
+		const targetLabel =
+			input.sharpSide === "A" ? input.sideALabel ?? "" : input.sideBLabel ?? "";
+		const targetByLabel = targetLabel
+			? tokens.find(
+					(token) =>
+						normalizeOutcomeLabel(token.outcome) ===
+						normalizeOutcomeLabel(targetLabel),
+				)
+			: null;
+		const targetByIndex = tokens.find((token) =>
+			input.sharpSide === "A" ? token.index === 0 : token.index === 1,
+		);
+		const targetToken = targetByLabel ?? targetByIndex ?? null;
+		if (!targetToken) return {};
+
+		const bookUrl = new URL("https://clob.polymarket.com/book");
+		bookUrl.searchParams.set("token_id", targetToken.tokenId);
+		const bookResponse = await fetch(bookUrl.toString());
+		if (!bookResponse.ok) return {};
+		const rawBook = (await bookResponse.json()) as {
+			bids?: Array<{ price?: string | number; size?: string | number }>;
+			asks?: Array<{ price?: string | number; size?: string | number }>;
+		};
+
+		const bids = (rawBook.bids ?? [])
+			.map((level) => {
+				const price = parseClobNumber(level.price);
+				const size = parseClobNumber(level.size);
+				if (
+					price === null ||
+					size === null ||
+					price <= 0 ||
+					price >= 1 ||
+					size <= 0
+				) {
+					return null;
+				}
+				return { price, size, notional: price * size };
+			})
+			.filter(
+				(level): level is { price: number; size: number; notional: number } =>
+					Boolean(level),
+			)
+			.sort((a, b) => b.price - a.price);
+		const asks = (rawBook.asks ?? [])
+			.map((level) => {
+				const price = parseClobNumber(level.price);
+				const size = parseClobNumber(level.size);
+				if (
+					price === null ||
+					size === null ||
+					price <= 0 ||
+					price >= 1 ||
+					size <= 0
+				) {
+					return null;
+				}
+				return { price, size, notional: price * size };
+			})
+			.filter(
+				(level): level is { price: number; size: number; notional: number } =>
+					Boolean(level),
+			)
+			.sort((a, b) => a.price - b.price);
+
+		const bestBid = bids[0]?.price ?? null;
+		const bestAsk = asks[0]?.price ?? null;
+		const mid =
+			bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
+		const spread =
+			bestBid !== null && bestAsk !== null ? Math.max(0, bestAsk - bestBid) : null;
+		const bidNotional = bids.reduce((sum, level) => sum + level.notional, 0);
+		const askNotional = asks.reduce((sum, level) => sum + level.notional, 0);
+		const imbalance =
+			bidNotional + askNotional > 0
+				? (bidNotional - askNotional) / (bidNotional + askNotional)
+				: null;
+		const nearMidBand = 0.05;
+		const nearMidBidNotional =
+			mid === null
+				? 0
+				: bids
+						.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+						.reduce((sum, level) => sum + level.notional, 0);
+		const nearMidAskNotional =
+			mid === null
+				? 0
+				: asks
+						.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+						.reduce((sum, level) => sum + level.notional, 0);
+		const imbalanceNearMid =
+			nearMidBidNotional + nearMidAskNotional > 0
+				? (nearMidBidNotional - nearMidAskNotional) /
+					(nearMidBidNotional + nearMidAskNotional)
+				: null;
+		const l2Disagreement =
+			imbalanceNearMid === null ? undefined : imbalanceNearMid < -0.05;
+		return {
+			l2Imbalance: imbalance ?? undefined,
+			l2ImbalanceNearMid: imbalanceNearMid ?? undefined,
+			l2Spread: spread ?? undefined,
+			l2Disagreement,
+		};
+	} catch {
+		return {};
+	}
+}
+
 type BotAuthResult = { ok: true } | { ok: false; response: Response };
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -901,6 +1063,25 @@ export async function handleBotRequest(
 			payload.l2Disagreement ??
 			extractSnapshotBoolean(snapshot, ["l2Disagreement", "imbalanceDisagree"]) ??
 			undefined;
+		const needsL2Signals =
+			l2Imbalance === undefined ||
+			l2ImbalanceNearMid === undefined ||
+			l2Spread === undefined ||
+			l2Disagreement === undefined;
+		const l2Fallback = needsL2Signals
+			? await fetchL2SignalsForPick({
+					conditionId: payload.conditionId,
+					sharpSide,
+					sideALabel: cacheEntry?.sideA.label,
+					sideBLabel: cacheEntry?.sideB.label,
+				})
+			: {};
+		const finalL2Imbalance = l2Imbalance ?? l2Fallback.l2Imbalance ?? undefined;
+		const finalL2ImbalanceNearMid =
+			l2ImbalanceNearMid ?? l2Fallback.l2ImbalanceNearMid ?? undefined;
+		const finalL2Spread = l2Spread ?? l2Fallback.l2Spread ?? undefined;
+		const finalL2Disagreement =
+			l2Disagreement ?? l2Fallback.l2Disagreement ?? undefined;
 		const confidence = cacheEntry?.confidence;
 		const priceEdgeResult =
 			cacheEntry && sharpSide
@@ -934,10 +1115,10 @@ export async function handleBotRequest(
 				thresholdUsed,
 				warnings,
 				candidateComputedAt,
-				l2Imbalance,
-				l2ImbalanceNearMid,
-				l2Spread,
-				l2Disagreement,
+				l2Imbalance: finalL2Imbalance,
+				l2ImbalanceNearMid: finalL2ImbalanceNearMid,
+				l2Spread: finalL2Spread,
+				l2Disagreement: finalL2Disagreement,
 			});
 			const pick = await createManualPick(env.POLYWHALER_DB, {
 				clientPickId: payload.clientPickId,
