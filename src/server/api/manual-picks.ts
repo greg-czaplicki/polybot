@@ -313,11 +313,16 @@ export const getManualPicksShadowWindowsFn = createServerFn({
 }).handler(async ({ context, data }) => {
 	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
 	const db = getDb(context);
-	const shadow = await getManualPicksShadowWindowSummary(db, {
-		limit: payload.limit,
-		qualityThreshold: payload.qualityThreshold,
-	});
-	return { shadow };
+	try {
+		const shadow = await getManualPicksShadowWindowSummary(db, {
+			limit: payload.limit,
+			qualityThreshold: payload.qualityThreshold,
+		});
+		return { shadow };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`shadow_windows_failed: ${message}`);
+	}
 });
 
 export const getManualPicksSportPerformanceFn = createServerFn({
@@ -325,11 +330,16 @@ export const getManualPicksSportPerformanceFn = createServerFn({
 }).handler(async ({ context, data }) => {
 	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
 	const db = getDb(context);
-	const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
-		limit: payload.limit,
-		qualityThreshold: payload.qualityThreshold,
-	});
-	return { sportPerformance };
+	try {
+		const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
+			limit: payload.limit,
+			qualityThreshold: payload.qualityThreshold,
+		});
+		return { sportPerformance };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`sport_performance_failed: ${message}`);
+	}
 });
 
 export const updateManualPickOutcomeFn = createServerFn({

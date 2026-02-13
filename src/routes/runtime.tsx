@@ -102,6 +102,16 @@ function sampleBadge(count: number): string | null {
 	return null;
 }
 
+function describeError(error: unknown): string {
+	if (error instanceof Error && error.message) return error.message;
+	if (typeof error === "string" && error) return error;
+	try {
+		return JSON.stringify(error);
+	} catch {
+		return "unknown_error";
+	}
+}
+
 type RuntimeStats = {
 	fetchedAt: number;
 	totalMarkets: number;
@@ -526,7 +536,7 @@ function RuntimePage() {
 				setShadowWindowResult((result.shadow ?? null) as ShadowWindowResult | null);
 			} catch (err) {
 				console.error("Failed to load shadow windows", err);
-				setShadowWindowError("Failed to load shadow windows");
+				setShadowWindowError(`Failed to load shadow windows: ${describeError(err)}`);
 			} finally {
 				setIsShadowWindowLoading(false);
 				isShadowWindowLoadingRef.current = false;
@@ -558,7 +568,7 @@ function RuntimePage() {
 				);
 			} catch (err) {
 				console.error("Failed to load sport performance", err);
-				setSportPerformanceError("Failed to load sport performance");
+				setSportPerformanceError(`Failed to load sport performance: ${describeError(err)}`);
 			} finally {
 				setIsSportPerformanceLoading(false);
 				isSportPerformanceLoadingRef.current = false;
