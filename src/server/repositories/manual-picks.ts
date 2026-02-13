@@ -1134,11 +1134,19 @@ export async function getManualPicksShadowWindowSummary(
 	const conditionIds = Array.from(
 		new Set(candidates.map((entry) => entry.pick.conditionId)),
 	);
-	const historyByConditionId = await listSharpMoneyHistoryByConditionIds(
-		db,
-		conditionIds,
-		historySince,
-	);
+	let historyByConditionId: SharpMoneyHistoryEntryByConditionId = {};
+	try {
+		historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+			db,
+			conditionIds,
+			historySince,
+		);
+	} catch (error) {
+		console.warn(
+			"[manual-picks] shadow window history lookup failed; using empty history",
+			error,
+		);
+	}
 
 	const windows = [
 		{ key: "actual", label: "Actual entry", leadMinutes: null as number | null },
@@ -1274,11 +1282,19 @@ export async function getManualPicksSportPerformanceSummary(
 	const picks = await listManualPicks(db, { limit });
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const conditionIds = Array.from(new Set(settled.map((pick) => pick.conditionId)));
-	const historyByConditionId = await listSharpMoneyHistoryByConditionIds(
-		db,
-		conditionIds,
-		nowUnixSeconds() - 30 * 24 * 60 * 60,
-	);
+	let historyByConditionId: SharpMoneyHistoryEntryByConditionId = {};
+	try {
+		historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+			db,
+			conditionIds,
+			nowUnixSeconds() - 30 * 24 * 60 * 60,
+		);
+	} catch (error) {
+		console.warn(
+			"[manual-picks] sport performance history lookup failed; using fallback sport detection only",
+			error,
+		);
+	}
 	const fallbackSeriesIdByConditionId = new Map<string, number>();
 	for (const [conditionId, rows] of Object.entries(historyByConditionId)) {
 		for (let i = rows.length - 1; i >= 0; i -= 1) {
