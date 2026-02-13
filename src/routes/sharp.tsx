@@ -294,6 +294,8 @@ const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
 const UPCOMING_WINDOW_HOURS = 12;
 const START_TIME_BUFFER_MINUTES = 10;
+const BOT_SYNC_WINDOW_MINUTES = 60;
+const BOT_SYNC_MIN_GRADE = "A";
 const STALE_HISTORY_MINUTES = 15;
 
 function getPnlCoverage(holders: TopHolderPnlData[]): number {
@@ -926,14 +928,21 @@ function SharpMoneyPage() {
 		const cutoff = new Date(
 			now.getTime() + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000,
 		);
+		const botSyncCutoff = new Date(
+			now.getTime() + BOT_SYNC_WINDOW_MINUTES * 60 * 1000,
+		);
 		const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
 		let filtered = baseEntries.filter((e) => {
 			if (e.sharpSide === "EVEN") return false;
+			if (!showAllEntries && getMarketTypeLabel(e.marketTitle) === "other") {
+				return false;
+			}
 			// Hide games that have already started (with buffer)
 			const gameTime = parseEventTime(e.eventTime);
 			if (gameTime) {
 				if (gameTime.getTime() < now.getTime() - startBufferMs) return false;
 				if (gameTime > cutoff) return false;
+				if (!showAllEntries && gameTime > botSyncCutoff) return false;
 				if (showAPlusOnly) {
 					const minutesToStart = (gameTime.getTime() - now.getTime()) / 60000;
 					const isStartingSoon =
@@ -953,7 +962,9 @@ function SharpMoneyPage() {
 						edgeRating: e.edgeRating,
 						scoreDifferential: e.scoreDifferential,
 					});
-				if (signalGrade === "C" || signalGrade === "D") return false;
+				if (gradeWeight(signalGrade) < gradeWeight(BOT_SYNC_MIN_GRADE)) {
+					return false;
+				}
 				if (showAPlusOnly && signalGrade !== "A+") return false;
 			}
 			const gradeWarnings = gradesByConditionId[e.conditionId]?.warnings ?? [];
@@ -1575,7 +1586,9 @@ function SharpMoneyPage() {
 									Edge Stats
 								</div>
 								<div className="text-[0.65rem] text-slate-500">
-									{showAllEntries ? "All ready markets" : "Grade filtered"}
+									{showAllEntries
+										? "All ready markets"
+										: `Bot-aligned (${BOT_SYNC_MIN_GRADE}, ${BOT_SYNC_WINDOW_MINUTES}m)`}
 								</div>
 							</div>
 							<div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-6">
