@@ -445,6 +445,12 @@ function formatBotInspectStatus(result: BotInspectResult | null): {
 	tone: "good" | "warn" | "bad";
 } {
 	if (!result) return { message: "No bot debug data", tone: "warn" };
+	if (result.stage === "checking") {
+		return { message: "Checking bot pipeline...", tone: "warn" };
+	}
+	if (result.stage === "no_inspect_data") {
+		return { message: "No inspect data returned", tone: "warn" };
+	}
 	if (result.stage === "not_found_in_entries") {
 		return { message: "Not in bot cache input", tone: "bad" };
 	}
@@ -2352,6 +2358,7 @@ function SharpMoneyCard({
 	const [botInspectResult, setBotInspectResult] = useState<BotInspectResult | null>(
 		null,
 	);
+	const [botInspectTouched, setBotInspectTouched] = useState(false);
 	const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug);
 	const sideAOdds = formatAmericanOdds(entry.sideA.price);
 	const sideBOdds = formatAmericanOdds(entry.sideB.price);
@@ -2473,8 +2480,10 @@ function SharpMoneyCard({
 		minutesToStart <= STARTING_SOON_MINUTES;
 
 	const inspectBotDecision = useCallback(async () => {
+		setBotInspectTouched(true);
 		setBotInspectLoading(true);
 		setBotInspectError(null);
+		setBotInspectResult({ stage: "checking" });
 		try {
 			const response = await getBotCandidatesFn({
 				data: {
@@ -2494,7 +2503,7 @@ function SharpMoneyCard({
 				return;
 			}
 			const inspect = response.debug?.inspect as BotInspectResult | undefined;
-			setBotInspectResult(inspect ?? null);
+			setBotInspectResult(inspect ?? { stage: "no_inspect_data" });
 		} catch (error) {
 			setBotInspectError(
 				error instanceof Error ? error.message : "bot_inspect_failed",
@@ -2636,9 +2645,9 @@ function SharpMoneyCard({
 
 					{/* Title and Sharp Indicator */}
 					<div className="px-3 pb-2">
-						{(botInspectError || botInspectResult) && (
+						{(botInspectTouched || botInspectError || botInspectResult) && (
 							<div
-								className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectToneClass}`}
+								className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
 							>
 								{botInspectError
 									? `Bot check failed: ${botInspectError}`
@@ -2897,9 +2906,9 @@ function SharpMoneyCard({
 					{/* Content Row - Title, Bet Side, and Metrics */}
 					<div className="grid grid-cols-[1fr_auto] items-start gap-4 px-4 pb-4">
 						<div className="flex-1 min-w-0">
-							{(botInspectError || botInspectResult) && (
+							{(botInspectTouched || botInspectError || botInspectResult) && (
 								<div
-									className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectToneClass}`}
+									className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
 								>
 									{botInspectError
 										? `Bot check failed: ${botInspectError}`
