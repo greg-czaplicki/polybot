@@ -428,6 +428,37 @@ function getSeriesLabel(seriesId?: number): string | null {
 	return SERIES_LABELS[seriesId] ?? `Series ${seriesId}`;
 }
 
+type BotInspectResult = {
+	stage?: string;
+	reason?: string;
+	dedupGroupKey?: string;
+	wonDedup?: boolean;
+	foundInEntries?: boolean;
+};
+
+function formatBotInspectMessage(result: BotInspectResult | null): string {
+	if (!result) return "No bot debug data";
+	if (result.stage === "not_found_in_entries") {
+		return "Not in bot cache input";
+	}
+	if (result.stage === "filtered_pre") {
+		return `Excluded pre-filter: ${result.reason ?? "unknown"}`;
+	}
+	if (result.stage === "filtered_grade") {
+		return `Excluded grade-filter: ${result.reason ?? "unknown"}`;
+	}
+	if (result.stage === "dedup_lost") {
+		return `Dedup dropped: ${result.reason ?? "unknown"}`;
+	}
+	if (result.stage === "dedup_seed" || result.wonDedup) {
+		return "Bot-eligible (won dedup)";
+	}
+	if (result.stage === "entries" || result.foundInEntries) {
+		return "In bot candidate pool";
+	}
+	return `Bot stage: ${result.stage ?? "unknown"}`;
+}
+
 function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
 	if (eventSlug && slug) {
 		return `https://polymarket.com/event/${eventSlug}/${slug}`;
@@ -2245,6 +2276,11 @@ function SharpMoneyCard({
 	};
 	showDebug?: boolean;
 }) {
+	const [botInspectLoading, setBotInspectLoading] = useState(false);
+	const [botInspectError, setBotInspectError] = useState<string | null>(null);
+	const [botInspectResult, setBotInspectResult] = useState<BotInspectResult | null>(
+		null,
+	);
 	const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug);
 	const sideAOdds = formatAmericanOdds(entry.sideA.price);
 	const sideBOdds = formatAmericanOdds(entry.sideB.price);
@@ -2344,6 +2380,40 @@ function SharpMoneyCard({
 		minutesToStart !== null &&
 		minutesToStart >= -START_TIME_BUFFER_MINUTES &&
 		minutesToStart <= STARTING_SOON_MINUTES;
+
+	const inspectBotDecision = useCallback(async () => {
+		setBotInspectLoading(true);
+		setBotInspectError(null);
+		try {
+			const response = await getBotCandidatesFn({
+				data: {
+					minGrade: BOT_SYNC_MIN_GRADE,
+					windowMinutes: BOT_SYNC_WINDOW_MINUTES,
+					requireReady: true,
+					includeStarted: false,
+					requireMicrostructure: true,
+					marketQualityThreshold: BOT_SYNC_MARKET_QUALITY_THRESHOLD,
+					inspectConditionId: entry.conditionId,
+					limit: 500,
+				},
+			});
+			if ("error" in response && response.error) {
+				setBotInspectError(String(response.error));
+				setBotInspectResult(null);
+				return;
+			}
+			const inspect = response.debug?.inspect as BotInspectResult | undefined;
+			setBotInspectResult(inspect ?? null);
+		} catch (error) {
+			setBotInspectError(
+				error instanceof Error ? error.message : "bot_inspect_failed",
+			);
+			setBotInspectResult(null);
+		} finally {
+			setBotInspectLoading(false);
+		}
+	}, [entry.conditionId]);
+
 	return (
 		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
 			{showDebug && debugInfo && (
@@ -2399,6 +2469,18 @@ function SharpMoneyCard({
 								<span className="text-[0.6rem] text-gray-500">
 									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								<button
+									type="button"
+									onClick={(e) => {
+										e.stopPropagation();
+										void inspectBotDecision();
+									}}
+									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
+									disabled={botInspectLoading}
+									title="Inspect why this market is included/excluded by bot candidate logic"
+								>
+									{botInspectLoading ? "Checking..." : "Bot check"}
+								</button>
 								<a
 									href={`/sharp/market/${entry.conditionId}`}
 									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
@@ -2448,6 +2530,13 @@ function SharpMoneyCard({
 
 					{/* Title and Sharp Indicator */}
 					<div className="px-3 pb-2">
+						{(botInspectError || botInspectResult) && (
+							<div className="mb-2 text-[0.65rem] font-semibold tracking-wide text-amber-200">
+								{botInspectError
+									? `Bot check failed: ${botInspectError}`
+									: formatBotInspectMessage(botInspectResult)}
+							</div>
+						)}
 						<div className="flex items-start justify-between gap-3 mb-1">
 							<div className="flex-1 min-w-0">
 								<h3 className="text-base font-semibold text-white leading-tight pb-2">
@@ -2630,6 +2719,18 @@ function SharpMoneyCard({
 								<span className="text-[0.6rem] text-gray-500">
 									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								<button
+									type="button"
+									onClick={(e) => {
+										e.stopPropagation();
+										void inspectBotDecision();
+									}}
+									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
+									disabled={botInspectLoading}
+									title="Inspect why this market is included/excluded by bot candidate logic"
+								>
+									{botInspectLoading ? "Checking..." : "Bot check"}
+								</button>
 								<a
 									href={`/sharp/market/${entry.conditionId}`}
 									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
@@ -2680,6 +2781,13 @@ function SharpMoneyCard({
 					{/* Content Row - Title, Bet Side, and Metrics */}
 					<div className="grid grid-cols-[1fr_auto] items-start gap-4 px-4 pb-4">
 						<div className="flex-1 min-w-0">
+							{(botInspectError || botInspectResult) && (
+								<div className="mb-2 text-[0.65rem] font-semibold tracking-wide text-amber-200">
+									{botInspectError
+										? `Bot check failed: ${botInspectError}`
+										: formatBotInspectMessage(botInspectResult)}
+								</div>
+							)}
 							<h3 className="text-base font-semibold text-white truncate pr-4">
 								{entry.marketTitle}
 							</h3>
