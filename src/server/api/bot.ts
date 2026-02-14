@@ -923,6 +923,54 @@ export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
 	},
 );
 
+export const getBotCandidateInspectFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as {
+		conditionId?: string;
+		minGrade?: GradeLabel;
+		windowMinutes?: number;
+		requireReady?: boolean;
+		includeStarted?: boolean;
+		requireMicrostructure?: boolean;
+		marketQualityThreshold?: number;
+		limit?: number;
+	};
+	const conditionId = payload.conditionId?.trim();
+	if (!conditionId) {
+		return { error: "conditionId_required" as const };
+	}
+	const minGrade = parseMinGrade(payload.minGrade ?? null);
+	if (!minGrade) {
+		return { error: "invalid_minGrade" as const };
+	}
+	try {
+		const result = await listBotCandidates(getDb(context), {
+			minGrade,
+			windowMinutes: payload.windowMinutes,
+			limit: payload.limit,
+			requireReady: payload.requireReady,
+			includeStarted: payload.includeStarted,
+			requireMicrostructure: payload.requireMicrostructure,
+			marketQualityThreshold: payload.marketQualityThreshold,
+			inspectConditionId: conditionId,
+		});
+		return {
+			inspect:
+				result.debug.inspect ?? {
+					conditionId,
+					foundInEntries: false,
+					stage: "not_found_in_entries",
+				},
+		};
+	} catch (error) {
+		return {
+			error:
+				error instanceof Error ? error.message : ("candidate_inspect_failed" as const),
+		};
+	}
+});
+
 export async function handleBotRequest(
 	request: Request,
 	env: Env,

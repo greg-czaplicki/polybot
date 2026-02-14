@@ -39,7 +39,7 @@ import {
 	type SharpMoneyGradeMix,
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
-import { getBotCandidatesFn } from "../server/api/bot";
+import { getBotCandidateInspectFn, getBotCandidatesFn } from "../server/api/bot";
 import { listManualPicksFn } from "../server/api/manual-picks";
 
 export const Route = createFileRoute("/sharp")({
@@ -2485,15 +2485,15 @@ function SharpMoneyCard({
 		setBotInspectError(null);
 		setBotInspectResult({ stage: "checking" });
 		try {
-			const response = await getBotCandidatesFn({
+			const response = await getBotCandidateInspectFn({
 				data: {
+					conditionId: entry.conditionId,
 					minGrade: BOT_SYNC_MIN_GRADE,
 					windowMinutes: BOT_SYNC_WINDOW_MINUTES,
 					requireReady: true,
 					includeStarted: false,
 					requireMicrostructure: true,
 					marketQualityThreshold: BOT_SYNC_MARKET_QUALITY_THRESHOLD,
-					inspectConditionId: entry.conditionId,
 					limit: 500,
 				},
 			});
@@ -2502,7 +2502,7 @@ function SharpMoneyCard({
 				setBotInspectResult(null);
 				return;
 			}
-			const inspect = response.debug?.inspect as BotInspectResult | undefined;
+			const inspect = response.inspect as BotInspectResult | undefined;
 			setBotInspectResult(inspect ?? { stage: "no_inspect_data" });
 		} catch (error) {
 			setBotInspectError(
