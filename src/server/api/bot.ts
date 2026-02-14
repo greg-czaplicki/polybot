@@ -386,6 +386,8 @@ function getMarketTypeLabel(
 	marketTitle: string,
 ): "total" | "spread" | "moneyline" | "other" {
 	const lower = marketTitle.toLowerCase();
+	const plainMatchup =
+		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
 	if (
 		lower.includes("o/u") ||
 		lower.includes("over/under") ||
@@ -394,8 +396,7 @@ function getMarketTypeLabel(
 		return "total";
 	}
 	if (lower.includes("spread")) return "spread";
-	if (!marketTitle.includes(":") && marketTitle.includes(" vs "))
-		return "moneyline";
+	if (plainMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
 	return "other";
 }

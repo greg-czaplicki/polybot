@@ -399,6 +399,8 @@ function formatEventTime(isoDate?: string): string | null {
 
 function getMarketTypeLabel(marketTitle: string): string {
 	const lower = marketTitle.toLowerCase();
+	const plainMatchup =
+		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
 	if (
 		lower.includes("o/u") ||
 		lower.includes("over/under") ||
@@ -407,6 +409,7 @@ function getMarketTypeLabel(marketTitle: string): string {
 		return "total";
 	}
 	if (lower.includes("spread")) return "spread";
+	if (plainMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
 	return "other";
 }
