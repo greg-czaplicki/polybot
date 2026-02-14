@@ -1,4 +1,6 @@
+import { createServerFn } from "@tanstack/react-start";
 import type { Env } from "../env";
+import { getDb } from "../env";
 import { nowUnixSeconds } from "../env";
 import {
 	getSharpMoneyCacheFreshnessStats,
@@ -30,6 +32,59 @@ const GRADE_RANK: Record<GradeLabel, number> = {
 	"B": 3,
 	"C": 2,
 	"D": 1,
+};
+
+type BotCandidateDebugInspect = {
+	conditionId: string;
+	foundInEntries: boolean;
+	stage: string;
+	reason?: string;
+	dedupGroupKey?: string;
+	wonDedup?: boolean;
+};
+
+type BotCandidatesDebug = {
+	totalEntries: number;
+	upcomingEntries: number;
+	candidatesBeforeDedup: number;
+	returnedAfterDedup: number;
+	excluded: Record<string, number>;
+	dedupDropped: number;
+	dedupReasons: Record<string, number>;
+	inspect?: BotCandidateDebugInspect;
+};
+
+type BotCandidatesOptions = {
+	minGrade: GradeLabel;
+	windowMinutes?: number;
+	limit?: number;
+	requireReady?: boolean;
+	includeStarted?: boolean;
+	requireMicrostructure?: boolean;
+	marketQualityThreshold?: number;
+	inspectConditionId?: string | null;
+};
+
+type BotCandidatesResult = {
+	candidates: Array<{
+		entry: ReturnType<typeof toSlimCandidate>;
+		grade: {
+			grade: GradeLabel;
+			signalScore?: number;
+			edgeRating?: number;
+			scoreDifferential?: number;
+			microstructureScore?: number;
+			isReady?: boolean;
+			warnings?: string[];
+			computedAt?: number;
+			historyUpdatedAt?: number;
+		};
+	}>;
+	requested: number;
+	returned: number;
+	truncated: boolean;
+	computedAt: number;
+	debug: BotCandidatesDebug;
 };
 
 function clampUnit(value: number): number {
@@ -507,6 +562,366 @@ function buildDecisionSnapshot(input: {
 	};
 }
 
+async function listBotCandidates(
+	db: D1Database,
+	options: BotCandidatesOptions,
+): Promise<BotCandidatesResult> {
+	const windowMinutes =
+		typeof options.windowMinutes === "number" && options.windowMinutes > 0
+			? options.windowMinutes
+			: DEFAULT_CANDIDATE_WINDOW_MINUTES;
+	const limit =
+		typeof options.limit === "number" && options.limit > 0
+			? Math.min(options.limit, MAX_CANDIDATE_LIMIT)
+			: DEFAULT_CACHE_LIMIT;
+	const shouldRequireReady = options.requireReady ?? true;
+	const shouldRequireMicrostructure = options.requireMicrostructure ?? true;
+	const marketQualityThreshold =
+		typeof options.marketQualityThreshold === "number" &&
+		options.marketQualityThreshold >= 0 &&
+		options.marketQualityThreshold <= 1
+			? options.marketQualityThreshold
+			: DEFAULT_MARKET_QUALITY_THRESHOLD;
+	const inspectConditionId = options.inspectConditionId ?? null;
+	const allowStarted = options.includeStarted ?? false;
+	const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
+	const now = Date.now();
+	const cutoffMs = windowMinutes * 60 * 1000;
+
+	const entries = await listSharpMoneyCache(db, {
+		limit,
+		windowHours,
+	});
+	const debug: BotCandidatesDebug = {
+		totalEntries: entries.length,
+		upcomingEntries: 0,
+		candidatesBeforeDedup: 0,
+		returnedAfterDedup: 0,
+		excluded: {},
+		dedupDropped: 0,
+		dedupReasons: {},
+	};
+	const upcomingEntries = entries.filter((entry) => {
+		if (inspectConditionId && entry.conditionId === inspectConditionId) {
+			debug.inspect = {
+				conditionId: inspectConditionId,
+				foundInEntries: true,
+				stage: "entries",
+			};
+		}
+		const marketType = getMarketTypeLabel(entry.marketTitle);
+		if (marketType === "other") {
+			incrementCounter(debug.excluded, "market_type_other");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "market_type_other",
+				};
+			}
+			return false;
+		}
+		if (shouldRequireReady && !entry.isReady) {
+			incrementCounter(debug.excluded, "not_ready");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "not_ready",
+				};
+			}
+			return false;
+		}
+		const eventTime = parseEventTime(entry.eventTime);
+		if (!eventTime) {
+			incrementCounter(debug.excluded, "missing_event_time");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "missing_event_time",
+				};
+			}
+			return false;
+		}
+		const diffMs = eventTime.getTime() - now;
+		if (!allowStarted && diffMs < 0) {
+			incrementCounter(debug.excluded, "started_excluded");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "started_excluded",
+				};
+			}
+			return false;
+		}
+		if (allowStarted && diffMs < -cutoffMs) {
+			incrementCounter(debug.excluded, "started_too_old");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "started_too_old",
+				};
+			}
+			return false;
+		}
+		const inWindow = diffMs <= cutoffMs;
+		if (!inWindow) {
+			incrementCounter(debug.excluded, "outside_window");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "outside_window",
+				};
+			}
+		}
+		return inWindow;
+	});
+	debug.upcomingEntries = upcomingEntries.length;
+	if (upcomingEntries.length === 0) {
+		return {
+			candidates: [],
+			requested: 0,
+			returned: 0,
+			truncated: false,
+			computedAt: nowUnixSeconds(),
+			debug,
+		};
+	}
+	const gradesResult = await computeSharpMoneyGrades(db, {
+		conditionIds: upcomingEntries.map((entry) => entry.conditionId),
+	});
+	if (gradesResult.error) {
+		throw new Error(gradesResult.error);
+	}
+	const gradeByConditionId = new Map(
+		gradesResult.results.map((result) => [result.conditionId, result]),
+	);
+	const candidates = upcomingEntries
+		.map((entry) => {
+			const grade = gradeByConditionId.get(entry.conditionId) ?? null;
+			if (!grade?.grade) {
+				incrementCounter(debug.excluded, "missing_grade");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_grade",
+						reason: "missing_grade",
+					};
+				}
+				return null;
+			}
+			if (GRADE_RANK[grade.grade] < GRADE_RANK[options.minGrade]) {
+				incrementCounter(debug.excluded, "below_min_grade");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_grade",
+						reason: "below_min_grade",
+					};
+				}
+				return null;
+			}
+			if ((grade.warnings ?? []).includes("no_price_edge")) {
+				incrementCounter(debug.excluded, "no_price_edge");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_grade",
+						reason: "no_price_edge",
+					};
+				}
+				return null;
+			}
+			if (
+				shouldRequireMicrostructure &&
+				(grade.microstructureScore ?? 0) < marketQualityThreshold
+			) {
+				incrementCounter(debug.excluded, "below_microstructure_threshold");
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_grade",
+						reason: "below_microstructure_threshold",
+					};
+				}
+				return null;
+			}
+			return {
+				entry: toSlimCandidate(entry),
+				grade: {
+					grade: grade.grade,
+					signalScore: grade.signalScore,
+					edgeRating: grade.edgeRating,
+					scoreDifferential: grade.scoreDifferential,
+					microstructureScore: grade.microstructureScore,
+					isReady: grade.isReady,
+					warnings: grade.warnings,
+					computedAt: grade.computedAt,
+					historyUpdatedAt: grade.historyUpdatedAt,
+				},
+			};
+		})
+		.filter((candidate) => candidate !== null);
+	debug.candidatesBeforeDedup = candidates.length;
+	const deduped = new Map<string, (typeof candidates)[number]>();
+	for (const candidate of candidates) {
+		if (!candidate) continue;
+		const key = getMarketGroupKey(candidate.entry);
+		const existing = deduped.get(key);
+		if (!existing) {
+			deduped.set(key, candidate);
+			if (inspectConditionId && candidate.entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "dedup_seed",
+					dedupGroupKey: key,
+					wonDedup: true,
+				};
+			}
+			continue;
+		}
+		const candidateGrade = candidate.grade.grade;
+		const existingGrade = existing.grade.grade;
+		const candidateRank = GRADE_RANK[candidateGrade];
+		const existingRank = GRADE_RANK[existingGrade];
+		if (candidateRank > existingRank) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "grade_rank");
+			deduped.set(key, candidate);
+			continue;
+		}
+		if (candidateRank < existingRank) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "grade_rank");
+			if (inspectConditionId && candidate.entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "dedup_lost",
+					reason: "grade_rank",
+					dedupGroupKey: key,
+					wonDedup: false,
+				};
+			}
+			continue;
+		}
+		const candidateScore = candidate.grade.signalScore ?? 0;
+		const existingScore = existing.grade.signalScore ?? 0;
+		if (candidateScore > existingScore) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "signal_score");
+			deduped.set(key, candidate);
+			continue;
+		}
+		if (candidateScore < existingScore) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "signal_score");
+			continue;
+		}
+		const candidateEdge = candidate.grade.edgeRating ?? 0;
+		const existingEdge = existing.grade.edgeRating ?? 0;
+		if (candidateEdge > existingEdge) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "edge_rating");
+			deduped.set(key, candidate);
+			continue;
+		}
+		if (candidateEdge < existingEdge) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "edge_rating");
+			continue;
+		}
+		const candidateMicrostructure = candidate.grade.microstructureScore ?? 0;
+		const existingMicrostructure = existing.grade.microstructureScore ?? 0;
+		if (candidateMicrostructure > existingMicrostructure) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "microstructure");
+			deduped.set(key, candidate);
+			continue;
+		}
+		if (candidateMicrostructure < existingMicrostructure) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "microstructure");
+			continue;
+		}
+		const candidateDiff = candidate.grade.scoreDifferential ?? 0;
+		const existingDiff = existing.grade.scoreDifferential ?? 0;
+		if (candidateDiff > existingDiff) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "score_differential");
+			deduped.set(key, candidate);
+			continue;
+		}
+		const candidateTime = parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
+		const existingTime = parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
+		if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
+			debug.dedupDropped += 1;
+			incrementCounter(debug.dedupReasons, "event_time");
+			deduped.set(key, candidate);
+		}
+	}
+	const dedupedCandidates = [...deduped.values()];
+	debug.returnedAfterDedup = dedupedCandidates.length;
+	if (inspectConditionId && !debug.inspect) {
+		debug.inspect = {
+			conditionId: inspectConditionId,
+			foundInEntries: false,
+			stage: "not_found_in_entries",
+		};
+	}
+	return {
+		candidates: dedupedCandidates,
+		requested: gradesResult.requested,
+		returned: dedupedCandidates.length,
+		truncated: gradesResult.truncated,
+		computedAt: gradesResult.computedAt,
+		debug,
+	};
+}
+
+export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as Partial<BotCandidatesOptions>;
+		const minGrade = parseMinGrade(payload.minGrade ?? null);
+		if (!minGrade) {
+			return { error: "invalid_minGrade" as const };
+		}
+		try {
+			const result = await listBotCandidates(getDb(context), {
+				minGrade,
+				windowMinutes: payload.windowMinutes,
+				limit: payload.limit,
+				requireReady: payload.requireReady,
+				includeStarted: payload.includeStarted,
+				requireMicrostructure: payload.requireMicrostructure,
+				marketQualityThreshold: payload.marketQualityThreshold,
+				inspectConditionId: payload.inspectConditionId ?? null,
+			});
+			return result;
+		} catch (error) {
+			return {
+				error:
+					error instanceof Error ? error.message : ("candidate_build_failed" as const),
+			};
+		}
+	},
+);
+
 export async function handleBotRequest(
 	request: Request,
 	env: Env,
@@ -567,368 +982,53 @@ export async function handleBotRequest(
 			return jsonResponse({ error: "invalid_minGrade" }, { status: 400 });
 		}
 		const windowMinutesParam = Number(url.searchParams.get("windowMinutes"));
-			const limitParam = Number(url.searchParams.get("limit"));
-			const requireReady = url.searchParams.get("requireReady");
-			const includeStarted = url.searchParams.get("includeStarted");
-			const requireMicrostructure = url.searchParams.get("requireMicrostructure");
-			const includeDebug =
-				url.searchParams.get("debug")?.toLowerCase() === "true";
-			const inspectConditionId = url.searchParams.get("inspectConditionId");
-			const marketQualityThresholdParam = Number(
-				url.searchParams.get("marketQualityThreshold"),
-			);
-			const windowMinutes =
-				Number.isFinite(windowMinutesParam) && windowMinutesParam > 0
-					? windowMinutesParam
-					: DEFAULT_CANDIDATE_WINDOW_MINUTES;
-		const limit =
-			Number.isFinite(limitParam) && limitParam > 0
-				? Math.min(limitParam, MAX_CANDIDATE_LIMIT)
-				: DEFAULT_CACHE_LIMIT;
-		const shouldRequireReady =
-			requireReady === null || requireReady.toLowerCase() === "true";
-			const shouldRequireMicrostructure =
-				requireMicrostructure === null ||
-				requireMicrostructure.toLowerCase() === "true";
-			const marketQualityThreshold =
-				Number.isFinite(marketQualityThresholdParam) &&
-				marketQualityThresholdParam >= 0 &&
-				marketQualityThresholdParam <= 1
-					? marketQualityThresholdParam
-					: DEFAULT_MARKET_QUALITY_THRESHOLD;
-			const allowStarted = includeStarted?.toLowerCase() === "true";
-		const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
-		const now = Date.now();
-		const cutoffMs = windowMinutes * 60 * 1000;
-
-		const entries = await listSharpMoneyCache(env.POLYWHALER_DB, {
-			limit,
-			windowHours,
-		});
-		const debug: {
-			totalEntries: number;
-			upcomingEntries: number;
-			candidatesBeforeDedup: number;
-			returnedAfterDedup: number;
-			excluded: Record<string, number>;
-			dedupDropped: number;
-			dedupReasons: Record<string, number>;
-			inspect?: {
-				conditionId: string;
-				foundInEntries: boolean;
-				stage: string;
-				reason?: string;
-				dedupGroupKey?: string;
-				wonDedup?: boolean;
-			};
-		} = {
-			totalEntries: entries.length,
-			upcomingEntries: 0,
-			candidatesBeforeDedup: 0,
-			returnedAfterDedup: 0,
-			excluded: {},
-			dedupDropped: 0,
-			dedupReasons: {},
-		};
-		const upcomingEntries = entries.filter((entry) => {
-			if (inspectConditionId && entry.conditionId === inspectConditionId) {
-				debug.inspect = {
-					conditionId: inspectConditionId,
-					foundInEntries: true,
-					stage: "entries",
-				};
-			}
-			const marketType = getMarketTypeLabel(entry.marketTitle);
-			if (marketType === "other") {
-				incrementCounter(debug.excluded, "market_type_other");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "market_type_other",
-					};
-				}
-				return false;
-			}
-			if (shouldRequireReady && !entry.isReady) {
-				incrementCounter(debug.excluded, "not_ready");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "not_ready",
-					};
-				}
-				return false;
-			}
-			const eventTime = parseEventTime(entry.eventTime);
-			if (!eventTime) {
-				incrementCounter(debug.excluded, "missing_event_time");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "missing_event_time",
-					};
-				}
-				return false;
-			}
-			const diffMs = eventTime.getTime() - now;
-			if (!allowStarted && diffMs < 0) {
-				incrementCounter(debug.excluded, "started_excluded");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "started_excluded",
-					};
-				}
-				return false;
-			}
-			if (allowStarted && diffMs < -cutoffMs) {
-				incrementCounter(debug.excluded, "started_too_old");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "started_too_old",
-					};
-				}
-				return false;
-			}
-			const inWindow = diffMs <= cutoffMs;
-			if (!inWindow) {
-				incrementCounter(debug.excluded, "outside_window");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_pre",
-						reason: "outside_window",
-					};
-				}
-			}
-			return inWindow;
-		});
-		debug.upcomingEntries = upcomingEntries.length;
-		if (upcomingEntries.length === 0) {
-			return jsonResponse({
-				candidates: [],
-				requested: 0,
-				returned: 0,
-				truncated: false,
-				computedAt: nowUnixSeconds(),
-				...(includeDebug ? { debug } : {}),
-			});
-		}
-		const gradesResult = await computeSharpMoneyGrades(env.POLYWHALER_DB, {
-			conditionIds: upcomingEntries.map((entry) => entry.conditionId),
-		});
-		if (gradesResult.error) {
-			return jsonResponse({ error: gradesResult.error }, { status: 400 });
-		}
-		const gradeByConditionId = new Map(
-			gradesResult.results.map((result) => [result.conditionId, result]),
+		const limitParam = Number(url.searchParams.get("limit"));
+		const requireReady = url.searchParams.get("requireReady");
+		const includeStarted = url.searchParams.get("includeStarted");
+		const requireMicrostructure = url.searchParams.get("requireMicrostructure");
+		const includeDebug = url.searchParams.get("debug")?.toLowerCase() === "true";
+		const inspectConditionId = url.searchParams.get("inspectConditionId");
+		const marketQualityThresholdParam = Number(
+			url.searchParams.get("marketQualityThreshold"),
 		);
-		const candidates = upcomingEntries
-			.map((entry) => {
-				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
-				if (!grade?.grade) {
-					incrementCounter(debug.excluded, "missing_grade");
-					if (inspectConditionId && entry.conditionId === inspectConditionId) {
-						debug.inspect = {
-							conditionId: inspectConditionId,
-							foundInEntries: true,
-							stage: "filtered_grade",
-							reason: "missing_grade",
-						};
-					}
-					return null;
-				}
-				if (GRADE_RANK[grade.grade] < GRADE_RANK[minGrade]) {
-					incrementCounter(debug.excluded, "below_min_grade");
-					if (inspectConditionId && entry.conditionId === inspectConditionId) {
-						debug.inspect = {
-							conditionId: inspectConditionId,
-							foundInEntries: true,
-							stage: "filtered_grade",
-							reason: "below_min_grade",
-						};
-					}
-					return null;
-				}
-					if ((grade.warnings ?? []).includes("no_price_edge")) {
-						incrementCounter(debug.excluded, "no_price_edge");
-						if (inspectConditionId && entry.conditionId === inspectConditionId) {
-							debug.inspect = {
-								conditionId: inspectConditionId,
-								foundInEntries: true,
-								stage: "filtered_grade",
-								reason: "no_price_edge",
-							};
-						}
-						return null;
-					}
-					if (
-						shouldRequireMicrostructure &&
-						(grade.microstructureScore ?? 0) < marketQualityThreshold
-					) {
-						incrementCounter(debug.excluded, "below_microstructure_threshold");
-						if (inspectConditionId && entry.conditionId === inspectConditionId) {
-							debug.inspect = {
-								conditionId: inspectConditionId,
-								foundInEntries: true,
-								stage: "filtered_grade",
-								reason: "below_microstructure_threshold",
-							};
-						}
-						return null;
-					}
-				return {
-					entry: toSlimCandidate(entry),
-					grade: {
-						grade: grade.grade,
-						signalScore: grade.signalScore,
-						edgeRating: grade.edgeRating,
-						scoreDifferential: grade.scoreDifferential,
-						microstructureScore: grade.microstructureScore,
-						isReady: grade.isReady,
-						warnings: grade.warnings,
-						computedAt: grade.computedAt,
-						historyUpdatedAt: grade.historyUpdatedAt,
-					},
-				};
-			})
-			.filter((candidate) => candidate !== null);
-		debug.candidatesBeforeDedup = candidates.length;
-		const deduped = new Map<string, (typeof candidates)[number]>();
-		for (const candidate of candidates) {
-			if (!candidate) continue;
-			const key = getMarketGroupKey(candidate.entry);
-			const existing = deduped.get(key);
-			if (!existing) {
-				deduped.set(key, candidate);
-				if (
-					inspectConditionId &&
-					candidate.entry.conditionId === inspectConditionId
-				) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "dedup_seed",
-						dedupGroupKey: key,
-						wonDedup: true,
-					};
-				}
-				continue;
-			}
-			const candidateGrade = candidate.grade.grade;
-			const existingGrade = existing.grade.grade;
-			const candidateRank = GRADE_RANK[candidateGrade];
-			const existingRank = GRADE_RANK[existingGrade];
-			if (candidateRank > existingRank) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "grade_rank");
-				deduped.set(key, candidate);
-				continue;
-			}
-			if (candidateRank < existingRank) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "grade_rank");
-				if (
-					inspectConditionId &&
-					candidate.entry.conditionId === inspectConditionId
-				) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "dedup_lost",
-						reason: "grade_rank",
-						dedupGroupKey: key,
-						wonDedup: false,
-					};
-				}
-				continue;
-			}
-			const candidateScore = candidate.grade.signalScore ?? 0;
-			const existingScore = existing.grade.signalScore ?? 0;
-			if (candidateScore > existingScore) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "signal_score");
-				deduped.set(key, candidate);
-				continue;
-			}
-			if (candidateScore < existingScore) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "signal_score");
-				continue;
-			}
-			const candidateEdge = candidate.grade.edgeRating ?? 0;
-			const existingEdge = existing.grade.edgeRating ?? 0;
-			if (candidateEdge > existingEdge) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "edge_rating");
-				deduped.set(key, candidate);
-				continue;
-			}
-			if (candidateEdge < existingEdge) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "edge_rating");
-				continue;
-			}
-			const candidateMicrostructure = candidate.grade.microstructureScore ?? 0;
-			const existingMicrostructure = existing.grade.microstructureScore ?? 0;
-			if (candidateMicrostructure > existingMicrostructure) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "microstructure");
-				deduped.set(key, candidate);
-				continue;
-			}
-			if (candidateMicrostructure < existingMicrostructure) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "microstructure");
-				continue;
-			}
-			const candidateDiff = candidate.grade.scoreDifferential ?? 0;
-			const existingDiff = existing.grade.scoreDifferential ?? 0;
-			if (candidateDiff > existingDiff) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "score_differential");
-				deduped.set(key, candidate);
-				continue;
-			}
-			const candidateTime =
-				parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
-			const existingTime =
-				parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
-			if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
-				debug.dedupDropped += 1;
-				incrementCounter(debug.dedupReasons, "event_time");
-				deduped.set(key, candidate);
-			}
+		try {
+			const result = await listBotCandidates(env.POLYWHALER_DB, {
+				minGrade,
+				windowMinutes:
+					Number.isFinite(windowMinutesParam) && windowMinutesParam > 0
+						? windowMinutesParam
+						: DEFAULT_CANDIDATE_WINDOW_MINUTES,
+				limit:
+					Number.isFinite(limitParam) && limitParam > 0
+						? Math.min(limitParam, MAX_CANDIDATE_LIMIT)
+						: DEFAULT_CACHE_LIMIT,
+				requireReady: requireReady === null || requireReady.toLowerCase() === "true",
+				includeStarted: includeStarted?.toLowerCase() === "true",
+				requireMicrostructure:
+					requireMicrostructure === null ||
+					requireMicrostructure.toLowerCase() === "true",
+				marketQualityThreshold:
+					Number.isFinite(marketQualityThresholdParam) &&
+					marketQualityThresholdParam >= 0 &&
+					marketQualityThresholdParam <= 1
+						? marketQualityThresholdParam
+						: DEFAULT_MARKET_QUALITY_THRESHOLD,
+				inspectConditionId,
+			});
+			return jsonResponse({
+				candidates: result.candidates,
+				requested: result.requested,
+				returned: result.returned,
+				truncated: result.truncated,
+				computedAt: result.computedAt,
+				...(includeDebug ? { debug: result.debug } : {}),
+			});
+		} catch (error) {
+			return jsonResponse(
+				{ error: error instanceof Error ? error.message : "candidate_build_failed" },
+				{ status: 400 },
+			);
 		}
-		const dedupedCandidates = [...deduped.values()];
-		debug.returnedAfterDedup = dedupedCandidates.length;
-		if (inspectConditionId && !debug.inspect) {
-			debug.inspect = {
-				conditionId: inspectConditionId,
-				foundInEntries: false,
-				stage: "not_found_in_entries",
-			};
-		}
-		return jsonResponse({
-			candidates: dedupedCandidates,
-			requested: gradesResult.requested,
-			returned: dedupedCandidates.length,
-			truncated: gradesResult.truncated,
-			computedAt: gradesResult.computedAt,
-			...(includeDebug ? { debug } : {}),
-		});
 	}
 
 	if (url.pathname === "/api/bot/eval") {

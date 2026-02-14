@@ -39,6 +39,7 @@ import {
 	type SharpMoneyGradeMix,
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
+import { getBotCandidatesFn } from "../server/api/bot";
 
 export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
@@ -296,6 +297,7 @@ const UPCOMING_WINDOW_HOURS = 12;
 const START_TIME_BUFFER_MINUTES = 10;
 const BOT_SYNC_WINDOW_MINUTES = 60;
 const BOT_SYNC_MIN_GRADE = "A";
+const BOT_SYNC_MARKET_QUALITY_THRESHOLD = 0.72;
 const STALE_HISTORY_MINUTES = 15;
 
 function getPnlCoverage(holders: TopHolderPnlData[]): number {
@@ -466,6 +468,10 @@ function SharpMoneyPage() {
 	const [showAllEntries, setShowAllEntries] = useState(false);
 	const [showEdgeStats, setShowEdgeStats] = useState(true);
 	const [showAPlusOnly, setShowAPlusOnly] = useState(false);
+	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<string[]>(
+		[],
+	);
+	const [botAlignedError, setBotAlignedError] = useState<string | null>(null);
 	const [edgeStatsWindowHours, setEdgeStatsWindowHours] = useState(24 * 7);
 	const [edgeStatsHistory, setEdgeStatsHistory] = useState<EdgeStatsBucket[]>(
 		[],
@@ -923,6 +929,52 @@ function SharpMoneyPage() {
 		}
 		return map;
 	}, [baseEntries, signalHistoryByConditionId, historyByConditionId, gradesByConditionId]);
+
+	useEffect(() => {
+		if (showAllEntries) {
+			setBotAlignedError(null);
+			setBotAlignedConditionOrder([]);
+			return;
+		}
+		if (baseEntries.length === 0) {
+			setBotAlignedError(null);
+			setBotAlignedConditionOrder([]);
+			return;
+		}
+		let cancelled = false;
+		(async () => {
+			const result = await getBotCandidatesFn({
+				data: {
+					minGrade: BOT_SYNC_MIN_GRADE,
+					windowMinutes: BOT_SYNC_WINDOW_MINUTES,
+					requireReady: true,
+					includeStarted: false,
+					requireMicrostructure: true,
+					marketQualityThreshold: BOT_SYNC_MARKET_QUALITY_THRESHOLD,
+					limit: 500,
+				},
+			});
+			if (cancelled) return;
+			if ("error" in result && result.error) {
+				setBotAlignedError(String(result.error));
+				setBotAlignedConditionOrder([]);
+				return;
+			}
+			const orderedIds = (result.candidates ?? []).map(
+				(candidate) => candidate.entry.conditionId,
+			);
+			setBotAlignedError(null);
+			setBotAlignedConditionOrder(orderedIds);
+		})().catch((error) => {
+			if (cancelled) return;
+			setBotAlignedError(error instanceof Error ? error.message : "bot_candidates_failed");
+			setBotAlignedConditionOrder([]);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [showAllEntries, baseEntries]);
+
 	const filteredEntries = useMemo(() => {
 		const now = new Date();
 		const cutoff = new Date(
@@ -975,6 +1027,20 @@ function SharpMoneyPage() {
 			filtered = filtered.filter(
 				(e) => e.sportSeriesId === Number(selectedSeriesId),
 			);
+		}
+		if (!showAllEntries) {
+			const rankByConditionId = new Map<string, number>();
+			for (const [index, conditionId] of botAlignedConditionOrder.entries()) {
+				rankByConditionId.set(conditionId, index);
+			}
+			filtered = filtered
+				.filter((entry) => rankByConditionId.has(entry.conditionId))
+				.sort(
+					(a, b) =>
+						(rankByConditionId.get(a.conditionId) ?? Number.MAX_SAFE_INTEGER) -
+						(rankByConditionId.get(b.conditionId) ?? Number.MAX_SAFE_INTEGER),
+				);
+			return filtered;
 		}
 		const deduped = new Map<string, SharpMoneyCacheEntry>();
 		for (const entry of filtered) {
@@ -1039,6 +1105,7 @@ function SharpMoneyPage() {
 		selectedSeriesId,
 		showAllEntries,
 		showAPlusOnly,
+		botAlignedConditionOrder,
 		signalScoreByConditionId,
 		gradesByConditionId,
 	]);
@@ -1578,6 +1645,12 @@ function SharpMoneyPage() {
 						</button>
 					</div>
 					</div>
+
+					{!showAllEntries && botAlignedError && (
+						<div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+							Bot-aligned candidate sync failed: {botAlignedError}
+						</div>
+					)}
 
 					{showEdgeStats && edgeStats && (
 						<div className="mb-6 rounded-xl border border-slate-800/70 bg-slate-900/40 px-4 py-3">
