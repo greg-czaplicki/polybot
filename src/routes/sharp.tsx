@@ -436,27 +436,42 @@ type BotInspectResult = {
 	foundInEntries?: boolean;
 };
 
-function formatBotInspectMessage(result: BotInspectResult | null): string {
-	if (!result) return "No bot debug data";
+function formatBotInspectStatus(result: BotInspectResult | null): {
+	message: string;
+	tone: "good" | "warn" | "bad";
+} {
+	if (!result) return { message: "No bot debug data", tone: "warn" };
 	if (result.stage === "not_found_in_entries") {
-		return "Not in bot cache input";
+		return { message: "Not in bot cache input", tone: "bad" };
 	}
 	if (result.stage === "filtered_pre") {
-		return `Excluded pre-filter: ${result.reason ?? "unknown"}`;
+		return {
+			message: `Excluded pre-filter: ${result.reason ?? "unknown"}`,
+			tone: "warn",
+		};
 	}
 	if (result.stage === "filtered_grade") {
-		return `Excluded grade-filter: ${result.reason ?? "unknown"}`;
+		return {
+			message: `Excluded grade-filter: ${result.reason ?? "unknown"}`,
+			tone: "warn",
+		};
 	}
 	if (result.stage === "dedup_lost") {
-		return `Dedup dropped: ${result.reason ?? "unknown"}`;
+		return {
+			message: `Dedup dropped: ${result.reason ?? "unknown"}`,
+			tone: "bad",
+		};
 	}
 	if (result.stage === "dedup_seed" || result.wonDedup) {
-		return "Bot-eligible (won dedup)";
+		return { message: "Bot-eligible (won dedup)", tone: "good" };
 	}
 	if (result.stage === "entries" || result.foundInEntries) {
-		return "In bot candidate pool";
+		return { message: "In bot candidate pool", tone: "good" };
 	}
-	return `Bot stage: ${result.stage ?? "unknown"}`;
+	return {
+		message: `Bot stage: ${result.stage ?? "unknown"}`,
+		tone: "warn",
+	};
 }
 
 function buildPolymarketUrl(eventSlug?: string, slug?: string): string | null {
@@ -2413,6 +2428,13 @@ function SharpMoneyCard({
 			setBotInspectLoading(false);
 		}
 	}, [entry.conditionId]);
+	const botInspectStatus = formatBotInspectStatus(botInspectResult);
+	const botInspectToneClass =
+		botInspectStatus.tone === "good"
+			? "text-emerald-300"
+			: botInspectStatus.tone === "bad"
+				? "text-rose-300"
+				: "text-amber-200";
 
 	return (
 		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
@@ -2531,10 +2553,12 @@ function SharpMoneyCard({
 					{/* Title and Sharp Indicator */}
 					<div className="px-3 pb-2">
 						{(botInspectError || botInspectResult) && (
-							<div className="mb-2 text-[0.65rem] font-semibold tracking-wide text-amber-200">
+							<div
+								className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectToneClass}`}
+							>
 								{botInspectError
 									? `Bot check failed: ${botInspectError}`
-									: formatBotInspectMessage(botInspectResult)}
+									: botInspectStatus.message}
 							</div>
 						)}
 						<div className="flex items-start justify-between gap-3 mb-1">
@@ -2782,10 +2806,12 @@ function SharpMoneyCard({
 					<div className="grid grid-cols-[1fr_auto] items-start gap-4 px-4 pb-4">
 						<div className="flex-1 min-w-0">
 							{(botInspectError || botInspectResult) && (
-								<div className="mb-2 text-[0.65rem] font-semibold tracking-wide text-amber-200">
+								<div
+									className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectToneClass}`}
+								>
 									{botInspectError
 										? `Bot check failed: ${botInspectError}`
-										: formatBotInspectMessage(botInspectResult)}
+										: botInspectStatus.message}
 								</div>
 							)}
 							<h3 className="text-base font-semibold text-white truncate pr-4">
