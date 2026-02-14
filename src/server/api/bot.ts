@@ -945,23 +945,78 @@ export const getBotCandidateInspectFn = createServerFn({
 		return { error: "invalid_minGrade" as const };
 	}
 	try {
+		const windowMinutes =
+			typeof payload.windowMinutes === "number" && payload.windowMinutes > 0
+				? payload.windowMinutes
+				: DEFAULT_CANDIDATE_WINDOW_MINUTES;
+		const shouldRequireReady = payload.requireReady ?? true;
+		const allowStarted = payload.includeStarted ?? false;
 		const result = await listBotCandidates(getDb(context), {
 			minGrade,
-			windowMinutes: payload.windowMinutes,
+			windowMinutes,
 			limit: payload.limit,
-			requireReady: payload.requireReady,
+			requireReady: shouldRequireReady,
 			includeStarted: payload.includeStarted,
 			requireMicrostructure: payload.requireMicrostructure,
 			marketQualityThreshold: payload.marketQualityThreshold,
 			inspectConditionId: conditionId,
 		});
-		return {
-			inspect:
-				result.debug.inspect ?? {
-					conditionId,
-					foundInEntries: false,
-					stage: "not_found_in_entries",
+		const inspect =
+			result.debug.inspect ?? {
+				conditionId,
+				foundInEntries: false,
+				stage: "not_found_in_entries",
+			};
+		if (inspect.stage === "not_found_in_entries") {
+			const db = getDb(context);
+			const cacheEntry = await getSharpMoneyCacheByConditionId(db, conditionId);
+			if (!cacheEntry) {
+				return {
+					inspect: {
+						...inspect,
+						diagnosticReason: "not_in_cache_table",
+					},
+				};
+			}
+			const eventTime = parseEventTime(cacheEntry.eventTime);
+			const now = Date.now();
+			const minutesToStart =
+				eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null;
+			const cutoffMinutes = windowMinutes;
+			const inEventWindow =
+				minutesToStart === null ? false : minutesToStart >= 0 && minutesToStart <= cutoffMinutes;
+			const recentCacheCutoffSeconds =
+				nowUnixSeconds() - Math.max(1, Math.ceil(windowMinutes / 60)) * 3600;
+			const inRecentCacheWindow = (cacheEntry.updatedAt ?? 0) >= recentCacheCutoffSeconds;
+			let diagnosticReason = "not_in_recent_cache_window";
+			const marketType = getMarketTypeLabel(cacheEntry.marketTitle);
+			if (marketType === "other") {
+				diagnosticReason = "market_type_other";
+			} else if (shouldRequireReady && !cacheEntry.isReady) {
+				diagnosticReason = "not_ready";
+			} else if (!eventTime) {
+				diagnosticReason = "missing_event_time";
+			} else if (!allowStarted && minutesToStart !== null && minutesToStart < 0) {
+				diagnosticReason = "started_excluded";
+			} else if (!inEventWindow) {
+				diagnosticReason = "outside_event_window";
+			}
+			return {
+				inspect: {
+					...inspect,
+					diagnosticReason,
+					isReady: cacheEntry.isReady,
+					marketType,
+					minutesToStart,
+					candidateWindowMinutes: cutoffMinutes,
+					inEventWindow,
+					inRecentCacheWindow,
+					cacheUpdatedAt: cacheEntry.updatedAt,
 				},
+			};
+		}
+		return {
+			inspect,
 		};
 	} catch (error) {
 		return {

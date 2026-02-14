@@ -438,11 +438,20 @@ type BotInspectResult = {
 	dedupGroupKey?: string;
 	wonDedup?: boolean;
 	foundInEntries?: boolean;
+	diagnosticReason?: string;
+	isReady?: boolean;
+	marketType?: string;
+	minutesToStart?: number | null;
+	candidateWindowMinutes?: number;
+	inEventWindow?: boolean;
+	inRecentCacheWindow?: boolean;
+	cacheUpdatedAt?: number;
 };
 
 function formatBotInspectStatus(result: BotInspectResult | null): {
 	message: string;
 	tone: "good" | "warn" | "bad";
+	detail?: string;
 } {
 	if (!result) return { message: "No bot debug data", tone: "warn" };
 	if (result.stage === "checking") {
@@ -452,7 +461,30 @@ function formatBotInspectStatus(result: BotInspectResult | null): {
 		return { message: "No inspect data returned", tone: "warn" };
 	}
 	if (result.stage === "not_found_in_entries") {
-		return { message: "Not in bot cache input", tone: "bad" };
+		const detailParts: string[] = [];
+		if (result.diagnosticReason) detailParts.push(`reason=${result.diagnosticReason}`);
+		if (typeof result.isReady === "boolean")
+			detailParts.push(`ready=${result.isReady ? "yes" : "no"}`);
+		if (result.marketType) detailParts.push(`type=${result.marketType}`);
+		if (typeof result.minutesToStart === "number" && Number.isFinite(result.minutesToStart)) {
+			detailParts.push(`minsToStart=${Math.round(result.minutesToStart)}`);
+		}
+		if (typeof result.candidateWindowMinutes === "number") {
+			detailParts.push(`window=${result.candidateWindowMinutes}m`);
+		}
+		if (typeof result.inEventWindow === "boolean") {
+			detailParts.push(`inEventWindow=${result.inEventWindow ? "yes" : "no"}`);
+		}
+		if (typeof result.inRecentCacheWindow === "boolean") {
+			detailParts.push(
+				`inRecentCacheWindow=${result.inRecentCacheWindow ? "yes" : "no"}`,
+			);
+		}
+		return {
+			message: "Not in bot cache input",
+			tone: "bad",
+			detail: detailParts.length > 0 ? detailParts.join(" • ") : undefined,
+		};
 	}
 	if (result.stage === "filtered_pre") {
 		return {
@@ -2646,12 +2678,19 @@ function SharpMoneyCard({
 					{/* Title and Sharp Indicator */}
 					<div className="px-3 pb-2">
 						{(botInspectTouched || botInspectError || botInspectResult) && (
-							<div
-								className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
-							>
-								{botInspectError
-									? `Bot check failed: ${botInspectError}`
-									: botInspectStatus.message}
+							<div className="mb-2">
+								<div
+									className={`text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
+								>
+									{botInspectError
+										? `Bot check failed: ${botInspectError}`
+										: botInspectStatus.message}
+								</div>
+								{!botInspectError && botInspectStatus.detail && (
+									<div className="mt-0.5 text-[0.6rem] text-slate-400">
+										{botInspectStatus.detail}
+									</div>
+								)}
 							</div>
 						)}
 						<div className="flex items-start justify-between gap-3 mb-1">
@@ -2907,12 +2946,19 @@ function SharpMoneyCard({
 					<div className="grid grid-cols-[1fr_auto] items-start gap-4 px-4 pb-4">
 						<div className="flex-1 min-w-0">
 							{(botInspectTouched || botInspectError || botInspectResult) && (
-								<div
-									className={`mb-2 text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
-								>
-									{botInspectError
-										? `Bot check failed: ${botInspectError}`
-										: botInspectStatus.message}
+								<div className="mb-2">
+									<div
+										className={`text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
+									>
+										{botInspectError
+											? `Bot check failed: ${botInspectError}`
+											: botInspectStatus.message}
+									</div>
+									{!botInspectError && botInspectStatus.detail && (
+										<div className="mt-0.5 text-[0.6rem] text-slate-400">
+											{botInspectStatus.detail}
+										</div>
+									)}
 								</div>
 							)}
 							<h3 className="text-base font-semibold text-white truncate pr-4">
