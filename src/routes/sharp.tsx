@@ -40,6 +40,7 @@ import {
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
 import { getBotCandidatesFn } from "../server/api/bot";
+import { listManualPicksFn } from "../server/api/manual-picks";
 
 export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
@@ -521,6 +522,15 @@ function SharpMoneyPage() {
 		[],
 	);
 	const [botAlignedError, setBotAlignedError] = useState<string | null>(null);
+	const [pickStatusByConditionId, setPickStatusByConditionId] = useState<
+		Record<
+			string,
+			{
+				status: "pending" | "win" | "loss" | "push";
+				pickedAt: number;
+			}
+		>
+	>({});
 	const [edgeStatsWindowHours, setEdgeStatsWindowHours] = useState(24 * 7);
 	const [edgeStatsHistory, setEdgeStatsHistory] = useState<EdgeStatsBucket[]>(
 		[],
@@ -756,6 +766,43 @@ function SharpMoneyPage() {
 		}, 60000);
 		return () => clearInterval(interval);
 	}, [loadCache]);
+
+	useEffect(() => {
+		let cancelled = false;
+		const loadPickStatus = async () => {
+			try {
+				const result = await listManualPicksFn({ data: { limit: 2000 } });
+				if (cancelled) return;
+				const next: Record<
+					string,
+					{
+						status: "pending" | "win" | "loss" | "push";
+						pickedAt: number;
+					}
+				> = {};
+				for (const pick of result.picks ?? []) {
+					const existing = next[pick.conditionId];
+					if (!existing || pick.pickedAt > existing.pickedAt) {
+						next[pick.conditionId] = {
+							status: pick.status,
+							pickedAt: pick.pickedAt,
+						};
+					}
+				}
+				setPickStatusByConditionId(next);
+			} catch (error) {
+				console.error("Failed to load pick status map:", error);
+			}
+		};
+		void loadPickStatus();
+		const interval = setInterval(() => {
+			void loadPickStatus();
+		}, 60000);
+		return () => {
+			cancelled = true;
+			clearInterval(interval);
+		};
+	}, []);
 
 	useEffect(() => {
 		const interval = setInterval(
@@ -2230,6 +2277,7 @@ function SharpMoneyPage() {
 									<SharpMoneyCard
 										key={entry.id}
 										entry={entry}
+										pickMeta={pickStatusByConditionId[entry.conditionId]}
 										isExpanded={expandedMarkets.has(entry.id)}
 										onToggle={() => toggleMarket(entry)}
 										history={historyByConditionId[entry.conditionId]}
@@ -2254,6 +2302,7 @@ function SharpMoneyPage() {
 
 function SharpMoneyCard({
 	entry,
+	pickMeta,
 	isExpanded,
 	onToggle,
 	history,
@@ -2268,6 +2317,10 @@ function SharpMoneyCard({
 	showDebug,
 }: {
 	entry: SharpMoneyCacheEntry;
+	pickMeta?: {
+		status: "pending" | "win" | "loss" | "push";
+		pickedAt: number;
+	};
 	isExpanded: boolean;
 	onToggle: () => void;
 	history?: SharpMoneyHistoryEntry[];
@@ -2314,6 +2367,26 @@ function SharpMoneyCard({
 		historyAgeSeconds !== null &&
 		historyAgeSeconds > STALE_HISTORY_MINUTES * 60;
 	const gradeWarnings = gradeData?.warnings ?? [];
+	const pickStatusLabel =
+		pickMeta?.status === "pending"
+			? "placed"
+			: pickMeta?.status === "win"
+				? "won"
+				: pickMeta?.status === "loss"
+					? "lost"
+					: pickMeta?.status === "push"
+						? "push"
+						: null;
+	const pickStatusClass =
+		pickMeta?.status === "pending"
+			? "text-emerald-200 bg-emerald-500/15 border-emerald-500/40"
+			: pickMeta?.status === "win"
+				? "text-emerald-200 bg-emerald-500/15 border-emerald-500/40"
+				: pickMeta?.status === "loss"
+					? "text-rose-200 bg-rose-500/15 border-rose-500/40"
+					: pickMeta?.status === "push"
+						? "text-slate-200 bg-slate-500/15 border-slate-500/40"
+						: "";
 
 	// Calculate volume percentage and get heat map color
 	const marketVolume = getEntryMarketVolume(entry);
@@ -2494,6 +2567,14 @@ function SharpMoneyCard({
 								<span className="text-[0.6rem] text-gray-500">
 									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								{pickMeta && pickStatusLabel && (
+									<span
+										className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
+										title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
+									>
+										{pickStatusLabel}
+									</span>
+								)}
 								<button
 									type="button"
 									onClick={(e) => {
@@ -2746,6 +2827,14 @@ function SharpMoneyCard({
 								<span className="text-[0.6rem] text-gray-500">
 									History {formatRelativeTime(historyUpdatedAt)}
 								</span>
+								{pickMeta && pickStatusLabel && (
+									<span
+										className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
+										title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
+									>
+										{pickStatusLabel}
+									</span>
+								)}
 								<button
 									type="button"
 									onClick={(e) => {
