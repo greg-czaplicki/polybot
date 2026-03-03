@@ -18,6 +18,8 @@ class BotConfig:
 	min_grade: str
 	require_microstructure: bool
 	market_quality_threshold: float
+	min_minutes_to_start: int
+	max_minutes_to_start: int
 	window_minutes: int
 	poll_seconds: int
 	max_bets: int
@@ -36,6 +38,10 @@ class BotConfig:
 	poly_usdc_token: str
 	poly_conditional_token: str
 	low_roi_threshold: float
+	require_l2_alpha: bool
+	skip_if_l2_missing: bool
+	l2_imbalance_near_mid_threshold: float
+	fallback_no_l2_stake_multiplier: float
 	stop_on_403: bool
 	poll_jitter_ratio: float
 	poll_backoff_base: float
@@ -82,6 +88,13 @@ def load_dotenv(path: str) -> None:
 		return
 
 
+def env_flag(name: str, default: bool) -> bool:
+	value = os.getenv(name)
+	if value is None:
+		return default
+	return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_config() -> BotConfig:
 	load_dotenv(os.getenv("BOT_ENV_PATH", "bot/.env"))
 	base_url = os.getenv("BOT_BASE_URL", "").rstrip("/")
@@ -90,7 +103,7 @@ def load_config() -> BotConfig:
 	api_key = _prompt_missing(api_key, "BOT_API_KEY", secret=True)
 	if not base_url or not api_key:
 		raise RuntimeError("BOT_BASE_URL and BOT_API_KEY are required")
-	dry_run = os.getenv("BOT_DRY_RUN", "true").lower() != "false"
+	dry_run = env_flag("BOT_DRY_RUN", True)
 	poly_api_key = os.getenv("POLY_API_KEY", "")
 	poly_api_secret = os.getenv("POLY_API_SECRET", "")
 	poly_api_passphrase = os.getenv("POLY_API_PASSPHRASE", "")
@@ -99,7 +112,7 @@ def load_config() -> BotConfig:
 	poly_signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "0"))
 	poly_chain_id = int(os.getenv("POLY_CHAIN_ID", "137"))
 	poly_clob_host = os.getenv("POLY_CLOB_HOST", "https://clob.polymarket.com")
-	preflight_only = os.getenv("BOT_PREFLIGHT", "false").lower() == "true"
+	preflight_only = env_flag("BOT_PREFLIGHT", False)
 	preflight_condition_id = os.getenv("BOT_PREFLIGHT_CONDITION_ID", "").strip()
 	poly_usdc_token = os.getenv(
 		"POLY_USDC_TOKEN", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -108,7 +121,7 @@ def load_config() -> BotConfig:
 		"POLY_CONDITIONAL_TOKEN", "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 	)
 	low_roi_threshold = float(os.getenv("BOT_LOW_ROI_THRESHOLD", "0.72"))
-	stop_on_403 = os.getenv("BOT_STOP_ON_403", "true").lower() != "false"
+	stop_on_403 = env_flag("BOT_STOP_ON_403", True)
 	poll_jitter_ratio = float(os.getenv("BOT_POLL_JITTER", "0.2"))
 	poll_backoff_base = float(os.getenv("BOT_POLL_BACKOFF_BASE", "2"))
 	poll_backoff_max = float(os.getenv("BOT_POLL_BACKOFF_MAX", "120"))
@@ -126,12 +139,13 @@ def load_config() -> BotConfig:
 		base_url=base_url,
 		api_key=api_key,
 		min_grade=os.getenv("BOT_MIN_GRADE", "A"),
-		require_microstructure=os.getenv("BOT_REQUIRE_MICROSTRUCTURE", "false").lower()
-		== "true",
+		require_microstructure=env_flag("BOT_REQUIRE_MICROSTRUCTURE", True),
 		market_quality_threshold=float(
 			os.getenv("BOT_MARKET_QUALITY_THRESHOLD", "0.72")
 		),
-		window_minutes=int(os.getenv("BOT_WINDOW_MINUTES", "5")),
+		min_minutes_to_start=int(os.getenv("BOT_MIN_MINUTES_TO_START", "15")),
+		max_minutes_to_start=int(os.getenv("BOT_MAX_MINUTES_TO_START", "60")),
+		window_minutes=int(os.getenv("BOT_WINDOW_MINUTES", "60")),
 		poll_seconds=int(os.getenv("BOT_POLL_SECONDS", "20")),
 		max_bets=int(os.getenv("BOT_MAX_BETS", "5")),
 		dry_run=dry_run,
@@ -149,6 +163,14 @@ def load_config() -> BotConfig:
 		poly_usdc_token=poly_usdc_token,
 		poly_conditional_token=poly_conditional_token,
 		low_roi_threshold=low_roi_threshold,
+		require_l2_alpha=env_flag("BOT_REQUIRE_L2_ALPHA", True),
+		skip_if_l2_missing=env_flag("BOT_SKIP_IF_L2_MISSING", False),
+		l2_imbalance_near_mid_threshold=float(
+			os.getenv("BOT_L2_IMBALANCE_NEAR_MID_THRESHOLD", "-0.10")
+		),
+		fallback_no_l2_stake_multiplier=float(
+			os.getenv("BOT_FALLBACK_NO_L2_STAKE_MULTIPLIER", "0.5")
+		),
 		stop_on_403=stop_on_403,
 		poll_jitter_ratio=poll_jitter_ratio,
 		poll_backoff_base=poll_backoff_base,
@@ -214,6 +236,41 @@ def parse_event_time_seconds(raw_value: Any) -> int | None:
 		return int(dt.timestamp())
 	except Exception:
 		return None
+
+
+def minutes_to_start(event_time: Any, now_ts: int | None = None) -> float | None:
+	event_ts = parse_event_time_seconds(event_time)
+	if event_ts is None:
+		return None
+	now_value = now_ts if now_ts is not None else int(time.time())
+	return (event_ts - now_value) / 60.0
+
+
+def parse_float(value: Any) -> float | None:
+	if isinstance(value, (int, float)):
+		float_value = float(value)
+		return float_value if float_value == float_value else None
+	if isinstance(value, str):
+		try:
+			parsed = float(value)
+			return parsed if parsed == parsed else None
+		except Exception:
+			return None
+	return None
+
+
+def evaluate_l2_alpha(
+	entry: Dict[str, Any], threshold: float
+) -> tuple[bool, bool]:
+	imbalance_near_mid = parse_float(entry.get("l2ImbalanceNearMid"))
+	disagreement = entry.get("l2Disagreement")
+	has_disagreement = isinstance(disagreement, bool)
+	has_l2 = imbalance_near_mid is not None or has_disagreement
+	meets_alpha = (
+		(imbalance_near_mid is not None and imbalance_near_mid <= threshold)
+		or disagreement is True
+	)
+	return has_l2, meets_alpha
 
 
 def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[str, Any]]:
@@ -332,10 +389,16 @@ def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str,
 	query = urllib.parse.urlencode(
 		{
 			"windowMinutes": str(config.window_minutes),
+			"minMinutesToStart": str(config.min_minutes_to_start),
+			"maxMinutesToStart": str(config.max_minutes_to_start),
 			"minGrade": config.min_grade,
 			"limit": str(config.max_bets * 3),
 			"requireMicrostructure": "true" if config.require_microstructure else "false",
 			"marketQualityThreshold": str(config.market_quality_threshold),
+			"includeL2Signals": "true",
+			"requireL2Alpha": "true" if config.require_l2_alpha else "false",
+			"skipMissingL2": "true" if config.skip_if_l2_missing else "false",
+			"l2ImbalanceNearMidThreshold": str(config.l2_imbalance_near_mid_threshold),
 			"debug": "true",
 		}
 	)
@@ -347,6 +410,50 @@ def normalize_outcome(value: str) -> str:
 	return " ".join(value.strip().lower().split())
 
 _token_cache: Dict[str, List[Dict[str, str]]] = {}
+
+def log_event(event_name: str, **fields: Any) -> None:
+	normalized: Dict[str, Any] = {}
+	for key, value in fields.items():
+		if isinstance(value, float):
+			normalized[key] = round(value, 6)
+		else:
+			normalized[key] = value
+	print(
+		"[bot]",
+		event_name,
+		json.dumps(normalized, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+	)
+
+def candidate_context(
+	candidate: Dict[str, Any],
+	l2_threshold: float = -0.10,
+) -> Dict[str, Any]:
+	entry = candidate.get("entry") or {}
+	grade = candidate.get("grade") or {}
+	has_l2, meets_l2_alpha = evaluate_l2_alpha(entry, l2_threshold)
+	event_label = (
+		entry.get("eventTitle")
+		or entry.get("eventSlug")
+		or entry.get("marketSlug")
+		or "-"
+	)
+	return {
+		"conditionId": entry.get("conditionId"),
+		"event": event_label,
+		"eventTime": entry.get("eventTime"),
+		"minutesToStart": minutes_to_start(entry.get("eventTime")),
+		"market": entry.get("marketTitle"),
+		"side": entry.get("sharpSide"),
+		"grade": grade.get("grade"),
+		"signalScore": grade.get("signalScore"),
+		"edgeRating": grade.get("edgeRating"),
+		"microstructureScore": grade.get("microstructureScore"),
+		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
+		"l2Disagreement": entry.get("l2Disagreement"),
+		"hasL2Signal": has_l2,
+		"meetsL2Alpha": meets_l2_alpha,
+		"warnings": grade.get("warnings"),
+	}
 
 def fetch_clob_token_map(condition_id: str) -> List[Dict[str, str]]:
 	if not condition_id:
@@ -708,12 +815,31 @@ def place_bet(
 			price,
 		)
 		return False
+	has_l2_signal, meets_l2_alpha = evaluate_l2_alpha(
+		entry,
+		config.l2_imbalance_near_mid_threshold,
+	)
+	if config.require_l2_alpha and has_l2_signal and not meets_l2_alpha:
+		print(
+			"[bot] skip l2 alpha not met",
+			entry.get("marketTitle"),
+			"imbalanceNearMid",
+			entry.get("l2ImbalanceNearMid"),
+			"disagreement",
+			entry.get("l2Disagreement"),
+		)
+		return False
+	if config.require_l2_alpha and not has_l2_signal and config.skip_if_l2_missing:
+		print("[bot] skip missing L2 signal", entry.get("marketTitle"))
+		return False
 
 	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
 	kelly = kelly_fraction(prob, float(price))
 	stake = state.get("bankroll", config.paper_bankroll) * kelly * config.kelly_fraction
 	if config.fixed_stake > 0:
 		stake = config.fixed_stake
+	if config.require_l2_alpha and not has_l2_signal:
+		stake *= max(0.0, config.fallback_no_l2_stake_multiplier)
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
@@ -727,6 +853,9 @@ def place_bet(
 		"price": price,
 		"grade": grade_label,
 		"signalScore": grade.get("signalScore"),
+		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
+		"l2Disagreement": entry.get("l2Disagreement"),
+		"l2AlphaQualified": meets_l2_alpha if has_l2_signal else None,
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
@@ -782,6 +911,22 @@ def place_bet(
 	if not placed_successfully:
 		return False
 	try:
+		threshold_used = (
+			config.market_quality_threshold if config.require_microstructure else None
+		)
+		decision_snapshot = {
+			"signalScore": grade.get("signalScore"),
+			"edgeRating": entry.get("edgeRating"),
+			"scoreDifferential": entry.get("scoreDifferential"),
+			"marketQualityScore": grade.get("microstructureScore"),
+			"thresholdUsed": threshold_used,
+			"warnings": grade.get("warnings") or [],
+			"candidateComputedAt": grade.get("computedAt"),
+			"l2Imbalance": entry.get("l2Imbalance"),
+			"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
+			"l2Spread": entry.get("l2Spread"),
+			"l2Disagreement": entry.get("l2Disagreement"),
+		}
 		post_json(
 			f"{config.base_url}/api/bot/picks",
 			config.api_key,
@@ -795,6 +940,17 @@ def place_bet(
 				"scoreDifferential": entry.get("scoreDifferential"),
 				"sharpSide": entry.get("sharpSide"),
 				"price": price,
+				"thresholdUsed": threshold_used,
+				"marketQualityScore": grade.get("microstructureScore"),
+				"warnings": grade.get("warnings") or [],
+				"candidateComputedAt": grade.get("computedAt"),
+				"l2Imbalance": parse_float(entry.get("l2Imbalance")),
+				"l2ImbalanceNearMid": parse_float(entry.get("l2ImbalanceNearMid")),
+				"l2Spread": parse_float(entry.get("l2Spread")),
+				"l2Disagreement": entry.get("l2Disagreement")
+				if isinstance(entry.get("l2Disagreement"), bool)
+				else None,
+				"decisionSnapshot": decision_snapshot,
 			},
 		)
 	except Exception as exc:
@@ -869,8 +1025,14 @@ def run_loop() -> None:
 				config.base_url,
 				"window",
 				config.window_minutes,
+				"minToStart",
+				config.min_minutes_to_start,
+				"maxToStart",
+				config.max_minutes_to_start,
 				"minGrade",
 				config.min_grade,
+				"requireL2Alpha",
+				config.require_l2_alpha,
 			)
 			call_timestamps.append(time.time())
 			candidates, candidate_debug = fetch_candidates(config)
@@ -879,30 +1041,72 @@ def run_loop() -> None:
 				excluded = candidate_debug.get("excluded") or {}
 				total_entries = candidate_debug.get("totalEntries")
 				upcoming_entries = candidate_debug.get("upcomingEntries")
-				print(
-					"[bot] candidate_debug",
-					"totalEntries",
-					total_entries,
-					"upcomingEntries",
-					upcoming_entries,
-					"excluded",
-					excluded,
+				log_event(
+					"candidate_debug",
+					totalEntries=total_entries,
+					upcomingEntries=upcoming_entries,
+					excluded=excluded,
+					dedupDropped=candidate_debug.get("dedupDropped"),
+					dedupReasons=candidate_debug.get("dedupReasons"),
 				)
 			new_bets = 0
-			for candidate in candidates:
+			skipped_already_placed = 0
+			skipped_missing_condition = 0
+			skipped_timing_window = 0
+			for idx, candidate in enumerate(candidates, start=1):
 				entry = candidate.get("entry") or {}
 				condition_id = entry.get("conditionId")
+				log_event(
+					"candidate",
+					idx=idx,
+					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+				)
 				if not condition_id:
+					skipped_missing_condition += 1
+					log_event(
+						"candidate_skip_missing_condition_id",
+						idx=idx,
+						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					)
 					continue
 				if condition_id in placed:
-					print("[bot] skip already placed", condition_id)
+					skipped_already_placed += 1
+					placed_row = placed_meta.get(condition_id) or {}
+					log_event(
+						"candidate_skip_already_placed",
+						idx=idx,
+						placedAt=placed_row.get("placedAt"),
+						placedEventTime=placed_row.get("eventTime"),
+						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					)
 					continue
-				print(
-					"[bot] considering",
-					entry.get("marketTitle"),
-					entry.get("sharpSide"),
-					"grade",
-					(candidate.get("grade") or {}).get("grade"),
+				minutes_until_start = minutes_to_start(entry.get("eventTime"))
+				if minutes_until_start is None:
+					skipped_timing_window += 1
+					log_event(
+						"candidate_skip_missing_event_time",
+						idx=idx,
+						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					)
+					continue
+				if (
+					minutes_until_start < config.min_minutes_to_start
+					or minutes_until_start > config.max_minutes_to_start
+				):
+					skipped_timing_window += 1
+					log_event(
+						"candidate_skip_timing_window",
+						idx=idx,
+						minMinutes=config.min_minutes_to_start,
+						maxMinutes=config.max_minutes_to_start,
+						minutesToStart=minutes_until_start,
+						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					)
+					continue
+				log_event(
+					"candidate_considering",
+					idx=idx,
+					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
 				)
 				did_place = place_bet(candidate, config, state)
 				if did_place:
@@ -915,6 +1119,14 @@ def run_loop() -> None:
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
 						break
+			log_event(
+				"poll_summary",
+				raw=len(candidates),
+				skippedAlreadyPlaced=skipped_already_placed,
+				skippedMissingConditionId=skipped_missing_condition,
+				skippedTimingWindow=skipped_timing_window,
+				newPlaced=new_bets,
+			)
 			state["placed"] = sorted(placed)
 			state["placedMeta"] = placed_meta
 			save_state(config.state_path, state)

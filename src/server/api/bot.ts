@@ -1,22 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { Env } from "../env";
-import { getDb } from "../env";
-import { nowUnixSeconds } from "../env";
-import {
-	getSharpMoneyCacheFreshnessStats,
-	getSharpMoneyCacheByConditionId,
-	listSharpMoneyCache,
-} from "../repositories/sharp-money";
+import { getDb, nowUnixSeconds } from "../env";
 import {
 	createManualPick,
+	type ManualPickStatus,
 	settleManualPick,
 	updateManualPickExecution,
-	type ManualPickStatus,
 } from "../repositories/manual-picks";
+import {
+	getSharpMoneyCacheByConditionId,
+	getSharpMoneyCacheFreshnessStats,
+	listSharpMoneyCache,
+} from "../repositories/sharp-money";
 import { computeBotEval } from "./bot-eval";
 import {
-	computeSharpMoneyGrades,
 	computePriceEdgeFromEntry,
+	computeSharpMoneyGrades,
 	type GradeLabel,
 	type SharpGradePayload,
 } from "./sharp-money";
@@ -28,10 +27,10 @@ const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.72;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
-	"A": 4,
-	"B": 3,
-	"C": 2,
-	"D": 1,
+	A: 4,
+	B: 3,
+	C: 2,
+	D: 1,
 };
 
 type BotCandidateDebugInspect = {
@@ -57,11 +56,17 @@ type BotCandidatesDebug = {
 type BotCandidatesOptions = {
 	minGrade: GradeLabel;
 	windowMinutes?: number;
+	minMinutesToStart?: number;
+	maxMinutesToStart?: number;
 	limit?: number;
 	requireReady?: boolean;
 	includeStarted?: boolean;
 	requireMicrostructure?: boolean;
 	marketQualityThreshold?: number;
+	includeL2Signals?: boolean;
+	requireL2Alpha?: boolean;
+	skipMissingL2?: boolean;
+	l2ImbalanceNearMidThreshold?: number;
 	inspectConditionId?: string | null;
 };
 
@@ -104,7 +109,10 @@ function computeMarketQualityScoreFromCacheEntry(input: {
 	marketVolume?: number;
 	marketLiquidity?: number;
 }): number | null {
-	if (!input.sharpSide || (input.sharpSide !== "A" && input.sharpSide !== "B")) {
+	if (
+		!input.sharpSide ||
+		(input.sharpSide !== "A" && input.sharpSide !== "B")
+	) {
 		return null;
 	}
 	const sideAPrice = normalizeMarketPrice(input.sideA?.price);
@@ -113,7 +121,9 @@ function computeMarketQualityScoreFromCacheEntry(input: {
 	const complementGap = hasBothPrices
 		? Math.abs(sideAPrice + sideBPrice - 1)
 		: 0.08;
-	const complementScore = hasBothPrices ? clampUnit(1 - complementGap / 0.08) : 0.45;
+	const complementScore = hasBothPrices
+		? clampUnit(1 - complementGap / 0.08)
+		: 0.45;
 	const sharpSidePrice = input.sharpSide === "A" ? sideAPrice : sideBPrice;
 	const priceBandScore =
 		sharpSidePrice === null
@@ -166,7 +176,10 @@ async function fetchL2SignalsForPick(input: {
 	l2Spread?: number;
 	l2Disagreement?: boolean;
 }> {
-	if (!input.sharpSide || (input.sharpSide !== "A" && input.sharpSide !== "B")) {
+	if (
+		!input.sharpSide ||
+		(input.sharpSide !== "A" && input.sharpSide !== "B")
+	) {
 		return {};
 	}
 	try {
@@ -197,7 +210,9 @@ async function fetchL2SignalsForPick(input: {
 			);
 		if (tokens.length === 0) return {};
 		const targetLabel =
-			input.sharpSide === "A" ? input.sideALabel ?? "" : input.sideBLabel ?? "";
+			input.sharpSide === "A"
+				? (input.sideALabel ?? "")
+				: (input.sideBLabel ?? "");
 		const targetByLabel = targetLabel
 			? tokens.find(
 					(token) =>
@@ -266,7 +281,9 @@ async function fetchL2SignalsForPick(input: {
 		const mid =
 			bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
 		const spread =
-			bestBid !== null && bestAsk !== null ? Math.max(0, bestAsk - bestBid) : null;
+			bestBid !== null && bestAsk !== null
+				? Math.max(0, bestAsk - bestBid)
+				: null;
 		const bidNotional = bids.reduce((sum, level) => sum + level.notional, 0);
 		const askNotional = asks.reduce((sum, level) => sum + level.notional, 0);
 		const imbalance =
@@ -321,10 +338,7 @@ function requireBotAuth(request: Request, env: Env): BotAuthResult {
 	if (!apiKey) {
 		return {
 			ok: false,
-			response: jsonResponse(
-				{ error: "bot_api_key_missing" },
-				{ status: 401 },
-			),
+			response: jsonResponse({ error: "bot_api_key_missing" }, { status: 401 }),
 		};
 	}
 
@@ -495,7 +509,9 @@ function extractSnapshotStringArray(
 	for (const key of keys) {
 		const value = snapshot[key];
 		if (Array.isArray(value)) {
-			const values = value.filter((entry): entry is string => typeof entry === "string");
+			const values = value.filter(
+				(entry): entry is string => typeof entry === "string",
+			);
 			if (values.length > 0) return values;
 		}
 	}
@@ -526,10 +542,9 @@ function buildDecisionSnapshot(input: {
 	const marketTitle = input.marketTitle || input.cacheEntry?.marketTitle || "";
 	const eventTime = input.eventTime ?? input.cacheEntry?.eventTime;
 	const eventTimeMs = eventTime ? new Date(eventTime).getTime() : Number.NaN;
-	const minutesToStartAtPick =
-		Number.isFinite(eventTimeMs)
-			? (eventTimeMs - Date.now()) / (60 * 1000)
-			: null;
+	const minutesToStartAtPick = Number.isFinite(eventTimeMs)
+		? (eventTimeMs - Date.now()) / (60 * 1000)
+		: null;
 	const defaultSnapshot: Record<string, unknown> = {
 		conditionId: input.conditionId,
 		marketTitle,
@@ -585,9 +600,32 @@ async function listBotCandidates(
 			: DEFAULT_MARKET_QUALITY_THRESHOLD;
 	const inspectConditionId = options.inspectConditionId ?? null;
 	const allowStarted = options.includeStarted ?? false;
+	const minMinutesToStart =
+		typeof options.minMinutesToStart === "number" &&
+		Number.isFinite(options.minMinutesToStart) &&
+		options.minMinutesToStart >= 0
+			? options.minMinutesToStart
+			: 0;
+	const maxMinutesToStart =
+		typeof options.maxMinutesToStart === "number" &&
+		Number.isFinite(options.maxMinutesToStart) &&
+		options.maxMinutesToStart > 0
+			? options.maxMinutesToStart
+			: windowMinutes;
+	const shouldIncludeL2Signals = options.includeL2Signals ?? false;
+	const shouldRequireL2Alpha = options.requireL2Alpha ?? false;
+	const shouldSkipMissingL2 = options.skipMissingL2 ?? false;
+	const l2ImbalanceNearMidThreshold =
+		typeof options.l2ImbalanceNearMidThreshold === "number" &&
+		Number.isFinite(options.l2ImbalanceNearMidThreshold)
+			? options.l2ImbalanceNearMidThreshold
+			: -0.1;
+	const shouldFetchL2Signals =
+		shouldIncludeL2Signals || shouldRequireL2Alpha || shouldSkipMissingL2;
 	const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
 	const now = Date.now();
-	const cutoffMs = windowMinutes * 60 * 1000;
+	const maxMinutesWindow = Math.max(maxMinutesToStart, minMinutesToStart);
+	const cutoffMs = maxMinutesWindow * 60 * 1000;
 
 	const entries = await listSharpMoneyCache(db, {
 		limit,
@@ -673,7 +711,20 @@ async function listBotCandidates(
 			}
 			return false;
 		}
-		const inWindow = diffMs <= cutoffMs;
+		const minutesToStart = diffMs / 60_000;
+		if (minutesToStart < minMinutesToStart) {
+			incrementCounter(debug.excluded, "too_close_to_start");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "too_close_to_start",
+				};
+			}
+			return false;
+		}
+		const inWindow = minutesToStart <= maxMinutesToStart;
 		if (!inWindow) {
 			incrementCounter(debug.excluded, "outside_window");
 			if (inspectConditionId && entry.conditionId === inspectConditionId) {
@@ -707,7 +758,7 @@ async function listBotCandidates(
 	const gradeByConditionId = new Map(
 		gradesResult.results.map((result) => [result.conditionId, result]),
 	);
-	const candidates = upcomingEntries
+	const baseCandidates = upcomingEntries
 		.map((entry) => {
 			const grade = gradeByConditionId.get(entry.conditionId) ?? null;
 			if (!grade?.grade) {
@@ -777,6 +828,70 @@ async function listBotCandidates(
 			};
 		})
 		.filter((candidate) => candidate !== null);
+	const candidates = shouldFetchL2Signals
+		? (
+				await Promise.all(
+					baseCandidates.map(async (candidate) => {
+						const l2 = await fetchL2SignalsForPick({
+							conditionId: candidate.entry.conditionId,
+							sharpSide: candidate.entry.sharpSide,
+							sideALabel: candidate.entry.sideA.label,
+							sideBLabel: candidate.entry.sideB.label,
+						});
+						const hasImbalanceNearMid =
+							typeof l2.l2ImbalanceNearMid === "number" &&
+							Number.isFinite(l2.l2ImbalanceNearMid);
+						const hasDisagreement = typeof l2.l2Disagreement === "boolean";
+						const hasL2Signal = hasImbalanceNearMid || hasDisagreement;
+						const meetsL2Alpha =
+							(hasImbalanceNearMid &&
+								(l2.l2ImbalanceNearMid as number) <=
+									l2ImbalanceNearMidThreshold) ||
+							l2.l2Disagreement === true;
+						if (shouldRequireL2Alpha && hasL2Signal && !meetsL2Alpha) {
+							incrementCounter(debug.excluded, "l2_alpha_not_met");
+							if (
+								inspectConditionId &&
+								candidate.entry.conditionId === inspectConditionId
+							) {
+								debug.inspect = {
+									conditionId: inspectConditionId,
+									foundInEntries: true,
+									stage: "filtered_l2",
+									reason: "l2_alpha_not_met",
+								};
+							}
+							return null;
+						}
+						if (shouldSkipMissingL2 && !hasL2Signal) {
+							incrementCounter(debug.excluded, "missing_l2_signals");
+							if (
+								inspectConditionId &&
+								candidate.entry.conditionId === inspectConditionId
+							) {
+								debug.inspect = {
+									conditionId: inspectConditionId,
+									foundInEntries: true,
+									stage: "filtered_l2",
+									reason: "missing_l2_signals",
+								};
+							}
+							return null;
+						}
+						return {
+							...candidate,
+							entry: {
+								...candidate.entry,
+								l2Imbalance: l2.l2Imbalance ?? null,
+								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
+								l2Spread: l2.l2Spread ?? null,
+								l2Disagreement: l2.l2Disagreement ?? null,
+							},
+						};
+					}),
+				)
+			).filter((candidate) => candidate !== null)
+		: baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	const deduped = new Map<string, (typeof candidates)[number]>();
 	for (const candidate of candidates) {
@@ -785,7 +900,10 @@ async function listBotCandidates(
 		const existing = deduped.get(key);
 		if (!existing) {
 			deduped.set(key, candidate);
-			if (inspectConditionId && candidate.entry.conditionId === inspectConditionId) {
+			if (
+				inspectConditionId &&
+				candidate.entry.conditionId === inspectConditionId
+			) {
 				debug.inspect = {
 					conditionId: inspectConditionId,
 					foundInEntries: true,
@@ -809,7 +927,10 @@ async function listBotCandidates(
 		if (candidateRank < existingRank) {
 			debug.dedupDropped += 1;
 			incrementCounter(debug.dedupReasons, "grade_rank");
-			if (inspectConditionId && candidate.entry.conditionId === inspectConditionId) {
+			if (
+				inspectConditionId &&
+				candidate.entry.conditionId === inspectConditionId
+			) {
 				debug.inspect = {
 					conditionId: inspectConditionId,
 					foundInEntries: true,
@@ -868,8 +989,10 @@ async function listBotCandidates(
 			deduped.set(key, candidate);
 			continue;
 		}
-		const candidateTime = parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
-		const existingTime = parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
+		const candidateTime =
+			parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
+		const existingTime =
+			parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
 		if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
 			debug.dedupDropped += 1;
 			incrementCounter(debug.dedupReasons, "event_time");
@@ -906,18 +1029,26 @@ export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
 			const result = await listBotCandidates(getDb(context), {
 				minGrade,
 				windowMinutes: payload.windowMinutes,
+				minMinutesToStart: payload.minMinutesToStart,
+				maxMinutesToStart: payload.maxMinutesToStart,
 				limit: payload.limit,
 				requireReady: payload.requireReady,
 				includeStarted: payload.includeStarted,
 				requireMicrostructure: payload.requireMicrostructure,
 				marketQualityThreshold: payload.marketQualityThreshold,
+				includeL2Signals: payload.includeL2Signals,
+				requireL2Alpha: payload.requireL2Alpha,
+				skipMissingL2: payload.skipMissingL2,
+				l2ImbalanceNearMidThreshold: payload.l2ImbalanceNearMidThreshold,
 				inspectConditionId: payload.inspectConditionId ?? null,
 			});
 			return result;
 		} catch (error) {
 			return {
 				error:
-					error instanceof Error ? error.message : ("candidate_build_failed" as const),
+					error instanceof Error
+						? error.message
+						: ("candidate_build_failed" as const),
 			};
 		}
 	},
@@ -930,10 +1061,16 @@ export const getBotCandidateInspectFn = createServerFn({
 		conditionId?: string;
 		minGrade?: GradeLabel;
 		windowMinutes?: number;
+		minMinutesToStart?: number;
+		maxMinutesToStart?: number;
 		requireReady?: boolean;
 		includeStarted?: boolean;
 		requireMicrostructure?: boolean;
 		marketQualityThreshold?: number;
+		includeL2Signals?: boolean;
+		requireL2Alpha?: boolean;
+		skipMissingL2?: boolean;
+		l2ImbalanceNearMidThreshold?: number;
 		limit?: number;
 	};
 	const conditionId = payload.conditionId?.trim();
@@ -954,19 +1091,24 @@ export const getBotCandidateInspectFn = createServerFn({
 		const result = await listBotCandidates(getDb(context), {
 			minGrade,
 			windowMinutes,
+			minMinutesToStart: payload.minMinutesToStart,
+			maxMinutesToStart: payload.maxMinutesToStart,
 			limit: payload.limit,
 			requireReady: shouldRequireReady,
 			includeStarted: payload.includeStarted,
 			requireMicrostructure: payload.requireMicrostructure,
 			marketQualityThreshold: payload.marketQualityThreshold,
+			includeL2Signals: payload.includeL2Signals,
+			requireL2Alpha: payload.requireL2Alpha,
+			skipMissingL2: payload.skipMissingL2,
+			l2ImbalanceNearMidThreshold: payload.l2ImbalanceNearMidThreshold,
 			inspectConditionId: conditionId,
 		});
-		const inspect =
-			result.debug.inspect ?? {
-				conditionId,
-				foundInEntries: false,
-				stage: "not_found_in_entries",
-			};
+		const inspect = result.debug.inspect ?? {
+			conditionId,
+			foundInEntries: false,
+			stage: "not_found_in_entries",
+		};
 		if (inspect.stage === "not_found_in_entries") {
 			const db = getDb(context);
 			const cacheEntry = await getSharpMoneyCacheByConditionId(db, conditionId);
@@ -984,10 +1126,13 @@ export const getBotCandidateInspectFn = createServerFn({
 				eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null;
 			const cutoffMinutes = windowMinutes;
 			const inEventWindow =
-				minutesToStart === null ? false : minutesToStart >= 0 && minutesToStart <= cutoffMinutes;
+				minutesToStart === null
+					? false
+					: minutesToStart >= 0 && minutesToStart <= cutoffMinutes;
 			const recentCacheCutoffSeconds =
 				nowUnixSeconds() - Math.max(1, Math.ceil(windowMinutes / 60)) * 3600;
-			const inRecentCacheWindow = (cacheEntry.updatedAt ?? 0) >= recentCacheCutoffSeconds;
+			const inRecentCacheWindow =
+				(cacheEntry.updatedAt ?? 0) >= recentCacheCutoffSeconds;
 			let diagnosticReason = "not_in_recent_cache_window";
 			const marketType = getMarketTypeLabel(cacheEntry.marketTitle);
 			if (marketType === "other") {
@@ -996,7 +1141,11 @@ export const getBotCandidateInspectFn = createServerFn({
 				diagnosticReason = "not_ready";
 			} else if (!eventTime) {
 				diagnosticReason = "missing_event_time";
-			} else if (!allowStarted && minutesToStart !== null && minutesToStart < 0) {
+			} else if (
+				!allowStarted &&
+				minutesToStart !== null &&
+				minutesToStart < 0
+			) {
 				diagnosticReason = "started_excluded";
 			} else if (!inEventWindow) {
 				diagnosticReason = "outside_event_window";
@@ -1021,7 +1170,9 @@ export const getBotCandidateInspectFn = createServerFn({
 	} catch (error) {
 		return {
 			error:
-				error instanceof Error ? error.message : ("candidate_inspect_failed" as const),
+				error instanceof Error
+					? error.message
+					: ("candidate_inspect_failed" as const),
 		};
 	}
 });
@@ -1086,11 +1237,24 @@ export async function handleBotRequest(
 			return jsonResponse({ error: "invalid_minGrade" }, { status: 400 });
 		}
 		const windowMinutesParam = Number(url.searchParams.get("windowMinutes"));
+		const minMinutesToStartParam = Number(
+			url.searchParams.get("minMinutesToStart"),
+		);
+		const maxMinutesToStartParam = Number(
+			url.searchParams.get("maxMinutesToStart"),
+		);
 		const limitParam = Number(url.searchParams.get("limit"));
 		const requireReady = url.searchParams.get("requireReady");
 		const includeStarted = url.searchParams.get("includeStarted");
 		const requireMicrostructure = url.searchParams.get("requireMicrostructure");
-		const includeDebug = url.searchParams.get("debug")?.toLowerCase() === "true";
+		const includeL2Signals = url.searchParams.get("includeL2Signals");
+		const requireL2Alpha = url.searchParams.get("requireL2Alpha");
+		const skipMissingL2 = url.searchParams.get("skipMissingL2");
+		const l2ImbalanceNearMidThresholdParam = Number(
+			url.searchParams.get("l2ImbalanceNearMidThreshold"),
+		);
+		const includeDebug =
+			url.searchParams.get("debug")?.toLowerCase() === "true";
 		const inspectConditionId = url.searchParams.get("inspectConditionId");
 		const marketQualityThresholdParam = Number(
 			url.searchParams.get("marketQualityThreshold"),
@@ -1102,15 +1266,32 @@ export async function handleBotRequest(
 					Number.isFinite(windowMinutesParam) && windowMinutesParam > 0
 						? windowMinutesParam
 						: DEFAULT_CANDIDATE_WINDOW_MINUTES,
+				minMinutesToStart:
+					Number.isFinite(minMinutesToStartParam) && minMinutesToStartParam >= 0
+						? minMinutesToStartParam
+						: undefined,
+				maxMinutesToStart:
+					Number.isFinite(maxMinutesToStartParam) && maxMinutesToStartParam > 0
+						? maxMinutesToStartParam
+						: undefined,
 				limit:
 					Number.isFinite(limitParam) && limitParam > 0
 						? Math.min(limitParam, MAX_CANDIDATE_LIMIT)
 						: DEFAULT_CACHE_LIMIT,
-				requireReady: requireReady === null || requireReady.toLowerCase() === "true",
+				requireReady:
+					requireReady === null || requireReady.toLowerCase() === "true",
 				includeStarted: includeStarted?.toLowerCase() === "true",
 				requireMicrostructure:
 					requireMicrostructure === null ||
 					requireMicrostructure.toLowerCase() === "true",
+				includeL2Signals: includeL2Signals?.toLowerCase() === "true",
+				requireL2Alpha: requireL2Alpha?.toLowerCase() === "true",
+				skipMissingL2: skipMissingL2?.toLowerCase() === "true",
+				l2ImbalanceNearMidThreshold: Number.isFinite(
+					l2ImbalanceNearMidThresholdParam,
+				)
+					? l2ImbalanceNearMidThresholdParam
+					: undefined,
 				marketQualityThreshold:
 					Number.isFinite(marketQualityThresholdParam) &&
 					marketQualityThresholdParam >= 0 &&
@@ -1129,7 +1310,10 @@ export async function handleBotRequest(
 			});
 		} catch (error) {
 			return jsonResponse(
-				{ error: error instanceof Error ? error.message : "candidate_build_failed" },
+				{
+					error:
+						error instanceof Error ? error.message : "candidate_build_failed",
+				},
 				{ status: 400 },
 			);
 		}
@@ -1175,11 +1359,11 @@ export async function handleBotRequest(
 		return jsonResponse(result);
 	}
 
-		if (url.pathname === "/api/bot/picks") {
-			if (request.method !== "POST") {
-				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
-			}
-			const payload = await parseJson<{
+	if (url.pathname === "/api/bot/picks") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
 			clientPickId?: string;
 			conditionId?: string;
 			marketTitle?: string;
@@ -1187,20 +1371,20 @@ export async function handleBotRequest(
 			grade?: string;
 			signalScore?: number;
 			edgeRating?: number;
-				scoreDifferential?: number;
-				sharpSide?: string;
-				price?: number;
-				strategyVersion?: string;
-				thresholdUsed?: number;
-				marketQualityScore?: number;
-				warnings?: string[];
-				decisionSnapshot?: unknown;
-				candidateComputedAt?: number;
-				l2Imbalance?: number;
-				l2ImbalanceNearMid?: number;
-				l2Spread?: number;
-				l2Disagreement?: boolean;
-			}>(request);
+			scoreDifferential?: number;
+			sharpSide?: string;
+			price?: number;
+			strategyVersion?: string;
+			thresholdUsed?: number;
+			marketQualityScore?: number;
+			warnings?: string[];
+			decisionSnapshot?: unknown;
+			candidateComputedAt?: number;
+			l2Imbalance?: number;
+			l2ImbalanceNearMid?: number;
+			l2Spread?: number;
+			l2Disagreement?: boolean;
+		}>(request);
 		if (!payload?.conditionId || !payload?.marketTitle) {
 			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 		}
@@ -1215,9 +1399,9 @@ export async function handleBotRequest(
 		const price =
 			payload.price ??
 			(sharpSide === "A"
-				? cacheEntry?.sideA.price ?? undefined
+				? (cacheEntry?.sideA.price ?? undefined)
 				: sharpSide === "B"
-					? cacheEntry?.sideB.price ?? undefined
+					? (cacheEntry?.sideB.price ?? undefined)
 					: undefined);
 		const edgeRating = payload.edgeRating ?? cacheEntry?.edgeRating;
 		const scoreDifferential =
@@ -1228,7 +1412,10 @@ export async function handleBotRequest(
 			undefined;
 		const marketQualityScore =
 			payload.marketQualityScore ??
-			extractSnapshotNumber(snapshot, ["marketQualityScore", "microstructureScore"]) ??
+			extractSnapshotNumber(snapshot, [
+				"marketQualityScore",
+				"microstructureScore",
+			]) ??
 			(cacheEntry
 				? computeMarketQualityScoreFromCacheEntry({
 						sharpSide,
@@ -1257,7 +1444,10 @@ export async function handleBotRequest(
 			undefined;
 		const l2ImbalanceNearMid =
 			payload.l2ImbalanceNearMid ??
-			extractSnapshotNumber(snapshot, ["l2ImbalanceNearMid", "imbalanceNearMid"]) ??
+			extractSnapshotNumber(snapshot, [
+				"l2ImbalanceNearMid",
+				"imbalanceNearMid",
+			]) ??
 			undefined;
 		const l2Spread =
 			payload.l2Spread ??
@@ -1265,7 +1455,10 @@ export async function handleBotRequest(
 			undefined;
 		const l2Disagreement =
 			payload.l2Disagreement ??
-			extractSnapshotBoolean(snapshot, ["l2Disagreement", "imbalanceDisagree"]) ??
+			extractSnapshotBoolean(snapshot, [
+				"l2Disagreement",
+				"imbalanceDisagree",
+			]) ??
 			undefined;
 		const needsL2Signals =
 			l2Imbalance === undefined ||
@@ -1315,110 +1508,110 @@ export async function handleBotRequest(
 			signalScore,
 			edgeRating,
 			scoreDifferential,
-				marketQualityScore,
-				thresholdUsed,
-				warnings,
-				candidateComputedAt,
-				l2Imbalance: finalL2Imbalance,
-				l2ImbalanceNearMid: finalL2ImbalanceNearMid,
-				l2Spread: finalL2Spread,
-				l2Disagreement: finalL2Disagreement,
-			});
-			const pick = await createManualPick(env.POLYWHALER_DB, {
-				clientPickId: payload.clientPickId,
-				conditionId: payload.conditionId,
-				marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
-				eventTime: payload.eventTime ?? cacheEntry?.eventTime,
-				grade: payload.grade,
+			marketQualityScore,
+			thresholdUsed,
+			warnings,
+			candidateComputedAt,
+			l2Imbalance: finalL2Imbalance,
+			l2ImbalanceNearMid: finalL2ImbalanceNearMid,
+			l2Spread: finalL2Spread,
+			l2Disagreement: finalL2Disagreement,
+		});
+		const pick = await createManualPick(env.POLYWHALER_DB, {
+			clientPickId: payload.clientPickId,
+			conditionId: payload.conditionId,
+			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
+			eventTime: payload.eventTime ?? cacheEntry?.eventTime,
+			grade: payload.grade,
 			signalScore,
 			edgeRating,
 			scoreDifferential,
 			sharpSide,
 			price,
-				confidence,
-				fairPrice: priceEdgeResult?.fairPrice ?? null,
-				priceEdge: priceEdgeResult?.priceEdge ?? null,
-				strategyVersion: payload.strategyVersion,
-				thresholdUsed,
-				marketQualityScore,
-				warnings,
-				decisionSnapshot,
-				candidateComputedAt,
-			});
-			return jsonResponse({ pick });
-		}
+			confidence,
+			fairPrice: priceEdgeResult?.fairPrice ?? null,
+			priceEdge: priceEdgeResult?.priceEdge ?? null,
+			strategyVersion: payload.strategyVersion,
+			thresholdUsed,
+			marketQualityScore,
+			warnings,
+			decisionSnapshot,
+			candidateComputedAt,
+		});
+		return jsonResponse({ pick });
+	}
 
-		if (url.pathname === "/api/bot/picks/execution") {
-			if (request.method !== "POST") {
-				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
-			}
-			const payload = await parseJson<{
-				id?: string;
-				clientPickId?: string;
-				executionSubmittedAt?: number;
-				executionFilledAt?: number;
-				fillStatus?: string;
-				fillPrice?: number;
-				fillSize?: number;
-				fillNotional?: number;
-				fillSlippageBps?: number;
-				orderId?: string;
-				exchangeTradeId?: string;
-				executionNotes?: string;
-			}>(request);
-			if (!payload?.id && !payload?.clientPickId) {
-				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
-			}
-			const pick = await updateManualPickExecution(env.POLYWHALER_DB, {
-				id: payload.id,
-				clientPickId: payload.clientPickId,
-				executionSubmittedAt: payload.executionSubmittedAt ?? null,
-				executionFilledAt: payload.executionFilledAt ?? null,
-				fillStatus: payload.fillStatus ?? null,
-				fillPrice: payload.fillPrice ?? null,
-				fillSize: payload.fillSize ?? null,
-				fillNotional: payload.fillNotional ?? null,
-				fillSlippageBps: payload.fillSlippageBps ?? null,
-				orderId: payload.orderId ?? null,
-				exchangeTradeId: payload.exchangeTradeId ?? null,
-				executionNotes: payload.executionNotes ?? null,
-			});
-			if (!pick) {
-				return jsonResponse({ error: "pick_not_found" }, { status: 404 });
-			}
-			return jsonResponse({ pick });
+	if (url.pathname === "/api/bot/picks/execution") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
 		}
+		const payload = await parseJson<{
+			id?: string;
+			clientPickId?: string;
+			executionSubmittedAt?: number;
+			executionFilledAt?: number;
+			fillStatus?: string;
+			fillPrice?: number;
+			fillSize?: number;
+			fillNotional?: number;
+			fillSlippageBps?: number;
+			orderId?: string;
+			exchangeTradeId?: string;
+			executionNotes?: string;
+		}>(request);
+		if (!payload?.id && !payload?.clientPickId) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const pick = await updateManualPickExecution(env.POLYWHALER_DB, {
+			id: payload.id,
+			clientPickId: payload.clientPickId,
+			executionSubmittedAt: payload.executionSubmittedAt ?? null,
+			executionFilledAt: payload.executionFilledAt ?? null,
+			fillStatus: payload.fillStatus ?? null,
+			fillPrice: payload.fillPrice ?? null,
+			fillSize: payload.fillSize ?? null,
+			fillNotional: payload.fillNotional ?? null,
+			fillSlippageBps: payload.fillSlippageBps ?? null,
+			orderId: payload.orderId ?? null,
+			exchangeTradeId: payload.exchangeTradeId ?? null,
+			executionNotes: payload.executionNotes ?? null,
+		});
+		if (!pick) {
+			return jsonResponse({ error: "pick_not_found" }, { status: 404 });
+		}
+		return jsonResponse({ pick });
+	}
 
-		if (url.pathname === "/api/bot/picks/outcome") {
-			if (request.method !== "POST") {
-				return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
-			}
-			const payload = await parseJson<{
-				id?: string;
-				clientPickId?: string;
-				status?: ManualPickStatus;
-				resolvedOutcome?: string;
-				closePrice?: number;
-				roi?: number;
-				clv?: number;
-			}>(request);
-			if ((!payload?.id && !payload?.clientPickId) || !payload.status) {
-				return jsonResponse({ error: "invalid_payload" }, { status: 400 });
-			}
-			const pick = await settleManualPick(env.POLYWHALER_DB, {
-				id: payload.id,
-				clientPickId: payload.clientPickId,
-				status: payload.status,
-				resolvedOutcome: payload.resolvedOutcome ?? null,
-				closePrice: payload.closePrice ?? null,
-				roi: payload.roi ?? null,
-				clv: payload.clv ?? null,
-			});
-			if (!pick) {
-				return jsonResponse({ error: "pick_not_found" }, { status: 404 });
-			}
-			return jsonResponse({ pick });
+	if (url.pathname === "/api/bot/picks/outcome") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
 		}
+		const payload = await parseJson<{
+			id?: string;
+			clientPickId?: string;
+			status?: ManualPickStatus;
+			resolvedOutcome?: string;
+			closePrice?: number;
+			roi?: number;
+			clv?: number;
+		}>(request);
+		if ((!payload?.id && !payload?.clientPickId) || !payload.status) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const pick = await settleManualPick(env.POLYWHALER_DB, {
+			id: payload.id,
+			clientPickId: payload.clientPickId,
+			status: payload.status,
+			resolvedOutcome: payload.resolvedOutcome ?? null,
+			closePrice: payload.closePrice ?? null,
+			roi: payload.roi ?? null,
+			clv: payload.clv ?? null,
+		});
+		if (!pick) {
+			return jsonResponse({ error: "pick_not_found" }, { status: 404 });
+		}
+		return jsonResponse({ pick });
+	}
 
 	return jsonResponse({ error: "not_found" }, { status: 404 });
 }
