@@ -1,4 +1,4 @@
-import { Outlet, createFileRoute, useMatchRoute } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useMatchRoute } from "@tanstack/react-router";
 import {
 	CheckCircle2,
 	ChevronDown,
@@ -24,23 +24,26 @@ import {
 	signalScoreToGradeLabel,
 } from "@/lib/sharp-grade";
 import {
+	getBotCandidateInspectFn,
+	getBotCandidatesFn,
+} from "../server/api/bot";
+import { listManualPicksFn } from "../server/api/manual-picks";
+import {
 	clearSharpMoneyCacheFn,
 	fetchTrendingSportsMarketsFn,
+	getRuntimeMarketStatsFn,
 	getSharpMoneyCacheFn,
 	getSharpMoneyCacheStatsFn,
 	getSharpMoneyEdgeStatsHistoryFn,
 	getSharpMoneyGradeMixFn,
 	getSharpMoneyGradesFn,
-	getRuntimeMarketStatsFn,
 	getSharpMoneyHistoryFn,
 	refreshMarketSharpnessFn,
 	type SharpMoneyCacheEntry,
-	type SharpMoneyHistoryEntry,
 	type SharpMoneyGradeMix,
+	type SharpMoneyHistoryEntry,
 	type TopHolderPnlData,
 } from "../server/api/sharp-money";
-import { getBotCandidateInspectFn, getBotCandidatesFn } from "../server/api/bot";
-import { listManualPicksFn } from "../server/api/manual-picks";
 
 export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
@@ -113,16 +116,11 @@ function getEntryHolderVolume(entry: SharpMoneyCacheEntry): number {
 
 function getEntryMarketVolume(entry: SharpMoneyCacheEntry): number {
 	return (
-		entry.marketVolume ??
-		entry.marketLiquidity ??
-		getEntryHolderVolume(entry)
+		entry.marketVolume ?? entry.marketLiquidity ?? getEntryHolderVolume(entry)
 	);
 }
 
-function getVolumePercentLogScaled(
-	volume: number,
-	maxVolume: number,
-): number {
+function getVolumePercentLogScaled(volume: number, maxVolume: number): number {
 	if (!Number.isFinite(volume) || volume <= 0) return 0;
 	if (!Number.isFinite(maxVolume) || maxVolume <= 0) return 0;
 	const safeVolume = Math.max(0, volume);
@@ -133,10 +131,7 @@ function getVolumePercentLogScaled(
 	return Math.min((numerator / denominator) * 100, 100);
 }
 
-function getVolumeColorPercent(
-	volume: number,
-	maxVolume: number,
-): number {
+function getVolumeColorPercent(volume: number, maxVolume: number): number {
 	if (!Number.isFinite(volume) || volume <= 0) return 0;
 	const low = VOLUME_COLOR_ANCHORS.low;
 	const mid = VOLUME_COLOR_ANCHORS.mid;
@@ -204,7 +199,8 @@ function buildGradeMix(
 	let aPlusCount = 0;
 	let aPlusOrACount = 0;
 	for (const entry of entries) {
-		const score = signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
+		const score =
+			signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
 		if (!Number.isFinite(score)) continue;
 		total += 1;
 		if (entry.edgeRating >= MIN_EDGE_RATING) passing += 1;
@@ -296,9 +292,10 @@ const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
 const UPCOMING_WINDOW_HOURS = 12;
 const START_TIME_BUFFER_MINUTES = 10;
-const BOT_SYNC_WINDOW_MINUTES = 60;
+const BOT_SYNC_MIN_MINUTES_TO_START = 15;
+const BOT_SYNC_MAX_MINUTES_TO_START = 60;
 const BOT_SYNC_MIN_GRADE = "A";
-const BOT_SYNC_MARKET_QUALITY_THRESHOLD = 0.72;
+const BOT_SYNC_MARKET_QUALITY_THRESHOLD = 0.66;
 const STALE_HISTORY_MINUTES = 15;
 
 function getPnlCoverage(holders: TopHolderPnlData[]): number {
@@ -462,11 +459,15 @@ function formatBotInspectStatus(result: BotInspectResult | null): {
 	}
 	if (result.stage === "not_found_in_entries") {
 		const detailParts: string[] = [];
-		if (result.diagnosticReason) detailParts.push(`reason=${result.diagnosticReason}`);
+		if (result.diagnosticReason)
+			detailParts.push(`reason=${result.diagnosticReason}`);
 		if (typeof result.isReady === "boolean")
 			detailParts.push(`ready=${result.isReady ? "yes" : "no"}`);
 		if (result.marketType) detailParts.push(`type=${result.marketType}`);
-		if (typeof result.minutesToStart === "number" && Number.isFinite(result.minutesToStart)) {
+		if (
+			typeof result.minutesToStart === "number" &&
+			Number.isFinite(result.minutesToStart)
+		) {
 			detailParts.push(`minsToStart=${Math.round(result.minutesToStart)}`);
 		}
 		if (typeof result.candidateWindowMinutes === "number") {
@@ -556,9 +557,9 @@ function SharpMoneyPage() {
 	const [showAllEntries, setShowAllEntries] = useState(false);
 	const [showEdgeStats, setShowEdgeStats] = useState(true);
 	const [showAPlusOnly, setShowAPlusOnly] = useState(false);
-	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<string[]>(
-		[],
-	);
+	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<
+		string[]
+	>([]);
 	const [botAlignedError, setBotAlignedError] = useState<string | null>(null);
 	const [pickStatusByConditionId, setPickStatusByConditionId] = useState<
 		Record<
@@ -966,7 +967,6 @@ function SharpMoneyPage() {
 		[loadCache, refreshingEntryId],
 	);
 
-
 	useEffect(() => {
 		if (!pipelineStatus?.inProgress) {
 			return;
@@ -1062,7 +1062,12 @@ function SharpMoneyPage() {
 			);
 		}
 		return map;
-	}, [baseEntries, signalHistoryByConditionId, historyByConditionId, gradesByConditionId]);
+	}, [
+		baseEntries,
+		signalHistoryByConditionId,
+		historyByConditionId,
+		gradesByConditionId,
+	]);
 
 	useEffect(() => {
 		if (showAllEntries) {
@@ -1080,7 +1085,9 @@ function SharpMoneyPage() {
 			const result = await getBotCandidatesFn({
 				data: {
 					minGrade: BOT_SYNC_MIN_GRADE,
-					windowMinutes: BOT_SYNC_WINDOW_MINUTES,
+					windowMinutes: BOT_SYNC_MAX_MINUTES_TO_START,
+					minMinutesToStart: BOT_SYNC_MIN_MINUTES_TO_START,
+					maxMinutesToStart: BOT_SYNC_MAX_MINUTES_TO_START,
 					requireReady: true,
 					includeStarted: false,
 					requireMicrostructure: true,
@@ -1101,7 +1108,9 @@ function SharpMoneyPage() {
 			setBotAlignedConditionOrder(orderedIds);
 		})().catch((error) => {
 			if (cancelled) return;
-			setBotAlignedError(error instanceof Error ? error.message : "bot_candidates_failed");
+			setBotAlignedError(
+				error instanceof Error ? error.message : "bot_candidates_failed",
+			);
 			setBotAlignedConditionOrder([]);
 		});
 		return () => {
@@ -1115,7 +1124,7 @@ function SharpMoneyPage() {
 			now.getTime() + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000,
 		);
 		const botSyncCutoff = new Date(
-			now.getTime() + BOT_SYNC_WINDOW_MINUTES * 60 * 1000,
+			now.getTime() + BOT_SYNC_MAX_MINUTES_TO_START * 60 * 1000,
 		);
 		const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
 		let filtered = baseEntries.filter((e) => {
@@ -1284,7 +1293,12 @@ function SharpMoneyPage() {
 			};
 		}
 		return info;
-	}, [baseEntries, showRefreshDebug, signalScoreByConditionId, gradesByConditionId]);
+	}, [
+		baseEntries,
+		showRefreshDebug,
+		signalScoreByConditionId,
+		gradesByConditionId,
+	]);
 
 	const statsEntries = useMemo(() => {
 		return filteredEntries;
@@ -1298,8 +1312,7 @@ function SharpMoneyPage() {
 			.sort((a, b) => a - b);
 		if (values.length === 0) return null;
 		const total = values.length;
-		const average =
-			values.reduce((sum, value) => sum + value, 0) / total;
+		const average = values.reduce((sum, value) => sum + value, 0) / total;
 		const pickPercentile = (percent: number) => {
 			const index = Math.round((percent / 100) * (total - 1));
 			return values[Math.max(0, Math.min(total - 1, index))];
@@ -1533,12 +1546,7 @@ function SharpMoneyPage() {
 		return () => {
 			cancelled = true;
 		};
-	}, [
-		refreshSignalHistory,
-		refreshGrades,
-		ensureHealthStats,
-		refreshHealth,
-	]);
+	}, [refreshSignalHistory, refreshGrades, ensureHealthStats, refreshHealth]);
 
 	useEffect(() => {
 		const interval = setInterval(() => {
@@ -1587,10 +1595,7 @@ function SharpMoneyPage() {
 	// Calculate max volume for scale
 	const maxVolume = useMemo(() => {
 		if (displayEntries.length === 0) return 1;
-		return Math.max(
-			...displayEntries.map((e) => getEntryMarketVolume(e)),
-			1,
-		);
+		return Math.max(...displayEntries.map((e) => getEntryMarketVolume(e)), 1);
 	}, [displayEntries]);
 	const pullReady = pullDistance >= PULL_THRESHOLD;
 	const pullIndicatorOffset = Math.min(pullDistance, PULL_MAX);
@@ -1751,33 +1756,33 @@ function SharpMoneyPage() {
 								A+ only {showAPlusOnly ? "on" : "off"}
 							</button>
 						</div>
-					<div className="hidden flex-wrap gap-2 sm:flex">
-						{SPORT_FILTERS.map((filter) => (
+						<div className="hidden flex-wrap gap-2 sm:flex">
+							{SPORT_FILTERS.map((filter) => (
+								<button
+									type="button"
+									key={filter.value}
+									onClick={() => setSelectedSeriesId(filter.value)}
+									className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+										selectedSeriesId === filter.value
+											? "bg-cyan-500 text-white"
+											: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
+									}`}
+								>
+									{filter.label}
+								</button>
+							))}
 							<button
 								type="button"
-								key={filter.value}
-								onClick={() => setSelectedSeriesId(filter.value)}
+								onClick={() => setShowAPlusOnly((prev) => !prev)}
 								className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-									selectedSeriesId === filter.value
-										? "bg-cyan-500 text-white"
+									showAPlusOnly
+										? "bg-emerald-500 text-white"
 										: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
 								}`}
 							>
-								{filter.label}
+								A+ only
 							</button>
-						))}
-						<button
-							type="button"
-							onClick={() => setShowAPlusOnly((prev) => !prev)}
-							className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-								showAPlusOnly
-									? "bg-emerald-500 text-white"
-									: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
-							}`}
-						>
-							A+ only
-						</button>
-					</div>
+						</div>
 					</div>
 
 					{!showAllEntries && botAlignedError && (
@@ -1795,7 +1800,7 @@ function SharpMoneyPage() {
 								<div className="text-[0.65rem] text-slate-500">
 									{showAllEntries
 										? "All ready markets"
-										: `Bot-aligned (${BOT_SYNC_MIN_GRADE}, ${BOT_SYNC_WINDOW_MINUTES}m)`}
+										: `Bot-aligned (${BOT_SYNC_MIN_GRADE}, ${BOT_SYNC_MIN_MINUTES_TO_START}-${BOT_SYNC_MAX_MINUTES_TO_START}m, q>=${BOT_SYNC_MARKET_QUALITY_THRESHOLD.toFixed(2)})`}
 								</div>
 							</div>
 							<div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-6">
@@ -1940,7 +1945,9 @@ function SharpMoneyPage() {
 									</div>
 								</div>
 								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="uppercase text-slate-500">≥ {MIN_EDGE_RATING}</div>
+									<div className="uppercase text-slate-500">
+										≥ {MIN_EDGE_RATING}
+									</div>
 									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
 										<span>Current</span>
 										<span>7d</span>
@@ -2068,8 +2075,7 @@ function SharpMoneyPage() {
 										</table>
 										{edgeStatsHistory.length > edgeStatsHistoryView.length && (
 											<div className="mt-2 text-[0.65rem] text-slate-500">
-												Showing last{" "}
-												{edgeStatsHistoryView.length}{" "}
+												Showing last {edgeStatsHistoryView.length}{" "}
 												{isEdgeStatsDaily ? "days" : "hours"} of{" "}
 												{edgeStatsWindowHours === 24 ? "24h" : "7d"} history.
 											</div>
@@ -2120,13 +2126,9 @@ function SharpMoneyPage() {
 							<span className="uppercase tracking-[0.2em] text-slate-400">
 								Grades
 							</span>
-							<span>
-								{gradeStatus.total ?? 0} loaded
-							</span>
+							<span>{gradeStatus.total ?? 0} loaded</span>
 							{typeof gradeStatus.withWarnings === "number" && (
-								<span>
-									{gradeStatus.withWarnings} with warnings
-								</span>
+								<span>{gradeStatus.withWarnings} with warnings</span>
 							)}
 							{gradeStatus.warningCounts && (
 								<span className="text-slate-400">
@@ -2136,7 +2138,8 @@ function SharpMoneyPage() {
 								</span>
 							)}
 							<span>
-								Updated {formatRelativeTime(Math.floor(gradeStatus.updatedAt / 1000))}
+								Updated{" "}
+								{formatRelativeTime(Math.floor(gradeStatus.updatedAt / 1000))}
 							</span>
 						</div>
 					)}
@@ -2387,9 +2390,8 @@ function SharpMoneyCard({
 }) {
 	const [botInspectLoading, setBotInspectLoading] = useState(false);
 	const [botInspectError, setBotInspectError] = useState<string | null>(null);
-	const [botInspectResult, setBotInspectResult] = useState<BotInspectResult | null>(
-		null,
-	);
+	const [botInspectResult, setBotInspectResult] =
+		useState<BotInspectResult | null>(null);
 	const [botInspectTouched, setBotInspectTouched] = useState(false);
 	const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug);
 	const sideAOdds = formatAmericanOdds(entry.sideA.price);
@@ -2521,7 +2523,9 @@ function SharpMoneyCard({
 				data: {
 					conditionId: entry.conditionId,
 					minGrade: BOT_SYNC_MIN_GRADE,
-					windowMinutes: BOT_SYNC_WINDOW_MINUTES,
+					windowMinutes: BOT_SYNC_MAX_MINUTES_TO_START,
+					minMinutesToStart: BOT_SYNC_MIN_MINUTES_TO_START,
+					maxMinutesToStart: BOT_SYNC_MAX_MINUTES_TO_START,
 					requireReady: true,
 					includeStarted: false,
 					requireMicrostructure: true,
@@ -2604,41 +2608,41 @@ function SharpMoneyCard({
 								</>
 							)}
 						</div>
-							<div className="flex items-center gap-1">
-								<span className="text-[0.6rem] text-gray-500">
-									History {formatRelativeTime(historyUpdatedAt)}
+						<div className="flex items-center gap-1">
+							<span className="text-[0.6rem] text-gray-500">
+								History {formatRelativeTime(historyUpdatedAt)}
+							</span>
+							{pickMeta && pickStatusLabel && (
+								<span
+									className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
+									title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
+								>
+									{pickStatusLabel}
 								</span>
-								{pickMeta && pickStatusLabel && (
-									<span
-										className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
-										title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
-									>
-										{pickStatusLabel}
-									</span>
-								)}
-								<button
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										void inspectBotDecision();
-									}}
-									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
-									disabled={botInspectLoading}
-									title="Inspect why this market is included/excluded by bot candidate logic"
-								>
-									{botInspectLoading ? "Checking..." : "Bot check"}
-								</button>
-								<a
-									href={`/sharp/market/${entry.conditionId}`}
-									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
-									onClick={(e) => e.stopPropagation()}
-								>
-									Depth
-								</a>
-								{isHistoryStale && (
-									<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-										Stale
-									</span>
+							)}
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation();
+									void inspectBotDecision();
+								}}
+								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
+								disabled={botInspectLoading}
+								title="Inspect why this market is included/excluded by bot candidate logic"
+							>
+								{botInspectLoading ? "Checking..." : "Bot check"}
+							</button>
+							<a
+								href={`/sharp/market/${entry.conditionId}`}
+								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
+								onClick={(e) => e.stopPropagation()}
+							>
+								Depth
+							</a>
+							{isHistoryStale && (
+								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+									Stale
+								</span>
 							)}
 							{polymarketUrl && (
 								<a
@@ -2871,41 +2875,41 @@ function SharpMoneyCard({
 								</>
 							)}
 						</div>
-							<div className="flex items-center gap-1">
-								<span className="text-[0.6rem] text-gray-500">
-									History {formatRelativeTime(historyUpdatedAt)}
+						<div className="flex items-center gap-1">
+							<span className="text-[0.6rem] text-gray-500">
+								History {formatRelativeTime(historyUpdatedAt)}
+							</span>
+							{pickMeta && pickStatusLabel && (
+								<span
+									className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
+									title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
+								>
+									{pickStatusLabel}
 								</span>
-								{pickMeta && pickStatusLabel && (
-									<span
-										className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
-										title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
-									>
-										{pickStatusLabel}
-									</span>
-								)}
-								<button
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										void inspectBotDecision();
-									}}
-									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
-									disabled={botInspectLoading}
-									title="Inspect why this market is included/excluded by bot candidate logic"
-								>
-									{botInspectLoading ? "Checking..." : "Bot check"}
-								</button>
-								<a
-									href={`/sharp/market/${entry.conditionId}`}
-									className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
-									onClick={(e) => e.stopPropagation()}
-								>
-									Depth
-								</a>
-								{isHistoryStale && (
-									<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-										Stale
-									</span>
+							)}
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation();
+									void inspectBotDecision();
+								}}
+								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
+								disabled={botInspectLoading}
+								title="Inspect why this market is included/excluded by bot candidate logic"
+							>
+								{botInspectLoading ? "Checking..." : "Bot check"}
+							</button>
+							<a
+								href={`/sharp/market/${entry.conditionId}`}
+								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
+								onClick={(e) => e.stopPropagation()}
+							>
+								Depth
+							</a>
+							{isHistoryStale && (
+								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
+									Stale
+								</span>
 							)}
 							{polymarketUrl && (
 								<a

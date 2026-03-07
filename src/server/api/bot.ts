@@ -24,7 +24,8 @@ const DEFAULT_CACHE_LIMIT = 200;
 const DEFAULT_CACHE_WINDOW_HOURS = 24;
 const DEFAULT_CANDIDATE_WINDOW_MINUTES = 60;
 const MAX_CANDIDATE_LIMIT = 500;
-const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.72;
+const DEFAULT_MIN_MINUTES_TO_START = 15;
+const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.66;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	A: 4,
@@ -605,7 +606,7 @@ async function listBotCandidates(
 		Number.isFinite(options.minMinutesToStart) &&
 		options.minMinutesToStart >= 0
 			? options.minMinutesToStart
-			: 0;
+			: DEFAULT_MIN_MINUTES_TO_START;
 	const maxMinutesToStart =
 		typeof options.maxMinutesToStart === "number" &&
 		Number.isFinite(options.maxMinutesToStart) &&
