@@ -1,3 +1,4 @@
+import { detectSportTag } from "../../lib/sports";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
@@ -5,7 +6,6 @@ import {
 	listSharpMoneyHistoryByConditionIds,
 	type SharpMoneyHistoryEntryByConditionId,
 } from "./sharp-money";
-import { detectSportTag } from "../../lib/sports";
 
 export type ManualPickStatus = "pending" | "win" | "loss" | "push";
 
@@ -308,7 +308,9 @@ const SPORT_TAG_TO_SERIES_ID: Record<string, number> = {
 	epl: 10188,
 };
 
-function parseStringArray(value: string | null | undefined): string[] | undefined {
+function parseStringArray(
+	value: string | null | undefined,
+): string[] | undefined {
 	if (!value) return undefined;
 	try {
 		const parsed = JSON.parse(value);
@@ -415,11 +417,11 @@ export async function createManualPick(
 	      decision_snapshot_json,
 	      candidate_computed_at,
 	      status
-	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-			id,
-			input.clientPickId ?? null,
-			input.conditionId,
-			input.marketTitle,
+	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id,
+		input.clientPickId ?? null,
+		input.conditionId,
+		input.marketTitle,
 		input.eventTime ?? null,
 		now,
 		input.grade ?? null,
@@ -428,17 +430,17 @@ export async function createManualPick(
 		input.scoreDifferential ?? null,
 		input.sharpSide ?? null,
 		input.price ?? null,
-			input.confidence ?? null,
-			input.fairPrice ?? null,
-			input.priceEdge ?? null,
-			input.strategyVersion ?? null,
-			input.thresholdUsed ?? null,
-			input.marketQualityScore ?? null,
-			input.warnings ? JSON.stringify(input.warnings) : null,
-			input.decisionSnapshot ? JSON.stringify(input.decisionSnapshot) : null,
-			input.candidateComputedAt ?? null,
-			"pending",
-		);
+		input.confidence ?? null,
+		input.fairPrice ?? null,
+		input.priceEdge ?? null,
+		input.strategyVersion ?? null,
+		input.thresholdUsed ?? null,
+		input.marketQualityScore ?? null,
+		input.warnings ? JSON.stringify(input.warnings) : null,
+		input.decisionSnapshot ? JSON.stringify(input.decisionSnapshot) : null,
+		input.candidateComputedAt ?? null,
+		"pending",
+	);
 	const row = await first<ManualPickRow>(
 		db,
 		`SELECT * FROM manual_picks WHERE id = ?`,
@@ -636,7 +638,9 @@ function createMutableBuckets(labels: string[]): MutableBucketStats[] {
 	}));
 }
 
-function bucketToOutput(bucket: MutableBucketStats): ManualPickCalibrationBucket {
+function bucketToOutput(
+	bucket: MutableBucketStats,
+): ManualPickCalibrationBucket {
 	return {
 		label: bucket.label,
 		count: bucket.count,
@@ -660,7 +664,10 @@ function bucketIndexFromRange(
 	return ranges.findIndex((range) => value >= range.min && value < range.max);
 }
 
-function applyPickToBucket(bucket: MutableBucketStats, pick: ManualPickEntry): void {
+function applyPickToBucket(
+	bucket: MutableBucketStats,
+	pick: ManualPickEntry,
+): void {
 	bucket.count += 1;
 	if (pick.status === "win") bucket.wins += 1;
 	if (pick.status === "loss") bucket.losses += 1;
@@ -675,7 +682,9 @@ function applyPickToBucket(bucket: MutableBucketStats, pick: ManualPickEntry): v
 	}
 }
 
-function toPerformanceRows(buckets: MutableBucketStats[]): BucketPerformanceRow[] {
+function toPerformanceRows(
+	buckets: MutableBucketStats[],
+): BucketPerformanceRow[] {
 	return buckets.map((bucket) => ({
 		bucket: bucket.label,
 		count: bucket.count,
@@ -693,7 +702,8 @@ function toPerformanceRows(buckets: MutableBucketStats[]): BucketPerformanceRow[
 }
 
 function extractNumber(obj: unknown, keys: string[]): number | null {
-	if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
+	if (typeof obj !== "object" || obj === null || Array.isArray(obj))
+		return null;
 	const record = obj as Record<string, unknown>;
 	for (const key of keys) {
 		const value = record[key];
@@ -703,7 +713,8 @@ function extractNumber(obj: unknown, keys: string[]): number | null {
 }
 
 function extractBoolean(obj: unknown, keys: string[]): boolean | null {
-	if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
+	if (typeof obj !== "object" || obj === null || Array.isArray(obj))
+		return null;
 	const record = obj as Record<string, unknown>;
 	for (const key of keys) {
 		const value = record[key];
@@ -713,7 +724,10 @@ function extractBoolean(obj: unknown, keys: string[]): boolean | null {
 }
 
 function resolveSignalScore(pick: ManualPickEntry): number | null {
-	if (typeof pick.signalScore === "number" && Number.isFinite(pick.signalScore)) {
+	if (
+		typeof pick.signalScore === "number" &&
+		Number.isFinite(pick.signalScore)
+	) {
 		return pick.signalScore;
 	}
 	const snapshotScore = extractNumber(pick.decisionSnapshot, ["signalScore"]);
@@ -733,11 +747,13 @@ function resolveMarketQualityScore(pick: ManualPickEntry): number | null {
 }
 
 function extractString(obj: unknown, keys: string[]): string | null {
-	if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
+	if (typeof obj !== "object" || obj === null || Array.isArray(obj))
+		return null;
 	const record = obj as Record<string, unknown>;
 	for (const key of keys) {
 		const value = record[key];
-		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+		if (typeof value === "string" && value.trim().length > 0)
+			return value.trim();
 	}
 	return null;
 }
@@ -796,9 +812,10 @@ function resolveSportForPick(
 	};
 }
 
-function buildTimeToStartRows(
-	picks: ManualPickEntry[],
-): { withEventTime: number; rows: BucketPerformanceRow[] } {
+function buildTimeToStartRows(picks: ManualPickEntry[]): {
+	withEventTime: number;
+	rows: BucketPerformanceRow[];
+} {
 	const buckets = createMutableBuckets(
 		TIME_TO_START_BUCKETS.map((bucket) => bucket.label),
 	);
@@ -818,7 +835,10 @@ function buildTimeToStartRows(
 }
 
 function getPriceForSide(
-	entry: { sideA?: { price?: number | null }; sideB?: { price?: number | null } },
+	entry: {
+		sideA?: { price?: number | null };
+		sideB?: { price?: number | null };
+	},
 	sharpSide: "A" | "B",
 ): number | null {
 	const value = sharpSide === "A" ? entry.sideA?.price : entry.sideB?.price;
@@ -912,7 +932,10 @@ export async function getManualPicksCalibrationSummary(
 
 		const marketQualityScore = resolveMarketQualityScore(pick);
 		if (marketQualityScore !== null) {
-			const index = bucketIndexFromRange(marketQualityScore, QUALITY_SCORE_BUCKETS);
+			const index = bucketIndexFromRange(
+				marketQualityScore,
+				QUALITY_SCORE_BUCKETS,
+			);
 			if (index >= 0) {
 				withQualityScore += 1;
 				applyPickToBucket(qualityBuckets[index], pick);
@@ -924,7 +947,10 @@ export async function getManualPicksCalibrationSummary(
 			if (Number.isFinite(eventTimeMs)) {
 				const minutesToStart = (eventTimeMs - pick.pickedAt * 1000) / 60000;
 				if (Number.isFinite(minutesToStart) && minutesToStart >= 0) {
-					const index = bucketIndexFromRange(minutesToStart, TIME_TO_START_BUCKETS);
+					const index = bucketIndexFromRange(
+						minutesToStart,
+						TIME_TO_START_BUCKETS,
+					);
 					if (index >= 0) {
 						withEventTime += 1;
 						applyPickToBucket(timeBuckets[index], pick);
@@ -963,7 +989,10 @@ export async function getManualPicksBucketPerformanceSummary(
 	const l2ImbalanceBuckets = createMutableBuckets(
 		PERFORMANCE_L2_IMBALANCE_BUCKETS.map((bucket) => bucket.label),
 	);
-	const l2DisagreementBuckets = createMutableBuckets(["disagree", "agree_or_neutral"]);
+	const l2DisagreementBuckets = createMutableBuckets([
+		"disagree",
+		"agree_or_neutral",
+	]);
 
 	for (const pick of settled) {
 		const signalScore = resolveSignalScore(pick);
@@ -1013,9 +1042,7 @@ export async function getManualPicksBucketPerformanceSummary(
 		]);
 		if (l2Disagreement !== null) {
 			applyPickToBucket(
-				l2Disagreement
-					? l2DisagreementBuckets[0]
-					: l2DisagreementBuckets[1],
+				l2Disagreement ? l2DisagreementBuckets[0] : l2DisagreementBuckets[1],
 				pick,
 			);
 		}
@@ -1040,7 +1067,7 @@ export async function getManualPicksClvTimingSummary(
 		typeof options?.qualityThreshold === "number" &&
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
-			: 0.72;
+			: 0.66;
 	const picks = await listManualPicks(db, { limit });
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const segments = [
@@ -1057,7 +1084,8 @@ export async function getManualPicksClvTimingSummary(
 		{
 			key: "grade_a_or_better",
 			label: "Grade A/A+",
-			filter: (pick: ManualPickEntry) => pick.grade === "A+" || pick.grade === "A",
+			filter: (pick: ManualPickEntry) =>
+				pick.grade === "A+" || pick.grade === "A",
 		},
 		{
 			key: "quality_threshold",
@@ -1103,14 +1131,18 @@ export async function getManualPicksShadowWindowSummary(
 		typeof options?.qualityThreshold === "number" &&
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
-			: 0.72;
+			: 0.66;
 	const picks = await listManualPicks(db, { limit });
 	const settled = picks.filter(
-		(pick) => pick.status !== "pending" && (pick.sharpSide === "A" || pick.sharpSide === "B"),
+		(pick) =>
+			pick.status !== "pending" &&
+			(pick.sharpSide === "A" || pick.sharpSide === "B"),
 	);
 	const candidates = settled
 		.map((pick) => {
-			const eventTimeMs = pick.eventTime ? new Date(pick.eventTime).getTime() : Number.NaN;
+			const eventTimeMs = pick.eventTime
+				? new Date(pick.eventTime).getTime()
+				: Number.NaN;
 			if (!Number.isFinite(eventTimeMs)) return null;
 			return {
 				pick,
@@ -1129,7 +1161,9 @@ export async function getManualPicksShadowWindowSummary(
 		};
 	}
 
-	const earliestEventTime = Math.min(...candidates.map((entry) => entry.eventTimeSeconds));
+	const earliestEventTime = Math.min(
+		...candidates.map((entry) => entry.eventTimeSeconds),
+	);
 	const historySince = earliestEventTime - 4 * 60 * 60;
 	const conditionIds = Array.from(
 		new Set(candidates.map((entry) => entry.pick.conditionId)),
@@ -1149,7 +1183,11 @@ export async function getManualPicksShadowWindowSummary(
 	}
 
 	const windows = [
-		{ key: "actual", label: "Actual entry", leadMinutes: null as number | null },
+		{
+			key: "actual",
+			label: "Actual entry",
+			leadMinutes: null as number | null,
+		},
 		{ key: "t120", label: "T-120m", leadMinutes: 120 },
 		{ key: "t60", label: "T-60m", leadMinutes: 60 },
 		{ key: "t30", label: "T-30m", leadMinutes: 30 },
@@ -1172,7 +1210,8 @@ export async function getManualPicksShadowWindowSummary(
 		{
 			key: "grade_a_or_better",
 			label: "Grade A/A+",
-			filter: (pick: ManualPickEntry) => pick.grade === "A+" || pick.grade === "A",
+			filter: (pick: ManualPickEntry) =>
+				pick.grade === "A+" || pick.grade === "A",
 		},
 		{
 			key: "quality_threshold",
@@ -1196,7 +1235,9 @@ export async function getManualPicksShadowWindowSummary(
 		settledPicks: settled.length,
 		qualityThreshold,
 		segments: segments.map((segment) => {
-			const segmentCandidates = candidates.filter(({ pick }) => segment.filter(pick));
+			const segmentCandidates = candidates.filter(({ pick }) =>
+				segment.filter(pick),
+			);
 			const rows = windows.map((window) => {
 				const bucket = initMutableBucket(window.label);
 				for (const candidate of segmentCandidates) {
@@ -1278,10 +1319,12 @@ export async function getManualPicksSportPerformanceSummary(
 		typeof options?.qualityThreshold === "number" &&
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
-			: 0.72;
+			: 0.66;
 	const picks = await listManualPicks(db, { limit });
 	const settled = picks.filter((pick) => pick.status !== "pending");
-	const conditionIds = Array.from(new Set(settled.map((pick) => pick.conditionId)));
+	const conditionIds = Array.from(
+		new Set(settled.map((pick) => pick.conditionId)),
+	);
 	let historyByConditionId: SharpMoneyHistoryEntryByConditionId = {};
 	try {
 		historyByConditionId = await listSharpMoneyHistoryByConditionIds(
@@ -1341,7 +1384,9 @@ export async function getManualPicksSportPerformanceSummary(
 		statsBySport.set(sport.sportTag, existing);
 	}
 
-	const rows: ManualPickSportPerformanceRow[] = Array.from(statsBySport.values())
+	const rows: ManualPickSportPerformanceRow[] = Array.from(
+		statsBySport.values(),
+	)
 		.map((entry) => {
 			const allRow = bucketToShadowWindowRow(entry.all, "all", "all", null);
 			const qualityRow = bucketToShadowWindowRow(

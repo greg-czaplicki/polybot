@@ -42,18 +42,21 @@ function formatRelativeTime(timestamp?: number): string {
 }
 
 function formatPercent(value: number | null | undefined): string {
-	if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+	if (value === null || value === undefined || !Number.isFinite(value))
+		return "—";
 	return `${(value * 100).toFixed(1)}%`;
 }
 
 function formatSignedPercent(value: number | null | undefined): string {
-	if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+	if (value === null || value === undefined || !Number.isFinite(value))
+		return "—";
 	const percent = value * 100;
 	return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
 }
 
 function formatBps(value: number | null | undefined): string {
-	if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+	if (value === null || value === undefined || !Number.isFinite(value))
+		return "—";
 	return `${value.toFixed(1)} bps`;
 }
 
@@ -121,17 +124,32 @@ type RuntimeStats = {
 		tag: string;
 		seriesId: number;
 		count: number;
-		markets: Array<{ title: string; volume: number; eventSlug?: string; slug?: string }>;
+		markets: Array<{
+			title: string;
+			volume: number;
+			eventSlug?: string;
+			slug?: string;
+		}>;
 	}>;
 	combinedTagStats: Array<{
 		tag: string;
 		count: number;
-		markets: Array<{ title: string; volume: number; eventSlug?: string; slug?: string }>;
+		markets: Array<{
+			title: string;
+			volume: number;
+			eventSlug?: string;
+			slug?: string;
+		}>;
 	}>;
 	filteredTagStats: Array<{
 		tag: string;
 		count: number;
-		markets: Array<{ title: string; volume: number; eventSlug?: string; slug?: string }>;
+		markets: Array<{
+			title: string;
+			volume: number;
+			eventSlug?: string;
+			slug?: string;
+		}>;
 	}>;
 	eventStats: Array<{
 		tag: string;
@@ -152,7 +170,11 @@ type RuntimeStats = {
 	totalRuns: number;
 	totalRetries: number;
 	totalFailures: number;
-	paginationCapHits: Array<{ tag: string; seriesId: number; eventCount: number }>;
+	paginationCapHits: Array<{
+		tag: string;
+		seriesId: number;
+		eventCount: number;
+	}>;
 	cacheFreshness?: {
 		total: number;
 		missingHistory: number;
@@ -321,39 +343,50 @@ function RuntimePage() {
 	const [evalError, setEvalError] = useState<string | null>(null);
 	const [evalWindowHours, setEvalWindowHours] = useState("24");
 	const [evalHorizonMinutes, setEvalHorizonMinutes] = useState("15");
-	const [evalHistoryWindowMinutes, setEvalHistoryWindowMinutes] = useState("60");
-	const [evalMinGrade, setEvalMinGrade] = useState<"A+" | "A" | "B" | "C" | "D">("A");
+	const [evalHistoryWindowMinutes, setEvalHistoryWindowMinutes] =
+		useState("60");
+	const [evalMinGrade, setEvalMinGrade] = useState<
+		"A+" | "A" | "B" | "C" | "D"
+	>("A");
 	const [evalIncludeStarted, setEvalIncludeStarted] = useState(false);
-	const [evalSweepThresholds, setEvalSweepThresholds] = useState("0.58,0.62,0.66,0.70");
+	const [evalSweepThresholds, setEvalSweepThresholds] = useState(
+		"0.58,0.62,0.66,0.70",
+	);
 
-	const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null);
+	const [calibrationResult, setCalibrationResult] =
+		useState<CalibrationResult | null>(null);
 	const [isCalibrationLoading, setIsCalibrationLoading] = useState(false);
 	const [calibrationError, setCalibrationError] = useState<string | null>(null);
 	const [calibrationLimit, setCalibrationLimit] = useState("2000");
 	const isCalibrationLoadingRef = useRef(false);
 	const [bucketPerformanceResult, setBucketPerformanceResult] =
 		useState<BucketPerformanceResult | null>(null);
-	const [isBucketPerformanceLoading, setIsBucketPerformanceLoading] = useState(false);
-	const [bucketPerformanceError, setBucketPerformanceError] = useState<string | null>(
-		null,
-	);
+	const [isBucketPerformanceLoading, setIsBucketPerformanceLoading] =
+		useState(false);
+	const [bucketPerformanceError, setBucketPerformanceError] = useState<
+		string | null
+	>(null);
 	const isBucketPerformanceLoadingRef = useRef(false);
-	const [clvTimingResult, setClvTimingResult] = useState<ClvTimingResult | null>(null);
+	const [clvTimingResult, setClvTimingResult] =
+		useState<ClvTimingResult | null>(null);
 	const [isClvTimingLoading, setIsClvTimingLoading] = useState(false);
 	const [clvTimingError, setClvTimingError] = useState<string | null>(null);
-	const [clvQualityThreshold, setClvQualityThreshold] = useState("0.72");
+	const [clvQualityThreshold, setClvQualityThreshold] = useState("0.66");
 	const isClvTimingLoadingRef = useRef(false);
 	const [shadowWindowResult, setShadowWindowResult] =
 		useState<ShadowWindowResult | null>(null);
 	const [isShadowWindowLoading, setIsShadowWindowLoading] = useState(false);
-	const [shadowWindowError, setShadowWindowError] = useState<string | null>(null);
+	const [shadowWindowError, setShadowWindowError] = useState<string | null>(
+		null,
+	);
 	const isShadowWindowLoadingRef = useRef(false);
 	const [sportPerformanceResult, setSportPerformanceResult] =
 		useState<SportPerformanceResult | null>(null);
-	const [isSportPerformanceLoading, setIsSportPerformanceLoading] = useState(false);
-	const [sportPerformanceError, setSportPerformanceError] = useState<string | null>(
-		null,
-	);
+	const [isSportPerformanceLoading, setIsSportPerformanceLoading] =
+		useState(false);
+	const [sportPerformanceError, setSportPerformanceError] = useState<
+		string | null
+	>(null);
 	const isSportPerformanceLoadingRef = useRef(false);
 
 	const filteredTotalMarkets = stats
@@ -431,7 +464,9 @@ function RuntimePage() {
 	const loadStats = useCallback(async () => {
 		setError(null);
 		try {
-			const result = await getRuntimeMarketStatsFn({ data: { freshnessWindowHours: 24 } });
+			const result = await getRuntimeMarketStatsFn({
+				data: { freshnessWindowHours: 24 },
+			});
 			setStats((result.stats ?? null) as RuntimeStats | null);
 		} catch (err) {
 			console.error("Failed to load runtime stats", err);
@@ -448,10 +483,13 @@ function RuntimePage() {
 			const limitValue = requestedLimit ?? 2000;
 			const result = await getManualPicksCalibrationFn({
 				data: {
-					limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+					limit:
+						Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
 				},
 			});
-			setCalibrationResult((result.calibration ?? null) as CalibrationResult | null);
+			setCalibrationResult(
+				(result.calibration ?? null) as CalibrationResult | null,
+			);
 		} catch (err) {
 			console.error("Failed to load pick calibration", err);
 			setCalibrationError("Failed to load pick calibration");
@@ -470,7 +508,8 @@ function RuntimePage() {
 			const limitValue = requestedLimit ?? 2000;
 			const result = await getManualPicksBucketPerformanceFn({
 				data: {
-					limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+					limit:
+						Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
 				},
 			});
 			setBucketPerformanceResult(
@@ -493,14 +532,15 @@ function RuntimePage() {
 			setClvTimingError(null);
 			try {
 				const limitValue = requestedLimit ?? 2000;
-				const thresholdValue = requestedThreshold ?? 0.72;
+				const thresholdValue = requestedThreshold ?? 0.66;
 				const result = await getManualPicksClvTimingFn({
 					data: {
-						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						limit:
+							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
 						qualityThreshold:
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
-								: 0.72,
+								: 0.66,
 					},
 				});
 				setClvTimingResult((result.timing ?? null) as ClvTimingResult | null);
@@ -523,20 +563,25 @@ function RuntimePage() {
 			setShadowWindowError(null);
 			try {
 				const limitValue = requestedLimit ?? 2000;
-				const thresholdValue = requestedThreshold ?? 0.72;
+				const thresholdValue = requestedThreshold ?? 0.66;
 				const result = await getManualPicksShadowWindowsFn({
 					data: {
-						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						limit:
+							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
 						qualityThreshold:
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
-								: 0.72,
+								: 0.66,
 					},
 				});
-				setShadowWindowResult((result.shadow ?? null) as ShadowWindowResult | null);
+				setShadowWindowResult(
+					(result.shadow ?? null) as ShadowWindowResult | null,
+				);
 			} catch (err) {
 				console.error("Failed to load shadow windows", err);
-				setShadowWindowError(`Failed to load shadow windows: ${describeError(err)}`);
+				setShadowWindowError(
+					`Failed to load shadow windows: ${describeError(err)}`,
+				);
 			} finally {
 				setIsShadowWindowLoading(false);
 				isShadowWindowLoadingRef.current = false;
@@ -553,14 +598,15 @@ function RuntimePage() {
 			setSportPerformanceError(null);
 			try {
 				const limitValue = requestedLimit ?? 2000;
-				const thresholdValue = requestedThreshold ?? 0.72;
+				const thresholdValue = requestedThreshold ?? 0.66;
 				const result = await getManualPicksSportPerformanceFn({
 					data: {
-						limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						limit:
+							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
 						qualityThreshold:
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
-								: 0.72,
+								: 0.66,
 					},
 				});
 				setSportPerformanceResult(
@@ -568,7 +614,9 @@ function RuntimePage() {
 				);
 			} catch (err) {
 				console.error("Failed to load sport performance", err);
-				setSportPerformanceError(`Failed to load sport performance: ${describeError(err)}`);
+				setSportPerformanceError(
+					`Failed to load sport performance: ${describeError(err)}`,
+				);
 			} finally {
 				setIsSportPerformanceLoading(false);
 				isSportPerformanceLoadingRef.current = false;
@@ -581,7 +629,9 @@ function RuntimePage() {
 		setIsLoading(true);
 		setError(null);
 		try {
-			await fetchTrendingSportsMarketsFn({ data: { limit: 50, includeLowVolume: true } });
+			await fetchTrendingSportsMarketsFn({
+				data: { limit: 50, includeLowVolume: true },
+			});
 			await loadStats();
 		} catch (err) {
 			console.error("Failed to refresh runtime stats", err);
@@ -628,9 +678,12 @@ function RuntimePage() {
 			const historyWindowMinutes = Number(evalHistoryWindowMinutes);
 			const result = await getBotEvalFn({
 				data: {
-					windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
+					windowHours:
+						Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
 					horizonMinutes:
-						Number.isFinite(horizonMinutes) && horizonMinutes > 0 ? horizonMinutes : 15,
+						Number.isFinite(horizonMinutes) && horizonMinutes > 0
+							? horizonMinutes
+							: 15,
 					historyWindowMinutes:
 						Number.isFinite(historyWindowMinutes) && historyWindowMinutes > 0
 							? historyWindowMinutes
@@ -665,9 +718,9 @@ function RuntimePage() {
 		void loadStats();
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
-		void loadClvTiming(2000, 0.72);
-		void loadShadowWindows(2000, 0.72);
-		void loadSportPerformance(2000, 0.72);
+		void loadClvTiming(2000, 0.66);
+		void loadShadowWindows(2000, 0.66);
+		void loadSportPerformance(2000, 0.66);
 	}, [
 		loadStats,
 		loadCalibration,
@@ -683,10 +736,15 @@ function RuntimePage() {
 				<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
 					<header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 						<div>
-							<p className="text-xs uppercase tracking-[0.3em] text-slate-400">Runtime</p>
-							<h1 className="text-3xl font-semibold text-slate-50">Market Fetch Stats</h1>
+							<p className="text-xs uppercase tracking-[0.3em] text-slate-400">
+								Runtime
+							</p>
+							<h1 className="text-3xl font-semibold text-slate-50">
+								Market Fetch Stats
+							</h1>
 							<p className="mt-2 text-sm text-slate-400">
-								Verify how many markets we pull per sport tag and which ones dominate by volume.
+								Verify how many markets we pull per sport tag and which ones
+								dominate by volume.
 							</p>
 						</div>
 						<a
@@ -700,20 +758,31 @@ function RuntimePage() {
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
 						<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 							<div>
-								<p className="text-sm text-slate-400">Last fetched: {formatRelativeTime(stats?.fetchedAt)}</p>
-								<p className="text-sm text-slate-400">Filtered markets (window): {filteredTotalMarkets}</p>
 								<p className="text-sm text-slate-400">
-									Expanded events: {stats?.expandedEventCount ?? 0} • Expanded markets: {stats?.expandedMarketCount ?? 0}
+									Last fetched: {formatRelativeTime(stats?.fetchedAt)}
 								</p>
 								<p className="text-sm text-slate-400">
-									Retries: {stats?.retryCount ?? 0} • Failures: {stats?.failureCount ?? 0} • Pagination caps: {stats?.paginationCapHits?.length ?? 0}
+									Filtered markets (window): {filteredTotalMarkets}
 								</p>
 								<p className="text-sm text-slate-400">
-									Totals: {stats?.totalRuns ?? 0} runs • {stats?.totalRetries ?? 0} retries • {stats?.totalFailures ?? 0} failures
+									Expanded events: {stats?.expandedEventCount ?? 0} • Expanded
+									markets: {stats?.expandedMarketCount ?? 0}
+								</p>
+								<p className="text-sm text-slate-400">
+									Retries: {stats?.retryCount ?? 0} • Failures:{" "}
+									{stats?.failureCount ?? 0} • Pagination caps:{" "}
+									{stats?.paginationCapHits?.length ?? 0}
+								</p>
+								<p className="text-sm text-slate-400">
+									Totals: {stats?.totalRuns ?? 0} runs •{" "}
+									{stats?.totalRetries ?? 0} retries •{" "}
+									{stats?.totalFailures ?? 0} failures
 								</p>
 								{stats?.cacheFreshness && (
 									<p className="text-sm text-slate-400">
-										Cache freshness: {stats.cacheFreshness.total} total • {stats.cacheFreshness.staleHistory} stale • {stats.cacheFreshness.missingHistory} missing history
+										Cache freshness: {stats.cacheFreshness.total} total •{" "}
+										{stats.cacheFreshness.staleHistory} stale •{" "}
+										{stats.cacheFreshness.missingHistory} missing history
 									</p>
 								)}
 							</div>
@@ -752,27 +821,78 @@ function RuntimePage() {
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
 						<div className="flex flex-col gap-4">
 							<div>
-								<h2 className="text-lg font-semibold text-slate-50">Eval Comparison</h2>
+								<h2 className="text-lg font-semibold text-slate-50">
+									Eval Comparison
+								</h2>
 								<p className="mt-1 text-sm text-slate-400">
-									Compare baseline candidate logic vs filtered market-quality logic using historical snapshots.
+									Compare baseline candidate logic vs filtered market-quality
+									logic using historical snapshots.
 								</p>
 							</div>
 							<div className="grid gap-3 md:grid-cols-6">
 								<div>
-									<label htmlFor="eval-window-hours" className="block text-xs text-slate-400">Window hours</label>
-									<input id="eval-window-hours" value={evalWindowHours} onChange={(event) => setEvalWindowHours(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+									<label
+										htmlFor="eval-window-hours"
+										className="block text-xs text-slate-400"
+									>
+										Window hours
+									</label>
+									<input
+										id="eval-window-hours"
+										value={evalWindowHours}
+										onChange={(event) => setEvalWindowHours(event.target.value)}
+										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									/>
 								</div>
 								<div>
-									<label htmlFor="eval-horizon-mins" className="block text-xs text-slate-400">Horizon (mins)</label>
-									<input id="eval-horizon-mins" value={evalHorizonMinutes} onChange={(event) => setEvalHorizonMinutes(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+									<label
+										htmlFor="eval-horizon-mins"
+										className="block text-xs text-slate-400"
+									>
+										Horizon (mins)
+									</label>
+									<input
+										id="eval-horizon-mins"
+										value={evalHorizonMinutes}
+										onChange={(event) =>
+											setEvalHorizonMinutes(event.target.value)
+										}
+										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									/>
 								</div>
 								<div>
-									<label htmlFor="eval-history-mins" className="block text-xs text-slate-400">Signal window (mins)</label>
-									<input id="eval-history-mins" value={evalHistoryWindowMinutes} onChange={(event) => setEvalHistoryWindowMinutes(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+									<label
+										htmlFor="eval-history-mins"
+										className="block text-xs text-slate-400"
+									>
+										Signal window (mins)
+									</label>
+									<input
+										id="eval-history-mins"
+										value={evalHistoryWindowMinutes}
+										onChange={(event) =>
+											setEvalHistoryWindowMinutes(event.target.value)
+										}
+										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									/>
 								</div>
 								<div>
-									<label htmlFor="eval-min-grade" className="block text-xs text-slate-400">Min grade</label>
-									<select id="eval-min-grade" value={evalMinGrade} onChange={(event) => setEvalMinGrade(event.target.value as "A+" | "A" | "B" | "C" | "D")} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white">
+									<label
+										htmlFor="eval-min-grade"
+										className="block text-xs text-slate-400"
+									>
+										Min grade
+									</label>
+									<select
+										id="eval-min-grade"
+										value={evalMinGrade}
+										onChange={(event) =>
+											setEvalMinGrade(
+												event.target.value as "A+" | "A" | "B" | "C" | "D",
+											)
+										}
+										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									>
 										<option value="A+">A+</option>
 										<option value="A">A</option>
 										<option value="B">B</option>
@@ -781,49 +901,126 @@ function RuntimePage() {
 									</select>
 								</div>
 								<div className="flex items-end gap-2">
-									<button type="button" onClick={runEval} disabled={isEvaluating} className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60">
+									<button
+										type="button"
+										onClick={runEval}
+										disabled={isEvaluating}
+										className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+									>
 										{isEvaluating ? "Running..." : "Run Eval"}
 									</button>
 								</div>
 								<div className="md:col-span-6">
-									<label htmlFor="eval-thresholds" className="block text-xs text-slate-400">Sweep thresholds (comma separated)</label>
-									<input id="eval-thresholds" value={evalSweepThresholds} onChange={(event) => setEvalSweepThresholds(event.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" placeholder="0.58,0.62,0.66,0.70" />
+									<label
+										htmlFor="eval-thresholds"
+										className="block text-xs text-slate-400"
+									>
+										Sweep thresholds (comma separated)
+									</label>
+									<input
+										id="eval-thresholds"
+										value={evalSweepThresholds}
+										onChange={(event) =>
+											setEvalSweepThresholds(event.target.value)
+										}
+										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+										placeholder="0.58,0.62,0.66,0.70"
+									/>
 								</div>
 							</div>
 							<label className="inline-flex items-center gap-2 text-sm text-slate-300">
-								<input type="checkbox" checked={evalIncludeStarted} onChange={(event) => setEvalIncludeStarted(event.target.checked)} />
+								<input
+									type="checkbox"
+									checked={evalIncludeStarted}
+									onChange={(event) =>
+										setEvalIncludeStarted(event.target.checked)
+									}
+								/>
 								Include started events
 							</label>
-							{evalError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{evalError}</div>}
+							{evalError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{evalError}
+								</div>
+							)}
 							{evalResult && (
 								<div className="space-y-5">
 									<div className="grid gap-3 md:grid-cols-2">
 										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">Baseline</p>
-											<p className="mt-2 text-sm text-slate-300">Triggered: {evalResult.strategies.baseline.triggered} • Resolved: {evalResult.strategies.baseline.resolved}</p>
-											<p className="text-sm text-slate-300">Hit rate: {formatPercent(evalResult.strategies.baseline.hitRate)} • Avg move: {formatBps(evalResult.strategies.baseline.avgMoveBps)}</p>
+											<p className="text-sm font-semibold text-slate-100">
+												Baseline
+											</p>
+											<p className="mt-2 text-sm text-slate-300">
+												Triggered: {evalResult.strategies.baseline.triggered} •
+												Resolved: {evalResult.strategies.baseline.resolved}
+											</p>
+											<p className="text-sm text-slate-300">
+												Hit rate:{" "}
+												{formatPercent(evalResult.strategies.baseline.hitRate)}{" "}
+												• Avg move:{" "}
+												{formatBps(evalResult.strategies.baseline.avgMoveBps)}
+											</p>
 										</div>
 										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">Filtered</p>
-											<p className="mt-2 text-sm text-slate-300">Triggered: {evalResult.strategies.filtered.triggered} • Resolved: {evalResult.strategies.filtered.resolved}</p>
-											<p className="text-sm text-slate-300">Hit rate: {formatPercent(evalResult.strategies.filtered.hitRate)} • Avg move: {formatBps(evalResult.strategies.filtered.avgMoveBps)}</p>
+											<p className="text-sm font-semibold text-slate-100">
+												Filtered
+											</p>
+											<p className="mt-2 text-sm text-slate-300">
+												Triggered: {evalResult.strategies.filtered.triggered} •
+												Resolved: {evalResult.strategies.filtered.resolved}
+											</p>
+											<p className="text-sm text-slate-300">
+												Hit rate:{" "}
+												{formatPercent(evalResult.strategies.filtered.hitRate)}{" "}
+												• Avg move:{" "}
+												{formatBps(evalResult.strategies.filtered.avgMoveBps)}
+											</p>
 										</div>
 									</div>
 									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<p className="text-sm font-semibold text-slate-100">By hour to start</p>
+										<p className="text-sm font-semibold text-slate-100">
+											By hour to start
+										</p>
 										<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-											<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Base Hit</th><th className="pb-2">Base Avg</th><th className="pb-2">Filt Hit</th><th className="pb-2">Filt Avg</th></tr></thead>
+											<thead>
+												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+													<th className="pb-2">Bucket</th>
+													<th className="pb-2">Base Hit</th>
+													<th className="pb-2">Base Avg</th>
+													<th className="pb-2">Filt Hit</th>
+													<th className="pb-2">Filt Avg</th>
+												</tr>
+											</thead>
 											<tbody>
 												{evalHourBuckets.map((bucket) => {
-													const base = evalResult.strategies.baseline.byHourToStart[bucket];
-													const filt = evalResult.strategies.filtered.byHourToStart[bucket];
+													const base =
+														evalResult.strategies.baseline.byHourToStart[
+															bucket
+														];
+													const filt =
+														evalResult.strategies.filtered.byHourToStart[
+															bucket
+														];
 													return (
-														<tr key={bucket} className="border-t border-slate-800">
-															<td className="py-2 pr-4 font-semibold text-slate-100">{bucket}</td>
-															<td className="py-2 pr-4">{formatPercent(base?.hitRate)}</td>
-															<td className="py-2 pr-4">{formatBps(base?.avgMoveBps)}</td>
-															<td className="py-2 pr-4">{formatPercent(filt?.hitRate)}</td>
-															<td className="py-2">{formatBps(filt?.avgMoveBps)}</td>
+														<tr
+															key={bucket}
+															className="border-t border-slate-800"
+														>
+															<td className="py-2 pr-4 font-semibold text-slate-100">
+																{bucket}
+															</td>
+															<td className="py-2 pr-4">
+																{formatPercent(base?.hitRate)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatBps(base?.avgMoveBps)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatPercent(filt?.hitRate)}
+															</td>
+															<td className="py-2">
+																{formatBps(filt?.avgMoveBps)}
+															</td>
 														</tr>
 													);
 												})}
@@ -831,17 +1028,43 @@ function RuntimePage() {
 										</table>
 									</div>
 									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<p className="text-sm font-semibold text-slate-100">Threshold sweep</p>
+										<p className="text-sm font-semibold text-slate-100">
+											Threshold sweep
+										</p>
 										<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-											<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Threshold</th><th className="pb-2">Retained</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg Move</th><th className="pb-2">Delta vs Base</th></tr></thead>
+											<thead>
+												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+													<th className="pb-2">Threshold</th>
+													<th className="pb-2">Retained</th>
+													<th className="pb-2">Hit Rate</th>
+													<th className="pb-2">Avg Move</th>
+													<th className="pb-2">Delta vs Base</th>
+												</tr>
+											</thead>
 											<tbody>
 												{evalResult.thresholdSweep.map((row) => (
-													<tr key={row.threshold} className="border-t border-slate-800">
-														<td className="py-2 pr-4 font-semibold text-slate-100">{row.threshold.toFixed(2)}</td>
-														<td className="py-2 pr-4">{formatPercent(row.retainedRate)}</td>
-														<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
-														<td className="py-2 pr-4">{formatBps(row.avgMoveBps)}</td>
-														<td className="py-2">{row.avgMoveDeltaBps === null || !Number.isFinite(row.avgMoveDeltaBps) ? "—" : `${row.avgMoveDeltaBps >= 0 ? "+" : ""}${row.avgMoveDeltaBps.toFixed(1)} bps`}</td>
+													<tr
+														key={row.threshold}
+														className="border-t border-slate-800"
+													>
+														<td className="py-2 pr-4 font-semibold text-slate-100">
+															{row.threshold.toFixed(2)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.retainedRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.hitRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatBps(row.avgMoveBps)}
+														</td>
+														<td className="py-2">
+															{row.avgMoveDeltaBps === null ||
+															!Number.isFinite(row.avgMoveDeltaBps)
+																? "—"
+																: `${row.avgMoveDeltaBps >= 0 ? "+" : ""}${row.avgMoveDeltaBps.toFixed(1)} bps`}
+														</td>
 													</tr>
 												))}
 											</tbody>
@@ -855,15 +1078,30 @@ function RuntimePage() {
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
 						<div className="flex flex-col gap-4">
 							<div>
-								<h2 className="text-lg font-semibold text-slate-50">CLV Timing Dashboard</h2>
+								<h2 className="text-lg font-semibold text-slate-50">
+									CLV Timing Dashboard
+								</h2>
 								<p className="mt-1 text-sm text-slate-400">
-									Compare CLV and ROI by entry timing, split by grade and quality threshold.
+									Compare CLV and ROI by entry timing, split by grade and
+									quality threshold.
 								</p>
 							</div>
 							<div className="flex flex-wrap items-end gap-3">
 								<div>
-									<label htmlFor="clv-quality-threshold" className="block text-xs text-slate-400">Quality threshold</label>
-									<input id="clv-quality-threshold" value={clvQualityThreshold} onChange={(event) => setClvQualityThreshold(event.target.value)} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+									<label
+										htmlFor="clv-quality-threshold"
+										className="block text-xs text-slate-400"
+									>
+										Quality threshold
+									</label>
+									<input
+										id="clv-quality-threshold"
+										value={clvQualityThreshold}
+										onChange={(event) =>
+											setClvQualityThreshold(event.target.value)
+										}
+										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									/>
 								</div>
 								<button
 									type="button"
@@ -879,24 +1117,48 @@ function RuntimePage() {
 									{isClvTimingLoading ? "Refreshing..." : "Refresh CLV Timing"}
 								</button>
 							</div>
-							{clvTimingError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{clvTimingError}</div>}
+							{clvTimingError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{clvTimingError}
+								</div>
+							)}
 							{clvTimingResult ? (
 								<div className="space-y-5">
 									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
-										Settled picks: {clvTimingResult.settledPicks} • Quality threshold: {clvTimingResult.qualityThreshold.toFixed(2)}
+										Settled picks: {clvTimingResult.settledPicks} • Quality
+										threshold: {clvTimingResult.qualityThreshold.toFixed(2)}
 									</div>
 									{clvTimingResult.segments.map((segment) => (
-										<div key={segment.key} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">{segment.label}</p>
+										<div
+											key={segment.key}
+											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+										>
+											<p className="text-sm font-semibold text-slate-100">
+												{segment.label}
+											</p>
 											<p className="mt-1 text-xs text-slate-400">
-												Matched: {segment.matchedPicks} • With event time: {segment.withEventTime}
+												Matched: {segment.matchedPicks} • With event time:{" "}
+												{segment.withEventTime}
 											</p>
 											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Time Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+												<thead>
+													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+														<th className="pb-2">Time Bucket</th>
+														<th className="pb-2">Count</th>
+														<th className="pb-2">Hit Rate</th>
+														<th className="pb-2">Avg ROI</th>
+														<th className="pb-2">Avg CLV</th>
+													</tr>
+												</thead>
 												<tbody>
 													{segment.byTimeToStart.map((row) => (
-														<tr key={`${segment.key}-${row.bucket}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
-															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
+														<tr
+															key={`${segment.key}-${row.bucket}`}
+															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+														>
+															<td className="py-2 pr-4 font-semibold text-slate-100">
+																{row.bucket}
+															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
@@ -905,9 +1167,15 @@ function RuntimePage() {
 																	</span>
 																) : null}
 															</td>
-															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
-															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
-															<td className="py-2">{formatBps(row.avgClvBps)}</td>
+															<td className="py-2 pr-4">
+																{formatPercent(row.hitRate)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatSignedPercent(row.avgRoi)}
+															</td>
+															<td className="py-2">
+																{formatBps(row.avgClvBps)}
+															</td>
 														</tr>
 													))}
 												</tbody>
@@ -916,11 +1184,15 @@ function RuntimePage() {
 									))}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">No CLV timing data yet.</p>
+								<p className="text-sm text-slate-400">
+									No CLV timing data yet.
+								</p>
 							)}
 							<div className="mt-6">
 								<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-									<p className="text-sm font-semibold text-slate-100">Shadow Entry Windows</p>
+									<p className="text-sm font-semibold text-slate-100">
+										Shadow Entry Windows
+									</p>
 									<button
 										type="button"
 										onClick={() =>
@@ -932,30 +1204,57 @@ function RuntimePage() {
 										disabled={isShadowWindowLoading}
 										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
 									>
-										{isShadowWindowLoading ? "Refreshing..." : "Refresh Shadow Windows"}
+										{isShadowWindowLoading
+											? "Refreshing..."
+											: "Refresh Shadow Windows"}
 									</button>
 								</div>
 								<p className="text-xs text-slate-400">
-									Hypothetical windows use historical snapshots (T-120/T-60/T-30/T-15/T-5/T-2) without placing real bets.
+									Hypothetical windows use historical snapshots
+									(T-120/T-60/T-30/T-15/T-5/T-2) without placing real bets.
 								</p>
-								{shadowWindowError && <div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{shadowWindowError}</div>}
+								{shadowWindowError && (
+									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+										{shadowWindowError}
+									</div>
+								)}
 								{shadowWindowResult ? (
 									<div className="mt-4 space-y-5">
 										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
-											Settled picks: {shadowWindowResult.settledPicks} • Quality threshold: {shadowWindowResult.qualityThreshold.toFixed(2)}
+											Settled picks: {shadowWindowResult.settledPicks} • Quality
+											threshold:{" "}
+											{shadowWindowResult.qualityThreshold.toFixed(2)}
 										</div>
 										{shadowWindowResult.segments.map((segment) => (
-											<div key={segment.key} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-												<p className="text-sm font-semibold text-slate-100">{segment.label}</p>
+											<div
+												key={segment.key}
+												className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+											>
+												<p className="text-sm font-semibold text-slate-100">
+													{segment.label}
+												</p>
 												<p className="mt-1 text-xs text-slate-400">
 													Matched picks: {segment.matchedPicks}
 												</p>
 												<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-													<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Window</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+													<thead>
+														<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+															<th className="pb-2">Window</th>
+															<th className="pb-2">Count</th>
+															<th className="pb-2">Hit Rate</th>
+															<th className="pb-2">Avg ROI</th>
+															<th className="pb-2">Avg CLV</th>
+														</tr>
+													</thead>
 													<tbody>
 														{segment.rows.map((row) => (
-															<tr key={`${segment.key}-${row.windowKey}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
-																<td className="py-2 pr-4 font-semibold text-slate-100">{row.windowLabel}</td>
+															<tr
+																key={`${segment.key}-${row.windowKey}`}
+																className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+															>
+																<td className="py-2 pr-4 font-semibold text-slate-100">
+																	{row.windowLabel}
+																</td>
 																<td className="py-2 pr-4">
 																	{row.count}
 																	{sampleBadge(row.count) ? (
@@ -964,9 +1263,15 @@ function RuntimePage() {
 																		</span>
 																	) : null}
 																</td>
-																<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
-																<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
-																<td className="py-2">{formatBps(row.avgClvBps)}</td>
+																<td className="py-2 pr-4">
+																	{formatPercent(row.hitRate)}
+																</td>
+																<td className="py-2 pr-4">
+																	{formatSignedPercent(row.avgRoi)}
+																</td>
+																<td className="py-2">
+																	{formatBps(row.avgClvBps)}
+																</td>
 															</tr>
 														))}
 													</tbody>
@@ -975,7 +1280,9 @@ function RuntimePage() {
 										))}
 									</div>
 								) : (
-									<p className="mt-3 text-sm text-slate-400">No shadow window data yet.</p>
+									<p className="mt-3 text-sm text-slate-400">
+										No shadow window data yet.
+									</p>
 								)}
 							</div>
 							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -983,7 +1290,8 @@ function RuntimePage() {
 									Performance by Sport
 								</summary>
 								<p className="mt-2 text-xs text-slate-400">
-									Shows sport-level hit/ROI/CLV across all settled picks and the quality-threshold subset.
+									Shows sport-level hit/ROI/CLV across all settled picks and the
+									quality-threshold subset.
 								</p>
 								<div className="mt-3 flex flex-wrap items-center gap-3">
 									<button
@@ -997,21 +1305,46 @@ function RuntimePage() {
 										disabled={isSportPerformanceLoading}
 										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
 									>
-										{isSportPerformanceLoading ? "Refreshing..." : "Refresh Sport Performance"}
+										{isSportPerformanceLoading
+											? "Refreshing..."
+											: "Refresh Sport Performance"}
 									</button>
 								</div>
-								{sportPerformanceError && <div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{sportPerformanceError}</div>}
+								{sportPerformanceError && (
+									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+										{sportPerformanceError}
+									</div>
+								)}
 								{sportPerformanceResult ? (
 									<div className="mt-4 overflow-auto">
 										<div className="mb-2 text-xs text-slate-400">
-											Settled picks: {sportPerformanceResult.settledPicks} • Quality threshold: {sportPerformanceResult.qualityThreshold.toFixed(2)}
+											Settled picks: {sportPerformanceResult.settledPicks} •
+											Quality threshold:{" "}
+											{sportPerformanceResult.qualityThreshold.toFixed(2)}
 										</div>
 										<table className="min-w-full text-left text-sm text-slate-200">
-											<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Sport</th><th className="pb-2">All Count</th><th className="pb-2">All Hit</th><th className="pb-2">All ROI</th><th className="pb-2">All CLV</th><th className="pb-2">Q Count</th><th className="pb-2">Q Hit</th><th className="pb-2">Q ROI</th><th className="pb-2">Q CLV</th></tr></thead>
+											<thead>
+												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+													<th className="pb-2">Sport</th>
+													<th className="pb-2">All Count</th>
+													<th className="pb-2">All Hit</th>
+													<th className="pb-2">All ROI</th>
+													<th className="pb-2">All CLV</th>
+													<th className="pb-2">Q Count</th>
+													<th className="pb-2">Q Hit</th>
+													<th className="pb-2">Q ROI</th>
+													<th className="pb-2">Q CLV</th>
+												</tr>
+											</thead>
 											<tbody>
 												{sportPerformanceResult.rows.map((row) => (
-													<tr key={row.sportTag} className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}>
-														<td className="py-2 pr-4 font-semibold text-slate-100">{row.label}</td>
+													<tr
+														key={row.sportTag}
+														className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}
+													>
+														<td className="py-2 pr-4 font-semibold text-slate-100">
+															{row.label}
+														</td>
 														<td className="py-2 pr-4">
 															{row.totalCount}
 															{sampleBadge(row.totalCount) ? (
@@ -1020,20 +1353,34 @@ function RuntimePage() {
 																</span>
 															) : null}
 														</td>
-														<td className="py-2 pr-4">{formatPercent(row.winRate)}</td>
-														<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
-														<td className="py-2 pr-4">{formatBps(row.avgClvBps)}</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.winRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatSignedPercent(row.avgRoi)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatBps(row.avgClvBps)}
+														</td>
 														<td className="py-2 pr-4">{row.qualityCount}</td>
-														<td className="py-2 pr-4">{formatPercent(row.qualityWinRate)}</td>
-														<td className="py-2 pr-4">{formatSignedPercent(row.qualityAvgRoi)}</td>
-														<td className="py-2">{formatBps(row.qualityAvgClvBps)}</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.qualityWinRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatSignedPercent(row.qualityAvgRoi)}
+														</td>
+														<td className="py-2">
+															{formatBps(row.qualityAvgClvBps)}
+														</td>
 													</tr>
 												))}
 											</tbody>
 										</table>
 									</div>
 								) : (
-									<p className="mt-3 text-sm text-slate-400">No sport performance data yet.</p>
+									<p className="mt-3 text-sm text-slate-400">
+										No sport performance data yet.
+									</p>
 								)}
 							</details>
 						</div>
@@ -1042,13 +1389,21 @@ function RuntimePage() {
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
 						<div className="flex flex-col gap-4">
 							<div>
-								<h2 className="text-lg font-semibold text-slate-50">Pick Calibration</h2>
-								<p className="mt-1 text-sm text-slate-400">Where picks are actually performing: by score and by time-to-start.</p>
+								<h2 className="text-lg font-semibold text-slate-50">
+									Pick Calibration
+								</h2>
+								<p className="mt-1 text-sm text-slate-400">
+									Where picks are actually performing: by score and by
+									time-to-start.
+								</p>
 							</div>
 							<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-								<p className="text-sm font-semibold text-slate-100">Coverage Health</p>
+								<p className="text-sm font-semibold text-slate-100">
+									Coverage Health
+								</p>
 								<p className="mt-1 text-xs text-slate-400">
-									Checks whether new pick records are storing fields needed for calibration and filtering.
+									Checks whether new pick records are storing fields needed for
+									calibration and filtering.
 								</p>
 								<div className="mt-3 flex flex-wrap gap-2">
 									{coverageHealth.map((item) => (
@@ -1057,47 +1412,111 @@ function RuntimePage() {
 											className={`rounded-lg border px-3 py-2 text-xs ${item.status.className}`}
 										>
 											<span className="font-semibold">{item.label}</span>{" "}
-											{item.covered}/{item.total} ({formatPercent(item.status.ratio)}) •{" "}
-											{item.status.label}
+											{item.covered}/{item.total} (
+											{formatPercent(item.status.ratio)}) • {item.status.label}
 										</div>
 									))}
 								</div>
 							</div>
 							<div className="flex flex-wrap items-end gap-3">
 								<div>
-									<label htmlFor="calibration-limit" className="block text-xs text-slate-400">Pick sample limit</label>
-									<input id="calibration-limit" value={calibrationLimit} onChange={(event) => setCalibrationLimit(event.target.value)} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white" />
+									<label
+										htmlFor="calibration-limit"
+										className="block text-xs text-slate-400"
+									>
+										Pick sample limit
+									</label>
+									<input
+										id="calibration-limit"
+										value={calibrationLimit}
+										onChange={(event) =>
+											setCalibrationLimit(event.target.value)
+										}
+										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									/>
 								</div>
-								<button type="button" onClick={() => void loadCalibration(Number(calibrationLimit))} disabled={isCalibrationLoading} className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60">{isCalibrationLoading ? "Refreshing..." : "Refresh Calibration"}</button>
 								<button
 									type="button"
-									onClick={() => void loadBucketPerformance(Number(calibrationLimit))}
+									onClick={() => void loadCalibration(Number(calibrationLimit))}
+									disabled={isCalibrationLoading}
+									className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+								>
+									{isCalibrationLoading
+										? "Refreshing..."
+										: "Refresh Calibration"}
+								</button>
+								<button
+									type="button"
+									onClick={() =>
+										void loadBucketPerformance(Number(calibrationLimit))
+									}
 									disabled={isBucketPerformanceLoading}
 									className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
 								>
-									{isBucketPerformanceLoading ? "Refreshing..." : "Refresh Buckets"}
+									{isBucketPerformanceLoading
+										? "Refreshing..."
+										: "Refresh Buckets"}
 								</button>
 							</div>
-							{calibrationError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{calibrationError}</div>}
-							{bucketPerformanceError && <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">{bucketPerformanceError}</div>}
+							{calibrationError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{calibrationError}
+								</div>
+							)}
+							{bucketPerformanceError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{bucketPerformanceError}
+								</div>
+							)}
 							{calibrationResult ? (
 								<div className="space-y-5">
 									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
-										Total picks: {calibrationResult.totalPicks} • Settled: {calibrationResult.settledPicks} • Signal scored: {calibrationResult.withSignalScore} • Quality scored: {calibrationResult.withQualityScore} • With event time: {calibrationResult.withEventTime}
+										Total picks: {calibrationResult.totalPicks} • Settled:{" "}
+										{calibrationResult.settledPicks} • Signal scored:{" "}
+										{calibrationResult.withSignalScore} • Quality scored:{" "}
+										{calibrationResult.withQualityScore} • With event time:{" "}
+										{calibrationResult.withEventTime}
 									</div>
 									{[
-										{ title: "By signal score", rows: calibrationResult.bySignalScore },
-										{ title: "By market quality score", rows: calibrationResult.byQualityScore },
-										{ title: "By time to start", rows: calibrationResult.byTimeToStart },
+										{
+											title: "By signal score",
+											rows: calibrationResult.bySignalScore,
+										},
+										{
+											title: "By market quality score",
+											rows: calibrationResult.byQualityScore,
+										},
+										{
+											title: "By time to start",
+											rows: calibrationResult.byTimeToStart,
+										},
 									].map((table) => (
-										<div key={table.title} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">{table.title}</p>
+										<div
+											key={table.title}
+											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+										>
+											<p className="text-sm font-semibold text-slate-100">
+												{table.title}
+											</p>
 											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Count</th><th className="pb-2">Win Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+												<thead>
+													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+														<th className="pb-2">Bucket</th>
+														<th className="pb-2">Count</th>
+														<th className="pb-2">Win Rate</th>
+														<th className="pb-2">Avg ROI</th>
+														<th className="pb-2">Avg CLV</th>
+													</tr>
+												</thead>
 												<tbody>
 													{table.rows.map((row) => (
-														<tr key={`${table.title}-${row.label}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
-															<td className="py-2 pr-4 font-semibold text-slate-100">{row.label}</td>
+														<tr
+															key={`${table.title}-${row.label}`}
+															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+														>
+															<td className="py-2 pr-4 font-semibold text-slate-100">
+																{row.label}
+															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
@@ -1106,9 +1525,15 @@ function RuntimePage() {
 																	</span>
 																) : null}
 															</td>
-															<td className="py-2 pr-4">{formatPercent(row.winRate)}</td>
-															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
-															<td className="py-2">{formatBps(row.avgClvBps)}</td>
+															<td className="py-2 pr-4">
+																{formatPercent(row.winRate)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatSignedPercent(row.avgRoi)}
+															</td>
+															<td className="py-2">
+																{formatBps(row.avgClvBps)}
+															</td>
 														</tr>
 													))}
 												</tbody>
@@ -1117,12 +1542,16 @@ function RuntimePage() {
 									))}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">No calibration data yet. Place bets and settle outcomes, then refresh.</p>
+								<p className="text-sm text-slate-400">
+									No calibration data yet. Place bets and settle outcomes, then
+									refresh.
+								</p>
 							)}
 							{bucketPerformanceResult ? (
 								<div className="space-y-5">
 									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
-										Settled picks in bucket analysis: {bucketPerformanceResult.settledPicks}
+										Settled picks in bucket analysis:{" "}
+										{bucketPerformanceResult.settledPicks}
 									</div>
 									{[
 										{
@@ -1142,14 +1571,32 @@ function RuntimePage() {
 											rows: bucketPerformanceResult.byL2Disagreement,
 										},
 									].map((table) => (
-										<div key={table.title} className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">{table.title}</p>
+										<div
+											key={table.title}
+											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+										>
+											<p className="text-sm font-semibold text-slate-100">
+												{table.title}
+											</p>
 											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-												<thead><tr className="text-xs uppercase tracking-[0.2em] text-slate-500"><th className="pb-2">Bucket</th><th className="pb-2">Count</th><th className="pb-2">Hit Rate</th><th className="pb-2">Avg ROI</th><th className="pb-2">Avg CLV</th></tr></thead>
+												<thead>
+													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+														<th className="pb-2">Bucket</th>
+														<th className="pb-2">Count</th>
+														<th className="pb-2">Hit Rate</th>
+														<th className="pb-2">Avg ROI</th>
+														<th className="pb-2">Avg CLV</th>
+													</tr>
+												</thead>
 												<tbody>
 													{table.rows.map((row) => (
-														<tr key={`${table.title}-${row.bucket}`} className={`border-t border-slate-800 ${sampleClassName(row.count)}`}>
-															<td className="py-2 pr-4 font-semibold text-slate-100">{row.bucket}</td>
+														<tr
+															key={`${table.title}-${row.bucket}`}
+															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+														>
+															<td className="py-2 pr-4 font-semibold text-slate-100">
+																{row.bucket}
+															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
@@ -1158,9 +1605,15 @@ function RuntimePage() {
 																	</span>
 																) : null}
 															</td>
-															<td className="py-2 pr-4">{formatPercent(row.hitRate)}</td>
-															<td className="py-2 pr-4">{formatSignedPercent(row.avgRoi)}</td>
-															<td className="py-2">{formatBps(row.avgClvBps)}</td>
+															<td className="py-2 pr-4">
+																{formatPercent(row.hitRate)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatSignedPercent(row.avgRoi)}
+															</td>
+															<td className="py-2">
+																{formatBps(row.avgClvBps)}
+															</td>
 														</tr>
 													))}
 												</tbody>
@@ -1169,7 +1622,9 @@ function RuntimePage() {
 									))}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">No bucket performance data yet.</p>
+								<p className="text-sm text-slate-400">
+									No bucket performance data yet.
+								</p>
 							)}
 						</div>
 					</section>
@@ -1187,17 +1642,35 @@ function RuntimePage() {
 									</thead>
 									<tbody>
 										{stats.filteredTagStats.map((entry) => (
-											<tr key={`${entry.seriesId}-${entry.tag}`} className="border-t border-slate-800">
-												<td className="py-3 pr-4 font-semibold text-slate-100">{entry.tag} <span className="text-xs text-slate-500">(series {entry.seriesId})</span></td>
+											<tr
+												key={`${entry.seriesId}-${entry.tag}`}
+												className="border-t border-slate-800"
+											>
+												<td className="py-3 pr-4 font-semibold text-slate-100">
+													{entry.tag}{" "}
+													<span className="text-xs text-slate-500">
+														(series {entry.seriesId})
+													</span>
+												</td>
 												<td className="py-3 pr-4">{entry.count}</td>
 												<td className="py-3 text-slate-300">
 													{entry.markets.length === 0 ? (
-														<span className="text-slate-500">No markets returned</span>
+														<span className="text-slate-500">
+															No markets returned
+														</span>
 													) : (
 														entry.markets.map((market) => (
-															<div key={`${entry.seriesId}-${market.title}`} className="text-sm">
-																{market.title} • {formatUsdCompact(market.volume)}
-																{market.eventSlug ? ` • ${market.eventSlug}` : market.slug ? ` • ${market.slug}` : ""}
+															<div
+																key={`${entry.seriesId}-${market.title}`}
+																className="text-sm"
+															>
+																{market.title} •{" "}
+																{formatUsdCompact(market.volume)}
+																{market.eventSlug
+																	? ` • ${market.eventSlug}`
+																	: market.slug
+																		? ` • ${market.slug}`
+																		: ""}
 															</div>
 														))
 													)}
@@ -1208,7 +1681,10 @@ function RuntimePage() {
 								</table>
 							</div>
 						) : (
-							<p className="text-sm text-slate-400">No runtime stats yet. Click "Refresh Stats" to capture the latest fetch results.</p>
+							<p className="text-sm text-slate-400">
+								No runtime stats yet. Click "Refresh Stats" to capture the
+								latest fetch results.
+							</p>
 						)}
 					</section>
 				</div>
