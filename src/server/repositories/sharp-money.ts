@@ -78,8 +78,6 @@ export interface SharpMoneyCacheEntry {
 	marketVolume?: number;
 	marketLiquidity?: number;
 	isReady?: boolean;
-	marketVolume?: number;
-	marketLiquidity?: number;
 	sideA: {
 		label: string;
 		totalValue: number;
@@ -113,6 +111,8 @@ export interface SharpMoneyHistoryEntry {
 	marketTitle: string;
 	eventTime?: string;
 	sportSeriesId?: number;
+	marketVolume?: number;
+	marketLiquidity?: number;
 	sideA: {
 		label: string;
 		totalValue: number;
@@ -238,6 +238,8 @@ interface SharpMoneyHistoryRow {
 	market_title: string;
 	event_time?: string | null;
 	sport_series_id?: number | null;
+	market_volume?: number | null;
+	market_liquidity?: number | null;
 	side_a_label: string;
 	side_b_label: string;
 	side_a_total_value: number;
@@ -262,6 +264,8 @@ function parseHistoryRow(row: SharpMoneyHistoryRow): SharpMoneyHistoryEntry {
 		marketTitle: row.market_title,
 		eventTime: row.event_time ?? undefined,
 		sportSeriesId: row.sport_series_id ?? undefined,
+		marketVolume: row.market_volume ?? undefined,
+		marketLiquidity: row.market_liquidity ?? undefined,
 		sideA: {
 			label: row.side_a_label,
 			totalValue: row.side_a_total_value,
@@ -639,7 +643,9 @@ export async function getSharpMoneyCacheFreshnessStats(
 		newest_history?: number | null;
 		oldest_computed?: number | null;
 		newest_computed?: number | null;
-	}>(db, `SELECT
+	}>(
+		db,
+		`SELECT
     COUNT(*) as total,
     SUM(CASE WHEN history_updated_at IS NULL THEN 1 ELSE 0 END) as missing_history,
     SUM(CASE WHEN history_updated_at IS NOT NULL AND history_updated_at < ? THEN 1 ELSE 0 END) as stale_history,
@@ -675,6 +681,8 @@ export async function insertSharpMoneyHistory(
 		marketTitle: string;
 		eventTime?: string;
 		sportSeriesId?: number;
+		marketVolume?: number;
+		marketLiquidity?: number;
 		sideA: {
 			label: string;
 			totalValue: number;
@@ -714,6 +722,8 @@ export async function insertSharpMoneyHistory(
       market_title,
       event_time,
       sport_series_id,
+			market_volume,
+			market_liquidity,
       side_a_label,
       side_b_label,
       side_a_total_value,
@@ -728,13 +738,15 @@ export async function insertSharpMoneyHistory(
       sharp_side_value_ratio,
       edge_rating,
       pnl_coverage
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.conditionId,
 		now,
 		computedAt,
 		input.marketTitle,
 		input.eventTime ?? null,
 		input.sportSeriesId ?? null,
+		input.marketVolume ?? null,
+		input.marketLiquidity ?? null,
 		input.sideA.label,
 		input.sideB.label,
 		input.sideA.totalValue,
@@ -774,6 +786,8 @@ export async function backfillSharpMoneyHistory(
       market_title,
       event_time,
       sport_series_id,
+				market_volume,
+				market_liquidity,
       side_a_label,
       side_b_label,
       side_a_total_value,
@@ -788,13 +802,15 @@ export async function backfillSharpMoneyHistory(
       sharp_side_value_ratio,
       edge_rating,
       pnl_coverage
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.condition_id,
 			recordedAt,
 			row.computed_at ?? recordedAt,
 			row.market_title,
 			row.event_time,
 			row.sport_series_id,
+			row.market_volume ?? null,
+			row.market_liquidity ?? null,
 			row.side_a_label,
 			row.side_b_label,
 			row.side_a_total_value,

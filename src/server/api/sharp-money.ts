@@ -1,14 +1,20 @@
 import { createServerFn } from "@tanstack/react-start";
+import {
+	computeSignalScoreFromHistory,
+	type GradeLabel,
+	MIN_EDGE_RATING,
+	signalScoreToGradeLabel,
+} from "../../lib/sharp-grade";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
 import {
+	backfillSharpMoneyHistory,
 	clearAllSharpMoneyCache,
 	getSharpMoneyCacheByConditionId,
-	getSharpMoneyCacheStats,
 	getSharpMoneyCacheFreshnessStats,
-	backfillSharpMoneyHistory,
+	getSharpMoneyCacheStats,
 	insertSharpMoneyHistory,
 	listSharpMoneyCache,
 	listSharpMoneyCacheByConditionIds,
@@ -17,17 +23,11 @@ import {
 	listSharpMoneyHistoryLatest,
 	listSharpMoneyHistoryWindow,
 	type SharpMoneyHistoryEntry,
-	type TopHolderPnlData,
 	type SharpMoneyHistoryEntryByConditionId,
+	type TopHolderPnlData,
 	type UpsertSharpMoneyCacheInput,
 	upsertSharpMoneyCache,
 } from "../repositories/sharp-money";
-import {
-	computeSignalScoreFromHistory,
-	MIN_EDGE_RATING,
-	signalScoreToGradeLabel,
-	type GradeLabel,
-} from "../../lib/sharp-grade";
 
 // Re-export types for frontend use
 export type {
@@ -329,10 +329,7 @@ function calculateMedianTopHalf(values: number[]): number | null {
 	return calculateMedian(topHalf);
 }
 
-function calculateMedianTopN(
-	values: number[],
-	count: number,
-): number | null {
+function calculateMedianTopN(values: number[], count: number): number | null {
 	if (values.length === 0) return null;
 	const sorted = [...values].sort((a, b) => b - a);
 	const top = sorted.slice(0, Math.max(1, Math.min(count, sorted.length)));
@@ -749,7 +746,9 @@ function computeMicrostructureScoreFromEntry(entry: {
 	const complementGap = hasBothPrices
 		? Math.abs(sideAPrice + sideBPrice - 1)
 		: 0.08;
-	const complementScore = hasBothPrices ? clampUnit(1 - complementGap / 0.08) : 0.45;
+	const complementScore = hasBothPrices
+		? clampUnit(1 - complementGap / 0.08)
+		: 0.45;
 
 	const sharpSidePrice =
 		entry.sharpSide === "A"
@@ -832,7 +831,9 @@ export function computePriceEdgeFromEntry(entry: {
 	const fairPriceB = clamp01(entry.sideB.sharpScore / totalScore);
 	const fairPrice = entry.sharpSide === "A" ? fairPriceA : fairPriceB;
 	const marketPrice =
-		entry.sharpSide === "A" ? entry.sideA.price ?? null : entry.sideB.price ?? null;
+		entry.sharpSide === "A"
+			? (entry.sideA.price ?? null)
+			: (entry.sideB.price ?? null);
 	if (marketPrice === null || !Number.isFinite(marketPrice)) {
 		return {
 			fairPrice,
@@ -988,7 +989,6 @@ export async function fetchTrendingSportsMarkets(
 							rawMarketCount: rawMarkets.length,
 						});
 					}
-
 				}
 
 				if (eventCount >= GAMMA_EVENTS_PAGE_LIMIT * GAMMA_EVENTS_MAX_PAGES) {
@@ -1943,7 +1943,8 @@ function calculateEdgeRatingBreakdown(
 				// Time-weighted recent performance: day 30%, week 40%, month 30%
 				// Week is most reliable (less noisy than day, more current than month)
 				// Day still matters but less weight since it's noisy
-				const dayPnL = normalizePnl(holder.pnlDay ?? null, holder.unitSize) ?? 0;
+				const dayPnL =
+					normalizePnl(holder.pnlDay ?? null, holder.unitSize) ?? 0;
 				const weekPnL =
 					normalizePnl(holder.pnlWeek ?? null, holder.unitSize) ?? 0;
 				const monthPnL =
@@ -2209,33 +2210,33 @@ export async function analyzeMarketSharpness(
 			return { analysis: null, error: "No holders data" };
 		}
 
-			// Re-fetch holders per token to avoid market-level limit skewing sides
-			const tokenIds = holdersData
-				.map((tokenData) => tokenData.token)
-				.filter(Boolean);
-			type TokenHolder = {
-				proxyWallet: string;
-				name?: string;
-				pseudonym?: string;
-				amount: number;
-				outcomeIndex?: number;
-				profileImage?: string;
-				profileImageOptimized?: string;
-			};
-			let tokenHoldersCounts: Array<{ token: string; count: number }> | undefined;
-			if (tokenIds.length > 0) {
-				const tokenHoldersResults = await Promise.all(
+		// Re-fetch holders per token to avoid market-level limit skewing sides
+		const tokenIds = holdersData
+			.map((tokenData) => tokenData.token)
+			.filter(Boolean);
+		type TokenHolder = {
+			proxyWallet: string;
+			name?: string;
+			pseudonym?: string;
+			amount: number;
+			outcomeIndex?: number;
+			profileImage?: string;
+			profileImageOptimized?: string;
+		};
+		let tokenHoldersCounts: Array<{ token: string; count: number }> | undefined;
+		if (tokenIds.length > 0) {
+			const tokenHoldersResults = await Promise.all(
 				tokenIds.map(async (tokenId) => {
 					try {
-							const tokenUrl = new URL("/holders", POLYMARKET_DATA_API);
-							tokenUrl.searchParams.set("token", tokenId);
-								tokenUrl.searchParams.set("limit", "20");
-								tokenUrl.searchParams.set("minBalance", "1");
-							const tokenResponse = await fetch(tokenUrl);
-							if (!tokenResponse.ok) return null;
-							const tokenResponseData = (await tokenResponse.json()) as {
-								holders?: TokenHolder[];
-							};
+						const tokenUrl = new URL("/holders", POLYMARKET_DATA_API);
+						tokenUrl.searchParams.set("token", tokenId);
+						tokenUrl.searchParams.set("limit", "20");
+						tokenUrl.searchParams.set("minBalance", "1");
+						const tokenResponse = await fetch(tokenUrl);
+						if (!tokenResponse.ok) return null;
+						const tokenResponseData = (await tokenResponse.json()) as {
+							holders?: TokenHolder[];
+						};
 						if (
 							!tokenResponseData.holders ||
 							tokenResponseData.holders.length === 0
@@ -2252,10 +2253,10 @@ export async function analyzeMarketSharpness(
 				}),
 			);
 
-				const filteredResults = tokenHoldersResults.filter(
-					(result): result is { token: string; holders: TokenHolder[] } =>
-						Boolean(result),
-				);
+			const filteredResults = tokenHoldersResults.filter(
+				(result): result is { token: string; holders: TokenHolder[] } =>
+					Boolean(result),
+			);
 
 			if (filteredResults.length > 0) {
 				holdersData = filteredResults;
@@ -3042,7 +3043,10 @@ export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
 	const db = getDb(context);
-	const payload = (data ?? {}) as { windowHours?: number; bucketHours?: number };
+	const payload = (data ?? {}) as {
+		windowHours?: number;
+		bucketHours?: number;
+	};
 	const now = Math.floor(Date.now() / 1000);
 	const windowHours =
 		payload.windowHours && payload.windowHours > 0
@@ -3341,7 +3345,9 @@ export const getClobDepthSnapshotFn = createServerFn({
 		}),
 	);
 
-	const outcomes = books.filter((book): book is ClobOutcomeBook => Boolean(book));
+	const outcomes = books.filter((book): book is ClobOutcomeBook =>
+		Boolean(book),
+	);
 	const snapshot: ClobDepthSnapshot = {
 		conditionId,
 		marketQuestion: market.question,
@@ -3618,6 +3624,8 @@ export async function refreshMarketSharpness(
 		marketTitle: analysis.marketTitle,
 		eventTime: analysis.eventTime,
 		sportSeriesId: analysis.sportSeriesId,
+		marketVolume: analysis.marketVolume,
+		marketLiquidity: analysis.marketLiquidity,
 		sideA: {
 			label: analysis.sideA.label,
 			totalValue: analysis.sideA.totalValue,
