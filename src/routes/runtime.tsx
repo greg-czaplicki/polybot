@@ -423,6 +423,7 @@ function RuntimePage() {
 	const [copySnapshotStatus, setCopySnapshotStatus] = useState<string | null>(
 		null,
 	);
+	const [isCopyingSnapshot, setIsCopyingSnapshot] = useState(false);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -526,120 +527,6 @@ function RuntimePage() {
 			},
 		];
 	}, [candidateDebugResult]);
-
-	const runtimeSnapshot = useMemo(
-		() => ({
-			generatedAt: new Date().toISOString(),
-			runtime: stats
-				? {
-						fetchedAt: stats.fetchedAt,
-						filteredMarketsWindow: filteredTotalMarkets,
-						expandedEventCount: stats.expandedEventCount,
-						expandedMarketCount: stats.expandedMarketCount,
-						retryCount: stats.retryCount,
-						failureCount: stats.failureCount,
-						totalRuns: stats.totalRuns,
-						totalRetries: stats.totalRetries,
-						totalFailures: stats.totalFailures,
-						cacheFreshness: stats.cacheFreshness ?? null,
-					}
-				: null,
-			candidateDebug: candidateDebugResult
-				? {
-						requested: candidateDebugResult.requested,
-						returned: candidateDebugResult.returned,
-						totalEntries: candidateDebugResult.debug.totalEntries,
-						upcomingEntries: candidateDebugResult.debug.upcomingEntries,
-						candidatesBeforeDedup:
-							candidateDebugResult.debug.candidatesBeforeDedup,
-						dedupDropped: candidateDebugResult.debug.dedupDropped,
-						topExclusions: topEntries(candidateDebugResult.debug.excluded),
-						topDedupReasons: topEntries(
-							candidateDebugResult.debug.dedupReasons,
-						),
-						topPolicyBuckets: topEntries(
-							candidateDebugResult.debug.policyMatched,
-							8,
-						),
-						returnedByMarketType:
-							candidateDebugResult.debug.returnedByMarketType,
-						returnedByTimingBucket:
-							candidateDebugResult.debug.returnedByTimingBucket,
-						returnedBySportSeries:
-							candidateDebugResult.debug.returnedBySportSeries,
-					}
-				: null,
-			eval: evalResult
-				? {
-						computedAt: evalResult.computedAt,
-						windowHours: evalResult.windowHours,
-						horizonMinutes: evalResult.horizonMinutes,
-						historyWindowMinutes: evalResult.historyWindowMinutes,
-						minGrade: evalResult.minGrade,
-						includeStarted: evalResult.includeStarted,
-						filteredQualityThreshold: evalResult.filteredQualityThreshold,
-						baseline: {
-							triggered: evalResult.strategies.baseline.triggered,
-							resolved: evalResult.strategies.baseline.resolved,
-							hitRate: evalResult.strategies.baseline.hitRate,
-							avgMoveBps: evalResult.strategies.baseline.avgMoveBps,
-						},
-						filtered: {
-							triggered: evalResult.strategies.filtered.triggered,
-							resolved: evalResult.strategies.filtered.resolved,
-							hitRate: evalResult.strategies.filtered.hitRate,
-							avgMoveBps: evalResult.strategies.filtered.avgMoveBps,
-						},
-						thresholdSweep: evalResult.thresholdSweep,
-					}
-				: null,
-			clvTiming: clvTimingResult
-				? {
-						computedAt: clvTimingResult.computedAt,
-						settledPicks: clvTimingResult.settledPicks,
-						qualityThreshold: clvTimingResult.qualityThreshold,
-						segments: clvTimingResult.segments.map((segment) => ({
-							key: segment.key,
-							label: segment.label,
-							matchedPicks: segment.matchedPicks,
-							byTimeToStart: segment.byTimeToStart,
-						})),
-					}
-				: null,
-			calibration: calibrationResult
-				? {
-						computedAt: calibrationResult.computedAt,
-						totalPicks: calibrationResult.totalPicks,
-						settledPicks: calibrationResult.settledPicks,
-						withSignalScore: calibrationResult.withSignalScore,
-						withQualityScore: calibrationResult.withQualityScore,
-						withEventTime: calibrationResult.withEventTime,
-						bySignalScore: calibrationResult.bySignalScore,
-						byQualityScore: calibrationResult.byQualityScore,
-						byTimeToStart: calibrationResult.byTimeToStart,
-					}
-				: null,
-			bucketPerformance: bucketPerformanceResult
-				? {
-						computedAt: bucketPerformanceResult.computedAt,
-						settledPicks: bucketPerformanceResult.settledPicks,
-						byTimeToStart: bucketPerformanceResult.byTimeToStart,
-						bySignalScore: bucketPerformanceResult.bySignalScore,
-						byL2ImbalanceNearMid: bucketPerformanceResult.byL2ImbalanceNearMid,
-						byL2Disagreement: bucketPerformanceResult.byL2Disagreement,
-					}
-				: null,
-		}),
-		[
-			stats,
-			filteredTotalMarkets,
-			candidateDebugResult,
-			evalResult,
-			clvTimingResult,
-			calibrationResult,
-			bucketPerformanceResult,
-		],
-	);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -857,18 +744,180 @@ function RuntimePage() {
 
 	const copySnapshot = useCallback(async () => {
 		setCopySnapshotStatus(null);
+		setIsCopyingSnapshot(true);
 		try {
-			await navigator.clipboard.writeText(
-				JSON.stringify(runtimeSnapshot, null, 2),
+			const calibrationLimitValue = Number(calibrationLimit);
+			const clvThresholdValue = Number(clvQualityThreshold);
+			const evalWindowHoursValue = Number(evalWindowHours);
+			const evalHorizonMinutesValue = Number(evalHorizonMinutes);
+			const evalHistoryWindowMinutesValue = Number(evalHistoryWindowMinutes);
+			const refreshedStats = await getRuntimeMarketStatsFn({
+				data: { freshnessWindowHours: 24 },
+			});
+			const refreshedCandidateDebug = await getBotCandidatesFn({
+				data: {
+					minGrade: "B",
+					windowMinutes: 90,
+					minMinutesToStart: 15,
+					maxMinutesToStart: 75,
+					limit: 100,
+					requireReady: true,
+					includeStarted: true,
+					requireMicrostructure: true,
+					marketQualityThreshold: 0.7,
+					includeL2Signals: true,
+					requireL2Alpha: true,
+					skipMissingL2: false,
+					l2ImbalanceNearMidThreshold: -0.1,
+				},
+			});
+			if ("error" in refreshedCandidateDebug) {
+				throw new Error(refreshedCandidateDebug.error);
+			}
+			const [
+				refreshedEval,
+				refreshedCalibration,
+				refreshedBucketPerformance,
+				refreshedClvTiming,
+			] = await Promise.all([
+				getBotEvalFn({
+					data: {
+						windowHours:
+							Number.isFinite(evalWindowHoursValue) && evalWindowHoursValue > 0
+								? evalWindowHoursValue
+								: 24,
+						horizonMinutes:
+							Number.isFinite(evalHorizonMinutesValue) &&
+							evalHorizonMinutesValue > 0
+								? evalHorizonMinutesValue
+								: 15,
+						historyWindowMinutes:
+							Number.isFinite(evalHistoryWindowMinutesValue) &&
+							evalHistoryWindowMinutesValue > 0
+								? evalHistoryWindowMinutesValue
+								: 60,
+						minGrade: evalMinGrade,
+						includeStarted: evalIncludeStarted,
+						limit: 10000,
+						sweepThresholds: evalSweepThresholds
+							.split(",")
+							.map((value) => Number(value.trim()))
+							.filter((value) => Number.isFinite(value)),
+					},
+				}),
+				getManualPicksCalibrationFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+					},
+				}),
+				getManualPicksBucketPerformanceFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+					},
+				}),
+				getManualPicksClvTimingFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+						qualityThreshold:
+							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
+								? clvThresholdValue
+								: 0.66,
+					},
+				}),
+			]);
+			setStats((refreshedStats.stats ?? null) as RuntimeStats | null);
+			setCandidateDebugResult(refreshedCandidateDebug as CandidateDebugResult);
+			setEvalResult(refreshedEval as EvalResult);
+			setCalibrationResult(
+				(refreshedCalibration.calibration ?? null) as CalibrationResult | null,
 			);
-			setCopySnapshotStatus("Snapshot copied");
+			setBucketPerformanceResult(
+				(refreshedBucketPerformance.performance ??
+					null) as BucketPerformanceResult | null,
+			);
+			setClvTimingResult(
+				(refreshedClvTiming.timing ?? null) as ClvTimingResult | null,
+			);
+			const refreshedFilteredTotalMarkets =
+				(
+					(refreshedStats.stats ?? null) as RuntimeStats | null
+				)?.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+			const snapshot = {
+				generatedAt: new Date().toISOString(),
+				runtime: refreshedStats.stats
+					? {
+							fetchedAt: refreshedStats.stats.fetchedAt,
+							filteredMarketsWindow: refreshedFilteredTotalMarkets,
+							expandedEventCount: refreshedStats.stats.expandedEventCount,
+							expandedMarketCount: refreshedStats.stats.expandedMarketCount,
+							retryCount: refreshedStats.stats.retryCount,
+							failureCount: refreshedStats.stats.failureCount,
+							totalRuns: refreshedStats.stats.totalRuns,
+							totalRetries: refreshedStats.stats.totalRetries,
+							totalFailures: refreshedStats.stats.totalFailures,
+							cacheFreshness: refreshedStats.stats.cacheFreshness ?? null,
+						}
+					: null,
+				candidateDebug: {
+					requested: refreshedCandidateDebug.requested,
+					returned: refreshedCandidateDebug.returned,
+					totalEntries: refreshedCandidateDebug.debug.totalEntries,
+					upcomingEntries: refreshedCandidateDebug.debug.upcomingEntries,
+					candidatesBeforeDedup:
+						refreshedCandidateDebug.debug.candidatesBeforeDedup,
+					dedupDropped: refreshedCandidateDebug.debug.dedupDropped,
+					topExclusions: topEntries(refreshedCandidateDebug.debug.excluded),
+					topDedupReasons: topEntries(
+						refreshedCandidateDebug.debug.dedupReasons,
+					),
+					topPolicyBuckets: topEntries(
+						refreshedCandidateDebug.debug.policyMatched,
+						8,
+					),
+					returnedByMarketType:
+						refreshedCandidateDebug.debug.returnedByMarketType,
+					returnedByTimingBucket:
+						refreshedCandidateDebug.debug.returnedByTimingBucket,
+					returnedBySportSeries:
+						refreshedCandidateDebug.debug.returnedBySportSeries,
+				},
+				eval: refreshedEval,
+				clvTiming: refreshedClvTiming.timing ?? null,
+				calibration: refreshedCalibration.calibration ?? null,
+				bucketPerformance: refreshedBucketPerformance.performance ?? null,
+			};
+			await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
+			setCopySnapshotStatus("Snapshot refreshed and copied");
 			window.setTimeout(() => setCopySnapshotStatus(null), 2500);
 		} catch (err) {
 			console.error("Failed to copy runtime snapshot", err);
 			setCopySnapshotStatus("Copy failed");
 			window.setTimeout(() => setCopySnapshotStatus(null), 2500);
+		} finally {
+			setIsCopyingSnapshot(false);
 		}
-	}, [runtimeSnapshot]);
+	}, [
+		calibrationLimit,
+		clvQualityThreshold,
+		evalWindowHours,
+		evalHorizonMinutes,
+		evalHistoryWindowMinutes,
+		evalMinGrade,
+		evalIncludeStarted,
+		evalSweepThresholds,
+	]);
 
 	const handleBackfill = useCallback(async () => {
 		if (isBackfilling) return;
@@ -1021,9 +1070,12 @@ function RuntimePage() {
 								<button
 									type="button"
 									onClick={() => void copySnapshot()}
+									disabled={isCopyingSnapshot}
 									className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
 								>
-									Copy Snapshot
+									{isCopyingSnapshot
+										? "Refreshing..."
+										: "Refresh + Copy Snapshot"}
 								</button>
 								<button
 									type="button"
