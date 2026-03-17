@@ -1,3 +1,4 @@
+import { detectBetType } from "../../lib/markets";
 import { detectSportTag } from "../../lib/sports";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
@@ -204,6 +205,26 @@ export interface ManualPickSportPerformanceSummary {
 	settledPicks: number;
 	qualityThreshold: number;
 	rows: ManualPickSportPerformanceRow[];
+}
+
+export interface ManualPickMarketTypePerformanceRow {
+	marketType: string;
+	label: string;
+	totalCount: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	qualityCount: number;
+	qualityWinRate: number | null;
+	qualityAvgRoi: number | null;
+	qualityAvgClvBps: number | null;
+}
+
+export interface ManualPickMarketTypePerformanceSummary {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	rows: ManualPickMarketTypePerformanceRow[];
 }
 
 export interface CreateManualPickInput {
@@ -812,6 +833,71 @@ function resolveSportForPick(
 	};
 }
 
+function formatMarketTypeLabel(marketType: string): string {
+	switch (marketType) {
+		case "moneyline":
+			return "Moneyline";
+		case "spread":
+			return "Spread";
+		case "total":
+			return "Total";
+		case "future":
+			return "Future";
+		case "prop":
+			return "Prop";
+		case "parlay":
+			return "Parlay";
+		default:
+			return "Other";
+	}
+}
+
+function resolveMarketTypeForPick(pick: ManualPickEntry): {
+	marketType: string;
+	label: string;
+} {
+	const snapshotMarketType = extractString(pick.decisionSnapshot, [
+		"marketType",
+		"market_type",
+	]);
+	const normalizedSnapshotMarketType = snapshotMarketType?.toLowerCase();
+	if (
+		normalizedSnapshotMarketType &&
+		[
+			"moneyline",
+			"spread",
+			"total",
+			"future",
+			"prop",
+			"parlay",
+			"other",
+		].includes(normalizedSnapshotMarketType)
+	) {
+		return {
+			marketType: normalizedSnapshotMarketType,
+			label: formatMarketTypeLabel(normalizedSnapshotMarketType),
+		};
+	}
+
+	const eventSlug = extractString(pick.decisionSnapshot, ["eventSlug"]);
+	const marketSlug = extractString(pick.decisionSnapshot, ["marketSlug"]);
+	const outcome = extractString(pick.decisionSnapshot, [
+		"sharpSideLabel",
+		"selectedOutcome",
+		"outcomeLabel",
+	]);
+	const detected = detectBetType({
+		title: pick.marketTitle,
+		outcome,
+		eventSlug,
+		slug: marketSlug,
+	});
+	return {
+		marketType: detected,
+		label: formatMarketTypeLabel(detected),
+	};
+}
+
 function buildTimeToStartRows(picks: ManualPickEntry[]): {
 	withEventTime: number;
 	rows: BucketPerformanceRow[];
@@ -1399,6 +1485,86 @@ export async function getManualPicksSportPerformanceSummary(
 				sportTag: entry.sportTag,
 				label: entry.label,
 				seriesId: entry.seriesId,
+				totalCount: allRow.count,
+				winRate: allRow.hitRate,
+				avgRoi: allRow.avgRoi,
+				avgClvBps: allRow.avgClvBps,
+				qualityCount: qualityRow.count,
+				qualityWinRate: qualityRow.hitRate,
+				qualityAvgRoi: qualityRow.avgRoi,
+				qualityAvgClvBps: qualityRow.avgClvBps,
+			};
+		})
+		.sort((a, b) => {
+			if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+			return a.label.localeCompare(b.label);
+		});
+
+	return {
+		computedAt: nowUnixSeconds(),
+		settledPicks: settled.length,
+		qualityThreshold,
+		rows,
+	};
+}
+
+export async function getManualPicksMarketTypePerformanceSummary(
+	db: Db,
+	options?: { limit?: number; qualityThreshold?: number },
+): Promise<ManualPickMarketTypePerformanceSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const qualityThreshold =
+		typeof options?.qualityThreshold === "number" &&
+		Number.isFinite(options.qualityThreshold)
+			? options.qualityThreshold
+			: 0.66;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter((pick) => pick.status !== "pending");
+
+	const statsByMarketType = new Map<
+		string,
+		{
+			marketType: string;
+			label: string;
+			all: MutableBucketStats;
+			quality: MutableBucketStats;
+		}
+	>();
+
+	for (const pick of settled) {
+		const marketType = resolveMarketTypeForPick(pick);
+		const existing = statsByMarketType.get(marketType.marketType) ?? {
+			marketType: marketType.marketType,
+			label: marketType.label,
+			all: initMutableBucket("all"),
+			quality: initMutableBucket("quality"),
+		};
+		applyPickToBucket(existing.all, pick);
+		const qualityScore = resolveMarketQualityScore(pick);
+		if (
+			qualityScore !== null &&
+			Number.isFinite(qualityScore) &&
+			qualityScore >= qualityThreshold
+		) {
+			applyPickToBucket(existing.quality, pick);
+		}
+		statsByMarketType.set(marketType.marketType, existing);
+	}
+
+	const rows: ManualPickMarketTypePerformanceRow[] = Array.from(
+		statsByMarketType.values(),
+	)
+		.map((entry) => {
+			const allRow = bucketToShadowWindowRow(entry.all, "all", "all", null);
+			const qualityRow = bucketToShadowWindowRow(
+				entry.quality,
+				"quality",
+				"quality",
+				null,
+			);
+			return {
+				marketType: entry.marketType,
+				label: entry.label,
 				totalCount: allRow.count,
 				winRate: allRow.hitRate,
 				avgRoi: allRow.avgRoi,

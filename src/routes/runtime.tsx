@@ -8,6 +8,7 @@ import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
 	getManualPicksClvTimingFn,
+	getManualPicksMarketTypePerformanceFn,
 	getManualPicksShadowWindowsFn,
 	getManualPicksSportPerformanceFn,
 } from "../server/api/manual-picks";
@@ -339,6 +340,26 @@ type SportPerformanceResult = {
 	rows: SportPerformanceRow[];
 };
 
+type MarketTypePerformanceRow = {
+	marketType: string;
+	label: string;
+	totalCount: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	qualityCount: number;
+	qualityWinRate: number | null;
+	qualityAvgRoi: number | null;
+	qualityAvgClvBps: number | null;
+};
+
+type MarketTypePerformanceResult = {
+	computedAt: number;
+	settledPicks: number;
+	qualityThreshold: number;
+	rows: MarketTypePerformanceRow[];
+};
+
 type CandidateDebugResult = {
 	requested: number;
 	returned: number;
@@ -432,6 +453,14 @@ function RuntimePage() {
 		string | null
 	>(null);
 	const isSportPerformanceLoadingRef = useRef(false);
+	const [marketTypePerformanceResult, setMarketTypePerformanceResult] =
+		useState<MarketTypePerformanceResult | null>(null);
+	const [isMarketTypePerformanceLoading, setIsMarketTypePerformanceLoading] =
+		useState(false);
+	const [marketTypePerformanceError, setMarketTypePerformanceError] = useState<
+		string | null
+	>(null);
+	const isMarketTypePerformanceLoadingRef = useRef(false);
 	const [candidateDebugResult, setCandidateDebugResult] =
 		useState<CandidateDebugResult | null>(null);
 	const [isCandidateDebugLoading, setIsCandidateDebugLoading] = useState(false);
@@ -458,6 +487,16 @@ function RuntimePage() {
 					)
 				: [],
 		[evalResult],
+	);
+	const ncaabSportRow = useMemo(
+		() =>
+			sportPerformanceResult?.rows.find(
+				(row) =>
+					row.seriesId === 10470 ||
+					row.sportTag === "series_10470" ||
+					row.label.toLowerCase().includes("ncaab"),
+			) ?? null,
+		[sportPerformanceResult],
 	);
 
 	const coverageHealth = useMemo(() => {
@@ -743,6 +782,42 @@ function RuntimePage() {
 		[],
 	);
 
+	const loadMarketTypePerformance = useCallback(
+		async (requestedLimit?: number, requestedThreshold?: number) => {
+			if (isMarketTypePerformanceLoadingRef.current) return;
+			isMarketTypePerformanceLoadingRef.current = true;
+			setIsMarketTypePerformanceLoading(true);
+			setMarketTypePerformanceError(null);
+			try {
+				const limitValue = requestedLimit ?? 2000;
+				const thresholdValue = requestedThreshold ?? 0.66;
+				const result = await getManualPicksMarketTypePerformanceFn({
+					data: {
+						limit:
+							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						qualityThreshold:
+							Number.isFinite(thresholdValue) && thresholdValue > 0
+								? thresholdValue
+								: 0.66,
+					},
+				});
+				setMarketTypePerformanceResult(
+					(result.marketTypePerformance ??
+						null) as MarketTypePerformanceResult | null,
+				);
+			} catch (err) {
+				console.error("Failed to load market type performance", err);
+				setMarketTypePerformanceError(
+					`Failed to load market type performance: ${describeError(err)}`,
+				);
+			} finally {
+				setIsMarketTypePerformanceLoading(false);
+				isMarketTypePerformanceLoadingRef.current = false;
+			}
+		},
+		[],
+	);
+
 	const refreshStats = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
@@ -797,6 +872,8 @@ function RuntimePage() {
 				refreshedCalibration,
 				refreshedBucketPerformance,
 				refreshedClvTiming,
+				refreshedSportPerformance,
+				refreshedMarketTypePerformance,
 			] = await Promise.all([
 				getBotEvalFn({
 					data: {
@@ -854,6 +931,32 @@ function RuntimePage() {
 								: 0.66,
 					},
 				}),
+				getManualPicksSportPerformanceFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+						qualityThreshold:
+							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
+								? clvThresholdValue
+								: 0.66,
+					},
+				}),
+				getManualPicksMarketTypePerformanceFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+						qualityThreshold:
+							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
+								? clvThresholdValue
+								: 0.66,
+					},
+				}),
 			]);
 			setStats((refreshedStats.stats ?? null) as RuntimeStats | null);
 			setCandidateDebugResult(refreshedCandidateDebug as CandidateDebugResult);
@@ -867,6 +970,14 @@ function RuntimePage() {
 			);
 			setClvTimingResult(
 				(refreshedClvTiming.timing ?? null) as ClvTimingResult | null,
+			);
+			setSportPerformanceResult(
+				(refreshedSportPerformance.sportPerformance ??
+					null) as SportPerformanceResult | null,
+			);
+			setMarketTypePerformanceResult(
+				(refreshedMarketTypePerformance.marketTypePerformance ??
+					null) as MarketTypePerformanceResult | null,
 			);
 			const refreshedRuntimeStats = (refreshedStats.stats ??
 				null) as RuntimeStats | null;
@@ -919,6 +1030,9 @@ function RuntimePage() {
 				clvTiming: refreshedClvTiming.timing ?? null,
 				calibration: refreshedCalibration.calibration ?? null,
 				bucketPerformance: refreshedBucketPerformance.performance ?? null,
+				marketTypePerformance:
+					refreshedMarketTypePerformance.marketTypePerformance ?? null,
+				sportPerformance: refreshedSportPerformance.sportPerformance ?? null,
 			};
 			await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
 			setCopySnapshotStatus("Snapshot refreshed and copied");
@@ -1022,6 +1136,7 @@ function RuntimePage() {
 		void loadClvTiming(2000, 0.66);
 		void loadShadowWindows(2000, 0.66);
 		void loadSportPerformance(2000, 0.66);
+		void loadMarketTypePerformance(2000, 0.66);
 	}, [
 		loadStats,
 		loadCandidateDebug,
@@ -1030,6 +1145,7 @@ function RuntimePage() {
 		loadClvTiming,
 		loadShadowWindows,
 		loadSportPerformance,
+		loadMarketTypePerformance,
 	]);
 
 	return (
@@ -1733,12 +1849,136 @@ function RuntimePage() {
 							</div>
 							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
 								<summary className="cursor-pointer text-sm font-semibold text-slate-100">
+									Performance by Market Type
+								</summary>
+								<p className="mt-2 text-xs text-slate-400">
+									Shows totals, spreads, moneylines, and other market classes
+									across all settled picks and the quality-threshold subset.
+								</p>
+								<div className="mt-3 flex flex-wrap items-center gap-3">
+									<button
+										type="button"
+										onClick={() =>
+											void loadMarketTypePerformance(
+												Number(calibrationLimit),
+												Number(clvQualityThreshold),
+											)
+										}
+										disabled={isMarketTypePerformanceLoading}
+										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+									>
+										{isMarketTypePerformanceLoading
+											? "Refreshing..."
+											: "Refresh Market Types"}
+									</button>
+								</div>
+								{marketTypePerformanceError && (
+									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+										{marketTypePerformanceError}
+									</div>
+								)}
+								{marketTypePerformanceResult ? (
+									<div className="mt-4 overflow-auto">
+										<div className="mb-2 text-xs text-slate-400">
+											Settled picks: {marketTypePerformanceResult.settledPicks}{" "}
+											• Quality threshold:{" "}
+											{marketTypePerformanceResult.qualityThreshold.toFixed(2)}
+										</div>
+										<table className="min-w-full text-left text-sm text-slate-200">
+											<thead>
+												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+													<th className="pb-2">Market Type</th>
+													<th className="pb-2">All Count</th>
+													<th className="pb-2">All Hit</th>
+													<th className="pb-2">All ROI</th>
+													<th className="pb-2">All CLV</th>
+													<th className="pb-2">Q Count</th>
+													<th className="pb-2">Q Hit</th>
+													<th className="pb-2">Q ROI</th>
+													<th className="pb-2">Q CLV</th>
+												</tr>
+											</thead>
+											<tbody>
+												{marketTypePerformanceResult.rows.map((row) => (
+													<tr
+														key={row.marketType}
+														className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}
+													>
+														<td className="py-2 pr-4 font-semibold text-slate-100">
+															{row.label}
+														</td>
+														<td className="py-2 pr-4">
+															{row.totalCount}
+															{sampleBadge(row.totalCount) ? (
+																<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	{sampleBadge(row.totalCount)}
+																</span>
+															) : null}
+														</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.winRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatSignedPercent(row.avgRoi)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatBps(row.avgClvBps)}
+														</td>
+														<td className="py-2 pr-4">{row.qualityCount}</td>
+														<td className="py-2 pr-4">
+															{formatPercent(row.qualityWinRate)}
+														</td>
+														<td className="py-2 pr-4">
+															{formatSignedPercent(row.qualityAvgRoi)}
+														</td>
+														<td className="py-2">
+															{formatBps(row.qualityAvgClvBps)}
+														</td>
+													</tr>
+												))}
+											</tbody>
+										</table>
+									</div>
+								) : (
+									<p className="mt-3 text-sm text-slate-400">
+										No market-type performance data yet.
+									</p>
+								)}
+							</details>
+							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+								<summary className="cursor-pointer text-sm font-semibold text-slate-100">
 									Performance by Sport
 								</summary>
 								<p className="mt-2 text-xs text-slate-400">
 									Shows sport-level hit/ROI/CLV across all settled picks and the
 									quality-threshold subset.
 								</p>
+								{ncaabSportRow ? (
+									<div className="mt-3 grid gap-3 md:grid-cols-2">
+										<div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+											<p className="text-xs uppercase tracking-[0.2em] text-amber-200">
+												NCAAB All
+											</p>
+											<p className="mt-2 text-sm text-slate-200">
+												{ncaabSportRow.totalCount} picks •{" "}
+												{formatPercent(ncaabSportRow.winRate)} hit •{" "}
+												{formatSignedPercent(ncaabSportRow.avgRoi)} ROI •{" "}
+												{formatBps(ncaabSportRow.avgClvBps)} CLV
+											</p>
+										</div>
+										<div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+											<p className="text-xs uppercase tracking-[0.2em] text-cyan-200">
+												NCAAB Quality
+											</p>
+											<p className="mt-2 text-sm text-slate-200">
+												{ncaabSportRow.qualityCount} picks •{" "}
+												{formatPercent(ncaabSportRow.qualityWinRate)} hit •{" "}
+												{formatSignedPercent(ncaabSportRow.qualityAvgRoi)} ROI •{" "}
+												{formatBps(ncaabSportRow.qualityAvgClvBps)} CLV
+											</p>
+										</div>
+									</div>
+								) : null}
 								<div className="mt-3 flex flex-wrap items-center gap-3">
 									<button
 										type="button"

@@ -2,19 +2,20 @@ import { createServerFn } from "@tanstack/react-start";
 import type { Db } from "../db/client";
 import { getDb } from "../env";
 import {
-	createManualPick,
+	type CreateManualPickInput,
 	clearManualPicks,
+	createManualPick,
 	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
 	getManualPicksClvTimingSummary,
+	getManualPicksMarketTypePerformanceSummary,
 	getManualPicksShadowWindowSummary,
 	getManualPicksSportPerformanceSummary,
 	getManualPicksSummary,
 	listManualPicks,
+	type ManualPickStatus,
 	settleManualPick,
 	updateManualPickOutcome,
-	type CreateManualPickInput,
-	type ManualPickStatus,
 } from "../repositories/manual-picks";
 
 const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
@@ -42,10 +43,15 @@ function parseGammaList(value: string[] | string | null | undefined): string[] {
 			return [];
 		}
 	}
-	return trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+	return trimmed
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter(Boolean);
 }
 
-function parseGammaPrices(value: string[] | string | null | undefined): number[] {
+function parseGammaPrices(
+	value: string[] | string | null | undefined,
+): number[] {
 	return parseGammaList(value)
 		.map((entry) => Number(entry))
 		.filter((entry) => Number.isFinite(entry));
@@ -143,7 +149,10 @@ function resolvePickResult(input: {
 		return null;
 	}
 
-	if (!input.sharpSide || (input.sharpSide !== "A" && input.sharpSide !== "B")) {
+	if (
+		!input.sharpSide ||
+		(input.sharpSide !== "A" && input.sharpSide !== "B")
+	) {
 		return null;
 	}
 
@@ -216,7 +225,9 @@ function resolvePickResult(input: {
 			? input.entryPrice
 			: null;
 	const closePrice =
-		input.sharpSide === "A" ? outcomePrices[0] ?? null : outcomePrices[1] ?? null;
+		input.sharpSide === "A"
+			? (outcomePrices[0] ?? null)
+			: (outcomePrices[1] ?? null);
 	const roi =
 		entryPrice && status === "win"
 			? 1 / entryPrice - 1
@@ -339,6 +350,24 @@ export const getManualPicksSportPerformanceFn = createServerFn({
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`sport_performance_failed: ${message}`);
+	}
+});
+
+export const getManualPicksMarketTypePerformanceFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const db = getDb(context);
+	try {
+		const marketTypePerformance =
+			await getManualPicksMarketTypePerformanceSummary(db, {
+				limit: payload.limit,
+				qualityThreshold: payload.qualityThreshold,
+			});
+		return { marketTypePerformance };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`market_type_performance_failed: ${message}`);
 	}
 });
 
