@@ -207,6 +207,7 @@ type EvalResult = {
 	historyWindowMinutes: number;
 	minGrade: string;
 	includeStarted: boolean;
+	filteredQualityThreshold: number;
 	totalHistoryRows: number;
 	eligibleSnapshots: number;
 	strategies: {
@@ -964,6 +965,10 @@ function RuntimePage() {
 										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
 											<p className="text-sm font-semibold text-slate-100">
 												Filtered
+											</p>
+											<p className="mt-1 text-xs text-slate-400">
+												Quality threshold:{" "}
+												{evalResult.filteredQualityThreshold.toFixed(2)}
 											</p>
 											<p className="mt-2 text-sm text-slate-300">
 												Triggered: {evalResult.strategies.filtered.triggered} •

@@ -1,27 +1,30 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
 	computeSignalScoreFromWindow,
+	type GradeLabel,
 	MIN_EDGE_RATING,
 	signalScoreToGradeLabel,
-	type GradeLabel,
 } from "../../lib/sharp-grade";
 import type { Db } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
-import { listSharpMoneyHistorySince, type SharpMoneyHistoryEntry } from "../repositories/sharp-money";
+import {
+	listSharpMoneyHistorySince,
+	type SharpMoneyHistoryEntry,
+} from "../repositories/sharp-money";
 import { computePriceEdgeFromEntry } from "./sharp-money";
 
 const DEFAULT_EVAL_WINDOW_HOURS = 24;
 const DEFAULT_EVAL_HORIZON_MINUTES = 15;
 const DEFAULT_EVAL_HISTORY_WINDOW_MINUTES = 60;
 const MAX_EVAL_ROWS = 20_000;
-const MIN_MARKET_QUALITY_SCORE = 0.58;
+const DEFAULT_FILTERED_QUALITY_THRESHOLD = 0.66;
 const DEFAULT_SWEEP_THRESHOLDS = [0.58, 0.62, 0.66, 0.7];
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
-	"A": 4,
-	"B": 3,
-	"C": 2,
-	"D": 1,
+	A: 4,
+	B: 3,
+	C: 2,
+	D: 1,
 };
 
 export type BotEvalPayload = {
@@ -31,6 +34,7 @@ export type BotEvalPayload = {
 	minGrade?: GradeLabel;
 	includeStarted?: boolean;
 	limit?: number;
+	filteredQualityThreshold?: number;
 	sweepThresholds?: number[];
 };
 
@@ -66,7 +70,9 @@ function computeMarketQualityScore(entry: {
 	const complementGap = hasBothPrices
 		? Math.abs(sideAPrice + sideBPrice - 1)
 		: 0.08;
-	const complementScore = hasBothPrices ? clampUnit(1 - complementGap / 0.08) : 0.45;
+	const complementScore = hasBothPrices
+		? clampUnit(1 - complementGap / 0.08)
+		: 0.45;
 	const sharpSidePrice =
 		entry.sharpSide === "A"
 			? sideAPrice
@@ -221,7 +227,8 @@ function addEvalPoint(
 function finalizeEval(acc: EvalAccumulator) {
 	const avgMoveBps =
 		acc.movesBps.length > 0
-			? acc.movesBps.reduce((sum, value) => sum + value, 0) / acc.movesBps.length
+			? acc.movesBps.reduce((sum, value) => sum + value, 0) /
+				acc.movesBps.length
 			: null;
 	const byGrade = Object.fromEntries(
 		Object.entries(acc.byGrade).map(([grade, bucket]) => {
@@ -314,6 +321,13 @@ export async function computeBotEval(db: Db, payload?: BotEvalPayload) {
 	const horizonSeconds = Math.floor(horizonMinutes * 60);
 	const minGradeRank = GRADE_RANK[minGrade];
 	const sweepThresholds = normalizeSweepThresholds(payload?.sweepThresholds);
+	const filteredQualityThreshold =
+		typeof payload?.filteredQualityThreshold === "number" &&
+		Number.isFinite(payload.filteredQualityThreshold) &&
+		payload.filteredQualityThreshold >= 0 &&
+		payload.filteredQualityThreshold <= 1
+			? payload.filteredQualityThreshold
+			: DEFAULT_FILTERED_QUALITY_THRESHOLD;
 
 	const historyRows = await listSharpMoneyHistorySince(db, sinceSeconds, limit);
 	const byConditionId = new Map<string, SharpMoneyHistoryEntry[]>();
@@ -348,7 +362,8 @@ export async function computeBotEval(db: Db, payload?: BotEvalPayload) {
 			}
 			while (
 				windowStart < i &&
-				rows[windowStart].recordedAt < snapshot.recordedAt - historyWindowMinutes * 60
+				rows[windowStart].recordedAt <
+					snapshot.recordedAt - historyWindowMinutes * 60
 			) {
 				windowStart += 1;
 			}
@@ -394,17 +409,23 @@ export async function computeBotEval(db: Db, payload?: BotEvalPayload) {
 
 			eligibleSnapshots += 1;
 			const eventTime = parseEventTime(snapshot.eventTime);
-			const hourToStartBucket = getHourToStartBucket(eventTime, snapshot.recordedAt);
+			const hourToStartBucket = getHourToStartBucket(
+				eventTime,
+				snapshot.recordedAt,
+			);
 			const qualityScore = computeMarketQualityScore({
 				sharpSide: snapshot.sharpSide,
 				sideA: { price: snapshot.sideA.price },
 				sideB: { price: snapshot.sideB.price },
 			});
-			const passesFiltered = qualityScore >= MIN_MARKET_QUALITY_SCORE;
+			const passesFiltered = qualityScore >= filteredQualityThreshold;
 
 			const targetTime = snapshot.recordedAt + horizonSeconds;
 			if (futureIndex < i + 1) futureIndex = i + 1;
-			while (futureIndex < rows.length && rows[futureIndex].recordedAt < targetTime) {
+			while (
+				futureIndex < rows.length &&
+				rows[futureIndex].recordedAt < targetTime
+			) {
 				futureIndex += 1;
 			}
 			let moveBps: number | null = null;
@@ -432,7 +453,9 @@ export async function computeBotEval(db: Db, payload?: BotEvalPayload) {
 	const baselineFinal = finalizeEval(baseline);
 	const filteredFinal = finalizeEval(filtered);
 	const thresholdSweep = sweepThresholds.map((threshold) => {
-		const result = finalizeEval(sweepAccumulators.get(threshold) ?? initEvalAccumulator());
+		const result = finalizeEval(
+			sweepAccumulators.get(threshold) ?? initEvalAccumulator(),
+		);
 		return {
 			threshold,
 			...result,
@@ -454,6 +477,7 @@ export async function computeBotEval(db: Db, payload?: BotEvalPayload) {
 		historyWindowMinutes,
 		minGrade,
 		includeStarted,
+		filteredQualityThreshold,
 		totalHistoryRows: historyRows.length,
 		eligibleSnapshots,
 		strategies: {

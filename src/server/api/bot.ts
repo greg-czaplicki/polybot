@@ -1331,6 +1331,7 @@ export async function handleBotRequest(
 			minGrade?: string;
 			includeStarted?: boolean;
 			limit?: number;
+			filteredQualityThreshold?: number;
 			sweepThresholds?: number[];
 		}>(request);
 		const minGrade = parseMinGrade(payload?.minGrade ?? null);

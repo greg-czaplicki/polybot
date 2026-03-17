@@ -16,6 +16,7 @@ class BotConfig:
 	base_url: str
 	api_key: str
 	min_grade: str
+	include_started: bool
 	require_microstructure: bool
 	market_quality_threshold: float
 	min_minutes_to_start: int
@@ -139,6 +140,7 @@ def load_config() -> BotConfig:
 		base_url=base_url,
 		api_key=api_key,
 		min_grade=os.getenv("BOT_MIN_GRADE", "A"),
+		include_started=env_flag("BOT_INCLUDE_STARTED", False),
 		require_microstructure=env_flag("BOT_REQUIRE_MICROSTRUCTURE", True),
 		market_quality_threshold=float(
 			os.getenv("BOT_MARKET_QUALITY_THRESHOLD", "0.72")
@@ -393,6 +395,7 @@ def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str,
 			"maxMinutesToStart": str(config.max_minutes_to_start),
 			"minGrade": config.min_grade,
 			"limit": str(config.max_bets * 3),
+			"includeStarted": "true" if config.include_started else "false",
 			"requireMicrostructure": "true" if config.require_microstructure else "false",
 			"marketQualityThreshold": str(config.market_quality_threshold),
 			"includeL2Signals": "true",
@@ -1031,6 +1034,8 @@ def run_loop() -> None:
 				config.max_minutes_to_start,
 				"minGrade",
 				config.min_grade,
+				"includeStarted",
+				config.include_started,
 				"requireL2Alpha",
 				config.require_l2_alpha,
 			)
