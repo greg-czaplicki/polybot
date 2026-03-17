@@ -116,6 +116,12 @@ function describeError(error: unknown): string {
 	}
 }
 
+function topEntries(record: Record<string, number>, limit: number = 5) {
+	return Object.entries(record)
+		.sort((left, right) => right[1] - left[1])
+		.slice(0, limit);
+}
+
 type RuntimeStats = {
 	fetchedAt: number;
 	totalMarkets: number;
@@ -414,6 +420,9 @@ function RuntimePage() {
 	const [candidateDebugError, setCandidateDebugError] = useState<string | null>(
 		null,
 	);
+	const [copySnapshotStatus, setCopySnapshotStatus] = useState<string | null>(
+		null,
+	);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -517,6 +526,120 @@ function RuntimePage() {
 			},
 		];
 	}, [candidateDebugResult]);
+
+	const runtimeSnapshot = useMemo(
+		() => ({
+			generatedAt: new Date().toISOString(),
+			runtime: stats
+				? {
+						fetchedAt: stats.fetchedAt,
+						filteredMarketsWindow: filteredTotalMarkets,
+						expandedEventCount: stats.expandedEventCount,
+						expandedMarketCount: stats.expandedMarketCount,
+						retryCount: stats.retryCount,
+						failureCount: stats.failureCount,
+						totalRuns: stats.totalRuns,
+						totalRetries: stats.totalRetries,
+						totalFailures: stats.totalFailures,
+						cacheFreshness: stats.cacheFreshness ?? null,
+					}
+				: null,
+			candidateDebug: candidateDebugResult
+				? {
+						requested: candidateDebugResult.requested,
+						returned: candidateDebugResult.returned,
+						totalEntries: candidateDebugResult.debug.totalEntries,
+						upcomingEntries: candidateDebugResult.debug.upcomingEntries,
+						candidatesBeforeDedup:
+							candidateDebugResult.debug.candidatesBeforeDedup,
+						dedupDropped: candidateDebugResult.debug.dedupDropped,
+						topExclusions: topEntries(candidateDebugResult.debug.excluded),
+						topDedupReasons: topEntries(
+							candidateDebugResult.debug.dedupReasons,
+						),
+						topPolicyBuckets: topEntries(
+							candidateDebugResult.debug.policyMatched,
+							8,
+						),
+						returnedByMarketType:
+							candidateDebugResult.debug.returnedByMarketType,
+						returnedByTimingBucket:
+							candidateDebugResult.debug.returnedByTimingBucket,
+						returnedBySportSeries:
+							candidateDebugResult.debug.returnedBySportSeries,
+					}
+				: null,
+			eval: evalResult
+				? {
+						computedAt: evalResult.computedAt,
+						windowHours: evalResult.windowHours,
+						horizonMinutes: evalResult.horizonMinutes,
+						historyWindowMinutes: evalResult.historyWindowMinutes,
+						minGrade: evalResult.minGrade,
+						includeStarted: evalResult.includeStarted,
+						filteredQualityThreshold: evalResult.filteredQualityThreshold,
+						baseline: {
+							triggered: evalResult.strategies.baseline.triggered,
+							resolved: evalResult.strategies.baseline.resolved,
+							hitRate: evalResult.strategies.baseline.hitRate,
+							avgMoveBps: evalResult.strategies.baseline.avgMoveBps,
+						},
+						filtered: {
+							triggered: evalResult.strategies.filtered.triggered,
+							resolved: evalResult.strategies.filtered.resolved,
+							hitRate: evalResult.strategies.filtered.hitRate,
+							avgMoveBps: evalResult.strategies.filtered.avgMoveBps,
+						},
+						thresholdSweep: evalResult.thresholdSweep,
+					}
+				: null,
+			clvTiming: clvTimingResult
+				? {
+						computedAt: clvTimingResult.computedAt,
+						settledPicks: clvTimingResult.settledPicks,
+						qualityThreshold: clvTimingResult.qualityThreshold,
+						segments: clvTimingResult.segments.map((segment) => ({
+							key: segment.key,
+							label: segment.label,
+							matchedPicks: segment.matchedPicks,
+							byTimeToStart: segment.byTimeToStart,
+						})),
+					}
+				: null,
+			calibration: calibrationResult
+				? {
+						computedAt: calibrationResult.computedAt,
+						totalPicks: calibrationResult.totalPicks,
+						settledPicks: calibrationResult.settledPicks,
+						withSignalScore: calibrationResult.withSignalScore,
+						withQualityScore: calibrationResult.withQualityScore,
+						withEventTime: calibrationResult.withEventTime,
+						bySignalScore: calibrationResult.bySignalScore,
+						byQualityScore: calibrationResult.byQualityScore,
+						byTimeToStart: calibrationResult.byTimeToStart,
+					}
+				: null,
+			bucketPerformance: bucketPerformanceResult
+				? {
+						computedAt: bucketPerformanceResult.computedAt,
+						settledPicks: bucketPerformanceResult.settledPicks,
+						byTimeToStart: bucketPerformanceResult.byTimeToStart,
+						bySignalScore: bucketPerformanceResult.bySignalScore,
+						byL2ImbalanceNearMid: bucketPerformanceResult.byL2ImbalanceNearMid,
+						byL2Disagreement: bucketPerformanceResult.byL2Disagreement,
+					}
+				: null,
+		}),
+		[
+			stats,
+			filteredTotalMarkets,
+			candidateDebugResult,
+			evalResult,
+			clvTimingResult,
+			calibrationResult,
+			bucketPerformanceResult,
+		],
+	);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -732,6 +855,21 @@ function RuntimePage() {
 		}
 	}, [loadStats, loadCandidateDebug]);
 
+	const copySnapshot = useCallback(async () => {
+		setCopySnapshotStatus(null);
+		try {
+			await navigator.clipboard.writeText(
+				JSON.stringify(runtimeSnapshot, null, 2),
+			);
+			setCopySnapshotStatus("Snapshot copied");
+			window.setTimeout(() => setCopySnapshotStatus(null), 2500);
+		} catch (err) {
+			console.error("Failed to copy runtime snapshot", err);
+			setCopySnapshotStatus("Copy failed");
+			window.setTimeout(() => setCopySnapshotStatus(null), 2500);
+		}
+	}, [runtimeSnapshot]);
+
 	const handleBackfill = useCallback(async () => {
 		if (isBackfilling) return;
 		if (!confirm("Backfill history for cache entries missing it?")) return;
@@ -882,6 +1020,13 @@ function RuntimePage() {
 							<div className="flex flex-wrap items-center gap-3">
 								<button
 									type="button"
+									onClick={() => void copySnapshot()}
+									className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
+								>
+									Copy Snapshot
+								</button>
+								<button
+									type="button"
 									onClick={refreshStats}
 									disabled={isLoading}
 									className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
@@ -907,6 +1052,11 @@ function RuntimePage() {
 						{backfillResult && (
 							<div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
 								{backfillResult}
+							</div>
+						)}
+						{copySnapshotStatus && (
+							<div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+								{copySnapshotStatus}
 							</div>
 						)}
 					</section>
