@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { getBotCandidatesFn } from "../server/api/bot";
 import { getBotEvalFn } from "../server/api/bot-eval";
 import {
 	getManualPicksBucketPerformanceFn,
@@ -332,6 +333,24 @@ type SportPerformanceResult = {
 	rows: SportPerformanceRow[];
 };
 
+type CandidateDebugResult = {
+	requested: number;
+	returned: number;
+	debug: {
+		totalEntries: number;
+		upcomingEntries: number;
+		candidatesBeforeDedup: number;
+		returnedAfterDedup: number;
+		excluded: Record<string, number>;
+		dedupDropped: number;
+		dedupReasons: Record<string, number>;
+		policyMatched: Record<string, number>;
+		returnedByMarketType: Record<string, number>;
+		returnedByTimingBucket: Record<string, number>;
+		returnedBySportSeries: Record<string, number>;
+	};
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -389,6 +408,12 @@ function RuntimePage() {
 		string | null
 	>(null);
 	const isSportPerformanceLoadingRef = useRef(false);
+	const [candidateDebugResult, setCandidateDebugResult] =
+		useState<CandidateDebugResult | null>(null);
+	const [isCandidateDebugLoading, setIsCandidateDebugLoading] = useState(false);
+	const [candidateDebugError, setCandidateDebugError] = useState<string | null>(
+		null,
+	);
 
 	const filteredTotalMarkets = stats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -462,6 +487,37 @@ function RuntimePage() {
 		] as const;
 	}, [calibrationResult, bucketPerformanceResult]);
 
+	const candidatePolicyRows = useMemo(() => {
+		if (!candidateDebugResult) return [];
+		return Object.entries(candidateDebugResult.debug.policyMatched)
+			.sort((left, right) => right[1] - left[1])
+			.slice(0, 8);
+	}, [candidateDebugResult]);
+
+	const candidateReturnedBreakdowns = useMemo(() => {
+		if (!candidateDebugResult) return [];
+		return [
+			{
+				title: "Returned by market type",
+				rows: Object.entries(
+					candidateDebugResult.debug.returnedByMarketType,
+				).sort((left, right) => right[1] - left[1]),
+			},
+			{
+				title: "Returned by timing bucket",
+				rows: Object.entries(
+					candidateDebugResult.debug.returnedByTimingBucket,
+				).sort((left, right) => right[1] - left[1]),
+			},
+			{
+				title: "Returned by sport series",
+				rows: Object.entries(
+					candidateDebugResult.debug.returnedBySportSeries,
+				).sort((left, right) => right[1] - left[1]),
+			},
+		];
+	}, [candidateDebugResult]);
+
 	const loadStats = useCallback(async () => {
 		setError(null);
 		try {
@@ -472,6 +528,39 @@ function RuntimePage() {
 		} catch (err) {
 			console.error("Failed to load runtime stats", err);
 			setError("Failed to load runtime stats");
+		}
+	}, []);
+
+	const loadCandidateDebug = useCallback(async () => {
+		setIsCandidateDebugLoading(true);
+		setCandidateDebugError(null);
+		try {
+			const result = await getBotCandidatesFn({
+				data: {
+					minGrade: "B",
+					windowMinutes: 90,
+					minMinutesToStart: 15,
+					maxMinutesToStart: 75,
+					limit: 100,
+					requireReady: true,
+					includeStarted: true,
+					requireMicrostructure: true,
+					marketQualityThreshold: 0.7,
+					includeL2Signals: true,
+					requireL2Alpha: true,
+					skipMissingL2: false,
+					l2ImbalanceNearMidThreshold: -0.1,
+				},
+			});
+			if ("error" in result) {
+				throw new Error(result.error);
+			}
+			setCandidateDebugResult(result as CandidateDebugResult);
+		} catch (err) {
+			console.error("Failed to load candidate debug", err);
+			setCandidateDebugError("Failed to load candidate debug");
+		} finally {
+			setIsCandidateDebugLoading(false);
 		}
 	}, []);
 
@@ -634,13 +723,14 @@ function RuntimePage() {
 				data: { limit: 50, includeLowVolume: true },
 			});
 			await loadStats();
+			await loadCandidateDebug();
 		} catch (err) {
 			console.error("Failed to refresh runtime stats", err);
 			setError("Failed to refresh runtime stats");
 		} finally {
 			setIsLoading(false);
 		}
-	}, [loadStats]);
+	}, [loadStats, loadCandidateDebug]);
 
 	const handleBackfill = useCallback(async () => {
 		if (isBackfilling) return;
@@ -717,6 +807,7 @@ function RuntimePage() {
 
 	useEffect(() => {
 		void loadStats();
+		void loadCandidateDebug();
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
 		void loadClvTiming(2000, 0.66);
@@ -724,6 +815,7 @@ function RuntimePage() {
 		void loadSportPerformance(2000, 0.66);
 	}, [
 		loadStats,
+		loadCandidateDebug,
 		loadCalibration,
 		loadBucketPerformance,
 		loadClvTiming,
@@ -817,6 +909,131 @@ function RuntimePage() {
 								{backfillResult}
 							</div>
 						)}
+					</section>
+
+					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+						<div className="flex flex-col gap-4">
+							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+								<div>
+									<h2 className="text-lg font-semibold text-slate-50">
+										Candidate Policy
+									</h2>
+									<p className="mt-1 text-sm text-slate-400">
+										Live candidate debug using the current API-side policy
+										ranking and filtering defaults.
+									</p>
+								</div>
+								<button
+									type="button"
+									onClick={() => void loadCandidateDebug()}
+									disabled={isCandidateDebugLoading}
+									className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800/60 disabled:opacity-60"
+								>
+									{isCandidateDebugLoading
+										? "Refreshing..."
+										: "Refresh Candidate Debug"}
+								</button>
+							</div>
+							{candidateDebugError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{candidateDebugError}
+								</div>
+							)}
+							{candidateDebugResult && (
+								<div className="space-y-5">
+									<div className="grid gap-3 md:grid-cols-4">
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>Entries: {candidateDebugResult.debug.totalEntries}</p>
+											<p>
+												Upcoming: {candidateDebugResult.debug.upcomingEntries}
+											</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Before dedup:{" "}
+												{candidateDebugResult.debug.candidatesBeforeDedup}
+											</p>
+											<p>Returned: {candidateDebugResult.returned}</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Dedup dropped: {candidateDebugResult.debug.dedupDropped}
+											</p>
+											<p>Requested grades: {candidateDebugResult.requested}</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Top exclusion:{" "}
+												{Object.entries(candidateDebugResult.debug.excluded)
+													.sort((left, right) => right[1] - left[1])[0]
+													?.join(" = ") ?? "—"}
+											</p>
+											<p>
+												Top dedup:{" "}
+												{Object.entries(candidateDebugResult.debug.dedupReasons)
+													.sort((left, right) => right[1] - left[1])[0]
+													?.join(" = ") ?? "—"}
+											</p>
+										</div>
+									</div>
+									<div className="grid gap-4 lg:grid-cols-2">
+										<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+											<h3 className="text-sm font-semibold text-slate-100">
+												Top policy buckets
+											</h3>
+											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+												<thead className="text-xs uppercase tracking-wide text-slate-500">
+													<tr>
+														<th className="pb-2 pr-4">Policy</th>
+														<th className="pb-2 text-right">Count</th>
+													</tr>
+												</thead>
+												<tbody>
+													{candidatePolicyRows.map(([key, count]) => (
+														<tr
+															key={key}
+															className="border-t border-slate-800/80 align-top"
+														>
+															<td className="py-2 pr-4 text-slate-200">
+																{key}
+															</td>
+															<td className="py-2 text-right">{count}</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+										<div className="space-y-4">
+											{candidateReturnedBreakdowns.map((section) => (
+												<div
+													key={section.title}
+													className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+												>
+													<h3 className="text-sm font-semibold text-slate-100">
+														{section.title}
+													</h3>
+													<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+														<tbody>
+															{section.rows.map(([key, count]) => (
+																<tr
+																	key={key}
+																	className="border-t border-slate-800/80"
+																>
+																	<td className="py-2 pr-4 text-slate-200">
+																		{key}
+																	</td>
+																	<td className="py-2 text-right">{count}</td>
+																</tr>
+															))}
+														</tbody>
+													</table>
+												</div>
+											))}
+										</div>
+									</div>
+								</div>
+							)}
+						</div>
 					</section>
 
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">

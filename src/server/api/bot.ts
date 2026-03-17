@@ -51,6 +51,10 @@ type BotCandidatesDebug = {
 	excluded: Record<string, number>;
 	dedupDropped: number;
 	dedupReasons: Record<string, number>;
+	policyMatched: Record<string, number>;
+	returnedByMarketType: Record<string, number>;
+	returnedByTimingBucket: Record<string, number>;
+	returnedBySportSeries: Record<string, number>;
 	inspect?: BotCandidateDebugInspect;
 };
 
@@ -93,8 +97,20 @@ type BotCandidatesResult = {
 	debug: BotCandidatesDebug;
 };
 
+type BotCandidate = BotCandidatesResult["candidates"][number];
+type BotCandidateMarketType = ReturnType<typeof getMarketTypeLabel>;
+type BotCandidatePolicy = {
+	minGrade: GradeLabel;
+	marketQualityThreshold: number;
+	requireStrongL2: boolean;
+};
+
 function clampUnit(value: number): number {
 	return Math.max(0, Math.min(1, value));
+}
+
+function stricterGrade(left: GradeLabel, right: GradeLabel): GradeLabel {
+	return GRADE_RANK[left] >= GRADE_RANK[right] ? left : right;
 }
 
 function normalizeMarketPrice(price?: number | null): number | null {
@@ -432,6 +448,177 @@ function getMarketGroupKey(entry: {
 	return `${sport}|${base}|${type}`;
 }
 
+function getCandidateMinutesToStart(candidate: BotCandidate): number | null {
+	const eventTime = parseEventTime(candidate.entry.eventTime);
+	if (!eventTime) return null;
+	return (eventTime.getTime() - Date.now()) / 60_000;
+}
+
+function getTimingPreferenceScore(minutesToStart: number | null): number {
+	if (minutesToStart === null || !Number.isFinite(minutesToStart)) return -1;
+	if (minutesToStart >= 15 && minutesToStart <= 60) return 4;
+	if (minutesToStart > 60 && minutesToStart <= 180) return 3;
+	if (minutesToStart > 180) return 2;
+	if (minutesToStart >= 0) return 0;
+	return -1;
+}
+
+function resolveTimingBucket(
+	minutesToStart: number | null,
+): "0-15m" | "15-60m" | "1-3h" | "3h+" | "unknown" {
+	if (minutesToStart === null || !Number.isFinite(minutesToStart))
+		return "unknown";
+	if (minutesToStart < 15) return "0-15m";
+	if (minutesToStart <= 60) return "15-60m";
+	if (minutesToStart <= 180) return "1-3h";
+	return "3h+";
+}
+
+function getBotCandidatePolicy(input: {
+	marketType: BotCandidateMarketType;
+	sportSeriesId?: number;
+	minutesToStart: number | null;
+	baseMinGrade: GradeLabel;
+	baseMarketQualityThreshold: number;
+}): BotCandidatePolicy {
+	const timingBucket = resolveTimingBucket(input.minutesToStart);
+	let minGrade = input.baseMinGrade;
+	let marketQualityThreshold = input.baseMarketQualityThreshold;
+	let requireStrongL2 = false;
+
+	if (timingBucket === "1-3h") {
+		minGrade = stricterGrade(minGrade, "B");
+		marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
+	}
+
+	if (timingBucket === "0-15m") {
+		minGrade = stricterGrade(minGrade, "A");
+		marketQualityThreshold = Math.max(marketQualityThreshold, 0.78);
+		requireStrongL2 = true;
+	}
+
+	if (input.marketType === "moneyline") {
+		minGrade = stricterGrade(minGrade, "A");
+		marketQualityThreshold = Math.max(marketQualityThreshold, 0.75);
+		requireStrongL2 = true;
+	}
+
+	if (input.marketType === "spread") {
+		marketQualityThreshold = Math.max(marketQualityThreshold, 0.72);
+	}
+
+	if (input.sportSeriesId === 10470) {
+		if (input.marketType === "total") {
+			marketQualityThreshold = Math.max(marketQualityThreshold, 0.7);
+		}
+		if (input.marketType === "spread") {
+			marketQualityThreshold = Math.max(marketQualityThreshold, 0.71);
+		}
+	}
+
+	return {
+		minGrade,
+		marketQualityThreshold: Math.min(0.9, marketQualityThreshold),
+		requireStrongL2,
+	};
+}
+
+function getBotCandidatePolicyKey(input: {
+	policy: BotCandidatePolicy;
+	marketType: BotCandidateMarketType;
+	sportSeriesId?: number;
+	minutesToStart: number | null;
+}): string {
+	const timingBucket = resolveTimingBucket(input.minutesToStart);
+	const sportKey = input.sportSeriesId === 10470 ? "ncaab" : "default";
+	return `${sportKey}|${input.marketType}|${timingBucket}|${input.policy.minGrade}|q${input.policy.marketQualityThreshold.toFixed(2)}|l2${input.policy.requireStrongL2 ? "strong" : "base"}`;
+}
+
+function getL2PreferenceScore(
+	candidate: BotCandidate,
+	l2ImbalanceNearMidThreshold: number,
+): number {
+	if (candidate.entry.l2Disagreement === true) return 4;
+	if (
+		typeof candidate.entry.l2ImbalanceNearMid === "number" &&
+		Number.isFinite(candidate.entry.l2ImbalanceNearMid)
+	) {
+		if (candidate.entry.l2ImbalanceNearMid <= l2ImbalanceNearMidThreshold) {
+			return 3;
+		}
+		if (candidate.entry.l2ImbalanceNearMid < 0) return 2;
+		return 0;
+	}
+	return 1;
+}
+
+function getCompressedGradeRank(grade: GradeLabel): number {
+	switch (grade) {
+		case "A+":
+		case "A":
+			return 3;
+		case "B":
+			return 2;
+		case "C":
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+function getCandidatePriceValueScore(candidate: BotCandidate): number {
+	const price = candidate.entry.sharpSidePrice;
+	if (typeof price !== "number" || !Number.isFinite(price)) return 0;
+	return 1 - price;
+}
+
+function compareBotCandidates(
+	left: BotCandidate,
+	right: BotCandidate,
+	l2ImbalanceNearMidThreshold: number,
+): number {
+	const leftQuality = left.grade.microstructureScore ?? 0;
+	const rightQuality = right.grade.microstructureScore ?? 0;
+	if (leftQuality !== rightQuality) return rightQuality - leftQuality;
+
+	const leftL2 = getL2PreferenceScore(left, l2ImbalanceNearMidThreshold);
+	const rightL2 = getL2PreferenceScore(right, l2ImbalanceNearMidThreshold);
+	if (leftL2 !== rightL2) return rightL2 - leftL2;
+
+	const leftTiming = getTimingPreferenceScore(getCandidateMinutesToStart(left));
+	const rightTiming = getTimingPreferenceScore(
+		getCandidateMinutesToStart(right),
+	);
+	if (leftTiming !== rightTiming) return rightTiming - leftTiming;
+
+	const leftPriceValue = getCandidatePriceValueScore(left);
+	const rightPriceValue = getCandidatePriceValueScore(right);
+	if (leftPriceValue !== rightPriceValue)
+		return rightPriceValue - leftPriceValue;
+
+	const leftGradeRank = getCompressedGradeRank(left.grade.grade);
+	const rightGradeRank = getCompressedGradeRank(right.grade.grade);
+	if (leftGradeRank !== rightGradeRank) return rightGradeRank - leftGradeRank;
+
+	const leftSignal = left.grade.signalScore ?? 0;
+	const rightSignal = right.grade.signalScore ?? 0;
+	if (leftSignal !== rightSignal) return rightSignal - leftSignal;
+
+	const leftEdge = left.grade.edgeRating ?? 0;
+	const rightEdge = right.grade.edgeRating ?? 0;
+	if (leftEdge !== rightEdge) return rightEdge - leftEdge;
+
+	const leftDiff = left.grade.scoreDifferential ?? 0;
+	const rightDiff = right.grade.scoreDifferential ?? 0;
+	if (leftDiff !== rightDiff) return rightDiff - leftDiff;
+
+	const leftTime =
+		parseEventTime(left.entry.eventTime)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+	const rightTime =
+		parseEventTime(right.entry.eventTime)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+	return leftTime - rightTime;
+}
+
 function toSlimCandidate(entry: {
 	conditionId: string;
 	marketTitle: string;
@@ -640,6 +827,10 @@ async function listBotCandidates(
 		excluded: {},
 		dedupDropped: 0,
 		dedupReasons: {},
+		policyMatched: {},
+		returnedByMarketType: {},
+		returnedByTimingBucket: {},
+		returnedBySportSeries: {},
 	};
 	const upcomingEntries = entries.filter((entry) => {
 		if (inspectConditionId && entry.conditionId === inspectConditionId) {
@@ -762,6 +953,25 @@ async function listBotCandidates(
 	const baseCandidates = upcomingEntries
 		.map((entry) => {
 			const grade = gradeByConditionId.get(entry.conditionId) ?? null;
+			const policyEventTime = parseEventTime(entry.eventTime);
+			const policyMinutesToStart =
+				policyEventTime !== null
+					? (policyEventTime.getTime() - now) / 60_000
+					: null;
+			const policy = getBotCandidatePolicy({
+				marketType: getMarketTypeLabel(entry.marketTitle),
+				sportSeriesId: entry.sportSeriesId,
+				minutesToStart: policyMinutesToStart,
+				baseMinGrade: options.minGrade,
+				baseMarketQualityThreshold: marketQualityThreshold,
+			});
+			const policyKey = getBotCandidatePolicyKey({
+				policy,
+				marketType: getMarketTypeLabel(entry.marketTitle),
+				sportSeriesId: entry.sportSeriesId,
+				minutesToStart: policyMinutesToStart,
+			});
+			incrementCounter(debug.policyMatched, policyKey);
 			if (!grade?.grade) {
 				incrementCounter(debug.excluded, "missing_grade");
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
@@ -774,14 +984,14 @@ async function listBotCandidates(
 				}
 				return null;
 			}
-			if (GRADE_RANK[grade.grade] < GRADE_RANK[options.minGrade]) {
-				incrementCounter(debug.excluded, "below_min_grade");
+			if (GRADE_RANK[grade.grade] < GRADE_RANK[policy.minGrade]) {
+				incrementCounter(debug.excluded, "below_policy_grade");
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
 					debug.inspect = {
 						conditionId: inspectConditionId,
 						foundInEntries: true,
 						stage: "filtered_grade",
-						reason: "below_min_grade",
+						reason: "below_policy_grade",
 					};
 				}
 				return null;
@@ -800,15 +1010,15 @@ async function listBotCandidates(
 			}
 			if (
 				shouldRequireMicrostructure &&
-				(grade.microstructureScore ?? 0) < marketQualityThreshold
+				(grade.microstructureScore ?? 0) < policy.marketQualityThreshold
 			) {
-				incrementCounter(debug.excluded, "below_microstructure_threshold");
+				incrementCounter(debug.excluded, "below_policy_microstructure");
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
 					debug.inspect = {
 						conditionId: inspectConditionId,
 						foundInEntries: true,
 						stage: "filtered_grade",
-						reason: "below_microstructure_threshold",
+						reason: "below_policy_microstructure",
 					};
 				}
 				return null;
@@ -826,6 +1036,7 @@ async function listBotCandidates(
 					computedAt: grade.computedAt,
 					historyUpdatedAt: grade.historyUpdatedAt,
 				},
+				policy,
 			};
 		})
 		.filter((candidate) => candidate !== null);
@@ -860,6 +1071,21 @@ async function listBotCandidates(
 									foundInEntries: true,
 									stage: "filtered_l2",
 									reason: "l2_alpha_not_met",
+								};
+							}
+							return null;
+						}
+						if (candidate.policy.requireStrongL2 && !meetsL2Alpha) {
+							incrementCounter(debug.excluded, "below_policy_l2");
+							if (
+								inspectConditionId &&
+								candidate.entry.conditionId === inspectConditionId
+							) {
+								debug.inspect = {
+									conditionId: inspectConditionId,
+									foundInEntries: true,
+									stage: "filtered_l2",
+									reason: "below_policy_l2",
 								};
 							}
 							return null;
@@ -915,19 +1141,20 @@ async function listBotCandidates(
 			}
 			continue;
 		}
-		const candidateGrade = candidate.grade.grade;
-		const existingGrade = existing.grade.grade;
-		const candidateRank = GRADE_RANK[candidateGrade];
-		const existingRank = GRADE_RANK[existingGrade];
-		if (candidateRank > existingRank) {
+		const comparison = compareBotCandidates(
+			candidate,
+			existing,
+			l2ImbalanceNearMidThreshold,
+		);
+		if (comparison < 0) {
 			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "grade_rank");
+			incrementCounter(debug.dedupReasons, "candidate_priority");
 			deduped.set(key, candidate);
 			continue;
 		}
-		if (candidateRank < existingRank) {
+		if (comparison > 0) {
 			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "grade_rank");
+			incrementCounter(debug.dedupReasons, "candidate_priority");
 			if (
 				inspectConditionId &&
 				candidate.entry.conditionId === inspectConditionId
@@ -936,71 +1163,29 @@ async function listBotCandidates(
 					conditionId: inspectConditionId,
 					foundInEntries: true,
 					stage: "dedup_lost",
-					reason: "grade_rank",
+					reason: "candidate_priority",
 					dedupGroupKey: key,
 					wonDedup: false,
 				};
 			}
-			continue;
-		}
-		const candidateScore = candidate.grade.signalScore ?? 0;
-		const existingScore = existing.grade.signalScore ?? 0;
-		if (candidateScore > existingScore) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "signal_score");
-			deduped.set(key, candidate);
-			continue;
-		}
-		if (candidateScore < existingScore) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "signal_score");
-			continue;
-		}
-		const candidateEdge = candidate.grade.edgeRating ?? 0;
-		const existingEdge = existing.grade.edgeRating ?? 0;
-		if (candidateEdge > existingEdge) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "edge_rating");
-			deduped.set(key, candidate);
-			continue;
-		}
-		if (candidateEdge < existingEdge) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "edge_rating");
-			continue;
-		}
-		const candidateMicrostructure = candidate.grade.microstructureScore ?? 0;
-		const existingMicrostructure = existing.grade.microstructureScore ?? 0;
-		if (candidateMicrostructure > existingMicrostructure) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "microstructure");
-			deduped.set(key, candidate);
-			continue;
-		}
-		if (candidateMicrostructure < existingMicrostructure) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "microstructure");
-			continue;
-		}
-		const candidateDiff = candidate.grade.scoreDifferential ?? 0;
-		const existingDiff = existing.grade.scoreDifferential ?? 0;
-		if (candidateDiff > existingDiff) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "score_differential");
-			deduped.set(key, candidate);
-			continue;
-		}
-		const candidateTime =
-			parseEventTime(candidate.entry.eventTime)?.getTime() ?? 0;
-		const existingTime =
-			parseEventTime(existing.entry.eventTime)?.getTime() ?? 0;
-		if (candidateTime > 0 && existingTime > 0 && candidateTime < existingTime) {
-			debug.dedupDropped += 1;
-			incrementCounter(debug.dedupReasons, "event_time");
-			deduped.set(key, candidate);
 		}
 	}
-	const dedupedCandidates = [...deduped.values()];
+	const dedupedCandidates = [...deduped.values()].sort((left, right) =>
+		compareBotCandidates(left, right, l2ImbalanceNearMidThreshold),
+	);
+	for (const candidate of dedupedCandidates) {
+		incrementCounter(debug.returnedByMarketType, candidate.entry.marketType);
+		incrementCounter(
+			debug.returnedByTimingBucket,
+			resolveTimingBucket(getCandidateMinutesToStart(candidate)),
+		);
+		incrementCounter(
+			debug.returnedBySportSeries,
+			candidate.entry.sportSeriesId !== undefined
+				? String(candidate.entry.sportSeriesId)
+				: "unknown",
+		);
+	}
 	debug.returnedAfterDedup = dedupedCandidates.length;
 	if (inspectConditionId && !debug.inspect) {
 		debug.inspect = {
