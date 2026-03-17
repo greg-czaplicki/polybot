@@ -357,6 +357,24 @@ type CandidateDebugResult = {
 	};
 };
 
+type SnapshotRuntimeSummary =
+	| {
+			fetchedAt: number;
+			filteredMarketsWindow: number;
+			expandedEventCount: number;
+			expandedMarketCount: number;
+			retryCount: number;
+			failureCount: number;
+			totalRuns: number;
+			totalRetries: number;
+			totalFailures: number;
+			cacheFreshness: RuntimeStats["cacheFreshness"] | null;
+	  }
+	| {
+			error: string;
+	  }
+	| null;
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -850,26 +868,30 @@ function RuntimePage() {
 			setClvTimingResult(
 				(refreshedClvTiming.timing ?? null) as ClvTimingResult | null,
 			);
+			const refreshedRuntimeStats = (refreshedStats.stats ??
+				null) as RuntimeStats | null;
 			const refreshedFilteredTotalMarkets =
-				(
-					(refreshedStats.stats ?? null) as RuntimeStats | null
-				)?.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+				refreshedRuntimeStats?.filteredTagStats.reduce(
+					(sum, entry) => sum + entry.count,
+					0,
+				) ?? 0;
+			const runtimeSummary: SnapshotRuntimeSummary = refreshedRuntimeStats
+				? {
+						fetchedAt: refreshedRuntimeStats.fetchedAt,
+						filteredMarketsWindow: refreshedFilteredTotalMarkets,
+						expandedEventCount: refreshedRuntimeStats.expandedEventCount,
+						expandedMarketCount: refreshedRuntimeStats.expandedMarketCount,
+						retryCount: refreshedRuntimeStats.retryCount,
+						failureCount: refreshedRuntimeStats.failureCount,
+						totalRuns: refreshedRuntimeStats.totalRuns,
+						totalRetries: refreshedRuntimeStats.totalRetries,
+						totalFailures: refreshedRuntimeStats.totalFailures,
+						cacheFreshness: refreshedRuntimeStats.cacheFreshness ?? null,
+					}
+				: { error: "runtime_stats_missing" };
 			const snapshot = {
 				generatedAt: new Date().toISOString(),
-				runtime: refreshedStats.stats
-					? {
-							fetchedAt: refreshedStats.stats.fetchedAt,
-							filteredMarketsWindow: refreshedFilteredTotalMarkets,
-							expandedEventCount: refreshedStats.stats.expandedEventCount,
-							expandedMarketCount: refreshedStats.stats.expandedMarketCount,
-							retryCount: refreshedStats.stats.retryCount,
-							failureCount: refreshedStats.stats.failureCount,
-							totalRuns: refreshedStats.stats.totalRuns,
-							totalRetries: refreshedStats.stats.totalRetries,
-							totalFailures: refreshedStats.stats.totalFailures,
-							cacheFreshness: refreshedStats.stats.cacheFreshness ?? null,
-						}
-					: null,
+				runtime: runtimeSummary,
 				candidateDebug: {
 					requested: refreshedCandidateDebug.requested,
 					returned: refreshedCandidateDebug.returned,

@@ -487,7 +487,6 @@ function getBotCandidatePolicy(input: {
 	let requireStrongL2 = false;
 
 	if (timingBucket === "1-3h") {
-		minGrade = stricterGrade(minGrade, "B");
 		marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
 	}
 
@@ -505,6 +504,13 @@ function getBotCandidatePolicy(input: {
 
 	if (input.marketType === "spread") {
 		marketQualityThreshold = Math.max(marketQualityThreshold, 0.72);
+	}
+
+	if (
+		timingBucket === "1-3h" &&
+		(input.marketType === "spread" || input.marketType === "total")
+	) {
+		minGrade = stricterGrade(minGrade, "C");
 	}
 
 	if (input.sportSeriesId === 10470) {
