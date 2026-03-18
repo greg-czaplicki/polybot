@@ -507,6 +507,13 @@ function getBotCandidatePolicy(input: {
 	}
 
 	if (
+		timingBucket === "15-60m" &&
+		(input.marketType === "spread" || input.marketType === "total")
+	) {
+		minGrade = stricterGrade(minGrade, "C");
+	}
+
+	if (
 		timingBucket === "1-3h" &&
 		(input.marketType === "spread" || input.marketType === "total")
 	) {
