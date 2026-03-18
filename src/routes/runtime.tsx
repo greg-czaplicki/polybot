@@ -63,6 +63,14 @@ function formatBps(value: number | null | undefined): string {
 	return `${value.toFixed(1)} bps`;
 }
 
+function formatMinutesToStart(eventTime?: string): string {
+	if (!eventTime) return "—";
+	const eventTimeMs = new Date(eventTime).getTime();
+	if (!Number.isFinite(eventTimeMs)) return "—";
+	const minutes = Math.round((eventTimeMs - Date.now()) / 60000);
+	return `${minutes}m`;
+}
+
 function coverageStatus(
 	covered: number,
 	total: number,
@@ -382,7 +390,43 @@ type GradeRecalibrationResult = {
 	observations: string[];
 };
 
+type CandidateDebugCandidate = {
+	entry: {
+		conditionId: string;
+		marketTitle: string;
+		marketSlug?: string;
+		eventSlug?: string;
+		sportSeriesId?: number;
+		eventTime?: string;
+		sharpSide: "A" | "B" | "EVEN";
+		marketType: string;
+		sideA: {
+			label: string;
+			price: number | null;
+		};
+		sideB: {
+			label: string;
+			price: number | null;
+		};
+		sharpSidePrice: number | null;
+		edgeRating: number;
+		scoreDifferential: number;
+	};
+	grade: {
+		grade: string;
+		signalScore?: number;
+		edgeRating?: number;
+		scoreDifferential?: number;
+		microstructureScore?: number;
+		isReady?: boolean;
+		warnings?: string[];
+		computedAt?: number;
+		historyUpdatedAt?: number;
+	};
+};
+
 type CandidateDebugResult = {
+	candidates: CandidateDebugCandidate[];
 	requested: number;
 	returned: number;
 	debug: {
@@ -614,6 +658,10 @@ function RuntimePage() {
 			},
 		];
 	}, [candidateDebugResult]);
+	const returnedCandidates = useMemo(
+		() => candidateDebugResult?.candidates.slice(0, 5) ?? [],
+		[candidateDebugResult],
+	);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -1100,6 +1148,26 @@ function RuntimePage() {
 						refreshedCandidateDebug.debug.returnedByTimingBucket,
 					returnedBySportSeries:
 						refreshedCandidateDebug.debug.returnedBySportSeries,
+					returnedCandidates: refreshedCandidateDebug.candidates
+						.slice(0, 5)
+						.map((candidate) => ({
+							conditionId: candidate.entry.conditionId,
+							marketTitle: candidate.entry.marketTitle,
+							sportSeriesId: candidate.entry.sportSeriesId ?? null,
+							marketType: candidate.entry.marketType,
+							sharpSide: candidate.entry.sharpSide,
+							sharpSidePrice: candidate.entry.sharpSidePrice,
+							grade: candidate.grade.grade,
+							signalScore: candidate.grade.signalScore ?? null,
+							marketQualityScore: candidate.grade.microstructureScore ?? null,
+							minutesToStart: candidate.entry.eventTime
+								? Math.round(
+										(new Date(candidate.entry.eventTime).getTime() -
+											Date.now()) /
+											60000,
+									)
+								: null,
+						})),
 				},
 				eval: refreshedEval,
 				clvTiming: refreshedClvTiming.timing ?? null,
@@ -1449,6 +1517,81 @@ function RuntimePage() {
 												</div>
 											))}
 										</div>
+									</div>
+									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+										<h3 className="text-sm font-semibold text-slate-100">
+											Top returned candidates
+										</h3>
+										{returnedCandidates.length > 0 ? (
+											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+												<thead className="text-xs uppercase tracking-wide text-slate-500">
+													<tr>
+														<th className="pb-2 pr-4">Market</th>
+														<th className="pb-2 pr-4">Type</th>
+														<th className="pb-2 pr-4">Side</th>
+														<th className="pb-2 pr-4">Grade</th>
+														<th className="pb-2 pr-4">Quality</th>
+														<th className="pb-2 pr-4">Score</th>
+														<th className="pb-2 pr-4">Price</th>
+														<th className="pb-2">Start</th>
+													</tr>
+												</thead>
+												<tbody>
+													{returnedCandidates.map((candidate) => (
+														<tr
+															key={candidate.entry.conditionId}
+															className="border-t border-slate-800/80 align-top"
+														>
+															<td className="py-2 pr-4 text-slate-200">
+																<div className="font-semibold text-slate-100">
+																	{candidate.entry.marketTitle}
+																</div>
+																<div className="text-xs text-slate-500">
+																	Series:{" "}
+																	{candidate.entry.sportSeriesId ?? "unknown"}
+																</div>
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.entry.marketType}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.entry.sharpSide}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.grade.grade}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.grade.microstructureScore !==
+																undefined
+																	? candidate.grade.microstructureScore.toFixed(
+																			2,
+																		)
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.grade.signalScore !== undefined
+																	? candidate.grade.signalScore.toFixed(1)
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.entry.sharpSidePrice !== null
+																	? candidate.entry.sharpSidePrice.toFixed(3)
+																	: "—"}
+															</td>
+															<td className="py-2">
+																{formatMinutesToStart(
+																	candidate.entry.eventTime,
+																)}
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										) : (
+											<p className="mt-3 text-sm text-slate-400">
+												No returned candidates in the current snapshot.
+											</p>
+										)}
 									</div>
 								</div>
 							)}
