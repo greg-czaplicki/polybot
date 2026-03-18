@@ -425,6 +425,23 @@ type CandidateDebugCandidate = {
 	};
 };
 
+type CandidateNearMiss = {
+	reason: string;
+	conditionId: string;
+	marketTitle: string;
+	sportSeriesId?: number;
+	marketType: string;
+	sharpSide: "A" | "B" | "EVEN";
+	sharpSidePrice: number | null;
+	grade?: string;
+	policyMinGrade?: string;
+	signalScore?: number;
+	marketQualityScore?: number;
+	minutesToStart?: number | null;
+	l2ImbalanceNearMid?: number | null;
+	l2Disagreement?: boolean | null;
+};
+
 type CandidateDebugResult = {
 	candidates: CandidateDebugCandidate[];
 	requested: number;
@@ -441,6 +458,7 @@ type CandidateDebugResult = {
 		returnedByMarketType: Record<string, number>;
 		returnedByTimingBucket: Record<string, number>;
 		returnedBySportSeries: Record<string, number>;
+		nearMisses: CandidateNearMiss[];
 	};
 };
 
@@ -660,6 +678,10 @@ function RuntimePage() {
 	}, [candidateDebugResult]);
 	const returnedCandidates = useMemo(
 		() => candidateDebugResult?.candidates.slice(0, 5) ?? [],
+		[candidateDebugResult],
+	);
+	const nearMissCandidates = useMemo(
+		() => candidateDebugResult?.debug.nearMisses.slice(0, 5) ?? [],
 		[candidateDebugResult],
 	);
 
@@ -1148,6 +1170,24 @@ function RuntimePage() {
 						refreshedCandidateDebug.debug.returnedByTimingBucket,
 					returnedBySportSeries:
 						refreshedCandidateDebug.debug.returnedBySportSeries,
+					nearMisses: refreshedCandidateDebug.debug.nearMisses
+						.slice(0, 5)
+						.map((candidate) => ({
+							reason: candidate.reason,
+							conditionId: candidate.conditionId,
+							marketTitle: candidate.marketTitle,
+							sportSeriesId: candidate.sportSeriesId ?? null,
+							marketType: candidate.marketType,
+							sharpSide: candidate.sharpSide,
+							sharpSidePrice: candidate.sharpSidePrice,
+							grade: candidate.grade ?? null,
+							policyMinGrade: candidate.policyMinGrade ?? null,
+							signalScore: candidate.signalScore ?? null,
+							marketQualityScore: candidate.marketQualityScore ?? null,
+							minutesToStart: candidate.minutesToStart ?? null,
+							l2ImbalanceNearMid: candidate.l2ImbalanceNearMid ?? null,
+							l2Disagreement: candidate.l2Disagreement ?? null,
+						})),
 					returnedCandidates: refreshedCandidateDebug.candidates
 						.slice(0, 5)
 						.map((candidate) => ({
@@ -1590,6 +1630,77 @@ function RuntimePage() {
 										) : (
 											<p className="mt-3 text-sm text-slate-400">
 												No returned candidates in the current snapshot.
+											</p>
+										)}
+									</div>
+									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+										<h3 className="text-sm font-semibold text-slate-100">
+											Top near misses
+										</h3>
+										{nearMissCandidates.length > 0 ? (
+											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+												<thead className="text-xs uppercase tracking-wide text-slate-500">
+													<tr>
+														<th className="pb-2 pr-4">Market</th>
+														<th className="pb-2 pr-4">Reason</th>
+														<th className="pb-2 pr-4">Grade</th>
+														<th className="pb-2 pr-4">Target</th>
+														<th className="pb-2 pr-4">Quality</th>
+														<th className="pb-2 pr-4">Score</th>
+														<th className="pb-2 pr-4">Price</th>
+														<th className="pb-2">Start</th>
+													</tr>
+												</thead>
+												<tbody>
+													{nearMissCandidates.map((candidate) => (
+														<tr
+															key={`${candidate.reason}-${candidate.conditionId}`}
+															className="border-t border-slate-800/80 align-top"
+														>
+															<td className="py-2 pr-4 text-slate-200">
+																<div className="font-semibold text-slate-100">
+																	{candidate.marketTitle}
+																</div>
+																<div className="text-xs text-slate-500">
+																	Series: {candidate.sportSeriesId ?? "unknown"}{" "}
+																	• {candidate.marketType}
+																</div>
+															</td>
+															<td className="py-2 pr-4">{candidate.reason}</td>
+															<td className="py-2 pr-4">
+																{candidate.grade ?? "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.policyMinGrade ?? "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.marketQualityScore !== undefined
+																	? candidate.marketQualityScore.toFixed(2)
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.signalScore !== undefined
+																	? candidate.signalScore.toFixed(1)
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{candidate.sharpSidePrice !== null
+																	? candidate.sharpSidePrice.toFixed(3)
+																	: "—"}
+															</td>
+															<td className="py-2">
+																{candidate.minutesToStart !== null &&
+																candidate.minutesToStart !== undefined
+																	? `${Math.round(candidate.minutesToStart)}m`
+																	: "—"}
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										) : (
+											<p className="mt-3 text-sm text-slate-400">
+												No near misses captured in the current snapshot.
 											</p>
 										)}
 									</div>

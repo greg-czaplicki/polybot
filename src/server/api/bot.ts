@@ -43,6 +43,23 @@ type BotCandidateDebugInspect = {
 	wonDedup?: boolean;
 };
 
+type BotCandidateNearMiss = {
+	reason: string;
+	conditionId: string;
+	marketTitle: string;
+	sportSeriesId?: number;
+	marketType: BotCandidateMarketType;
+	sharpSide: "A" | "B" | "EVEN";
+	sharpSidePrice: number | null;
+	grade?: GradeLabel;
+	policyMinGrade?: GradeLabel;
+	signalScore?: number;
+	marketQualityScore?: number;
+	minutesToStart?: number | null;
+	l2ImbalanceNearMid?: number | null;
+	l2Disagreement?: boolean | null;
+};
+
 type BotCandidatesDebug = {
 	totalEntries: number;
 	upcomingEntries: number;
@@ -55,6 +72,7 @@ type BotCandidatesDebug = {
 	returnedByMarketType: Record<string, number>;
 	returnedByTimingBucket: Record<string, number>;
 	returnedBySportSeries: Record<string, number>;
+	nearMisses: BotCandidateNearMiss[];
 	inspect?: BotCandidateDebugInspect;
 };
 
@@ -117,6 +135,24 @@ function normalizeMarketPrice(price?: number | null): number | null {
 	if (typeof price !== "number" || !Number.isFinite(price)) return null;
 	if (price <= 0 || price >= 1) return null;
 	return price;
+}
+
+function pushNearMiss(
+	debug: BotCandidatesDebug,
+	nearMiss: BotCandidateNearMiss,
+): void {
+	debug.nearMisses.push(nearMiss);
+	debug.nearMisses.sort((left, right) => {
+		const leftSignal = left.signalScore ?? Number.NEGATIVE_INFINITY;
+		const rightSignal = right.signalScore ?? Number.NEGATIVE_INFINITY;
+		if (rightSignal !== leftSignal) return rightSignal - leftSignal;
+		const leftQuality = left.marketQualityScore ?? Number.NEGATIVE_INFINITY;
+		const rightQuality = right.marketQualityScore ?? Number.NEGATIVE_INFINITY;
+		return rightQuality - leftQuality;
+	});
+	if (debug.nearMisses.length > 10) {
+		debug.nearMisses.length = 10;
+	}
 }
 
 function computeMarketQualityScoreFromCacheEntry(input: {
@@ -844,6 +880,7 @@ async function listBotCandidates(
 		returnedByMarketType: {},
 		returnedByTimingBucket: {},
 		returnedBySportSeries: {},
+		nearMisses: [],
 	};
 	const upcomingEntries = entries.filter((entry) => {
 		if (inspectConditionId && entry.conditionId === inspectConditionId) {
@@ -999,6 +1036,25 @@ async function listBotCandidates(
 			}
 			if (GRADE_RANK[grade.grade] < GRADE_RANK[policy.minGrade]) {
 				incrementCounter(debug.excluded, "below_policy_grade");
+				pushNearMiss(debug, {
+					reason: "below_policy_grade",
+					conditionId: entry.conditionId,
+					marketTitle: entry.marketTitle,
+					sportSeriesId: entry.sportSeriesId,
+					marketType: getMarketTypeLabel(entry.marketTitle),
+					sharpSide: entry.sharpSide,
+					sharpSidePrice:
+						entry.sharpSide === "A"
+							? (entry.sideA.price ?? null)
+							: entry.sharpSide === "B"
+								? (entry.sideB.price ?? null)
+								: null,
+					grade: grade.grade,
+					policyMinGrade: policy.minGrade,
+					signalScore: grade.signalScore,
+					marketQualityScore: grade.microstructureScore,
+					minutesToStart: policyMinutesToStart,
+				});
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
 					debug.inspect = {
 						conditionId: inspectConditionId,
@@ -1011,6 +1067,25 @@ async function listBotCandidates(
 			}
 			if ((grade.warnings ?? []).includes("no_price_edge")) {
 				incrementCounter(debug.excluded, "no_price_edge");
+				pushNearMiss(debug, {
+					reason: "no_price_edge",
+					conditionId: entry.conditionId,
+					marketTitle: entry.marketTitle,
+					sportSeriesId: entry.sportSeriesId,
+					marketType: getMarketTypeLabel(entry.marketTitle),
+					sharpSide: entry.sharpSide,
+					sharpSidePrice:
+						entry.sharpSide === "A"
+							? (entry.sideA.price ?? null)
+							: entry.sharpSide === "B"
+								? (entry.sideB.price ?? null)
+								: null,
+					grade: grade.grade,
+					policyMinGrade: policy.minGrade,
+					signalScore: grade.signalScore,
+					marketQualityScore: grade.microstructureScore,
+					minutesToStart: policyMinutesToStart,
+				});
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
 					debug.inspect = {
 						conditionId: inspectConditionId,
@@ -1026,6 +1101,25 @@ async function listBotCandidates(
 				(grade.microstructureScore ?? 0) < policy.marketQualityThreshold
 			) {
 				incrementCounter(debug.excluded, "below_policy_microstructure");
+				pushNearMiss(debug, {
+					reason: "below_policy_microstructure",
+					conditionId: entry.conditionId,
+					marketTitle: entry.marketTitle,
+					sportSeriesId: entry.sportSeriesId,
+					marketType: getMarketTypeLabel(entry.marketTitle),
+					sharpSide: entry.sharpSide,
+					sharpSidePrice:
+						entry.sharpSide === "A"
+							? (entry.sideA.price ?? null)
+							: entry.sharpSide === "B"
+								? (entry.sideB.price ?? null)
+								: null,
+					grade: grade.grade,
+					policyMinGrade: policy.minGrade,
+					signalScore: grade.signalScore,
+					marketQualityScore: grade.microstructureScore,
+					minutesToStart: policyMinutesToStart,
+				});
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
 					debug.inspect = {
 						conditionId: inspectConditionId,
@@ -1075,6 +1169,22 @@ async function listBotCandidates(
 							l2.l2Disagreement === true;
 						if (shouldRequireL2Alpha && hasL2Signal && !meetsL2Alpha) {
 							incrementCounter(debug.excluded, "l2_alpha_not_met");
+							pushNearMiss(debug, {
+								reason: "l2_alpha_not_met",
+								conditionId: candidate.entry.conditionId,
+								marketTitle: candidate.entry.marketTitle,
+								sportSeriesId: candidate.entry.sportSeriesId,
+								marketType: candidate.entry.marketType,
+								sharpSide: candidate.entry.sharpSide,
+								sharpSidePrice: candidate.entry.sharpSidePrice,
+								grade: candidate.grade.grade,
+								policyMinGrade: candidate.policy.minGrade,
+								signalScore: candidate.grade.signalScore,
+								marketQualityScore: candidate.grade.microstructureScore,
+								minutesToStart: getCandidateMinutesToStart(candidate),
+								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
+								l2Disagreement: l2.l2Disagreement ?? null,
+							});
 							if (
 								inspectConditionId &&
 								candidate.entry.conditionId === inspectConditionId
@@ -1090,6 +1200,22 @@ async function listBotCandidates(
 						}
 						if (candidate.policy.requireStrongL2 && !meetsL2Alpha) {
 							incrementCounter(debug.excluded, "below_policy_l2");
+							pushNearMiss(debug, {
+								reason: "below_policy_l2",
+								conditionId: candidate.entry.conditionId,
+								marketTitle: candidate.entry.marketTitle,
+								sportSeriesId: candidate.entry.sportSeriesId,
+								marketType: candidate.entry.marketType,
+								sharpSide: candidate.entry.sharpSide,
+								sharpSidePrice: candidate.entry.sharpSidePrice,
+								grade: candidate.grade.grade,
+								policyMinGrade: candidate.policy.minGrade,
+								signalScore: candidate.grade.signalScore,
+								marketQualityScore: candidate.grade.microstructureScore,
+								minutesToStart: getCandidateMinutesToStart(candidate),
+								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
+								l2Disagreement: l2.l2Disagreement ?? null,
+							});
 							if (
 								inspectConditionId &&
 								candidate.entry.conditionId === inspectConditionId
