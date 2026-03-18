@@ -8,6 +8,7 @@ import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
 	getManualPicksClvTimingFn,
+	getManualPicksGradeRecalibrationFn,
 	getManualPicksMarketTypePerformanceFn,
 	getManualPicksShadowWindowsFn,
 	getManualPicksSportPerformanceFn,
@@ -360,6 +361,27 @@ type MarketTypePerformanceResult = {
 	rows: MarketTypePerformanceRow[];
 };
 
+type GradeRecalibrationRow = {
+	grade: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	avgSignalScore: number | null;
+	minSignalScore: number | null;
+	maxSignalScore: number | null;
+};
+
+type GradeRecalibrationResult = {
+	computedAt: number;
+	settledPicks: number;
+	rows: GradeRecalibrationRow[];
+	observations: string[];
+};
+
 type CandidateDebugResult = {
 	requested: number;
 	returned: number;
@@ -461,6 +483,14 @@ function RuntimePage() {
 		string | null
 	>(null);
 	const isMarketTypePerformanceLoadingRef = useRef(false);
+	const [gradeRecalibrationResult, setGradeRecalibrationResult] =
+		useState<GradeRecalibrationResult | null>(null);
+	const [isGradeRecalibrationLoading, setIsGradeRecalibrationLoading] =
+		useState(false);
+	const [gradeRecalibrationError, setGradeRecalibrationError] = useState<
+		string | null
+	>(null);
+	const isGradeRecalibrationLoadingRef = useRef(false);
 	const [candidateDebugResult, setCandidateDebugResult] =
 		useState<CandidateDebugResult | null>(null);
 	const [isCandidateDebugLoading, setIsCandidateDebugLoading] = useState(false);
@@ -818,6 +848,37 @@ function RuntimePage() {
 		[],
 	);
 
+	const loadGradeRecalibration = useCallback(
+		async (requestedLimit?: number) => {
+			if (isGradeRecalibrationLoadingRef.current) return;
+			isGradeRecalibrationLoadingRef.current = true;
+			setIsGradeRecalibrationLoading(true);
+			setGradeRecalibrationError(null);
+			try {
+				const limitValue = requestedLimit ?? 2000;
+				const result = await getManualPicksGradeRecalibrationFn({
+					data: {
+						limit:
+							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+					},
+				});
+				setGradeRecalibrationResult(
+					(result.gradeRecalibration ??
+						null) as GradeRecalibrationResult | null,
+				);
+			} catch (err) {
+				console.error("Failed to load grade recalibration", err);
+				setGradeRecalibrationError(
+					`Failed to load grade recalibration: ${describeError(err)}`,
+				);
+			} finally {
+				setIsGradeRecalibrationLoading(false);
+				isGradeRecalibrationLoadingRef.current = false;
+			}
+		},
+		[],
+	);
+
 	const refreshStats = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
@@ -874,6 +935,7 @@ function RuntimePage() {
 				refreshedClvTiming,
 				refreshedSportPerformance,
 				refreshedMarketTypePerformance,
+				refreshedGradeRecalibration,
 			] = await Promise.all([
 				getBotEvalFn({
 					data: {
@@ -957,6 +1019,15 @@ function RuntimePage() {
 								: 0.66,
 					},
 				}),
+				getManualPicksGradeRecalibrationFn({
+					data: {
+						limit:
+							Number.isFinite(calibrationLimitValue) &&
+							calibrationLimitValue > 0
+								? calibrationLimitValue
+								: 2000,
+					},
+				}),
 			]);
 			setStats((refreshedStats.stats ?? null) as RuntimeStats | null);
 			setCandidateDebugResult(refreshedCandidateDebug as CandidateDebugResult);
@@ -978,6 +1049,10 @@ function RuntimePage() {
 			setMarketTypePerformanceResult(
 				(refreshedMarketTypePerformance.marketTypePerformance ??
 					null) as MarketTypePerformanceResult | null,
+			);
+			setGradeRecalibrationResult(
+				(refreshedGradeRecalibration.gradeRecalibration ??
+					null) as GradeRecalibrationResult | null,
 			);
 			const refreshedRuntimeStats = (refreshedStats.stats ??
 				null) as RuntimeStats | null;
@@ -1033,6 +1108,8 @@ function RuntimePage() {
 				marketTypePerformance:
 					refreshedMarketTypePerformance.marketTypePerformance ?? null,
 				sportPerformance: refreshedSportPerformance.sportPerformance ?? null,
+				gradeRecalibration:
+					refreshedGradeRecalibration.gradeRecalibration ?? null,
 			};
 			await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
 			setCopySnapshotStatus("Snapshot refreshed and copied");
@@ -1137,6 +1214,7 @@ function RuntimePage() {
 		void loadShadowWindows(2000, 0.66);
 		void loadSportPerformance(2000, 0.66);
 		void loadMarketTypePerformance(2000, 0.66);
+		void loadGradeRecalibration(2000);
 	}, [
 		loadStats,
 		loadCandidateDebug,
@@ -1146,6 +1224,7 @@ function RuntimePage() {
 		loadShadowWindows,
 		loadSportPerformance,
 		loadMarketTypePerformance,
+		loadGradeRecalibration,
 	]);
 
 	return (
@@ -2143,6 +2222,18 @@ function RuntimePage() {
 										? "Refreshing..."
 										: "Refresh Buckets"}
 								</button>
+								<button
+									type="button"
+									onClick={() =>
+										void loadGradeRecalibration(Number(calibrationLimit))
+									}
+									disabled={isGradeRecalibrationLoading}
+									className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+								>
+									{isGradeRecalibrationLoading
+										? "Refreshing..."
+										: "Refresh Grade Recal"}
+								</button>
 							</div>
 							{calibrationError && (
 								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
@@ -2152,6 +2243,11 @@ function RuntimePage() {
 							{bucketPerformanceError && (
 								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
 									{bucketPerformanceError}
+								</div>
+							)}
+							{gradeRecalibrationError && (
+								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									{gradeRecalibrationError}
 								</div>
 							)}
 							{calibrationResult ? (
@@ -2226,6 +2322,82 @@ function RuntimePage() {
 											</table>
 										</div>
 									))}
+									{gradeRecalibrationResult ? (
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+											<p className="text-sm font-semibold text-slate-100">
+												Grade Recalibration
+											</p>
+											<p className="mt-1 text-xs text-slate-400">
+												Current grade performance and the score ranges feeding
+												those grades.
+											</p>
+											<div className="mt-3 flex flex-wrap gap-2">
+												{gradeRecalibrationResult.observations.map(
+													(observation) => (
+														<div
+															key={observation}
+															className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100"
+														>
+															{observation}
+														</div>
+													),
+												)}
+											</div>
+											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+												<thead>
+													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
+														<th className="pb-2">Grade</th>
+														<th className="pb-2">Count</th>
+														<th className="pb-2">Hit Rate</th>
+														<th className="pb-2">Avg ROI</th>
+														<th className="pb-2">Avg CLV</th>
+														<th className="pb-2">Avg Score</th>
+														<th className="pb-2">Score Range</th>
+													</tr>
+												</thead>
+												<tbody>
+													{gradeRecalibrationResult.rows.map((row) => (
+														<tr
+															key={row.grade}
+															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+														>
+															<td className="py-2 pr-4 font-semibold text-slate-100">
+																{row.grade}
+															</td>
+															<td className="py-2 pr-4">
+																{row.count}
+																{sampleBadge(row.count) ? (
+																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																		{sampleBadge(row.count)}
+																	</span>
+																) : null}
+															</td>
+															<td className="py-2 pr-4">
+																{formatPercent(row.winRate)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatSignedPercent(row.avgRoi)}
+															</td>
+															<td className="py-2 pr-4">
+																{formatBps(row.avgClvBps)}
+															</td>
+															<td className="py-2 pr-4">
+																{row.avgSignalScore !== null
+																	? row.avgSignalScore.toFixed(1)
+																	: "—"}
+															</td>
+															<td className="py-2">
+																{row.minSignalScore !== null &&
+																row.maxSignalScore !== null
+																	? `${row.minSignalScore.toFixed(1)}-${row.maxSignalScore.toFixed(1)}`
+																	: "—"}
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+									) : null}
 								</div>
 							) : (
 								<p className="text-sm text-slate-400">

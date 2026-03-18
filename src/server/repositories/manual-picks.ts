@@ -227,6 +227,27 @@ export interface ManualPickMarketTypePerformanceSummary {
 	rows: ManualPickMarketTypePerformanceRow[];
 }
 
+export interface ManualPickGradeRecalibrationRow {
+	grade: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+	avgSignalScore: number | null;
+	minSignalScore: number | null;
+	maxSignalScore: number | null;
+}
+
+export interface ManualPickGradeRecalibrationSummary {
+	computedAt: number;
+	settledPicks: number;
+	rows: ManualPickGradeRecalibrationRow[];
+	observations: string[];
+}
+
 export interface CreateManualPickInput {
 	clientPickId?: string;
 	conditionId: string;
@@ -645,6 +666,13 @@ type MutableBucketStats = {
 	clvBpsCount: number;
 };
 
+type MutableGradeBucketStats = MutableBucketStats & {
+	signalScoreSum: number;
+	signalScoreCount: number;
+	minSignalScore: number | null;
+	maxSignalScore: number | null;
+};
+
 function createMutableBuckets(labels: string[]): MutableBucketStats[] {
 	return labels.map((label) => ({
 		label,
@@ -657,6 +685,24 @@ function createMutableBuckets(labels: string[]): MutableBucketStats[] {
 		clvBpsSum: 0,
 		clvBpsCount: 0,
 	}));
+}
+
+function initMutableGradeBucket(label: string): MutableGradeBucketStats {
+	return {
+		label,
+		count: 0,
+		wins: 0,
+		losses: 0,
+		pushes: 0,
+		roiSum: 0,
+		roiCount: 0,
+		clvBpsSum: 0,
+		clvBpsCount: 0,
+		signalScoreSum: 0,
+		signalScoreCount: 0,
+		minSignalScore: null,
+		maxSignalScore: null,
+	};
 }
 
 function bucketToOutput(
@@ -701,6 +747,25 @@ function applyPickToBucket(
 		bucket.clvBpsSum += pick.clv * 10000;
 		bucket.clvBpsCount += 1;
 	}
+}
+
+function applyPickToGradeBucket(
+	bucket: MutableGradeBucketStats,
+	pick: ManualPickEntry,
+): void {
+	applyPickToBucket(bucket, pick);
+	const signalScore = resolveSignalScore(pick);
+	if (signalScore === null || !Number.isFinite(signalScore)) return;
+	bucket.signalScoreSum += signalScore;
+	bucket.signalScoreCount += 1;
+	bucket.minSignalScore =
+		bucket.minSignalScore === null
+			? signalScore
+			: Math.min(bucket.minSignalScore, signalScore);
+	bucket.maxSignalScore =
+		bucket.maxSignalScore === null
+			? signalScore
+			: Math.max(bucket.maxSignalScore, signalScore);
 }
 
 function toPerformanceRows(
@@ -1585,5 +1650,124 @@ export async function getManualPicksMarketTypePerformanceSummary(
 		settledPicks: settled.length,
 		qualityThreshold,
 		rows,
+	};
+}
+
+export async function getManualPicksGradeRecalibrationSummary(
+	db: Db,
+	options?: { limit?: number },
+): Promise<ManualPickGradeRecalibrationSummary> {
+	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
+	const picks = await listManualPicks(db, { limit });
+	const settled = picks.filter((pick) => pick.status !== "pending");
+	const gradeOrder = ["A+", "A", "B", "C", "D", "Unknown"];
+	const statsByGrade = new Map<string, MutableGradeBucketStats>(
+		gradeOrder.map((grade) => [grade, initMutableGradeBucket(grade)]),
+	);
+
+	for (const pick of settled) {
+		const grade = pick.grade?.trim() ? pick.grade.trim() : "Unknown";
+		const bucket = statsByGrade.get(grade) ?? initMutableGradeBucket(grade);
+		applyPickToGradeBucket(bucket, pick);
+		statsByGrade.set(grade, bucket);
+	}
+
+	const rows: ManualPickGradeRecalibrationRow[] = Array.from(
+		statsByGrade.entries(),
+	)
+		.map(([grade, bucket]) => ({
+			grade,
+			count: bucket.count,
+			wins: bucket.wins,
+			losses: bucket.losses,
+			pushes: bucket.pushes,
+			winRate:
+				bucket.wins + bucket.losses > 0
+					? bucket.wins / (bucket.wins + bucket.losses)
+					: null,
+			avgRoi: bucket.roiCount > 0 ? bucket.roiSum / bucket.roiCount : null,
+			avgClvBps:
+				bucket.clvBpsCount > 0 ? bucket.clvBpsSum / bucket.clvBpsCount : null,
+			avgSignalScore:
+				bucket.signalScoreCount > 0
+					? bucket.signalScoreSum / bucket.signalScoreCount
+					: null,
+			minSignalScore: bucket.minSignalScore,
+			maxSignalScore: bucket.maxSignalScore,
+		}))
+		.filter((row) => row.count > 0)
+		.sort((a, b) => {
+			const aIndex = gradeOrder.indexOf(a.grade);
+			const bIndex = gradeOrder.indexOf(b.grade);
+			if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
+			if (aIndex >= 0) return -1;
+			if (bIndex >= 0) return 1;
+			return a.grade.localeCompare(b.grade);
+		});
+
+	const observations: string[] = [];
+	const aPlus = rows.find((row) => row.grade === "A+");
+	const a = rows.find((row) => row.grade === "A");
+	const b = rows.find((row) => row.grade === "B");
+	if (
+		aPlus &&
+		a &&
+		aPlus.count >= 20 &&
+		a.count >= 20 &&
+		(aPlus.avgClvBps ?? Number.NEGATIVE_INFINITY) <=
+			(a.avgClvBps ?? Number.NEGATIVE_INFINITY)
+	) {
+		observations.push("A+ is not outperforming A on average CLV.");
+	}
+	if (
+		a &&
+		b &&
+		a.count >= 20 &&
+		b.count >= 20 &&
+		(a.avgClvBps ?? Number.NEGATIVE_INFINITY) <=
+			(b.avgClvBps ?? Number.NEGATIVE_INFINITY)
+	) {
+		observations.push("A is not outperforming B on average CLV.");
+	}
+	const highScoreBucket = settled.filter((pick) => {
+		const signalScore = resolveSignalScore(pick);
+		return signalScore !== null && signalScore >= 90;
+	});
+	const midScoreBucket = settled.filter((pick) => {
+		const signalScore = resolveSignalScore(pick);
+		return signalScore !== null && signalScore >= 75 && signalScore < 90;
+	});
+	const avgClvFor = (items: ManualPickEntry[]) => {
+		let sum = 0;
+		let count = 0;
+		for (const item of items) {
+			if (typeof item.clv === "number" && Number.isFinite(item.clv)) {
+				sum += item.clv * 10000;
+				count += 1;
+			}
+		}
+		return count > 0 ? sum / count : null;
+	};
+	const highScoreAvgClv = avgClvFor(highScoreBucket);
+	const midScoreAvgClv = avgClvFor(midScoreBucket);
+	if (
+		highScoreBucket.length >= 20 &&
+		midScoreBucket.length >= 20 &&
+		(highScoreAvgClv ?? Number.NEGATIVE_INFINITY) <=
+			(midScoreAvgClv ?? Number.NEGATIVE_INFINITY)
+	) {
+		observations.push("90+ signal scores are not outperforming 75-90 scores.");
+	}
+	if (observations.length === 0) {
+		observations.push(
+			"No obvious grade-order inversion detected in current sample.",
+		);
+	}
+
+	return {
+		computedAt: nowUnixSeconds(),
+		settledPicks: settled.length,
+		rows,
+		observations,
 	};
 }

@@ -8,6 +8,7 @@ import {
 	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
 	getManualPicksClvTimingSummary,
+	getManualPicksGradeRecalibrationSummary,
 	getManualPicksMarketTypePerformanceSummary,
 	getManualPicksShadowWindowSummary,
 	getManualPicksSportPerformanceSummary,
@@ -368,6 +369,25 @@ export const getManualPicksMarketTypePerformanceFn = createServerFn({
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`market_type_performance_failed: ${message}`);
+	}
+});
+
+export const getManualPicksGradeRecalibrationFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number };
+	const db = getDb(context);
+	try {
+		const gradeRecalibration = await getManualPicksGradeRecalibrationSummary(
+			db,
+			{
+				limit: payload.limit,
+			},
+		);
+		return { gradeRecalibration };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`grade_recalibration_failed: ${message}`);
 	}
 });
 
