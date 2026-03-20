@@ -1127,24 +1127,40 @@ function RuntimePage() {
 			const refreshedRuntimeStats = (refreshedStats.stats ??
 				null) as RuntimeStats | null;
 			const refreshedFilteredTotalMarkets =
-				refreshedRuntimeStats?.filteredTagStats.reduce(
+				refreshedRuntimeStats?.filteredTagStats?.reduce(
 					(sum, entry) => sum + entry.count,
 					0,
 				) ?? 0;
-			const runtimeSummary: SnapshotRuntimeSummary = refreshedRuntimeStats
+			const hasFullStats =
+				refreshedRuntimeStats && "fetchedAt" in refreshedRuntimeStats;
+			const runtimeSummary: SnapshotRuntimeSummary = hasFullStats
 				? {
 						fetchedAt: refreshedRuntimeStats.fetchedAt,
 						filteredMarketsWindow: refreshedFilteredTotalMarkets,
-						expandedEventCount: refreshedRuntimeStats.expandedEventCount,
-						expandedMarketCount: refreshedRuntimeStats.expandedMarketCount,
-						retryCount: refreshedRuntimeStats.retryCount,
-						failureCount: refreshedRuntimeStats.failureCount,
-						totalRuns: refreshedRuntimeStats.totalRuns,
-						totalRetries: refreshedRuntimeStats.totalRetries,
-						totalFailures: refreshedRuntimeStats.totalFailures,
+						expandedEventCount: refreshedRuntimeStats.expandedEventCount ?? 0,
+						expandedMarketCount:
+							refreshedRuntimeStats.expandedMarketCount ?? 0,
+						retryCount: refreshedRuntimeStats.retryCount ?? 0,
+						failureCount: refreshedRuntimeStats.failureCount ?? 0,
+						totalRuns: refreshedRuntimeStats.totalRuns ?? 0,
+						totalRetries: refreshedRuntimeStats.totalRetries ?? 0,
+						totalFailures: refreshedRuntimeStats.totalFailures ?? 0,
 						cacheFreshness: refreshedRuntimeStats.cacheFreshness ?? null,
 					}
-				: { error: "runtime_stats_missing" };
+				: {
+						fetchedAt: Math.floor(Date.now() / 1000),
+						filteredMarketsWindow: 0,
+						expandedEventCount: 0,
+						expandedMarketCount: 0,
+						retryCount: 0,
+						failureCount: 0,
+						totalRuns: 0,
+						totalRetries: 0,
+						totalFailures: 0,
+						cacheFreshness:
+							((refreshedRuntimeStats as Record<string, unknown> | null)
+								?.cacheFreshness as RuntimeStats["cacheFreshness"]) ?? null,
+					};
 			const snapshot = {
 				generatedAt: new Date().toISOString(),
 				runtime: runtimeSummary,

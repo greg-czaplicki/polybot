@@ -3195,10 +3195,7 @@ export const getRuntimeMarketStatsFn = createServerFn({
 	);
 
 	if (!lastRuntimeMarketStats) {
-		if (payload.minimal) {
-			return { stats: { cacheFreshness } };
-		}
-		return { stats: null };
+		return { stats: { cacheFreshness } };
 	}
 
 	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };

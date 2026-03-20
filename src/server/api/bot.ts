@@ -25,7 +25,7 @@ const DEFAULT_CACHE_WINDOW_HOURS = 24;
 const DEFAULT_CANDIDATE_WINDOW_MINUTES = 60;
 const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_MIN_MINUTES_TO_START = 15;
-const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.66;
+const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.7;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	A: 4,
@@ -121,6 +121,8 @@ type BotCandidatePolicy = {
 	minGrade: GradeLabel;
 	marketQualityThreshold: number;
 	requireStrongL2: boolean;
+	reject?: boolean;
+	rejectReason?: string;
 };
 
 function clampUnit(value: number): number {
@@ -522,14 +524,30 @@ function getBotCandidatePolicy(input: {
 	let marketQualityThreshold = input.baseMarketQualityThreshold;
 	let requireStrongL2 = false;
 
-	if (timingBucket === "1-3h") {
-		marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
+	// Kill 0-15m picks entirely — catastrophic performance (-1709 CLV bps, 33% win rate)
+	if (timingBucket === "0-15m") {
+		return {
+			minGrade: "A+",
+			marketQualityThreshold: 1,
+			requireStrongL2: true,
+			reject: true,
+			rejectReason: "0-15m_timing_excluded",
+		};
 	}
 
-	if (timingBucket === "0-15m") {
-		minGrade = stricterGrade(minGrade, "A");
-		marketQualityThreshold = Math.max(marketQualityThreshold, 0.78);
-		requireStrongL2 = true;
+	// NHL sport gate — deeply negative (-2035 CLV bps, 27% win rate)
+	if (input.sportSeriesId === 10346) {
+		return {
+			minGrade: "A+",
+			marketQualityThreshold: 1,
+			requireStrongL2: true,
+			reject: true,
+			rejectReason: "nhl_sport_excluded",
+		};
+	}
+
+	if (timingBucket === "1-3h") {
+		// 1-3h shows promise — use default quality threshold (0.70), don't raise to 0.74
 	}
 
 	if (input.marketType === "moneyline") {
@@ -540,6 +558,11 @@ function getBotCandidatePolicy(input: {
 
 	if (input.marketType === "spread") {
 		marketQualityThreshold = Math.max(marketQualityThreshold, 0.72);
+	}
+
+	// Tighten totals quality — still negative after quality filter (-141 CLV bps)
+	if (input.marketType === "total") {
+		marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
 	}
 
 	if (
@@ -556,9 +579,14 @@ function getBotCandidatePolicy(input: {
 		minGrade = stricterGrade(minGrade, "C");
 	}
 
+	// Cap policy minGrade at A — A+ is not outperforming A
+	if (minGrade === "A+") {
+		minGrade = "A";
+	}
+
 	if (input.sportSeriesId === 10470) {
 		if (input.marketType === "total") {
-			marketQualityThreshold = Math.max(marketQualityThreshold, 0.7);
+			marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
 		}
 		if (input.marketType === "spread") {
 			marketQualityThreshold = Math.max(marketQualityThreshold, 0.71);
@@ -579,7 +607,12 @@ function getBotCandidatePolicyKey(input: {
 	minutesToStart: number | null;
 }): string {
 	const timingBucket = resolveTimingBucket(input.minutesToStart);
-	const sportKey = input.sportSeriesId === 10470 ? "ncaab" : "default";
+	const sportKey =
+		input.sportSeriesId === 10470
+			? "ncaab"
+			: input.sportSeriesId === 10346
+				? "nhl"
+				: "default";
 	return `${sportKey}|${input.marketType}|${timingBucket}|${input.policy.minGrade}|q${input.policy.marketQualityThreshold.toFixed(2)}|l2${input.policy.requireStrongL2 ? "strong" : "base"}`;
 }
 
@@ -1022,6 +1055,38 @@ async function listBotCandidates(
 				minutesToStart: policyMinutesToStart,
 			});
 			incrementCounter(debug.policyMatched, policyKey);
+			if (policy.reject) {
+				const rejectReason = policy.rejectReason ?? "policy_rejected";
+				incrementCounter(debug.excluded, rejectReason);
+				pushNearMiss(debug, {
+					reason: rejectReason,
+					conditionId: entry.conditionId,
+					marketTitle: entry.marketTitle,
+					sportSeriesId: entry.sportSeriesId,
+					marketType: getMarketTypeLabel(entry.marketTitle),
+					sharpSide: entry.sharpSide,
+					sharpSidePrice:
+						entry.sharpSide === "A"
+							? (entry.sideA.price ?? null)
+							: entry.sharpSide === "B"
+								? (entry.sideB.price ?? null)
+								: null,
+					grade: grade?.grade,
+					policyMinGrade: policy.minGrade,
+					signalScore: grade?.signalScore,
+					marketQualityScore: grade?.microstructureScore,
+					minutesToStart: policyMinutesToStart,
+				});
+				if (inspectConditionId && entry.conditionId === inspectConditionId) {
+					debug.inspect = {
+						conditionId: inspectConditionId,
+						foundInEntries: true,
+						stage: "filtered_policy",
+						reason: rejectReason,
+					};
+				}
+				return null;
+			}
 			if (!grade?.grade) {
 				incrementCounter(debug.excluded, "missing_grade");
 				if (inspectConditionId && entry.conditionId === inspectConditionId) {
