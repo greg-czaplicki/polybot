@@ -289,10 +289,14 @@ export const getManualPicksSummaryFn = createServerFn({
 export const getManualPicksCalibrationFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	const calibration = await getManualPicksCalibrationSummary(db, {
 		limit: payload.limit,
+		sincePickedAt: payload.sincePickedAt,
 	});
 	return { calibration };
 });
@@ -300,10 +304,14 @@ export const getManualPicksCalibrationFn = createServerFn({
 export const getManualPicksBucketPerformanceFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	const performance = await getManualPicksBucketPerformanceSummary(db, {
 		limit: payload.limit,
+		sincePickedAt: payload.sincePickedAt,
 	});
 	return { performance };
 });
@@ -311,11 +319,16 @@ export const getManualPicksBucketPerformanceFn = createServerFn({
 export const getManualPicksClvTimingFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	const timing = await getManualPicksClvTimingSummary(db, {
 		limit: payload.limit,
 		qualityThreshold: payload.qualityThreshold,
+		sincePickedAt: payload.sincePickedAt,
 	});
 	return { timing };
 });
@@ -323,12 +336,17 @@ export const getManualPicksClvTimingFn = createServerFn({
 export const getManualPicksShadowWindowsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	try {
 		const shadow = await getManualPicksShadowWindowSummary(db, {
 			limit: payload.limit,
 			qualityThreshold: payload.qualityThreshold,
+			sincePickedAt: payload.sincePickedAt,
 		});
 		return { shadow };
 	} catch (error) {
@@ -340,12 +358,17 @@ export const getManualPicksShadowWindowsFn = createServerFn({
 export const getManualPicksSportPerformanceFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	try {
 		const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
 			limit: payload.limit,
 			qualityThreshold: payload.qualityThreshold,
+			sincePickedAt: payload.sincePickedAt,
 		});
 		return { sportPerformance };
 	} catch (error) {
@@ -357,13 +380,18 @@ export const getManualPicksSportPerformanceFn = createServerFn({
 export const getManualPicksMarketTypePerformanceFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number; qualityThreshold?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	try {
 		const marketTypePerformance =
 			await getManualPicksMarketTypePerformanceSummary(db, {
 				limit: payload.limit,
 				qualityThreshold: payload.qualityThreshold,
+				sincePickedAt: payload.sincePickedAt,
 			});
 		return { marketTypePerformance };
 	} catch (error) {
@@ -375,13 +403,17 @@ export const getManualPicksMarketTypePerformanceFn = createServerFn({
 export const getManualPicksGradeRecalibrationFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number };
+	const payload = (data ?? {}) as {
+		limit?: number;
+		sincePickedAt?: number;
+	};
 	const db = getDb(context);
 	try {
 		const gradeRecalibration = await getManualPicksGradeRecalibrationSummary(
 			db,
 			{
 				limit: payload.limit,
+				sincePickedAt: payload.sincePickedAt,
 			},
 		);
 		return { gradeRecalibration };

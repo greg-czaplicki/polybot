@@ -563,6 +563,8 @@ function RuntimePage() {
 		null,
 	);
 	const [isCopyingSnapshot, setIsCopyingSnapshot] = useState(false);
+	const [sinceFilter, setSinceFilter] = useState<string>("");
+	const sincePickedAtRef = useRef<number | undefined>(undefined);
 
 	const filteredTotalMarkets = stats?.filteredTagStats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -742,6 +744,7 @@ function RuntimePage() {
 				data: {
 					limit:
 						Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+					sincePickedAt: sincePickedAtRef.current,
 				},
 			});
 			setCalibrationResult(
@@ -767,6 +770,7 @@ function RuntimePage() {
 				data: {
 					limit:
 						Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+					sincePickedAt: sincePickedAtRef.current,
 				},
 			});
 			setBucketPerformanceResult(
@@ -798,6 +802,7 @@ function RuntimePage() {
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				});
 				setClvTimingResult((result.timing ?? null) as ClvTimingResult | null);
@@ -829,6 +834,7 @@ function RuntimePage() {
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				});
 				setShadowWindowResult(
@@ -864,6 +870,7 @@ function RuntimePage() {
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				});
 				setSportPerformanceResult(
@@ -899,6 +906,7 @@ function RuntimePage() {
 							Number.isFinite(thresholdValue) && thresholdValue > 0
 								? thresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				});
 				setMarketTypePerformanceResult(
@@ -930,6 +938,7 @@ function RuntimePage() {
 					data: {
 						limit:
 							Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				});
 				setGradeRecalibrationResult(
@@ -1039,6 +1048,7 @@ function RuntimePage() {
 							calibrationLimitValue > 0
 								? calibrationLimitValue
 								: 2000,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 				getManualPicksBucketPerformanceFn({
@@ -1048,6 +1058,7 @@ function RuntimePage() {
 							calibrationLimitValue > 0
 								? calibrationLimitValue
 								: 2000,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 				getManualPicksClvTimingFn({
@@ -1061,6 +1072,7 @@ function RuntimePage() {
 							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
 								? clvThresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 				getManualPicksSportPerformanceFn({
@@ -1074,6 +1086,7 @@ function RuntimePage() {
 							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
 								? clvThresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 				getManualPicksMarketTypePerformanceFn({
@@ -1087,6 +1100,7 @@ function RuntimePage() {
 							Number.isFinite(clvThresholdValue) && clvThresholdValue > 0
 								? clvThresholdValue
 								: 0.66,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 				getManualPicksGradeRecalibrationFn({
@@ -1096,6 +1110,7 @@ function RuntimePage() {
 							calibrationLimitValue > 0
 								? calibrationLimitValue
 								: 2000,
+						sincePickedAt: sincePickedAtRef.current,
 					},
 				}),
 			]);
@@ -2469,6 +2484,38 @@ function RuntimePage() {
 										}
 										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
 									/>
+								</div>
+								<div>
+									<label
+										htmlFor="since-filter"
+										className="block text-xs text-slate-400"
+									>
+										Since
+									</label>
+									<select
+										id="since-filter"
+										value={sinceFilter}
+										onChange={(event) => {
+											const value = event.target.value;
+											setSinceFilter(value);
+											if (value === "") {
+												sincePickedAtRef.current = undefined;
+											} else {
+												const nowSec = Math.floor(Date.now() / 1000);
+												sincePickedAtRef.current =
+													nowSec - Number(value) * 86400;
+											}
+										}}
+										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+									>
+										<option value="">All time</option>
+										<option value="1">Last 24h</option>
+										<option value="3">Last 3d</option>
+										<option value="7">Last 7d</option>
+										<option value="14">Last 14d</option>
+										<option value="18">Since L2 gate (Mar 2)</option>
+										<option value="30">Last 30d</option>
+									</select>
 								</div>
 								<button
 									type="button"

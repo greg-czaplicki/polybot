@@ -496,14 +496,26 @@ export async function createManualPick(
 
 export async function listManualPicks(
 	db: Db,
-	options?: { status?: ManualPickStatus; limit?: number },
+	options?: {
+		status?: ManualPickStatus;
+		limit?: number;
+		sincePickedAt?: number;
+	},
 ): Promise<ManualPickEntry[]> {
-	const { status, limit = 25 } = options ?? {};
+	const { status, limit = 25, sincePickedAt } = options ?? {};
 	const params: unknown[] = [];
-	let query = `SELECT * FROM manual_picks`;
+	const conditions: string[] = [];
 	if (status) {
-		query += ` WHERE status = ?`;
+		conditions.push(`status = ?`);
 		params.push(status);
+	}
+	if (typeof sincePickedAt === "number" && Number.isFinite(sincePickedAt)) {
+		conditions.push(`picked_at >= ?`);
+		params.push(sincePickedAt);
+	}
+	let query = `SELECT * FROM manual_picks`;
+	if (conditions.length > 0) {
+		query += ` WHERE ${conditions.join(" AND ")}`;
 	}
 	query += ` ORDER BY picked_at DESC LIMIT ?`;
 	params.push(limit);
@@ -1052,10 +1064,13 @@ function bucketToShadowWindowRow(
 
 export async function getManualPicksCalibrationSummary(
 	db: Db,
-	options?: { limit?: number },
+	options?: { limit?: number; sincePickedAt?: number },
 ): Promise<ManualPickCalibrationSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const signalBuckets = createMutableBuckets(
 		SIGNAL_SCORE_BUCKETS.map((bucket) => bucket.label),
@@ -1126,10 +1141,13 @@ export async function getManualPicksCalibrationSummary(
 
 export async function getManualPicksBucketPerformanceSummary(
 	db: Db,
-	options?: { limit?: number },
+	options?: { limit?: number; sincePickedAt?: number },
 ): Promise<ManualPickBucketPerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const timeBuckets = createMutableBuckets(
 		TIME_TO_START_BUCKETS.map((bucket) => bucket.label),
@@ -1211,7 +1229,11 @@ export async function getManualPicksBucketPerformanceSummary(
 
 export async function getManualPicksClvTimingSummary(
 	db: Db,
-	options?: { limit?: number; qualityThreshold?: number },
+	options?: {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	},
 ): Promise<ManualPickClvTimingSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const qualityThreshold =
@@ -1219,7 +1241,10 @@ export async function getManualPicksClvTimingSummary(
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
 			: 0.66;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const segments = [
 		{
@@ -1275,7 +1300,11 @@ export async function getManualPicksClvTimingSummary(
 
 export async function getManualPicksShadowWindowSummary(
 	db: Db,
-	options?: { limit?: number; qualityThreshold?: number },
+	options?: {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	},
 ): Promise<ManualPickShadowWindowSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const qualityThreshold =
@@ -1283,7 +1312,10 @@ export async function getManualPicksShadowWindowSummary(
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
 			: 0.66;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter(
 		(pick) =>
 			pick.status !== "pending" &&
@@ -1463,7 +1495,11 @@ export async function getManualPicksShadowWindowSummary(
 
 export async function getManualPicksSportPerformanceSummary(
 	db: Db,
-	options?: { limit?: number; qualityThreshold?: number },
+	options?: {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	},
 ): Promise<ManualPickSportPerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const qualityThreshold =
@@ -1471,7 +1507,10 @@ export async function getManualPicksSportPerformanceSummary(
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
 			: 0.66;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const conditionIds = Array.from(
 		new Set(settled.map((pick) => pick.conditionId)),
@@ -1575,7 +1614,11 @@ export async function getManualPicksSportPerformanceSummary(
 
 export async function getManualPicksMarketTypePerformanceSummary(
 	db: Db,
-	options?: { limit?: number; qualityThreshold?: number },
+	options?: {
+		limit?: number;
+		qualityThreshold?: number;
+		sincePickedAt?: number;
+	},
 ): Promise<ManualPickMarketTypePerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const qualityThreshold =
@@ -1583,7 +1626,10 @@ export async function getManualPicksMarketTypePerformanceSummary(
 		Number.isFinite(options.qualityThreshold)
 			? options.qualityThreshold
 			: 0.66;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 
 	const statsByMarketType = new Map<
@@ -1655,10 +1701,13 @@ export async function getManualPicksMarketTypePerformanceSummary(
 
 export async function getManualPicksGradeRecalibrationSummary(
 	db: Db,
-	options?: { limit?: number },
+	options?: { limit?: number; sincePickedAt?: number },
 ): Promise<ManualPickGradeRecalibrationSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
-	const picks = await listManualPicks(db, { limit });
+	const picks = await listManualPicks(db, {
+		limit,
+		sincePickedAt: options?.sincePickedAt,
+	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const gradeOrder = ["A+", "A", "B", "C", "D", "Unknown"];
 	const statsByGrade = new Map<string, MutableGradeBucketStats>(
