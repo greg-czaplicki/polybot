@@ -2500,6 +2500,8 @@ function RuntimePage() {
 											setSinceFilter(value);
 											if (value === "") {
 												sincePickedAtRef.current = undefined;
+											} else if (value.startsWith("@")) {
+												sincePickedAtRef.current = Number(value.slice(1));
 											} else {
 												const nowSec = Math.floor(Date.now() / 1000);
 												sincePickedAtRef.current =
@@ -2513,9 +2515,16 @@ function RuntimePage() {
 										<option value="3">Last 3d</option>
 										<option value="7">Last 7d</option>
 										<option value="14">Last 14d</option>
-										<option value="18">Since L2 gate (Mar 2)</option>
+										<option value="@1772409600">Since L2 gate (Mar 2)</option>
 										<option value="30">Last 30d</option>
 									</select>
+									{sinceFilter !== "" && (
+										<p className="mt-1 text-xs text-slate-400">
+											{sinceFilter.startsWith("@")
+												? `Showing picks since Mar 2 (L2 gate)`
+												: `Showing picks since ${new Date(Date.now() - Number(sinceFilter) * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${sinceFilter}d)`}
+										</p>
+									)}
 								</div>
 								<button
 									type="button"
