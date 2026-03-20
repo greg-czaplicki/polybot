@@ -564,7 +564,7 @@ function RuntimePage() {
 	);
 	const [isCopyingSnapshot, setIsCopyingSnapshot] = useState(false);
 
-	const filteredTotalMarkets = stats
+	const filteredTotalMarkets = stats?.filteredTagStats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
 		: 0;
 
@@ -2758,7 +2758,7 @@ function RuntimePage() {
 					</section>
 
 					<section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-6">
-						{stats ? (
+						{stats?.filteredTagStats ? (
 							<div className="overflow-auto">
 								<table className="min-w-full text-left text-sm text-slate-200">
 									<thead>
