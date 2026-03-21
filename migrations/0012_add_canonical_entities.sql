@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS game_lines (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
-CREATE INDEX IF NOT EXISTS idx_game_lines_game ON game_lines(game_id, snapshot_type);
+-- Unique constraint supports ON CONFLICT upsert by (game_id, snapshot_type)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_game_lines_game_snapshot ON game_lines(game_id, snapshot_type);
 
 -- ============================================================================
 -- TEAM_GAME_FACTS — per-team SU/ATS/OU results and contextual flags per game
@@ -106,8 +107,8 @@ CREATE INDEX IF NOT EXISTS idx_tgf_team_favdog ON team_game_facts(team_id, fav_d
 -- Sport filtering: "team X last N in NFL"
 CREATE INDEX IF NOT EXISTS idx_tgf_team_sport ON team_game_facts(team_id, sport_tag, game_time DESC);
 
--- Join back to game: used when enriching game detail views
-CREATE INDEX IF NOT EXISTS idx_tgf_game ON team_game_facts(game_id);
+-- Unique constraint: one fact row per team per game, supports ON CONFLICT upsert
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tgf_game_team ON team_game_facts(game_id, team_id);
 
 -- ============================================================================
 -- TEAM_TREND_SNAPSHOTS — precomputed rolling splits (e.g., last 10 away dog ATS)
@@ -147,8 +148,8 @@ CREATE TABLE IF NOT EXISTS team_trend_snapshots (
 -- Primary query: "team X latest snapshot of type Y"
 CREATE INDEX IF NOT EXISTS idx_tts_team_type ON team_trend_snapshots(team_id, snapshot_type, as_of_time DESC);
 
--- Join to specific game: "what was team X's trend when game Y happened?"
-CREATE INDEX IF NOT EXISTS idx_tts_team_game ON team_trend_snapshots(team_id, as_of_game_id);
+-- Unique constraint: one snapshot per team/type/game, supports ON CONFLICT upsert
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_team_type_game ON team_trend_snapshots(team_id, snapshot_type, as_of_game_id);
 
 -- League-wide queries: "all teams' home ATS last 10, ordered by recency"
 CREATE INDEX IF NOT EXISTS idx_tts_sport ON team_trend_snapshots(sport_tag, snapshot_type, as_of_time DESC);

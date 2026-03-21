@@ -163,14 +163,14 @@ Each index is justified by a specific query pattern from the swarm goal:
 | `idx_games_sport_season` | List games for a sport/season combination |
 | `idx_games_game_time` | Time-ordered game listing across all sports |
 | `idx_games_home_team` / `idx_games_away_team` | "All games for team X" (union of home + away) |
-| `idx_game_lines_game` | Fetch opening/closing lines for a game |
+| `idx_game_lines_game_snapshot` (UNIQUE) | Fetch opening/closing lines for a game; supports `ON CONFLICT(game_id, snapshot_type)` upsert |
 | `idx_tgf_team` | "Team X last 10 games" — the most common query |
 | `idx_tgf_team_venue` | "Team X last 10 as home/away" |
 | `idx_tgf_team_favdog` | "Team X last 10 as favorite/dog" |
 | `idx_tgf_team_sport` | "Team X last 10 in NFL" |
-| `idx_tgf_game` | Join facts back to game for detail views |
+| `idx_tgf_game_team` (UNIQUE) | One fact row per team per game; supports `ON CONFLICT(game_id, team_id)` upsert |
 | `idx_tts_team_type` | "Team X latest overall/home/away_dog snapshot" |
-| `idx_tts_team_game` | "What was team X's trend when game Y happened?" (join to picks) |
+| `idx_tts_team_type_game` (UNIQUE) | One snapshot per team/type/game; supports `ON CONFLICT(team_id, snapshot_type, as_of_game_id)` upsert |
 | `idx_tts_sport` | "All teams' home ATS last 10" for league-wide dashboards |
 
 **Composite index ordering:** Indexes on `team_game_facts` and `team_trend_snapshots` lead with `team_id` because queries always filter by team first, then by split dimension, then order by time. The `DESC` on `game_time` / `as_of_time` columns optimizes "most recent N" queries without requiring a sort step.
