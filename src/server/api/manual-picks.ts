@@ -408,7 +408,7 @@ async function getSideLabelsForEnrichment(
 /**
  * Derives fav_dog_role from home spread and team position.
  */
-function deriveFavDogRole(
+export function deriveFavDogRole(
 	homeSpread: number | null,
 	isHomeTeam: boolean,
 ): FavDogRole | null {
@@ -423,7 +423,7 @@ function deriveFavDogRole(
  * Resolves which team was picked based on the sharp_side label.
  * Returns null when confidence is insufficient rather than guessing.
  */
-function resolvePickedSideForEnrichment(opts: {
+export function resolvePickedSideForEnrichment(opts: {
 	pickedLabel: string | null;
 	sideALabel: string | null;
 	sideBLabel: string | null;

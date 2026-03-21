@@ -387,7 +387,7 @@ export const getPickContextFn = createServerFn({ method: "POST" }).handler(
 /**
  * Derive the most specific snapshot type from venue and fav/dog roles.
  */
-function deriveSnapshotType(
+export function deriveSnapshotType(
 	venueRole: VenueRole | null,
 	favDogRole: FavDogRole | null,
 ): TrendSnapshotType {
