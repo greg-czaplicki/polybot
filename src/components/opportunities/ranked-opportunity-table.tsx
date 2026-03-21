@@ -44,7 +44,7 @@ function matchupLabel(opp: RankedOpportunity): string {
 
 /** Top factor summary for the row. */
 function topFactorSummary(opp: RankedOpportunity): string {
-	const top = opp.scoring.topPositive[0];
+	const top = opp.scoring.factors.find((f) => f.points > 0);
 	return top ? top.label : "—";
 }
 
@@ -119,21 +119,21 @@ export function RankedOpportunityTable({
 								{/* Warnings count */}
 								{opp.scoring.warnings.length > 0 && (
 									<div className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.5rem] text-amber-400">
-										{opp.scoring.warnings.length}⚠
+										{opp.scoring.warnings.length}!
 									</div>
 								)}
 
 								{/* Score + tier */}
 								<div className="shrink-0 text-right">
 									<div
-										className={`text-sm font-bold ${scoreColor(opp.scoring.score)}`}
+										className={`text-sm font-bold ${scoreColor(opp.scoring.totalScore)}`}
 									>
-										{opp.scoring.score}
+										{opp.scoring.totalScore}
 									</div>
 									<span
-										className={`inline-block rounded-full border px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-[0.15em] ${tierBadgeClass(opp.scoring.score)}`}
+										className={`inline-block rounded-full border px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-[0.15em] ${tierBadgeClass(opp.scoring.totalScore)}`}
 									>
-										{scoreTier(opp.scoring.score)}
+										{scoreTier(opp.scoring.totalScore)}
 									</span>
 								</div>
 

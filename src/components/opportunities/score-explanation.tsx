@@ -4,8 +4,7 @@
 
 import type {
 	OpportunityScore,
-	ScoreFactor,
-	ScoreWarning,
+	ScoringFactor,
 } from "../../server/domain/opportunity-scoring";
 
 /** Color class based on factor contribution direction. */
@@ -30,7 +29,7 @@ function FactorList({
 }: {
 	title: string;
 	titleColor: string;
-	factors: ScoreFactor[];
+	factors: ScoringFactor[];
 }) {
 	if (factors.length === 0) return null;
 	return (
@@ -42,19 +41,13 @@ function FactorList({
 			</div>
 			{factors.map((f) => (
 				<div
-					key={`${f.category}-${f.label}`}
+					key={`${f.name}-${f.label}`}
 					className="flex items-center justify-between py-0.5 text-[0.65rem]"
 				>
 					<span className="text-slate-300">
 						{f.label}
-						{f.rawValue != null && (
-							<span className="ml-1 text-slate-500">
-								[
-								{typeof f.rawValue === "number"
-									? f.rawValue.toFixed(2)
-									: f.rawValue}
-								]
-							</span>
+						{f.detail && (
+							<span className="ml-1 text-slate-500">({f.detail})</span>
 						)}
 					</span>
 					<span className={`font-mono font-semibold ${factorColor(f.points)}`}>
@@ -66,7 +59,7 @@ function FactorList({
 	);
 }
 
-function WarningList({ warnings }: { warnings: ScoreWarning[] }) {
+function WarningList({ warnings }: { warnings: string[] }) {
 	if (warnings.length === 0) return null;
 	return (
 		<div className="border-t border-slate-700/40 pt-2">
@@ -74,40 +67,11 @@ function WarningList({ warnings }: { warnings: ScoreWarning[] }) {
 				Warnings
 			</div>
 			{warnings.map((w) => (
-				<div key={w.type} className="py-0.5 text-[0.65rem] text-amber-300/80">
-					{w.message}
+				<div key={w} className="py-0.5 text-[0.65rem] text-amber-300/80">
+					{w}
 				</div>
 			))}
 		</div>
-	);
-}
-
-/** Data quality indicator based on snapshot availability. */
-function DataQualityBadge({
-	teamFound,
-	opponentFound,
-}: {
-	teamFound: boolean;
-	opponentFound: boolean;
-}) {
-	if (teamFound && opponentFound) {
-		return (
-			<span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[0.5rem] text-emerald-300">
-				Full context
-			</span>
-		);
-	}
-	if (teamFound || opponentFound) {
-		return (
-			<span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.5rem] text-amber-300">
-				Partial context
-			</span>
-		);
-	}
-	return (
-		<span className="rounded-full border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-[0.5rem] text-red-300">
-			No context
-		</span>
 	);
 }
 
@@ -121,12 +85,8 @@ export function ScoreExplanation({ scoring }: { scoring: OpportunityScore }) {
 			{/* Score summary */}
 			<div className="flex items-center justify-between text-[0.65rem]">
 				<span className="text-slate-400">
-					Raw score: {scoring.rawScore} → normalized: {scoring.score}/100
+					Raw score: {scoring.rawScore} → normalized: {scoring.totalScore}/100
 				</span>
-				<DataQualityBadge
-					teamFound={scoring.features.teamSnapshotFound}
-					opponentFound={scoring.features.opponentSnapshotFound}
-				/>
 			</div>
 
 			<FactorList
