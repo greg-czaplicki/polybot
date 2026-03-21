@@ -30,7 +30,7 @@ import {
 	batchIngestLines,
 } from "./line-ingestion";
 import { type BackfillResult, backfillManualPicks } from "./pick-backfill";
-import { seedAllTeams } from "./team-seeder";
+import { resolveTeamFromMarketTitle, seedAllTeams } from "./team-seeder";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,8 +155,9 @@ const GAME_TIME_MATCH_WINDOW = 6 * 60 * 60;
 
 /**
  * Builds MarketLineInput objects from sharp_money_cache for games that
- * don't yet have close lines. Uses application-level sport tag detection
- * and time-bounded game matching to avoid incorrect associations.
+ * don't yet have close lines. Uses team identity resolution (via
+ * resolveTeamFromMarketTitle) plus a time window for safe matching.
+ * Rows where teams cannot be resolved or the match is ambiguous are skipped.
  */
 async function getLineInputsFromCache(db: Db): Promise<MarketLineInput[]> {
 	// Fetch cache entries with event times
@@ -183,28 +184,50 @@ async function getLineInputsFromCache(db: Db): Promise<MarketLineInput[]> {
 		if (!Number.isFinite(eventTimeMs)) continue;
 		const eventTimeUnix = Math.floor(eventTimeMs / 1000);
 
-		// Find a matching game by sport + time window, excluding games with existing close lines
-		const game = await first<{ id: string }>(
+		// Resolve teams from market title — skip if we can't identify both teams
+		const resolved = await resolveTeamFromMarketTitle(
+			db,
+			sportTag,
+			row.market_title,
+		);
+		if (!resolved) continue;
+
+		const { homeTeam, awayTeam } = resolved;
+
+		// Find a matching game by team IDs + sport + time window,
+		// excluding games that already have close lines.
+		// Match either (home, away) or (away, home) ordering since
+		// market title parsing may not always get home/away correct.
+		const matches = await all<{ id: string }>(
 			db,
 			`SELECT g.id FROM games g
 			 LEFT JOIN game_lines gl ON gl.game_id = g.id AND gl.snapshot_type = 'close'
 			 WHERE g.sport_tag = ?
 			   AND ABS(g.game_time - ?) < ?
+			   AND (
+			     (g.home_team_id = ? AND g.away_team_id = ?)
+			     OR (g.home_team_id = ? AND g.away_team_id = ?)
+			   )
 			   AND gl.id IS NULL
-			 LIMIT 1`,
+			 LIMIT 2`,
 			sportTag,
 			eventTimeUnix,
 			GAME_TIME_MATCH_WINDOW,
+			homeTeam.id,
+			awayTeam.id,
+			awayTeam.id,
+			homeTeam.id,
 		);
 
-		if (game) {
-			inputs.push({
-				gameId: game.id,
-				marketTitle: row.market_title,
-				snapshotType: "close",
-				source: "polymarket",
-			});
-		}
+		// Skip ambiguous matches (0 or >1 games)
+		if (matches.length !== 1) continue;
+
+		inputs.push({
+			gameId: matches[0].id,
+			marketTitle: row.market_title,
+			snapshotType: "close",
+			source: "polymarket",
+		});
 	}
 
 	return inputs;
