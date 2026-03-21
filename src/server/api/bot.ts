@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { GradeLabel } from "@/lib/sharp-grade";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
 import {
@@ -16,7 +17,6 @@ import { computeBotEval } from "./bot-eval";
 import {
 	computePriceEdgeFromEntry,
 	computeSharpMoneyGrades,
-	type GradeLabel,
 	type SharpGradePayload,
 } from "./sharp-money";
 
@@ -26,6 +26,11 @@ const DEFAULT_CANDIDATE_WINDOW_MINUTES = 60;
 const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_MIN_MINUTES_TO_START = 15;
 const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.7;
+const DEFAULT_BOT_MIN_GRADE: GradeLabel = "A";
+const DEFAULT_BOT_REQUIRE_READY = true;
+const DEFAULT_BOT_INCLUDE_STARTED = false;
+const DEFAULT_BOT_REQUIRE_MICROSTRUCTURE = true;
+const DEFAULT_BOT_MARKET_QUALITY_THRESHOLD = 0.72;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	A: 4,
@@ -124,6 +129,111 @@ type BotCandidatePolicy = {
 	reject?: boolean;
 	rejectReason?: string;
 };
+
+export type BotInspectDefaults = {
+	minGrade: GradeLabel;
+	windowMinutes: number;
+	minMinutesToStart: number;
+	maxMinutesToStart: number;
+	requireReady: boolean;
+	includeStarted: boolean;
+	requireMicrostructure: boolean;
+	marketQualityThreshold: number;
+};
+
+function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+	if (!value) return fallback;
+	const normalized = value.trim().toLowerCase();
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
+	return fallback;
+}
+
+function parseNumberEnv(value: string | undefined, fallback: number): number {
+	if (!value) return fallback;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getBotControlHeaders(env: Env): Headers {
+	const headers = new Headers();
+	if (env.BOT_CONTROL_TOKEN) {
+		headers.set("Authorization", `Bearer ${env.BOT_CONTROL_TOKEN}`);
+	}
+	if (env.BOT_CONTROL_ACCESS_ID && env.BOT_CONTROL_ACCESS_SECRET) {
+		headers.set("CF-Access-Client-Id", env.BOT_CONTROL_ACCESS_ID);
+		headers.set("CF-Access-Client-Secret", env.BOT_CONTROL_ACCESS_SECRET);
+	}
+	return headers;
+}
+
+async function loadBotInspectDefaults(env: Env): Promise<BotInspectDefaults> {
+	const defaults: BotInspectDefaults = {
+		minGrade: DEFAULT_BOT_MIN_GRADE,
+		windowMinutes: DEFAULT_CANDIDATE_WINDOW_MINUTES,
+		minMinutesToStart: DEFAULT_MIN_MINUTES_TO_START,
+		maxMinutesToStart: DEFAULT_CANDIDATE_WINDOW_MINUTES,
+		requireReady: DEFAULT_BOT_REQUIRE_READY,
+		includeStarted: DEFAULT_BOT_INCLUDE_STARTED,
+		requireMicrostructure: DEFAULT_BOT_REQUIRE_MICROSTRUCTURE,
+		marketQualityThreshold: DEFAULT_BOT_MARKET_QUALITY_THRESHOLD,
+	};
+
+	if (!env.BOT_CONTROL_URL) {
+		return defaults;
+	}
+
+	try {
+		const upstreamUrl = new URL("/env", env.BOT_CONTROL_URL);
+		const response = await fetch(upstreamUrl.toString(), {
+			method: "GET",
+			headers: getBotControlHeaders(env),
+		});
+		if (!response.ok) {
+			return defaults;
+		}
+
+		const payload = (await response.json()) as {
+			env?: Record<string, string>;
+		};
+		const botEnv = payload.env ?? {};
+		const minGrade = parseMinGrade(botEnv.BOT_MIN_GRADE ?? null);
+
+		return {
+			minGrade: minGrade ?? defaults.minGrade,
+			windowMinutes: parseNumberEnv(
+				botEnv.BOT_WINDOW_MINUTES,
+				defaults.windowMinutes,
+			),
+			minMinutesToStart: parseNumberEnv(
+				botEnv.BOT_MIN_MINUTES_TO_START,
+				defaults.minMinutesToStart,
+			),
+			maxMinutesToStart: parseNumberEnv(
+				botEnv.BOT_MAX_MINUTES_TO_START,
+				defaults.maxMinutesToStart,
+			),
+			requireReady: parseBooleanEnv(
+				botEnv.BOT_REQUIRE_READY,
+				defaults.requireReady,
+			),
+			includeStarted: parseBooleanEnv(
+				botEnv.BOT_INCLUDE_STARTED,
+				defaults.includeStarted,
+			),
+			requireMicrostructure: parseBooleanEnv(
+				botEnv.BOT_REQUIRE_MICROSTRUCTURE,
+				defaults.requireMicrostructure,
+			),
+			marketQualityThreshold: parseNumberEnv(
+				botEnv.BOT_MARKET_QUALITY_THRESHOLD,
+				defaults.marketQualityThreshold,
+			),
+		};
+	} catch {
+		return defaults;
+	}
+}
 
 function clampUnit(value: number): number {
 	return Math.max(0, Math.min(1, value));
@@ -1071,7 +1181,7 @@ async function listBotCandidates(
 							: entry.sharpSide === "B"
 								? (entry.sideB.price ?? null)
 								: null,
-					grade: grade?.grade,
+					grade: grade?.grade ?? undefined,
 					policyMinGrade: policy.minGrade,
 					signalScore: grade?.signalScore,
 					marketQualityScore: grade?.microstructureScore,
@@ -1565,6 +1675,14 @@ export const getBotCandidateInspectFn = createServerFn({
 					: ("candidate_inspect_failed" as const),
 		};
 	}
+});
+
+export const getBotInspectDefaultsFn = createServerFn({
+	method: "GET",
+}).handler(async ({ context }) => {
+	return {
+		defaults: await loadBotInspectDefaults(context.env),
+	};
 });
 
 export async function handleBotRequest(

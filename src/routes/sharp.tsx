@@ -26,7 +26,9 @@ import {
 import {
 	getBotCandidateInspectFn,
 	getBotCandidatesFn,
+	getBotInspectDefaultsFn,
 } from "../server/api/bot";
+import type { BotInspectDefaults } from "../server/api/bot";
 import { listManualPicksFn } from "../server/api/manual-picks";
 import {
 	clearSharpMoneyCacheFn,
@@ -292,10 +294,6 @@ const MIN_READY_HOLDER_COUNT = 10;
 const MIN_READY_PNL_COVERAGE = 0.6;
 const UPCOMING_WINDOW_HOURS = 12;
 const START_TIME_BUFFER_MINUTES = 10;
-const BOT_SYNC_MIN_MINUTES_TO_START = 15;
-const BOT_SYNC_MAX_MINUTES_TO_START = 60;
-const BOT_SYNC_MIN_GRADE = "A";
-const BOT_SYNC_MARKET_QUALITY_THRESHOLD = 0.66;
 const STALE_HISTORY_MINUTES = 15;
 
 function getPnlCoverage(holders: TopHolderPnlData[]): number {
@@ -341,6 +339,11 @@ function parseEventTime(isoDate?: string): Date | null {
 	}
 	const parsed = new Date(isoDate);
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatBotPolicySummary(defaults: BotInspectDefaults | null): string {
+	if (!defaults) return "Bot-aligned (loading config...)";
+	return `Bot-aligned (${defaults.minGrade}, ${defaults.minMinutesToStart}-${defaults.maxMinutesToStart}m, q>=${defaults.marketQualityThreshold.toFixed(2)})`;
 }
 
 function formatEventTime(isoDate?: string): string | null {
@@ -627,6 +630,7 @@ function SharpMoneyPage() {
 		totalEntries: number;
 		newestEntry?: number;
 	} | null>(null);
+	const [botDefaults, setBotDefaults] = useState<BotInspectDefaults | null>(null);
 	const PULL_THRESHOLD = 80;
 	const PULL_MAX = 120;
 	const CACHE_FETCH_LIMIT = 200;
@@ -700,6 +704,15 @@ function SharpMoneyPage() {
 		}
 	}, []);
 
+	const loadBotDefaults = useCallback(async () => {
+		try {
+			const response = await getBotInspectDefaultsFn();
+			setBotDefaults(response.defaults ?? null);
+		} catch (error) {
+			console.error("Failed to load bot defaults:", error);
+		}
+	}, []);
+
 	// Initial load
 	useEffect(() => {
 		loadCache();
@@ -708,6 +721,10 @@ function SharpMoneyPage() {
 	useEffect(() => {
 		loadPipelineStatus();
 	}, [loadPipelineStatus]);
+
+	useEffect(() => {
+		void loadBotDefaults();
+	}, [loadBotDefaults]);
 
 	const loadEdgeStatsHistory = useCallback(async () => {
 		setEdgeStatsHistoryLoading(true);
@@ -1075,6 +1092,11 @@ function SharpMoneyPage() {
 			setBotAlignedConditionOrder([]);
 			return;
 		}
+		if (!botDefaults) {
+			setBotAlignedError(null);
+			setBotAlignedConditionOrder([]);
+			return;
+		}
 		if (baseEntries.length === 0) {
 			setBotAlignedError(null);
 			setBotAlignedConditionOrder([]);
@@ -1084,14 +1106,14 @@ function SharpMoneyPage() {
 		(async () => {
 			const result = await getBotCandidatesFn({
 				data: {
-					minGrade: BOT_SYNC_MIN_GRADE,
-					windowMinutes: BOT_SYNC_MAX_MINUTES_TO_START,
-					minMinutesToStart: BOT_SYNC_MIN_MINUTES_TO_START,
-					maxMinutesToStart: BOT_SYNC_MAX_MINUTES_TO_START,
-					requireReady: true,
-					includeStarted: false,
-					requireMicrostructure: true,
-					marketQualityThreshold: BOT_SYNC_MARKET_QUALITY_THRESHOLD,
+					minGrade: botDefaults.minGrade,
+					windowMinutes: botDefaults.windowMinutes,
+					minMinutesToStart: botDefaults.minMinutesToStart,
+					maxMinutesToStart: botDefaults.maxMinutesToStart,
+					requireReady: botDefaults.requireReady,
+					includeStarted: botDefaults.includeStarted,
+					requireMicrostructure: botDefaults.requireMicrostructure,
+					marketQualityThreshold: botDefaults.marketQualityThreshold,
 					limit: 500,
 				},
 			});
@@ -1116,7 +1138,7 @@ function SharpMoneyPage() {
 		return () => {
 			cancelled = true;
 		};
-	}, [showAllEntries, baseEntries]);
+	}, [showAllEntries, baseEntries, botDefaults]);
 
 	const filteredEntries = useMemo(() => {
 		const now = new Date();
@@ -1124,7 +1146,7 @@ function SharpMoneyPage() {
 			now.getTime() + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000,
 		);
 		const botSyncCutoff = new Date(
-			now.getTime() + BOT_SYNC_MAX_MINUTES_TO_START * 60 * 1000,
+			now.getTime() + (botDefaults?.maxMinutesToStart ?? 60) * 60 * 1000,
 		);
 		const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
 		let filtered = baseEntries.filter((e) => {
@@ -1157,7 +1179,10 @@ function SharpMoneyPage() {
 						edgeRating: e.edgeRating,
 						scoreDifferential: e.scoreDifferential,
 					});
-				if (gradeWeight(signalGrade) < gradeWeight(BOT_SYNC_MIN_GRADE)) {
+				if (
+					gradeWeight(signalGrade) <
+					gradeWeight(botDefaults?.minGrade ?? "A")
+				) {
 					return false;
 				}
 				if (showAPlusOnly && signalGrade !== "A+") return false;
@@ -1800,7 +1825,7 @@ function SharpMoneyPage() {
 								<div className="text-[0.65rem] text-slate-500">
 									{showAllEntries
 										? "All ready markets"
-										: `Bot-aligned (${BOT_SYNC_MIN_GRADE}, ${BOT_SYNC_MIN_MINUTES_TO_START}-${BOT_SYNC_MAX_MINUTES_TO_START}m, q>=${BOT_SYNC_MARKET_QUALITY_THRESHOLD.toFixed(2)})`}
+										: formatBotPolicySummary(botDefaults)}
 								</div>
 							</div>
 							<div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-6">
@@ -2519,17 +2544,18 @@ function SharpMoneyCard({
 		setBotInspectError(null);
 		setBotInspectResult({ stage: "checking" });
 		try {
+			const { defaults } = await getBotInspectDefaultsFn();
 			const response = await getBotCandidateInspectFn({
 				data: {
 					conditionId: entry.conditionId,
-					minGrade: BOT_SYNC_MIN_GRADE,
-					windowMinutes: BOT_SYNC_MAX_MINUTES_TO_START,
-					minMinutesToStart: BOT_SYNC_MIN_MINUTES_TO_START,
-					maxMinutesToStart: BOT_SYNC_MAX_MINUTES_TO_START,
-					requireReady: true,
-					includeStarted: false,
-					requireMicrostructure: true,
-					marketQualityThreshold: BOT_SYNC_MARKET_QUALITY_THRESHOLD,
+					minGrade: defaults.minGrade,
+					windowMinutes: defaults.windowMinutes,
+					minMinutesToStart: defaults.minMinutesToStart,
+					maxMinutesToStart: defaults.maxMinutesToStart,
+					requireReady: defaults.requireReady,
+					includeStarted: defaults.includeStarted,
+					requireMicrostructure: defaults.requireMicrostructure,
+					marketQualityThreshold: defaults.marketQualityThreshold,
 					limit: 500,
 				},
 			});
