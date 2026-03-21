@@ -244,36 +244,32 @@ export async function getTeamStreak(
 	if (rows.length === 0) return null;
 
 	const facts = rows.map(parseRow);
-	const isWin = (fact: TeamGameFact): boolean | null => {
+
+	// For SU/ATS, streaks are W (win/cover) or L (loss/no_cover).
+	// For OU, streaks track consecutive overs ("W") or unders ("L").
+	const getStreakDirection = (fact: TeamGameFact): "W" | "L" | null => {
 		if (metric === "su") {
-			return fact.suResult === "win"
-				? true
-				: fact.suResult === "loss"
-					? false
-					: null;
+			if (fact.suResult === "win") return "W";
+			if (fact.suResult === "loss") return "L";
+			return null;
 		}
 		if (metric === "ats") {
-			return fact.atsResult === "cover"
-				? true
-				: fact.atsResult === "no_cover"
-					? false
-					: null;
+			if (fact.atsResult === "cover") return "W";
+			if (fact.atsResult === "no_cover") return "L";
+			return null;
 		}
-		return fact.ouResult === "over"
-			? true
-			: fact.ouResult === "under"
-				? false
-				: null;
+		// OU: "over" maps to "W", "under" maps to "L"
+		if (fact.ouResult === "over") return "W";
+		if (fact.ouResult === "under") return "L";
+		return null;
 	};
 
 	let streakType: "W" | "L" | null = null;
 	let streakLength = 0;
 
 	for (const fact of facts) {
-		const win = isWin(fact);
-		if (win === null) continue;
-
-		const currentType = win ? "W" : "L";
+		const currentType = getStreakDirection(fact);
+		if (currentType === null) continue;
 		if (streakType === null) {
 			streakType = currentType;
 			streakLength = 1;

@@ -101,11 +101,13 @@ export async function findTeamByAlias(
 	if (exact) return exact;
 
 	// Search aliases (JSON array contains check)
+	// Escape SQL LIKE wildcards (%, _) in the alias before using in LIKE pattern
+	const escapedAlias = alias.replace(/[%_]/g, "\\$&");
 	const rows = await all<TeamRow>(
 		db,
-		`SELECT * FROM teams WHERE sport_tag = ? AND aliases_json LIKE ?`,
+		`SELECT * FROM teams WHERE sport_tag = ? AND aliases_json LIKE ? ESCAPE '\\'`,
 		sportTag,
-		`%${alias}%`,
+		`%${escapedAlias}%`,
 	);
 
 	for (const row of rows) {
