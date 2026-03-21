@@ -7,7 +7,11 @@
 
 import type { Db } from "../db/client";
 import { all, first } from "../db/client";
-import { createGame, getGameById } from "../repositories/games";
+import {
+	createGame,
+	getGameById,
+	updateGameResult,
+} from "../repositories/games";
 import type { Game } from "../types/canonical";
 import { resolveTeamFromMarketTitle } from "./team-seeder";
 
@@ -50,6 +54,11 @@ export interface GameIngestionResult {
 // ---------------------------------------------------------------------------
 // Game matching
 // ---------------------------------------------------------------------------
+
+/** Returns true if the input contains both home and away scores. */
+function hasScores(input: MarketGameInput): boolean {
+	return input.homeScore != null && input.awayScore != null;
+}
 
 /**
  * Time window (seconds) for matching markets to the same game.
@@ -132,6 +141,20 @@ export async function ingestGameFromMarketData(
 	);
 
 	if (existing) {
+		// If scores are provided and the game isn't finalized yet, update it
+		if (hasScores(input) && !existing.isFinal) {
+			await updateGameResult(db, existing.id, {
+				homeScore: input.homeScore as number,
+				awayScore: input.awayScore as number,
+				wentToOt: input.wentToOt,
+			});
+			const updated = await getGameById(db, existing.id);
+			return {
+				game: updated ?? existing,
+				created: false,
+				matchInfo: `Matched existing game ${existing.id}, updated with final scores`,
+			};
+		}
 		return {
 			game: existing,
 			created: false,
@@ -150,6 +173,21 @@ export async function ingestGameFromMarketData(
 		awayTeamId: awayTeam.id,
 		neutralSite: input.neutralSite,
 	});
+
+	// If scores are provided at creation time, finalize immediately
+	if (hasScores(input)) {
+		await updateGameResult(db, game.id, {
+			homeScore: input.homeScore as number,
+			awayScore: input.awayScore as number,
+			wentToOt: input.wentToOt,
+		});
+		const finalized = await getGameById(db, game.id);
+		return {
+			game: finalized ?? game,
+			created: true,
+			matchInfo: "Created with final scores",
+		};
+	}
 
 	return {
 		game,
