@@ -7,8 +7,8 @@
 
 import type { Db } from "../db/client";
 import { all, first } from "../db/client";
-import type { Game, GameRow } from "../types/canonical";
-import { createGame } from "../repositories/games";
+import type { Game } from "../types/canonical";
+import { createGame, getGameById } from "../repositories/games";
 import { resolveTeamFromMarketTitle } from "./team-seeder";
 
 // ---------------------------------------------------------------------------
@@ -58,30 +58,11 @@ export interface GameIngestionResult {
  */
 const GAME_TIME_MATCH_WINDOW_SECONDS = 6 * 60 * 60;
 
-function parseGameRow(row: GameRow): Game {
-	return {
-		id: row.id,
-		sportTag: row.sport_tag,
-		season: row.season ?? undefined,
-		seasonType: row.season_type ?? undefined,
-		week: row.week ?? undefined,
-		gameTime: row.game_time ?? undefined,
-		homeTeamId: row.home_team_id,
-		awayTeamId: row.away_team_id,
-		neutralSite: row.neutral_site === 1,
-		homeScore: row.home_score ?? undefined,
-		awayScore: row.away_score ?? undefined,
-		totalScore: row.total_score ?? undefined,
-		isFinal: row.is_final === 1,
-		wentToOt: row.went_to_ot === 1,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-	};
-}
-
 /**
  * Attempts to find an existing game matching the same teams and time window.
  * This deduplicates markets for the same event (spread, total, ML).
+ * Uses a lightweight ID query then delegates to the repository's getGameById
+ * to avoid duplicating row parsing logic.
  */
 async function findExistingGame(
 	db: Db,
@@ -93,9 +74,9 @@ async function findExistingGame(
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
-	const row = await first<GameRow>(
+	const row = await first<{ id: string }>(
 		db,
-		`SELECT * FROM games
+		`SELECT id FROM games
 		 WHERE sport_tag = ?
 		   AND home_team_id = ?
 		   AND away_team_id = ?
@@ -108,7 +89,8 @@ async function findExistingGame(
 		windowEnd,
 	);
 
-	return row ? parseGameRow(row) : null;
+	if (!row) return null;
+	return getGameById(db, row.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -257,14 +239,19 @@ export async function listUnfinalizedGames(
 	sportTag: string,
 	limit = 100,
 ): Promise<Game[]> {
-	const rows = await all<GameRow>(
+	const rows = await all<{ id: string }>(
 		db,
-		`SELECT * FROM games
+		`SELECT id FROM games
 		 WHERE sport_tag = ? AND is_final = 0
 		 ORDER BY game_time ASC
 		 LIMIT ?`,
 		sportTag,
 		limit,
 	);
-	return rows.map(parseGameRow);
+	const games: Game[] = [];
+	for (const row of rows) {
+		const game = await getGameById(db, row.id);
+		if (game) games.push(game);
+	}
+	return games;
 }
