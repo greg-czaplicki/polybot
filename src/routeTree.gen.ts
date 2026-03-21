@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StrategyRouteImport } from './routes/strategy'
+import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
@@ -50,6 +51,11 @@ const DebugRoute = DebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OpportunitiesRoute = OpportunitiesRouteImport.update({
+  id: '/opportunities',
+  path: '/opportunities',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CanonicalRoute = CanonicalRouteImport.update({
   id: '/canonical',
   path: '/canonical',
@@ -77,6 +83,7 @@ export interface FileRoutesByFullPath {
   '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
@@ -89,6 +96,7 @@ export interface FileRoutesByTo {
   '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
@@ -102,6 +110,7 @@ export interface FileRoutesById {
   '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
+  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
@@ -116,6 +125,7 @@ export interface FileRouteTypes {
     | '/canonical'
     | '/debug'
     | '/login'
+    | '/opportunities'
     | '/runtime'
     | '/sharp'
     | '/stats'
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/canonical'
     | '/debug'
     | '/login'
+    | '/opportunities'
     | '/runtime'
     | '/sharp'
     | '/stats'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/canonical'
     | '/debug'
     | '/login'
+    | '/opportunities'
     | '/runtime'
     | '/sharp'
     | '/stats'
@@ -153,6 +165,7 @@ export interface RootRouteChildren {
   CanonicalRoute: typeof CanonicalRoute
   DebugRoute: typeof DebugRoute
   LoginRoute: typeof LoginRoute
+  OpportunitiesRoute: typeof OpportunitiesRoute
   RuntimeRoute: typeof RuntimeRoute
   SharpRoute: typeof SharpRouteWithChildren
   StatsRoute: typeof StatsRoute
@@ -210,6 +223,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CanonicalRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/opportunities': {
+      id: '/opportunities'
+      path: '/opportunities'
+      fullPath: '/opportunities'
+      preLoaderRoute: typeof OpportunitiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/bot': {
       id: '/bot'
       path: '/bot'
@@ -250,6 +270,7 @@ const rootRouteChildren: RootRouteChildren = {
   CanonicalRoute: CanonicalRoute,
   DebugRoute: DebugRoute,
   LoginRoute: LoginRoute,
+  OpportunitiesRoute: OpportunitiesRoute,
   RuntimeRoute: RuntimeRoute,
   SharpRoute: SharpRouteWithChildren,
   StatsRoute: StatsRoute,
