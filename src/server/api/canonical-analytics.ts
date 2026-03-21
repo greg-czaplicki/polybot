@@ -41,91 +41,98 @@ import type {
  *
  * Input: { teamId?, alias?, sportTag, snapshotType?, window?, asOfTime? }
  */
+interface TrendSummaryInput {
+	teamId?: string;
+	alias?: string;
+	sportTag: string;
+	snapshotType?: TrendSnapshotType;
+	window?: number;
+	asOfTime?: number;
+}
+
 export const getTeamTrendSummaryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		teamId?: string;
-		alias?: string;
-		sportTag: string;
-		snapshotType?: TrendSnapshotType;
-		window?: number;
-		asOfTime?: number;
-	};
+})
+	.inputValidator((d: TrendSummaryInput) => d)
+	.handler(async ({ context, data }) => {
+		if (!data.sportTag) {
+			return { summary: null, error: "sportTag is required" };
+		}
 
-	if (!payload.sportTag) {
-		return { summary: null, error: "sportTag is required" };
-	}
+		if (!data.teamId && !data.alias) {
+			return { summary: null, error: "teamId or alias is required" };
+		}
 
-	if (!payload.teamId && !payload.alias) {
-		return { summary: null, error: "teamId or alias is required" };
-	}
+		const db = getDb(context);
+		const snapshotType = data.snapshotType ?? "overall";
 
-	const db = getDb(context);
-	const snapshotType = payload.snapshotType ?? "overall";
+		if (data.alias && !data.teamId) {
+			const summary = await buildTeamTrendSummaryByName(
+				db,
+				data.alias,
+				data.sportTag,
+				snapshotType,
+				{ window: data.window, asOfTime: data.asOfTime },
+			);
+			return { summary };
+		}
 
-	if (payload.alias && !payload.teamId) {
-		const summary = await buildTeamTrendSummaryByName(
+		if (!data.teamId) {
+			return { summary: null, error: "teamId or alias is required" };
+		}
+
+		const summary = await buildTeamTrendSummary(
 			db,
-			payload.alias,
-			payload.sportTag,
+			data.teamId,
 			snapshotType,
-			{ window: payload.window, asOfTime: payload.asOfTime },
+			{
+				sportTag: data.sportTag,
+				window: data.window,
+				asOfTime: data.asOfTime,
+			},
 		);
 		return { summary };
-	}
-
-	if (!payload.teamId) {
-		return { summary: null, error: "teamId or alias is required" };
-	}
-
-	const summary = await buildTeamTrendSummary(
-		db,
-		payload.teamId,
-		snapshotType,
-		{
-			sportTag: payload.sportTag,
-			window: payload.window,
-			asOfTime: payload.asOfTime,
-		},
-	);
-	return { summary };
-});
+	});
 
 /**
  * Get a multi-split team trend overview (all 9 snapshot types).
  *
  * Input: { teamId?, alias?, sportTag }
  */
+interface TrendOverviewInput {
+	teamId?: string;
+	alias?: string;
+	sportTag?: string;
+}
+
 export const getTeamTrendOverviewFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		teamId?: string;
-		alias?: string;
-		sportTag?: string;
-	};
+})
+	.inputValidator((d: TrendOverviewInput) => d)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
 
-	const db = getDb(context);
-
-	let teamId = payload.teamId;
-	if (!teamId && payload.alias && payload.sportTag) {
-		const team = await findTeamByAlias(db, payload.sportTag, payload.alias);
-		if (!team) {
-			return { overview: null, error: `Team not found: ${payload.alias}` };
+		let teamId = data.teamId;
+		if (!teamId && data.alias && data.sportTag) {
+			const team = await findTeamByAlias(db, data.sportTag, data.alias);
+			if (!team) {
+				return { overview: null, error: `Team not found: ${data.alias}` };
+			}
+			teamId = team.id;
 		}
-		teamId = team.id;
-	}
 
-	if (!teamId) {
-		return { overview: null, error: "teamId or alias+sportTag is required" };
-	}
+		if (!teamId) {
+			return {
+				overview: null,
+				error: "teamId or alias+sportTag is required",
+			};
+		}
 
-	const overview = await buildTeamTrendOverview(db, teamId, {
-		sportTag: payload.sportTag,
+		const overview = await buildTeamTrendOverview(db, teamId, {
+			sportTag: data.sportTag,
+		});
+		return { overview };
 	});
-	return { overview };
-});
 
 // ---------------------------------------------------------------------------
 // Matchup Comparison
@@ -140,77 +147,79 @@ export const getTeamTrendOverviewFn = createServerFn({
  * Input: { teamId?, opponentId?, teamAlias?, opponentAlias?, sportTag,
  *          gameId?, teamVenueRole?, teamFavDogRole?, asOfTime? }
  */
+interface MatchupComparisonInput {
+	teamId?: string;
+	opponentId?: string;
+	teamAlias?: string;
+	opponentAlias?: string;
+	sportTag: string;
+	gameId?: string;
+	teamVenueRole?: VenueRole;
+	teamFavDogRole?: FavDogRole;
+	asOfTime?: number;
+}
+
 export const getMatchupComparisonFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		teamId?: string;
-		opponentId?: string;
-		teamAlias?: string;
-		opponentAlias?: string;
-		sportTag: string;
-		gameId?: string;
-		teamVenueRole?: VenueRole;
-		teamFavDogRole?: FavDogRole;
-		asOfTime?: number;
-	};
+})
+	.inputValidator((d: MatchupComparisonInput) => d)
+	.handler(async ({ context, data }) => {
+		if (!data.sportTag) {
+			return { comparison: null, error: "sportTag is required" };
+		}
 
-	if (!payload.sportTag) {
-		return { comparison: null, error: "sportTag is required" };
-	}
+		const db = getDb(context);
 
-	const db = getDb(context);
+		// If gameId provided, build comparison from game context
+		if (data.gameId && !data.teamId && !data.teamAlias) {
+			const comparison = await buildMatchupComparisonFromGame(
+				db,
+				data.gameId,
+				{ asOfTime: data.asOfTime },
+			);
+			return { comparison };
+		}
 
-	// If gameId provided, build comparison from game context
-	if (payload.gameId && !payload.teamId && !payload.teamAlias) {
-		const comparison = await buildMatchupComparisonFromGame(
+		// Lookup by aliases
+		if (data.teamAlias && data.opponentAlias) {
+			const comparison = await buildMatchupComparisonByNames(
+				db,
+				data.teamAlias,
+				data.opponentAlias,
+				data.sportTag,
+				{
+					gameId: data.gameId,
+					teamVenueRole: data.teamVenueRole,
+					teamFavDogRole: data.teamFavDogRole,
+					asOfTime: data.asOfTime,
+				},
+			);
+			return { comparison };
+		}
+
+		// Lookup by IDs
+		if (!data.teamId || !data.opponentId) {
+			return {
+				comparison: null,
+				error:
+					"teamId+opponentId, teamAlias+opponentAlias, or gameId is required",
+			};
+		}
+
+		const comparison = await buildMatchupComparison(
 			db,
-			payload.gameId,
-			{ asOfTime: payload.asOfTime },
-		);
-		return { comparison };
-	}
-
-	// Lookup by aliases
-	if (payload.teamAlias && payload.opponentAlias) {
-		const comparison = await buildMatchupComparisonByNames(
-			db,
-			payload.teamAlias,
-			payload.opponentAlias,
-			payload.sportTag,
+			data.teamId,
+			data.opponentId,
 			{
-				gameId: payload.gameId,
-				teamVenueRole: payload.teamVenueRole,
-				teamFavDogRole: payload.teamFavDogRole,
-				asOfTime: payload.asOfTime,
+				sportTag: data.sportTag,
+				gameId: data.gameId,
+				teamVenueRole: data.teamVenueRole,
+				teamFavDogRole: data.teamFavDogRole,
+				asOfTime: data.asOfTime,
 			},
 		);
 		return { comparison };
-	}
-
-	// Lookup by IDs
-	if (!payload.teamId || !payload.opponentId) {
-		return {
-			comparison: null,
-			error:
-				"teamId+opponentId, teamAlias+opponentAlias, or gameId is required",
-		};
-	}
-
-	const comparison = await buildMatchupComparison(
-		db,
-		payload.teamId,
-		payload.opponentId,
-		{
-			sportTag: payload.sportTag,
-			gameId: payload.gameId,
-			teamVenueRole: payload.teamVenueRole,
-			teamFavDogRole: payload.teamFavDogRole,
-			asOfTime: payload.asOfTime,
-		},
-	);
-	return { comparison };
-});
+	});
 
 // ---------------------------------------------------------------------------
 // Pick Context Lookup
@@ -268,11 +277,10 @@ function formatSnapshotCompact(snapshot: {
  *
  * Input: { pickId: string }
  */
-export const getPickContextFn = createServerFn({ method: "POST" }).handler(
-	async ({ context, data }) => {
-		const payload = (data ?? {}) as { pickId: string };
-
-		if (!payload.pickId) {
+export const getPickContextFn = createServerFn({ method: "POST" })
+	.inputValidator((d: { pickId: string }) => d)
+	.handler(async ({ context, data }) => {
+		if (!data.pickId) {
 			return { context: null, error: "pickId is required" };
 		}
 
@@ -299,11 +307,11 @@ export const getPickContextFn = createServerFn({ method: "POST" }).handler(
 			        bet_type, sport_tag, venue_role, fav_dog_role,
 			        spread_line, total_line, actual_margin, actual_total
 			 FROM manual_picks WHERE id = ?`,
-			payload.pickId,
+			data.pickId,
 		);
 
 		if (!pick) {
-			return { context: null, error: `Pick not found: ${payload.pickId}` };
+			return { context: null, error: `Pick not found: ${data.pickId}` };
 		}
 
 		// Resolve team and opponent names
@@ -427,8 +435,9 @@ interface PipelineStatus {
  *
  * Input: {} (no parameters)
  */
-export const getPipelineStatusFn = createServerFn({ method: "POST" }).handler(
-	async ({ context }) => {
+export const getPipelineStatusFn = createServerFn({
+	method: "POST",
+}).handler(async ({ context }) => {
 		const db = getDb(context);
 
 		const [teams, games, facts, snapshots, picksTotal, picksEnriched] =
