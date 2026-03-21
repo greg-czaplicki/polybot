@@ -8,9 +8,13 @@ import type {
 	MetricComparison,
 } from "./matchup-comparison";
 import {
+	buildHeadline,
 	buildMatchupComparison,
 	buildMatchupComparisonByNames,
 	buildMatchupComparisonFromGame,
+	buildMetricComparisons,
+	determineEdge,
+	getRelevantSplitPairs,
 } from "./matchup-comparison";
 
 // ---------------------------------------------------------------------------
@@ -450,5 +454,307 @@ describe("buildMatchupComparisonFromGame", () => {
 		// Home team should get home splits
 		const splitTypes = result.splits.map((s) => s.teamSplit.snapshotType);
 		expect(splitTypes).toContain("home");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// determineEdge — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("determineEdge", () => {
+	it("returns 'even' when both are null", () => {
+		expect(determineEdge(null, null)).toBe("even");
+	});
+
+	it("returns 'opponent' when team is null", () => {
+		expect(determineEdge(null, 0.6)).toBe("opponent");
+	});
+
+	it("returns 'team' when opponent is null", () => {
+		expect(determineEdge(0.7, null)).toBe("team");
+	});
+
+	it("returns 'even' when difference is < 0.01", () => {
+		expect(determineEdge(0.500, 0.505)).toBe("even");
+		expect(determineEdge(0.700, 0.700)).toBe("even");
+	});
+
+	it("returns 'team' when team has higher pct", () => {
+		expect(determineEdge(0.8, 0.5)).toBe("team");
+	});
+
+	it("returns 'opponent' when opponent has higher pct", () => {
+		expect(determineEdge(0.3, 0.7)).toBe("opponent");
+	});
+
+	it("returns 'even' at exact boundary of 0.01", () => {
+		// 0.51 - 0.50 = 0.01, which is not < 0.01
+		expect(determineEdge(0.51, 0.50)).toBe("team");
+	});
+
+	it("handles zero values", () => {
+		expect(determineEdge(0, 0)).toBe("even");
+		expect(determineEdge(0, 0.5)).toBe("opponent");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// getRelevantSplitPairs — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("getRelevantSplitPairs", () => {
+	it("returns only overall when no context", () => {
+		const pairs = getRelevantSplitPairs(undefined, undefined);
+		expect(pairs).toEqual([
+			{ teamType: "overall", opponentType: "overall" },
+		]);
+	});
+
+	it("returns overall + home/away for home venue", () => {
+		const pairs = getRelevantSplitPairs("home", undefined);
+		expect(pairs).toHaveLength(2);
+		expect(pairs[0]).toEqual({
+			teamType: "overall",
+			opponentType: "overall",
+		});
+		expect(pairs[1]).toEqual({
+			teamType: "home",
+			opponentType: "away",
+		});
+	});
+
+	it("returns overall + away/home for away venue", () => {
+		const pairs = getRelevantSplitPairs("away", undefined);
+		expect(pairs).toHaveLength(2);
+		expect(pairs[1]).toEqual({
+			teamType: "away",
+			opponentType: "home",
+		});
+	});
+
+	it("returns overall + home/away + home_favorite/away_dog for home favorite", () => {
+		const pairs = getRelevantSplitPairs("home", "favorite");
+		expect(pairs).toHaveLength(3);
+		expect(pairs[2]).toEqual({
+			teamType: "home_favorite",
+			opponentType: "away_dog",
+		});
+	});
+
+	it("returns overall + home/away + home_dog/away_favorite for home dog", () => {
+		const pairs = getRelevantSplitPairs("home", "dog");
+		expect(pairs).toHaveLength(3);
+		expect(pairs[2]).toEqual({
+			teamType: "home_dog",
+			opponentType: "away_favorite",
+		});
+	});
+
+	it("returns overall + away/home + away_favorite/home_dog for away favorite", () => {
+		const pairs = getRelevantSplitPairs("away", "favorite");
+		expect(pairs).toHaveLength(3);
+		expect(pairs[2]).toEqual({
+			teamType: "away_favorite",
+			opponentType: "home_dog",
+		});
+	});
+
+	it("returns overall + away/home + away_dog/home_favorite for away dog", () => {
+		const pairs = getRelevantSplitPairs("away", "dog");
+		expect(pairs).toHaveLength(3);
+		expect(pairs[2]).toEqual({
+			teamType: "away_dog",
+			opponentType: "home_favorite",
+		});
+	});
+
+	it("returns overall + fav/dog pair when only favDog is known (no venue)", () => {
+		const pairs = getRelevantSplitPairs(undefined, "favorite");
+		expect(pairs).toHaveLength(2);
+		expect(pairs[1]).toEqual({
+			teamType: "favorite",
+			opponentType: "dog",
+		});
+	});
+
+	it("returns overall + dog/fav pair when only dog role is known", () => {
+		const pairs = getRelevantSplitPairs(undefined, "dog");
+		expect(pairs).toHaveLength(2);
+		expect(pairs[1]).toEqual({
+			teamType: "dog",
+			opponentType: "favorite",
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// buildMetricComparisons — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("buildMetricComparisons", () => {
+	const makeSummary = (
+		suWinPct: number | null,
+		atsWinPct: number | null,
+		ouWinPct: number | null,
+	) =>
+		({
+			su: {
+				record: { display: "5-5", winPct: suWinPct },
+				streak: suWinPct != null ? { display: "W1" } : null,
+			},
+			ats: {
+				record: { display: "6-4", winPct: atsWinPct },
+				streak: atsWinPct != null ? { display: "W2" } : null,
+			},
+			ou: {
+				record: { display: "4-6", winPct: ouWinPct },
+				streak: ouWinPct != null ? { display: "L1" } : null,
+			},
+		}) as any;
+
+	it("returns 3 metric comparisons (su, ats, ou)", () => {
+		const metrics = buildMetricComparisons(
+			makeSummary(0.5, 0.6, 0.4),
+			makeSummary(0.5, 0.6, 0.4),
+		);
+		expect(metrics).toHaveLength(3);
+		expect(metrics.map((m) => m.metric)).toEqual(["su", "ats", "ou"]);
+	});
+
+	it("handles both summaries being null", () => {
+		const metrics = buildMetricComparisons(null, null);
+		expect(metrics).toHaveLength(3);
+		for (const m of metrics) {
+			expect(m.team.record).toBe("—");
+			expect(m.opponent.record).toBe("—");
+			expect(m.edge).toBe("even");
+		}
+	});
+
+	it("handles team null, opponent present", () => {
+		const metrics = buildMetricComparisons(
+			null,
+			makeSummary(0.7, 0.8, 0.6),
+		);
+		for (const m of metrics) {
+			expect(m.team.record).toBe("—");
+			expect(m.edge).toBe("opponent");
+		}
+	});
+
+	it("handles team present, opponent null", () => {
+		const metrics = buildMetricComparisons(
+			makeSummary(0.7, 0.8, 0.6),
+			null,
+		);
+		for (const m of metrics) {
+			expect(m.opponent.record).toBe("—");
+			expect(m.edge).toBe("team");
+		}
+	});
+
+	it("determines edge correctly for mixed advantages", () => {
+		const team = makeSummary(0.8, 0.3, 0.5);
+		const opp = makeSummary(0.4, 0.7, 0.5);
+		const metrics = buildMetricComparisons(team, opp);
+
+		const suMetric = metrics.find((m) => m.metric === "su")!;
+		expect(suMetric.edge).toBe("team");
+
+		const atsMetric = metrics.find((m) => m.metric === "ats")!;
+		expect(atsMetric.edge).toBe("opponent");
+
+		const ouMetric = metrics.find((m) => m.metric === "ou")!;
+		expect(ouMetric.edge).toBe("even");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// buildHeadline — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("buildHeadline", () => {
+	it("returns simple headline when no splits", () => {
+		expect(buildHeadline("Michigan", "Ohio State", [])).toBe(
+			"Michigan vs Ohio State",
+		);
+	});
+
+	it("returns simple headline when overall split has no metrics", () => {
+		const splits: MatchupSplitComparison[] = [
+			{
+				teamSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				opponentSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				metrics: [],
+			},
+		];
+		expect(buildHeadline("Michigan", "Ohio State", splits)).toBe(
+			"Michigan vs Ohio State",
+		);
+	});
+
+	it("includes ATS records in headline when available", () => {
+		const splits: MatchupSplitComparison[] = [
+			{
+				teamSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				opponentSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				metrics: [
+					{
+						metric: "su",
+						team: { record: "8-2", winPct: 0.8, streak: null },
+						opponent: { record: "6-4", winPct: 0.6, streak: null },
+						edge: "team" as ComparisonEdge,
+					},
+					{
+						metric: "ats",
+						team: { record: "7-3", winPct: 0.7, streak: "W3" },
+						opponent: { record: "5-5", winPct: 0.5, streak: "L2" },
+						edge: "team" as ComparisonEdge,
+					},
+					{
+						metric: "ou",
+						team: { record: "5-5", winPct: 0.5, streak: null },
+						opponent: { record: "5-5", winPct: 0.5, streak: null },
+						edge: "even" as ComparisonEdge,
+					},
+				],
+			},
+		];
+		const headline = buildHeadline("Michigan", "Ohio State", splits);
+		expect(headline).toBe(
+			"Michigan (7-3 ATS) vs Ohio State (5-5 ATS)",
+		);
+	});
+
+	it("uses first found overall split for headline", () => {
+		const splits: MatchupSplitComparison[] = [
+			{
+				teamSplit: { snapshotType: "home", label: "Home", summary: null },
+				opponentSplit: { snapshotType: "away", label: "Away", summary: null },
+				metrics: [
+					{
+						metric: "ats",
+						team: { record: "9-1", winPct: 0.9, streak: null },
+						opponent: { record: "1-9", winPct: 0.1, streak: null },
+						edge: "team" as ComparisonEdge,
+					},
+				],
+			},
+			{
+				teamSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				opponentSplit: { snapshotType: "overall", label: "Overall", summary: null },
+				metrics: [
+					{
+						metric: "ats",
+						team: { record: "7-3", winPct: 0.7, streak: null },
+						opponent: { record: "5-5", winPct: 0.5, streak: null },
+						edge: "team" as ComparisonEdge,
+					},
+				],
+			},
+		];
+		const headline = buildHeadline("A", "B", splits);
+		// Should use the overall split's ATS, not the home split
+		expect(headline).toBe("A (7-3 ATS) vs B (5-5 ATS)");
 	});
 });

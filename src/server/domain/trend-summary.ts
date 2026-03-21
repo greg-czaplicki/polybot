@@ -140,7 +140,8 @@ export function splitFiltersForSnapshotType(type: TrendSnapshotType): {
 	}
 }
 
-function formatRecord(
+/** @internal Exported for testing */
+export function formatRecord(
 	wins: number,
 	losses: number,
 	pushes: number,
@@ -155,7 +156,8 @@ function formatRecord(
 	};
 }
 
-function formatStreak(
+/** @internal Exported for testing */
+export function formatStreak(
 	streak: { type: "W" | "L"; length: number } | null,
 ): FormattedStreak | null {
 	if (!streak) return null;

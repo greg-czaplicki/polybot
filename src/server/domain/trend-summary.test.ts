@@ -8,6 +8,8 @@ import type {
 import {
 	buildTeamTrendSummary,
 	buildTeamTrendSummaryByName,
+	formatRecord,
+	formatStreak,
 	getRecentFactsForSplit,
 	snapshotTypeLabel,
 	splitFiltersForSnapshotType,
@@ -622,5 +624,73 @@ describe("getRecentFactsForSplit", () => {
 			teamId: "team_mich",
 			limit: 10,
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// formatRecord — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("formatRecord", () => {
+	it("formats a standard record without pushes", () => {
+		const result = formatRecord(7, 3, 0, 0.7);
+		expect(result).toEqual({
+			wins: 7,
+			losses: 3,
+			pushes: 0,
+			winPct: 0.7,
+			display: "7-3",
+		});
+	});
+
+	it("includes pushes in display when > 0", () => {
+		const result = formatRecord(5, 3, 2, 0.5);
+		expect(result.display).toBe("5-3-2");
+	});
+
+	it("handles 0-0-0 record", () => {
+		const result = formatRecord(0, 0, 0, null);
+		expect(result.display).toBe("0-0");
+		expect(result.winPct).toBeNull();
+	});
+
+	it("handles all pushes", () => {
+		const result = formatRecord(0, 0, 10, null);
+		expect(result.display).toBe("0-0-10");
+	});
+
+	it("preserves exact winPct value", () => {
+		const result = formatRecord(3, 7, 0, 0.3);
+		expect(result.winPct).toBe(0.3);
+	});
+
+	it("handles large record numbers", () => {
+		const result = formatRecord(100, 50, 5, 0.667);
+		expect(result.display).toBe("100-50-5");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// formatStreak — direct helper tests
+// ---------------------------------------------------------------------------
+
+describe("formatStreak", () => {
+	it("returns null for null input", () => {
+		expect(formatStreak(null)).toBeNull();
+	});
+
+	it("formats a win streak", () => {
+		const result = formatStreak({ type: "W", length: 5 });
+		expect(result).toEqual({ type: "W", length: 5, display: "W5" });
+	});
+
+	it("formats a loss streak", () => {
+		const result = formatStreak({ type: "L", length: 3 });
+		expect(result).toEqual({ type: "L", length: 3, display: "L3" });
+	});
+
+	it("formats a streak of length 1", () => {
+		const result = formatStreak({ type: "W", length: 1 });
+		expect(result).toEqual({ type: "W", length: 1, display: "W1" });
 	});
 });

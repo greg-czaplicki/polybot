@@ -69,7 +69,8 @@ export interface MatchupSplitComparison {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function determineEdge(
+/** @internal Exported for testing */
+export function determineEdge(
 	teamPct: number | null,
 	opponentPct: number | null,
 ): ComparisonEdge {
@@ -80,7 +81,8 @@ function determineEdge(
 	return teamPct > opponentPct ? "team" : "opponent";
 }
 
-function buildMetricComparisons(
+/** @internal Exported for testing */
+export function buildMetricComparisons(
 	teamSummary: TeamTrendSummary | null,
 	opponentSummary: TeamTrendSummary | null,
 ): MetricComparison[] {
@@ -112,7 +114,8 @@ function buildMetricComparisons(
  * Determine which split pairs are relevant for a matchup.
  * Maps team context (home/away, fav/dog) to the opposing context.
  */
-function getRelevantSplitPairs(
+/** @internal Exported for testing */
+export function getRelevantSplitPairs(
 	teamVenueRole?: VenueRole,
 	teamFavDogRole?: FavDogRole,
 ): Array<{
@@ -168,7 +171,8 @@ function getRelevantSplitPairs(
 	return pairs;
 }
 
-function buildHeadline(
+/** @internal Exported for testing */
+export function buildHeadline(
 	teamName: string,
 	opponentName: string,
 	splits: MatchupSplitComparison[],
