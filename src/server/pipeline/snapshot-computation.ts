@@ -366,14 +366,23 @@ function getStreakDirection(
 
 /**
  * Compute average margin for facts that have the relevant value.
+ * For "cover": average of cover_margin (how much the spread was beaten by).
+ * For "total": average of total_margin = actual_total - total_line (per metric-definitions.md).
  */
 function computeAvgMargin(
 	facts: TeamGameFact[],
 	type: "cover" | "total",
 ): number | undefined {
-	const values = facts
-		.map((f) => (type === "cover" ? f.coverMargin : f.actualTotal))
-		.filter((v): v is number => v !== undefined);
+	const values =
+		type === "cover"
+			? facts
+					.map((f) => f.coverMargin)
+					.filter((v): v is number => v !== undefined)
+			: facts
+					.filter(
+						(f) => f.actualTotal !== undefined && f.totalLine !== undefined,
+					)
+					.map((f) => f.actualTotal! - f.totalLine!);
 
 	if (values.length === 0) return undefined;
 
