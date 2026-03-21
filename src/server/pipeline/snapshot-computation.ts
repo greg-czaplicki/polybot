@@ -380,9 +380,14 @@ function computeAvgMargin(
 					.filter((v): v is number => v !== undefined)
 			: facts
 					.filter(
-						(f) => f.actualTotal !== undefined && f.totalLine !== undefined,
+						(
+							f,
+						): f is TeamGameFact & {
+							actualTotal: number;
+							totalLine: number;
+						} => f.actualTotal !== undefined && f.totalLine !== undefined,
 					)
-					.map((f) => f.actualTotal! - f.totalLine!);
+					.map((f) => f.actualTotal - f.totalLine);
 
 	if (values.length === 0) return undefined;
 
