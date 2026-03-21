@@ -12,7 +12,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getDb } from "../env";
 import {
 	getRankedOpportunities,
-	type OpportunityRankingSummary,
+	type RankedOpportunitySummary,
 } from "../repositories/opportunity-ranking";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ export const getRankedOpportunitiesFn = createServerFn({
 }).handler(async ({ context, data }) => {
 	const payload = (data ?? {}) as { limit?: number };
 	const db = getDb(context);
-	const result: OpportunityRankingSummary = await getRankedOpportunities(db, {
+	const result: RankedOpportunitySummary = await getRankedOpportunities(db, {
 		limit: payload.limit,
 	});
 	return { ranking: result };

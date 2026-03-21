@@ -32,19 +32,9 @@ function tierBadgeClass(score: number): string {
 	return "bg-red-500/20 text-red-300 border-red-500/30";
 }
 
-/** Build matchup label from team/opponent names. */
-function matchupLabel(opp: RankedOpportunity): string {
-	if (opp.teamName && opp.opponentName) {
-		return opp.venueRole === "away"
-			? `${opp.teamName} @ ${opp.opponentName}`
-			: `${opp.teamName} vs ${opp.opponentName}`;
-	}
-	return opp.marketTitle;
-}
-
 /** Top factor summary for the row. */
 function topFactorSummary(opp: RankedOpportunity): string {
-	const top = opp.scoring.factors.find((f) => f.points > 0);
+	const top = opp.factors.find((f) => f.points > 0);
 	return top ? top.label : "—";
 }
 
@@ -101,7 +91,7 @@ export function RankedOpportunityTable({
 								{/* Matchup */}
 								<div className="min-w-0 flex-1">
 									<div className="truncate text-[0.7rem] font-semibold text-slate-200">
-										{matchupLabel(opp)}
+										{opp.matchupLabel}
 									</div>
 									<div className="flex items-center gap-2 text-[0.6rem] text-slate-500">
 										{opp.sportTag && <span>{opp.sportTag.toUpperCase()}</span>}
@@ -117,23 +107,23 @@ export function RankedOpportunityTable({
 								</div>
 
 								{/* Warnings count */}
-								{opp.scoring.warnings.length > 0 && (
+								{opp.warnings.length > 0 && (
 									<div className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.5rem] text-amber-400">
-										{opp.scoring.warnings.length}!
+										{opp.warnings.length}!
 									</div>
 								)}
 
 								{/* Score + tier */}
 								<div className="shrink-0 text-right">
 									<div
-										className={`text-sm font-bold ${scoreColor(opp.scoring.totalScore)}`}
+										className={`text-sm font-bold ${scoreColor(opp.totalScore)}`}
 									>
-										{opp.scoring.totalScore}
+										{opp.totalScore}
 									</div>
 									<span
-										className={`inline-block rounded-full border px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-[0.15em] ${tierBadgeClass(opp.scoring.totalScore)}`}
+										className={`inline-block rounded-full border px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-[0.15em] ${tierBadgeClass(opp.totalScore)}`}
 									>
-										{scoreTier(opp.scoring.totalScore)}
+										{scoreTier(opp.totalScore)}
 									</span>
 								</div>
 
@@ -146,7 +136,11 @@ export function RankedOpportunityTable({
 							{/* Expanded explanation */}
 							{expandedId === opp.pickId && (
 								<div className="border-t border-slate-800/40 px-3 py-2">
-									<ScoreExplanation scoring={opp.scoring} />
+									<ScoreExplanation
+										factors={opp.factors}
+										warnings={opp.warnings}
+										totalScore={opp.totalScore}
+									/>
 								</div>
 							)}
 						</div>

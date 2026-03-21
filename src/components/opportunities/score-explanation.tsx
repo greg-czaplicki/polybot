@@ -2,10 +2,7 @@
 // Score Explanation — expandable breakdown of a single opportunity's score
 // ---------------------------------------------------------------------------
 
-import type {
-	OpportunityScore,
-	ScoringFactor,
-} from "../../server/domain/opportunity-scoring";
+import type { ScoringFactor } from "../../server/repositories/opportunity-ranking";
 
 /** Color class based on factor contribution direction. */
 function factorColor(points: number): string {
@@ -59,35 +56,29 @@ function FactorList({
 	);
 }
 
-function WarningList({ warnings }: { warnings: string[] }) {
-	if (warnings.length === 0) return null;
-	return (
-		<div className="border-t border-slate-700/40 pt-2">
-			<div className="mb-1 text-[0.6rem] font-semibold uppercase tracking-[0.15em] text-amber-400/70">
-				Warnings
-			</div>
-			{warnings.map((w) => (
-				<div key={w} className="py-0.5 text-[0.65rem] text-amber-300/80">
-					{w}
-				</div>
-			))}
-		</div>
-	);
-}
-
-export function ScoreExplanation({ scoring }: { scoring: OpportunityScore }) {
-	const positives = scoring.factors.filter((f) => f.points > 0);
-	const negatives = scoring.factors.filter((f) => f.points < 0);
-	const neutrals = scoring.factors.filter((f) => f.points === 0);
+export function ScoreExplanation({
+	factors,
+	warnings,
+	totalScore,
+	rawScore,
+}: {
+	factors: ScoringFactor[];
+	warnings: string[];
+	totalScore: number;
+	rawScore?: number;
+}) {
+	const positives = factors.filter((f) => f.points > 0);
+	const negatives = factors.filter((f) => f.points < 0);
+	const neutrals = factors.filter((f) => f.points === 0);
 
 	return (
 		<div className="space-y-3 rounded-lg border border-slate-700/60 bg-slate-900/80 p-3">
 			{/* Score summary */}
-			<div className="flex items-center justify-between text-[0.65rem]">
-				<span className="text-slate-400">
-					Raw score: {scoring.rawScore} → normalized: {scoring.totalScore}/100
-				</span>
-			</div>
+			{rawScore != null && (
+				<div className="text-[0.65rem] text-slate-400">
+					Raw score: {rawScore} → normalized: {totalScore}/100
+				</div>
+			)}
 
 			<FactorList
 				title="Positive Factors"
@@ -104,7 +95,20 @@ export function ScoreExplanation({ scoring }: { scoring: OpportunityScore }) {
 				titleColor="text-slate-500"
 				factors={neutrals}
 			/>
-			<WarningList warnings={scoring.warnings} />
+
+			{/* Warnings */}
+			{warnings.length > 0 && (
+				<div className="border-t border-slate-700/40 pt-2">
+					<div className="mb-1 text-[0.6rem] font-semibold uppercase tracking-[0.15em] text-amber-400/70">
+						Warnings
+					</div>
+					{warnings.map((w) => (
+						<div key={w} className="py-0.5 text-[0.65rem] text-amber-300/80">
+							{w}
+						</div>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }
