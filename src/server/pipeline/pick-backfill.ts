@@ -41,6 +41,7 @@ interface ManualPickRow {
 	team_id: string | null;
 	bet_type: string | null;
 	sport_tag: string | null;
+	sharp_side: string | null;
 }
 
 /** Parsed decision snapshot fields we care about. */
@@ -49,6 +50,8 @@ interface DecisionSnapshotFields {
 	marketTitle?: string;
 	eventTime?: string;
 	sportSeriesId?: number;
+	sharpSideLabel?: string;
+	selectedOutcome?: string;
 }
 
 /** Result stats for the backfill run. */
@@ -82,6 +85,12 @@ function parseDecisionSnapshot(
 			eventTime: typeof obj.eventTime === "string" ? obj.eventTime : undefined,
 			sportSeriesId:
 				typeof obj.sportSeriesId === "number" ? obj.sportSeriesId : undefined,
+			sharpSideLabel:
+				typeof obj.sharpSideLabel === "string" ? obj.sharpSideLabel : undefined,
+			selectedOutcome:
+				typeof obj.selectedOutcome === "string"
+					? obj.selectedOutcome
+					: undefined,
 		};
 	} catch {
 		return null;
@@ -206,6 +215,121 @@ function deriveFavDogRole(
 	return homeFav ? "dog" : "favorite";
 }
 
+/**
+ * Looks up side_a_label and side_b_label from sharp_money_cache for a condition.
+ * These labels (e.g., "Chiefs", "Lions") let us map the picked side to a team.
+ */
+async function getSideLabels(
+	db: Db,
+	conditionId: string,
+): Promise<{ sideALabel: string | null; sideBLabel: string | null }> {
+	const row = await first<{
+		side_a_label: string | null;
+		side_b_label: string | null;
+	}>(
+		db,
+		`SELECT side_a_label, side_b_label FROM sharp_money_cache WHERE condition_id = ? LIMIT 1`,
+		conditionId,
+	);
+	return {
+		sideALabel: row?.side_a_label ?? null,
+		sideBLabel: row?.side_b_label ?? null,
+	};
+}
+
+/**
+ * Resolves which team was picked based on the sharp_side label.
+ *
+ * Strategy:
+ * 1. Get the picked side label from sharp_side, decision snapshot, or cache
+ * 2. Look up side_a_label / side_b_label from sharp_money_cache
+ * 3. Match the picked label against resolved team names/aliases
+ *
+ * Confidence thresholds:
+ * - HIGH: picked label exactly matches one team's name, shortName, or known alias
+ * - MEDIUM: picked label substring-matches one team but not the other
+ * - SKIP: no match or ambiguous match → do not assign team_id
+ *
+ * Returns null when confidence is insufficient rather than guessing.
+ */
+function resolvePickedSide(opts: {
+	pickedLabel: string | null;
+	sideALabel: string | null;
+	sideBLabel: string | null;
+	homeTeamName: string;
+	awayTeamName: string;
+	homeTeamId: string;
+	awayTeamId: string;
+}): {
+	teamId: string;
+	opponentId: string;
+	venueRole: VenueRole;
+	isHomeTeam: boolean;
+} | null {
+	const { pickedLabel, sideALabel, sideBLabel } = opts;
+
+	if (!pickedLabel) return null;
+
+	const normalizedPick = pickedLabel.trim().toLowerCase();
+	if (!normalizedPick) return null;
+
+	// Strategy 1: Match picked label against side labels from cache,
+	// then map side_a → away, side_b → home (Polymarket convention).
+	if (sideALabel && sideBLabel) {
+		const normA = sideALabel.trim().toLowerCase();
+		const normB = sideBLabel.trim().toLowerCase();
+
+		if (normalizedPick === normA) {
+			// Picked side A = away team
+			return {
+				teamId: opts.awayTeamId,
+				opponentId: opts.homeTeamId,
+				venueRole: "away",
+				isHomeTeam: false,
+			};
+		}
+		if (normalizedPick === normB) {
+			// Picked side B = home team
+			return {
+				teamId: opts.homeTeamId,
+				opponentId: opts.awayTeamId,
+				venueRole: "home",
+				isHomeTeam: true,
+			};
+		}
+	}
+
+	// Strategy 2: Direct substring match of picked label against team names.
+	// Only assign if exactly one team matches (avoid ambiguity).
+	const normHome = opts.homeTeamName.trim().toLowerCase();
+	const normAway = opts.awayTeamName.trim().toLowerCase();
+
+	const matchesHome =
+		normHome.includes(normalizedPick) || normalizedPick.includes(normHome);
+	const matchesAway =
+		normAway.includes(normalizedPick) || normalizedPick.includes(normAway);
+
+	if (matchesHome && !matchesAway) {
+		return {
+			teamId: opts.homeTeamId,
+			opponentId: opts.awayTeamId,
+			venueRole: "home",
+			isHomeTeam: true,
+		};
+	}
+	if (matchesAway && !matchesHome) {
+		return {
+			teamId: opts.awayTeamId,
+			opponentId: opts.homeTeamId,
+			venueRole: "away",
+			isHomeTeam: false,
+		};
+	}
+
+	// Ambiguous or no match → skip to avoid poisoning data
+	return null;
+}
+
 // ---------------------------------------------------------------------------
 // Main backfill
 // ---------------------------------------------------------------------------
@@ -229,7 +353,8 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 	const picks = await all<ManualPickRow>(
 		db,
 		`SELECT id, condition_id, market_title, event_time,
-		        decision_snapshot_json, game_id, team_id, bet_type, sport_tag
+		        decision_snapshot_json, game_id, team_id, bet_type, sport_tag,
+		        sharp_side
 		 FROM manual_picks
 		 WHERE bet_type IS NULL
 		    OR sport_tag IS NULL
@@ -262,7 +387,11 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			// 2. Detect sport_tag
 			const sportTag = pick.sport_tag ?? detectSportTag({ title }) ?? null;
 
-			// 3. Parse team names and resolve IDs
+			// 3. Parse team names and resolve IDs.
+			// We use the picked side label (from sharp_side, decision snapshot, or
+			// sharp_money_cache) to determine which team was picked. If we cannot
+			// confidently resolve the picked side, we skip team_id assignment
+			// entirely rather than guessing wrong.
 			let teamId = pick.team_id ?? null;
 			let opponentId: string | null = null;
 			let venueRole: VenueRole | null = null;
@@ -275,13 +404,35 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 					const awayTeam = await resolveSingleTeam(db, sportTag, parsed.away);
 
 					if (homeTeam && awayTeam) {
-						// For spread/ML, the picked team is typically the one with the line
-						// For simplicity, default to away team (first listed)
-						// unless the title clearly indicates the home team was picked
-						teamId = awayTeam.id;
-						opponentId = homeTeam.id;
-						venueRole = "away";
-						isHomeTeam = false;
+						// Determine picked side label from available sources
+						const pickedLabel =
+							pick.sharp_side ??
+							snapshot?.sharpSideLabel ??
+							snapshot?.selectedOutcome ??
+							null;
+
+						// Look up side labels from sharp_money_cache for mapping
+						const sideLabels = await getSideLabels(db, pick.condition_id);
+
+						const resolved = resolvePickedSide({
+							pickedLabel,
+							sideALabel: sideLabels.sideALabel,
+							sideBLabel: sideLabels.sideBLabel,
+							homeTeamName: homeTeam.name,
+							awayTeamName: awayTeam.name,
+							homeTeamId: homeTeam.id,
+							awayTeamId: awayTeam.id,
+						});
+
+						if (resolved) {
+							teamId = resolved.teamId;
+							opponentId = resolved.opponentId;
+							venueRole = resolved.venueRole;
+							isHomeTeam = resolved.isHomeTeam;
+						}
+						// If resolved is null, we skip team assignment — prefer no data
+						// over likely-wrong linkage. The pick can still get bet_type and
+						// sport_tag populated.
 					}
 				}
 			}
@@ -303,11 +454,9 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			}
 
 			if (!gameId && teamId && opponentId && eventTimeUnix && sportTag) {
-				// We need home/away IDs for game lookup
-				// Default assignment: teamId=away, opponentId=home
-				// venueRole may be updated later from facts, but for lookup we use initial assignment
-				const homeId = opponentId;
-				const awayId = teamId;
+				// Use venue roles to correctly map home/away for game lookup
+				const homeId = isHomeTeam ? teamId : opponentId;
+				const awayId = isHomeTeam ? opponentId : teamId;
 				gameId = await findGameForPick(db, {
 					eventSlug: snapshot?.eventSlug,
 					homeTeamId: homeId,
