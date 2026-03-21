@@ -6,20 +6,7 @@ import type {
 	FormattedStreak,
 	TeamTrendSummary,
 } from "../../server/domain/trend-summary";
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-function pctDisplay(pct: number | null): string {
-	if (pct == null) return "—";
-	return `${(pct * 100).toFixed(0)}%`;
-}
-
-function marginDisplay(val: number | null): string {
-	if (val == null) return "—";
-	return val >= 0 ? `+${val.toFixed(1)}` : val.toFixed(1);
-}
+import { formatMargin, formatPercent } from "./formatters";
 
 function RecordCell({
 	label,
@@ -41,7 +28,7 @@ function RecordCell({
 				{record.display}
 			</span>
 			<div className="flex items-center gap-2 text-[0.65rem] text-slate-400">
-				<span>{pctDisplay(record.winPct)}</span>
+				<span>{formatPercent(record.winPct)}</span>
 				{streak && (
 					<span
 						className={
@@ -52,7 +39,7 @@ function RecordCell({
 					</span>
 				)}
 				{avgMargin != null && (
-					<span className="text-slate-500">{marginDisplay(avgMargin)}</span>
+					<span className="text-slate-500">{formatMargin(avgMargin)}</span>
 				)}
 			</div>
 		</div>

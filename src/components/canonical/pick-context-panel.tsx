@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { getPickContextFn } from "../../server/api/canonical-analytics";
+import { formatPercent, formatSpreadLine } from "./formatters";
 
 // ---------------------------------------------------------------------------
 // Types — matches the PickContext shape from canonical-analytics.ts
@@ -40,29 +41,19 @@ interface CompactSnapshot {
 	atsStreak: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function pctDisplay(pct: number | null): string {
-	if (pct == null) return "—";
-	return `${(pct * 100).toFixed(0)}%`;
-}
-
-function lineDisplay(val: number | null): string {
-	if (val == null) return "—";
-	return val >= 0 ? `+${val}` : `${val}`;
-}
-
 function SnapshotBadge({ snapshot }: { snapshot: CompactSnapshot }) {
 	return (
 		<div className="flex flex-wrap items-center gap-2 text-[0.65rem]">
 			<span className="font-semibold uppercase text-slate-500">
 				{snapshot.type}
 			</span>
-			<span className="text-slate-400">SU {pctDisplay(snapshot.suPct)}</span>
-			<span className="text-slate-400">ATS {pctDisplay(snapshot.atsPct)}</span>
-			<span className="text-slate-400">O/U {pctDisplay(snapshot.ouPct)}</span>
+			<span className="text-slate-400">SU {formatPercent(snapshot.suPct)}</span>
+			<span className="text-slate-400">
+				ATS {formatPercent(snapshot.atsPct)}
+			</span>
+			<span className="text-slate-400">
+				O/U {formatPercent(snapshot.ouPct)}
+			</span>
 			{snapshot.atsStreak && (
 				<span
 					className={
@@ -197,14 +188,14 @@ function PickContextContent({ context }: { context: PickContextData }) {
 			{(enrichment.spreadLine != null || enrichment.totalLine != null) && (
 				<div className="flex flex-wrap items-center gap-3 text-[0.65rem] text-slate-400">
 					{enrichment.spreadLine != null && (
-						<span>Spread {lineDisplay(enrichment.spreadLine)}</span>
+						<span>Spread {formatSpreadLine(enrichment.spreadLine)}</span>
 					)}
 					{enrichment.totalLine != null && (
 						<span>Total {enrichment.totalLine}</span>
 					)}
 					{enrichment.actualMargin != null && (
 						<span className="text-slate-500">
-							Margin {lineDisplay(enrichment.actualMargin)}
+							Margin {formatSpreadLine(enrichment.actualMargin)}
 						</span>
 					)}
 					{enrichment.actualTotal != null && (
