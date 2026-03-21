@@ -304,6 +304,11 @@ function parseEnrichmentSnapshot(
 
 /**
  * Enrichment result for the pick response — tells the caller what was enriched.
+ *
+ * `trendSnapshotAttached` indicates whether a trend snapshot was available for
+ * the team at pick time. This is an in-memory signal only — no snapshot data
+ * is persisted on the pick row. Trend snapshots are fetched on demand via
+ * getPickContextFn using team_id + picked_at.
  */
 export interface PickEnrichmentResult {
 	fieldsSet: string[];
@@ -316,7 +321,12 @@ export interface PickEnrichmentResult {
  *
  * Enriches: bet_type, sport_tag, team_id, opponent_id, game_id,
  * venue_role, fav_dog_role, spread_line, total_line, actual_margin, actual_total.
- * Also attaches a point-in-time trend snapshot reference when possible.
+ *
+ * Also checks whether a point-in-time trend snapshot exists for the team.
+ * The snapshot is NOT persisted on the pick — the flag is returned to the
+ * caller as `trendSnapshotAttached` so it can be surfaced in the response.
+ * The canonical pick-context lookup (getPickContextFn) fetches snapshots
+ * on demand at read time using the pick's team_id and picked_at timestamp.
  */
 async function enrichPickInline(
 	db: Db,
@@ -472,10 +482,10 @@ async function enrichPickInline(
 		...params,
 	);
 
-	// 8. Attach point-in-time trend snapshot reference
-	// If we have a team and a time reference, look up the trend snapshot that was
-	// current when the pick was made. Store the snapshot type + as_of_game_id so
-	// the pick can reference what the team's trend looked like at decision time.
+	// 8. Check for point-in-time trend snapshot availability
+	// If we have a team and a time reference, verify that a trend snapshot existed
+	// when the pick was made. This is a read-only check — no data is persisted on
+	// the pick. The result flag lets the caller know whether trend context exists.
 	if (teamId && sportTag) {
 		const asOfTime = eventTimeUnix ?? nowUnixSeconds();
 		const trendSnapshot = await getTeamTrendSnapshotAsOf(
