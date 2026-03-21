@@ -5,6 +5,7 @@ import type {
 	TeamTrendSnapshot,
 	TeamTrendSnapshotFilter,
 	TeamTrendSnapshotRow,
+	TrendSnapshotType,
 } from "../types/canonical";
 
 function parseRow(row: TeamTrendSnapshotRow): TeamTrendSnapshot {
@@ -14,7 +15,7 @@ function parseRow(row: TeamTrendSnapshotRow): TeamTrendSnapshot {
 		asOfGameId: row.as_of_game_id,
 		asOfTime: row.as_of_time,
 		sportTag: row.sport_tag,
-		snapshotType: row.snapshot_type,
+		snapshotType: row.snapshot_type as TrendSnapshotType,
 		windowSize: row.window_size,
 		suWins: row.su_wins,
 		suLosses: row.su_losses,
@@ -49,7 +50,7 @@ export interface UpsertTeamTrendSnapshotInput {
 	asOfGameId: string;
 	asOfTime: number;
 	sportTag: string;
-	snapshotType: string;
+	snapshotType: TrendSnapshotType;
 	windowSize?: number;
 	suWins: number;
 	suLosses: number;
@@ -171,8 +172,10 @@ export async function upsertTeamTrendSnapshot(
 }
 
 /**
- * Get the latest trend snapshot for a team by snapshot type.
- * Primary access pattern: "join team trend snapshot to a pick by game/team/time"
+ * Get the most recent trend snapshot for a team, optionally filtered by
+ * snapshot type, sport, and window size. Returns the absolute latest snapshot
+ * matching the filter — not time-bounded. For pick-join lookups bounded by
+ * pick time, use {@link getTeamTrendSnapshotAsOf} instead.
  */
 export async function getLatestTeamTrendSnapshot(
 	db: Db,
@@ -213,7 +216,7 @@ export async function getTeamTrendSnapshotAtGame(
 	db: Db,
 	teamId: string,
 	gameId: string,
-	snapshotType: string,
+	snapshotType: TrendSnapshotType,
 ): Promise<TeamTrendSnapshot | null> {
 	const row = await first<TeamTrendSnapshotRow>(
 		db,
@@ -227,13 +230,39 @@ export async function getTeamTrendSnapshotAtGame(
 }
 
 /**
+ * Get the most recent trend snapshot for a team at or before a given time.
+ * This is the canonical lookup for attaching trend context to picks —
+ * it finds the snapshot that was current when a pick was made.
+ *
+ * SQL: snapshot_type = ? AND as_of_time <= ? ORDER BY as_of_time DESC LIMIT 1
+ */
+export async function getTeamTrendSnapshotAsOf(
+	db: Db,
+	teamId: string,
+	snapshotType: TrendSnapshotType,
+	asOfTime: number,
+): Promise<TeamTrendSnapshot | null> {
+	const row = await first<TeamTrendSnapshotRow>(
+		db,
+		`SELECT * FROM team_trend_snapshots
+		WHERE team_id = ? AND snapshot_type = ? AND as_of_time <= ?
+		ORDER BY as_of_time DESC
+		LIMIT 1`,
+		teamId,
+		snapshotType,
+		asOfTime,
+	);
+	return row ? parseRow(row) : null;
+}
+
+/**
  * List all trend snapshots for a team.
  * Access pattern: "compare team and opponent recent splits for a matchup"
  */
 export async function listTeamTrendSnapshots(
 	db: Db,
 	teamId: string,
-	options?: { sportTag?: string; snapshotType?: string },
+	options?: { sportTag?: string; snapshotType?: TrendSnapshotType },
 ): Promise<TeamTrendSnapshot[]> {
 	const where: string[] = [`team_id = ?`];
 	const params: unknown[] = [teamId];
