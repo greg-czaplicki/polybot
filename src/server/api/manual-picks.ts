@@ -2,8 +2,16 @@ import { createServerFn } from "@tanstack/react-start";
 import { detectBetType } from "@/lib/markets";
 import { detectSportTag } from "@/lib/sports";
 import type { Db } from "../db/client";
-import { first, run } from "../db/client";
+import { run } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
+import {
+	deriveFavDogRole,
+	findGameForPick,
+	getFactValues,
+	getLineValues,
+	getSideLabels,
+	resolvePickedSide,
+} from "../pipeline/pick-enrichment-helpers";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
@@ -294,206 +302,11 @@ function parseEnrichmentSnapshot(
 	};
 }
 
-/**
- * Finds a canonical game matching teams + event time within a 6-hour window.
- */
-async function findGameForEnrichment(
-	db: Db,
-	homeTeamId: string,
-	awayTeamId: string,
-	eventTimeUnix: number,
-	sportTag: string,
-): Promise<string | null> {
-	const windowSeconds = 6 * 60 * 60;
-	const row = await first<{ id: string }>(
-		db,
-		`SELECT id FROM games
-		 WHERE sport_tag = ?
-		   AND home_team_id = ?
-		   AND away_team_id = ?
-		   AND game_time BETWEEN ? AND ?
-		 LIMIT 1`,
-		sportTag,
-		homeTeamId,
-		awayTeamId,
-		eventTimeUnix - windowSeconds,
-		eventTimeUnix + windowSeconds,
-	);
-	return row?.id ?? null;
-}
-
-/**
- * Gets spread and total from game_lines (prefers close, falls back to open).
- */
-async function getLineValuesForEnrichment(
-	db: Db,
-	gameId: string,
-): Promise<{
-	homeSpread: number | null;
-	totalLine: number | null;
-}> {
-	const row = await first<{
-		home_spread: number | null;
-		total_line: number | null;
-	}>(
-		db,
-		`SELECT home_spread, total_line FROM game_lines
-		 WHERE game_id = ?
-		 ORDER BY CASE snapshot_type WHEN 'close' THEN 0 ELSE 1 END
-		 LIMIT 1`,
-		gameId,
-	);
-	return {
-		homeSpread: row?.home_spread ?? null,
-		totalLine: row?.total_line ?? null,
-	};
-}
-
-/**
- * Gets fact-derived values for a team in a game.
- */
-async function getFactValuesForEnrichment(
-	db: Db,
-	gameId: string,
-	teamId: string,
-): Promise<{
-	actualMargin: number | null;
-	actualTotal: number | null;
-	venueRole: VenueRole | null;
-	favDogRole: FavDogRole | null;
-}> {
-	const row = await first<{
-		actual_margin: number | null;
-		actual_total: number | null;
-		venue_role: string | null;
-		fav_dog_role: string | null;
-	}>(
-		db,
-		`SELECT actual_margin, actual_total, venue_role, fav_dog_role
-		 FROM team_game_facts
-		 WHERE game_id = ? AND team_id = ?
-		 LIMIT 1`,
-		gameId,
-		teamId,
-	);
-	return {
-		actualMargin: row?.actual_margin ?? null,
-		actualTotal: row?.actual_total ?? null,
-		venueRole: (row?.venue_role as VenueRole) ?? null,
-		favDogRole: (row?.fav_dog_role as FavDogRole) ?? null,
-	};
-}
-
-/**
- * Gets side_a_label and side_b_label from sharp_money_cache.
- */
-async function getSideLabelsForEnrichment(
-	db: Db,
-	conditionId: string,
-): Promise<{ sideALabel: string | null; sideBLabel: string | null }> {
-	const row = await first<{
-		side_a_label: string | null;
-		side_b_label: string | null;
-	}>(
-		db,
-		`SELECT side_a_label, side_b_label FROM sharp_money_cache WHERE condition_id = ? LIMIT 1`,
-		conditionId,
-	);
-	return {
-		sideALabel: row?.side_a_label ?? null,
-		sideBLabel: row?.side_b_label ?? null,
-	};
-}
-
-/**
- * Derives fav_dog_role from home spread and team position.
- */
-export function deriveFavDogRole(
-	homeSpread: number | null,
-	isHomeTeam: boolean,
-): FavDogRole | null {
-	if (homeSpread === null) return null;
-	if (homeSpread === 0) return "pickem";
-	const homeFav = homeSpread < 0;
-	if (isHomeTeam) return homeFav ? "favorite" : "dog";
-	return homeFav ? "dog" : "favorite";
-}
-
-/**
- * Resolves which team was picked based on the sharp_side label.
- * Returns null when confidence is insufficient rather than guessing.
- */
-export function resolvePickedSideForEnrichment(opts: {
-	pickedLabel: string | null;
-	sideALabel: string | null;
-	sideBLabel: string | null;
-	homeTeamName: string;
-	awayTeamName: string;
-	homeTeamId: string;
-	awayTeamId: string;
-}): {
-	teamId: string;
-	opponentId: string;
-	venueRole: VenueRole;
-	isHomeTeam: boolean;
-} | null {
-	const { pickedLabel, sideALabel, sideBLabel } = opts;
-	if (!pickedLabel) return null;
-
-	const normalizedPick = pickedLabel.trim().toLowerCase();
-	if (!normalizedPick) return null;
-
-	// Strategy 1: Match via side labels (side_a = away, side_b = home)
-	if (sideALabel && sideBLabel) {
-		const normA = sideALabel.trim().toLowerCase();
-		const normB = sideBLabel.trim().toLowerCase();
-
-		if (normalizedPick === normA) {
-			return {
-				teamId: opts.awayTeamId,
-				opponentId: opts.homeTeamId,
-				venueRole: "away",
-				isHomeTeam: false,
-			};
-		}
-		if (normalizedPick === normB) {
-			return {
-				teamId: opts.homeTeamId,
-				opponentId: opts.awayTeamId,
-				venueRole: "home",
-				isHomeTeam: true,
-			};
-		}
-	}
-
-	// Strategy 2: Substring match against team names
-	const normHome = opts.homeTeamName.trim().toLowerCase();
-	const normAway = opts.awayTeamName.trim().toLowerCase();
-
-	const matchesHome =
-		normHome.includes(normalizedPick) || normalizedPick.includes(normHome);
-	const matchesAway =
-		normAway.includes(normalizedPick) || normalizedPick.includes(normAway);
-
-	if (matchesHome && !matchesAway) {
-		return {
-			teamId: opts.homeTeamId,
-			opponentId: opts.awayTeamId,
-			venueRole: "home",
-			isHomeTeam: true,
-		};
-	}
-	if (matchesAway && !matchesHome) {
-		return {
-			teamId: opts.awayTeamId,
-			opponentId: opts.homeTeamId,
-			venueRole: "away",
-			isHomeTeam: false,
-		};
-	}
-
-	return null;
-}
+// Re-export shared helpers for test access
+export {
+	deriveFavDogRole as deriveFavDogRoleExported,
+	resolvePickedSide as resolvePickedSideForEnrichment,
+} from "../pipeline/pick-enrichment-helpers";
 
 /**
  * Enrichment result for the pick response — tells the caller what was enriched.
@@ -551,12 +364,12 @@ async function enrichPickInline(
 					snapshot?.selectedOutcome ??
 					null;
 
-				const sideLabels = await getSideLabelsForEnrichment(
+				const sideLabels = await getSideLabels(
 					db,
 					input.conditionId,
 				);
 
-				const resolved = resolvePickedSideForEnrichment({
+				const resolved = resolvePickedSide({
 					pickedLabel,
 					sideALabel: sideLabels.sideALabel,
 					sideBLabel: sideLabels.sideBLabel,
@@ -591,13 +404,12 @@ async function enrichPickInline(
 	if (teamId && opponentId && eventTimeUnix && sportTag) {
 		const homeId = isHomeTeam ? teamId : opponentId;
 		const awayId = isHomeTeam ? opponentId : teamId;
-		gameId = await findGameForEnrichment(
-			db,
-			homeId,
-			awayId,
-			eventTimeUnix,
+		gameId = await findGameForPick(db, {
+			homeTeamId: homeId,
+			awayTeamId: awayId,
+			eventTime: eventTimeUnix,
 			sportTag,
-		);
+		});
 	}
 
 	// 5. Get line values
@@ -606,7 +418,7 @@ async function enrichPickInline(
 	let homeSpread: number | null = null;
 
 	if (gameId) {
-		const lines = await getLineValuesForEnrichment(db, gameId);
+		const lines = await getLineValues(db, gameId);
 		homeSpread = lines.homeSpread;
 		spreadLine = homeSpread;
 		totalLine = lines.totalLine;
@@ -618,7 +430,7 @@ async function enrichPickInline(
 	let actualTotal: number | null = null;
 
 	if (gameId && teamId) {
-		const facts = await getFactValuesForEnrichment(db, gameId, teamId);
+		const facts = await getFactValues(db, gameId, teamId);
 		if (facts.favDogRole) favDogRole = facts.favDogRole;
 		if (facts.venueRole) {
 			venueRole = facts.venueRole;

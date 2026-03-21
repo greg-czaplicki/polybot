@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { deriveSnapshotType } from "./canonical-analytics";
 import {
 	deriveFavDogRole,
-	resolvePickedSideForEnrichment,
-} from "./manual-picks";
+	resolvePickedSide as resolvePickedSideForEnrichment,
+} from "../pipeline/pick-enrichment-helpers";
 
 // ---------------------------------------------------------------------------
 // deriveSnapshotType
