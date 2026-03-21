@@ -302,12 +302,6 @@ function parseEnrichmentSnapshot(
 	};
 }
 
-// Re-export shared helpers for test access
-export {
-	deriveFavDogRole as deriveFavDogRoleExported,
-	resolvePickedSide as resolvePickedSideForEnrichment,
-} from "../pipeline/pick-enrichment-helpers";
-
 /**
  * Enrichment result for the pick response — tells the caller what was enriched.
  */
