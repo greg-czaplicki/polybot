@@ -7,6 +7,7 @@ import type { Env, RequestContext } from './server/env'
 import { handleBotRequest } from './server/api/bot'
 import { handleBotControlRequest } from './server/api/bot-control'
 import { settlePendingManualPicks } from './server/api/manual-picks'
+import { runCanonicalSync, persistSyncRun, getCanonicalFreshness } from './server/pipeline/canonical-sync'
 import { SharpPipeline, handleSharpQueue } from './server/pipeline/sharp-pipeline'
 import { getPipelineStub } from './server/pipeline/sharp-pipeline-utils'
 
@@ -65,6 +66,42 @@ const serverEntry = {
       }
     }
 
+    // Trigger manual canonical sync
+    if (url.pathname === '/_canonical/trigger' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({})) as { skipSeeding?: boolean }
+        const result = await runCanonicalSync(env.POLYWHALER_DB, {
+          skipSeeding: body.skipSeeding,
+        })
+        const runId = await persistSyncRun(env.POLYWHALER_DB, result)
+        return new Response(JSON.stringify({ success: true, runId, result }), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } catch (error) {
+        console.error('[canonical-sync] Trigger error:', error)
+        return new Response(JSON.stringify({ success: false, error: String(error) }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Canonical pipeline freshness status
+    if (url.pathname === '/_canonical/status' && request.method === 'GET') {
+      try {
+        const freshness = await getCanonicalFreshness(env.POLYWHALER_DB)
+        return new Response(JSON.stringify(freshness), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } catch (error) {
+        console.error('[canonical-sync] Status error:', error)
+        return new Response(JSON.stringify({ success: false, error: String(error) }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     const context: RequestContext = {
       env,
       executionCtx,
@@ -92,6 +129,16 @@ const serverEntry = {
         })
         .catch((error) => {
           console.error('[manual-picks] Scheduled settle failed', error)
+        }),
+    )
+    executionCtx.waitUntil(
+      runCanonicalSync(env.POLYWHALER_DB, { skipSeeding: true })
+        .then((result) => persistSyncRun(env.POLYWHALER_DB, result))
+        .then((id) => {
+          console.log(`[canonical-sync] Scheduled sync complete: ${id}`)
+        })
+        .catch((error) => {
+          console.error('[canonical-sync] Scheduled sync failed', error)
         }),
     )
   },
