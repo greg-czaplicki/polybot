@@ -150,44 +150,61 @@ async function getMarketInputsFromCache(db: Db): Promise<MarketGameInput[]> {
 	return inputs;
 }
 
+/** Time window (seconds) for matching cache entries to games. */
+const GAME_TIME_MATCH_WINDOW = 6 * 60 * 60;
+
 /**
  * Builds MarketLineInput objects from sharp_money_cache for games that
- * were recently ingested (have a canonical game_id match).
+ * don't yet have close lines. Uses application-level sport tag detection
+ * and time-bounded game matching to avoid incorrect associations.
  */
 async function getLineInputsFromCache(db: Db): Promise<MarketLineInput[]> {
-	// Find cache entries that match existing games (by title/time overlap)
-	// and create "close" snapshot lines from them
-	const rows = await all<CacheRow & { game_id: string }>(
+	// Fetch cache entries with event times
+	const cacheRows = await all<CacheRow>(
 		db,
-		`SELECT smc.condition_id, smc.market_title, smc.event_slug,
-		        smc.event_time, smc.sport_series_id, smc.side_a_label,
-		        smc.side_b_label, smc.market_volume,
-		        g.id as game_id
-		 FROM sharp_money_cache smc
-		 JOIN games g ON g.sport_tag = (
-		   CASE
-		     WHEN smc.event_slug LIKE 'nfl-%' THEN 'nfl'
-		     WHEN smc.event_slug LIKE 'nba-%' THEN 'nba'
-		     WHEN smc.event_slug LIKE 'mlb-%' THEN 'mlb'
-		     WHEN smc.event_slug LIKE 'ncaab-%' OR smc.event_slug LIKE 'cbb-%' THEN 'ncaab'
-		     WHEN smc.event_slug LIKE 'ncaaf-%' OR smc.event_slug LIKE 'cfb-%' THEN 'ncaaf'
-		     ELSE 'unknown'
-		   END
-		 )
-		 LEFT JOIN game_lines gl ON gl.game_id = g.id AND gl.snapshot_type = 'close'
-		 WHERE smc.event_time IS NOT NULL
-		   AND gl.id IS NULL
+		`SELECT condition_id, market_title, event_slug, event_time,
+		        sport_series_id, side_a_label, side_b_label, market_volume
+		 FROM sharp_money_cache
+		 WHERE event_time IS NOT NULL
 		 LIMIT 500`,
 	);
 
 	const inputs: MarketLineInput[] = [];
-	for (const row of rows) {
-		inputs.push({
-			gameId: row.game_id,
-			marketTitle: row.market_title,
-			snapshotType: "close",
-			source: "polymarket",
+
+	for (const row of cacheRows) {
+		// Detect sport tag in application code (DRY — uses shared detectSportTag)
+		const sportTag = detectSportTag({
+			title: row.market_title,
+			eventSlug: row.event_slug,
 		});
+		if (!sportTag) continue;
+
+		const eventTimeMs = new Date(row.event_time as string).getTime();
+		if (!Number.isFinite(eventTimeMs)) continue;
+		const eventTimeUnix = Math.floor(eventTimeMs / 1000);
+
+		// Find a matching game by sport + time window, excluding games with existing close lines
+		const game = await first<{ id: string }>(
+			db,
+			`SELECT g.id FROM games g
+			 LEFT JOIN game_lines gl ON gl.game_id = g.id AND gl.snapshot_type = 'close'
+			 WHERE g.sport_tag = ?
+			   AND ABS(g.game_time - ?) < ?
+			   AND gl.id IS NULL
+			 LIMIT 1`,
+			sportTag,
+			eventTimeUnix,
+			GAME_TIME_MATCH_WINDOW,
+		);
+
+		if (game) {
+			inputs.push({
+				gameId: game.id,
+				marketTitle: row.market_title,
+				snapshotType: "close",
+				source: "polymarket",
+			});
+		}
 	}
 
 	return inputs;
