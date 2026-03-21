@@ -18,6 +18,7 @@ import {
 } from "../pipeline/team-seeder";
 import {
 	type CreateManualPickInput,
+	type ManualPickEntry,
 	clearManualPicks,
 	createManualPick,
 	getManualPicksBucketPerformanceSummary,
@@ -502,48 +503,70 @@ async function enrichPickInline(
 	return result;
 }
 
+/**
+ * Narrow ManualPickEntry.decisionSnapshot from `unknown` to a serializable
+ * type so TanStack Start's return-type validation accepts it. The underlying
+ * data is always JSON-parsed at the repository layer.
+ */
+type SerializablePickEntry = Omit<ManualPickEntry, "decisionSnapshot"> & {
+	decisionSnapshot?: Record<string, {}>;
+};
+
+function toSerializablePick(pick: ManualPickEntry): SerializablePickEntry {
+	return {
+		...pick,
+		decisionSnapshot: pick.decisionSnapshot as
+			| Record<string, {}>
+			| undefined,
+	};
+}
+
 export const createManualPickFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as CreateManualPickInput;
-	if (!payload.conditionId || !payload.marketTitle) {
-		return { error: "invalid_payload", pick: null };
-	}
-	const db = getDb(context);
-	const pick = await createManualPick(db, payload);
+})
+	.inputValidator((d: CreateManualPickInput) => d)
+	.handler(async ({ context, data }) => {
+		if (!data.conditionId || !data.marketTitle) {
+			return { error: "invalid_payload" as const, pick: null };
+		}
+		const db = getDb(context);
+		const pick = await createManualPick(db, data);
 
-	// Attempt inline enrichment — best-effort, never blocks pick creation
-	let enrichment: PickEnrichmentResult | null = null;
-	try {
-		enrichment = await enrichPickInline(db, pick.id, payload);
-	} catch {
-		// Enrichment failure must not prevent pick creation
-	}
+		// Attempt inline enrichment — best-effort, never blocks pick creation
+		let enrichment: PickEnrichmentResult | null = null;
+		try {
+			enrichment = await enrichPickInline(db, pick.id, data);
+		} catch {
+			// Enrichment failure must not prevent pick creation
+		}
 
-	// If enrichment set fields, re-read the pick to return updated data
-	if (enrichment && enrichment.fieldsSet.length > 0) {
-		const updated = await listManualPicks(db, { limit: 50 });
-		const freshPick = updated.find((p) => p.id === pick.id);
-		return { pick: freshPick ?? pick, enrichment };
-	}
+		// If enrichment set fields, re-read the pick to return updated data
+		if (enrichment && enrichment.fieldsSet.length > 0) {
+			const updated = await listManualPicks(db, { limit: 50 });
+			const freshPick = updated.find((p) => p.id === pick.id);
+			return {
+				pick: toSerializablePick(freshPick ?? pick),
+				enrichment,
+			};
+		}
 
-	return { pick, enrichment };
-});
+		return { pick: toSerializablePick(pick), enrichment };
+	});
 
 export const listManualPicksFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		status?: ManualPickStatus;
-		limit?: number;
-	};
-	const db = getDb(context);
-	const picks = await listManualPicks(db, {
-		status: payload.status,
-		limit: payload.limit,
+})
+	.inputValidator(
+		(d: { status?: ManualPickStatus; limit?: number }) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const picks = await listManualPicks(db, {
+			status: data.status,
+			limit: data.limit,
+		});
+		return { picks: picks.map(toSerializablePick) };
 	});
-	return { picks };
-});
 
 export const getManualPicksSummaryFn = createServerFn({
 	method: "POST",
@@ -692,15 +715,16 @@ export const getManualPicksGradeRecalibrationFn = createServerFn({
 
 export const updateManualPickOutcomeFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { id: string; status: ManualPickStatus };
-	if (!payload.id || !payload.status) {
-		return { error: "invalid_payload", pick: null };
-	}
-	const db = getDb(context);
-	const pick = await updateManualPickOutcome(db, payload);
-	return { pick };
-});
+})
+	.inputValidator((d: { id: string; status: ManualPickStatus }) => d)
+	.handler(async ({ context, data }) => {
+		if (!data.id || !data.status) {
+			return { error: "invalid_payload" as const, pick: null };
+		}
+		const db = getDb(context);
+		const pick = await updateManualPickOutcome(db, data);
+		return { pick: pick ? toSerializablePick(pick) : null };
+	});
 
 export const clearManualPicksFn = createServerFn({
 	method: "POST",
