@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StrategyRouteImport } from './routes/strategy'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
@@ -19,6 +20,11 @@ import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SharpMarketConditionIdRouteImport } from './routes/sharp.market.$conditionId'
 
+const StrategyRoute = StrategyRouteImport.update({
+  id: '/strategy',
+  path: '/strategy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StatsRoute = StatsRouteImport.update({
   id: '/stats',
   path: '/stats',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/strategy': typeof StrategyRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesByTo {
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/strategy': typeof StrategyRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesById {
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/runtime': typeof RuntimeRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
+  '/strategy': typeof StrategyRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRouteTypes {
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sharp'
     | '/stats'
+    | '/strategy'
     | '/sharp/market/$conditionId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sharp'
     | '/stats'
+    | '/strategy'
     | '/sharp/market/$conditionId'
   id:
     | '__root__'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sharp'
     | '/stats'
+    | '/strategy'
     | '/sharp/market/$conditionId'
   fileRoutesById: FileRoutesById
 }
@@ -144,10 +156,18 @@ export interface RootRouteChildren {
   RuntimeRoute: typeof RuntimeRoute
   SharpRoute: typeof SharpRouteWithChildren
   StatsRoute: typeof StatsRoute
+  StrategyRoute: typeof StrategyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/strategy': {
+      id: '/strategy'
+      path: '/strategy'
+      fullPath: '/strategy'
+      preLoaderRoute: typeof StrategyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/stats': {
       id: '/stats'
       path: '/stats'
@@ -233,6 +253,7 @@ const rootRouteChildren: RootRouteChildren = {
   RuntimeRoute: RuntimeRoute,
   SharpRoute: SharpRouteWithChildren,
   StatsRoute: StatsRoute,
+  StrategyRoute: StrategyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
