@@ -275,6 +275,35 @@ def evaluate_l2_alpha(
 	return has_l2, meets_alpha
 
 
+def get_market_type_label(market_title: str) -> str:
+	lower = market_title.lower()
+	plain_matchup = ":" not in market_title and re.search(r"\bvs\.?\b", market_title, re.I)
+	if "o/u" in lower or "over/under" in lower or "total" in lower:
+		return "total"
+	if "spread" in lower:
+		return "spread"
+	if plain_matchup:
+		return "moneyline"
+	if "moneyline" in lower or "ml" in lower:
+		return "moneyline"
+	return "other"
+
+
+def normalize_matchup_title(market_title: str) -> str:
+	matchup = market_title.split(":", 1)[0]
+	return matchup.strip().lower()
+
+
+def get_market_group_key(entry: Dict[str, Any]) -> str | None:
+	market_title_raw = entry.get("marketTitle")
+	if not isinstance(market_title_raw, str) or not market_title_raw.strip():
+		return None
+	base = entry.get("eventSlug") or normalize_matchup_title(market_title_raw)
+	sport = entry.get("sportSeriesId") or "na"
+	market_type = get_market_type_label(market_title_raw)
+	return f"{sport}|{base}|{market_type}"
+
+
 def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[str, Any]]:
 	meta_raw = state.get("placedMeta")
 	meta: Dict[str, Dict[str, Any]] = {}
@@ -303,6 +332,30 @@ def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[
 	return meta
 
 
+def normalize_placed_group_meta(
+	state: Dict[str, Any], now_ts: int
+) -> Dict[str, Dict[str, Any]]:
+	meta_raw = state.get("placedGroupMeta")
+	meta: Dict[str, Dict[str, Any]] = {}
+	if not isinstance(meta_raw, dict):
+		return meta
+	for group_key, value in meta_raw.items():
+		if not isinstance(group_key, str) or not group_key:
+			continue
+		row = value if isinstance(value, dict) else {}
+		placed_at_raw = row.get("placedAt")
+		try:
+			placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+		except Exception:
+			placed_at = now_ts
+		meta[group_key] = {
+			"placedAt": placed_at,
+			"eventTime": row.get("eventTime"),
+			"conditionId": row.get("conditionId"),
+		}
+	return meta
+
+
 def prune_placed_meta(
 	meta: Dict[str, Dict[str, Any]],
 	now_ts: int,
@@ -324,6 +377,30 @@ def prune_placed_meta(
 			placed_at = now_ts
 		if now_ts - placed_at <= ttl_seconds:
 			pruned[condition_id] = row
+	return pruned
+
+
+def prune_placed_group_meta(
+	meta: Dict[str, Dict[str, Any]],
+	now_ts: int,
+	ttl_seconds: int,
+	event_grace_seconds: int,
+) -> Dict[str, Dict[str, Any]]:
+	pruned: Dict[str, Dict[str, Any]] = {}
+	for group_key, row in meta.items():
+		event_ts = parse_event_time_seconds(row.get("eventTime"))
+		if event_ts is not None:
+			if now_ts <= event_ts + event_grace_seconds:
+				pruned[group_key] = row
+			continue
+
+		placed_at_raw = row.get("placedAt")
+		try:
+			placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+		except Exception:
+			placed_at = now_ts
+		if now_ts - placed_at <= ttl_seconds:
+			pruned[group_key] = row
 	return pruned
 
 
@@ -442,6 +519,7 @@ def candidate_context(
 	)
 	return {
 		"conditionId": entry.get("conditionId"),
+		"marketGroupKey": get_market_group_key(entry),
 		"event": event_label,
 		"eventTime": entry.get("eventTime"),
 		"minutesToStart": minutes_to_start(entry.get("eventTime")),
@@ -977,7 +1055,15 @@ def run_loop() -> None:
 		config.placed_ttl_seconds,
 		config.placed_event_grace_seconds,
 	)
+	placed_group_meta = normalize_placed_group_meta(state, now_init)
+	placed_group_meta = prune_placed_group_meta(
+		placed_group_meta,
+		now_init,
+		config.placed_ttl_seconds,
+		config.placed_event_grace_seconds,
+	)
 	placed = set(placed_meta.keys())
+	placed_groups = set(placed_group_meta.keys())
 	if "bankroll" not in state:
 		state["bankroll"] = config.paper_bankroll
 
@@ -1009,7 +1095,14 @@ def run_loop() -> None:
 				config.placed_ttl_seconds,
 				config.placed_event_grace_seconds,
 			)
+			placed_group_meta = prune_placed_group_meta(
+				placed_group_meta,
+				int(time.time()),
+				config.placed_ttl_seconds,
+				config.placed_event_grace_seconds,
+			)
 			placed = set(placed_meta.keys())
+			placed_groups = set(placed_group_meta.keys())
 			call_timestamps = [t for t in call_timestamps if now - t < 3600]
 			if config.max_calls_per_hour > 0 and len(call_timestamps) >= config.max_calls_per_hour:
 				sleep_seconds = apply_jitter(config.poll_seconds, config.poll_jitter_ratio)
@@ -1085,6 +1178,20 @@ def run_loop() -> None:
 						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
 					)
 					continue
+				market_group_key = get_market_group_key(entry)
+				if market_group_key and market_group_key in placed_groups:
+					skipped_already_placed += 1
+					placed_group_row = placed_group_meta.get(market_group_key) or {}
+					log_event(
+						"candidate_skip_already_placed_group",
+						idx=idx,
+						marketGroupKey=market_group_key,
+						placedAt=placed_group_row.get("placedAt"),
+						placedEventTime=placed_group_row.get("eventTime"),
+						placedConditionId=placed_group_row.get("conditionId"),
+						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					)
+					continue
 				minutes_until_start = minutes_to_start(entry.get("eventTime"))
 				if minutes_until_start is None:
 					skipped_timing_window += 1
@@ -1120,6 +1227,13 @@ def run_loop() -> None:
 						"placedAt": int(time.time()),
 						"eventTime": entry.get("eventTime"),
 					}
+					if market_group_key:
+						placed_groups.add(market_group_key)
+						placed_group_meta[market_group_key] = {
+							"placedAt": int(time.time()),
+							"eventTime": entry.get("eventTime"),
+							"conditionId": condition_id,
+						}
 					new_bets += 1
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
@@ -1134,6 +1248,8 @@ def run_loop() -> None:
 			)
 			state["placed"] = sorted(placed)
 			state["placedMeta"] = placed_meta
+			state["placedGroups"] = sorted(placed_groups)
+			state["placedGroupMeta"] = placed_group_meta
 			save_state(config.state_path, state)
 		except Exception as exc:
 			print("[bot] error:", exc)
