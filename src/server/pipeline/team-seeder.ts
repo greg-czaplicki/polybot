@@ -1171,7 +1171,7 @@ const NCAAB_TEAMS: UpsertTeamInput[] = [
 		sportTag: "ncaab",
 		aliases: ["Oklahoma", "Sooners", "OU"],
 	},
-	// Notable non-Power 4
+	// Big East + other notable programs
 	{
 		name: "Gonzaga Bulldogs",
 		shortName: "Gonzaga",
@@ -1220,6 +1220,41 @@ const NCAAB_TEAMS: UpsertTeamInput[] = [
 		abbreviation: "SJU",
 		sportTag: "ncaab",
 		aliases: ["St. John's", "Red Storm", "SJU", "Saint John's"],
+	},
+	{
+		name: "Providence Friars",
+		shortName: "Providence",
+		abbreviation: "PROV",
+		sportTag: "ncaab",
+		aliases: ["Providence", "Friars", "PROV"],
+	},
+	{
+		name: "Georgetown Hoyas",
+		shortName: "Georgetown",
+		abbreviation: "GTWN",
+		sportTag: "ncaab",
+		aliases: ["Georgetown", "Hoyas", "GTWN"],
+	},
+	{
+		name: "Seton Hall Pirates",
+		shortName: "Seton Hall",
+		abbreviation: "SH",
+		sportTag: "ncaab",
+		aliases: ["Seton Hall", "Pirates", "SH"],
+	},
+	{
+		name: "Butler Bulldogs",
+		shortName: "Butler",
+		abbreviation: "BUT",
+		sportTag: "ncaab",
+		aliases: ["Butler", "Bulldogs", "BUT"],
+	},
+	{
+		name: "DePaul Blue Demons",
+		shortName: "DePaul",
+		abbreviation: "DEP",
+		sportTag: "ncaab",
+		aliases: ["DePaul", "Blue Demons", "DEP"],
 	},
 	{
 		name: "Memphis Tigers",
