@@ -12,11 +12,11 @@
  */
 
 import type { Db } from "../db/client";
-import { getGameById } from "../repositories/games";
 import { getGameLine } from "../repositories/game-lines";
+import { getGameById } from "../repositories/games";
 import {
-	upsertTeamGameFact,
 	type UpsertTeamGameFactInput,
+	upsertTeamGameFact,
 } from "../repositories/team-game-facts";
 import type {
 	AtsResult,
