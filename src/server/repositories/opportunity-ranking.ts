@@ -17,7 +17,10 @@
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import type { Db } from "../db/client";
 import { all } from "../db/client";
-import type { SideFeatures } from "../domain/canonical-features";
+import {
+	deriveOpponentSnapshotType,
+	extractSideFeatures,
+} from "../domain/canonical-features";
 import {
 	type OpportunityScore,
 	type PrePickFeatures,
@@ -157,45 +160,6 @@ const UPCOMING_GAMES_QUERY = `
 // ---------------------------------------------------------------------------
 // Shared feature extraction
 // ---------------------------------------------------------------------------
-
-function extractSideFeatures(
-	overallSnapshot: TeamTrendSnapshot | null,
-	splitSnapshot: TeamTrendSnapshot | null,
-): SideFeatures {
-	return {
-		atsWinPct: overallSnapshot?.atsWinPct ?? null,
-		atsSplitPct: splitSnapshot?.atsWinPct ?? null,
-		atsStreakType: overallSnapshot?.atsStreakType ?? null,
-		atsStreakLength:
-			overallSnapshot?.atsStreakType != null
-				? overallSnapshot.atsStreakLength
-				: null,
-		ouOverPct: overallSnapshot?.ouOverPct ?? null,
-		ouStreakType: overallSnapshot?.ouStreakType ?? null,
-		ouStreakLength:
-			overallSnapshot?.ouStreakType != null
-				? overallSnapshot.ouStreakLength
-				: null,
-		avgCoverMargin: overallSnapshot?.avgCoverMargin ?? null,
-		avgTotalMargin: overallSnapshot?.avgTotalMargin ?? null,
-		suWinPct: overallSnapshot?.suWinPct ?? null,
-	};
-}
-
-function deriveOpponentSnapshotType(
-	venueRole: VenueRole | null,
-	favDogRole: FavDogRole | null,
-): ReturnType<typeof deriveSnapshotType> {
-	const mirroredVenue: VenueRole | null =
-		venueRole === "home" ? "away" : venueRole === "away" ? "home" : venueRole;
-	const mirroredFavDog: FavDogRole | null =
-		favDogRole === "favorite"
-			? "dog"
-			: favDogRole === "dog"
-				? "favorite"
-				: favDogRole;
-	return deriveSnapshotType(mirroredVenue, mirroredFavDog);
-}
 
 async function loadSideSnapshots(
 	db: Db,
