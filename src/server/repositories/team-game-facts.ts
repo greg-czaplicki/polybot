@@ -15,26 +15,25 @@ import type {
 function parseRow(row: TeamGameFactRow): TeamGameFact {
 	return {
 		id: row.id,
-		teamId: row.team_id,
 		gameId: row.game_id,
+		teamId: row.team_id,
 		opponentId: row.opponent_id,
-		venueRole: (row.venue_role as VenueRole) ?? undefined,
+		venueRole: row.venue_role as VenueRole,
 		favDogRole: (row.fav_dog_role as FavDogRole) ?? undefined,
-		suResult: (row.su_result as PickResult) ?? undefined,
-		atsResult: (row.ats_result as AtsResult) ?? undefined,
-		ouResult: (row.ou_result as OuResult) ?? undefined,
-		spreadLine: row.spread_line ?? undefined,
-		totalLine: row.total_line ?? undefined,
-		actualMargin: row.actual_margin ?? undefined,
-		coverMargin: row.cover_margin ?? undefined,
-		totalMargin: row.total_margin ?? undefined,
 		teamScore: row.team_score ?? undefined,
 		opponentScore: row.opponent_score ?? undefined,
-		gameDate: row.game_date,
+		actualMargin: row.actual_margin ?? undefined,
+		suResult: (row.su_result as PickResult) ?? undefined,
+		spreadLine: row.spread_line ?? undefined,
+		coverMargin: row.cover_margin ?? undefined,
+		atsResult: (row.ats_result as AtsResult) ?? undefined,
+		totalLine: row.total_line ?? undefined,
+		actualTotal: row.actual_total ?? undefined,
+		ouResult: (row.ou_result as OuResult) ?? undefined,
+		gameTime: row.game_time,
 		sportTag: row.sport_tag,
 		season: row.season ?? undefined,
 		createdAt: row.created_at,
-		updatedAt: row.updated_at,
 	};
 }
 
@@ -43,22 +42,22 @@ function generateId(): string {
 }
 
 export interface UpsertTeamGameFactInput {
-	teamId: string;
 	gameId: string;
+	teamId: string;
 	opponentId: string;
-	venueRole?: VenueRole;
+	venueRole: VenueRole;
 	favDogRole?: FavDogRole;
-	suResult?: PickResult;
-	atsResult?: AtsResult;
-	ouResult?: OuResult;
-	spreadLine?: number;
-	totalLine?: number;
-	actualMargin?: number;
-	coverMargin?: number;
-	totalMargin?: number;
 	teamScore?: number;
 	opponentScore?: number;
-	gameDate: string;
+	actualMargin?: number;
+	suResult?: PickResult;
+	spreadLine?: number;
+	coverMargin?: number;
+	atsResult?: AtsResult;
+	totalLine?: number;
+	actualTotal?: number;
+	ouResult?: OuResult;
+	gameTime: number;
 	sportTag: string;
 	season?: string;
 }
@@ -73,50 +72,47 @@ export async function upsertTeamGameFact(
 	await run(
 		db,
 		`INSERT INTO team_game_facts (
-			id, team_id, game_id, opponent_id,
+			id, game_id, team_id, opponent_id,
 			venue_role, fav_dog_role,
-			su_result, ats_result, ou_result,
-			spread_line, total_line,
-			actual_margin, cover_margin, total_margin,
-			team_score, opponent_score,
-			game_date, sport_tag, season,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(team_id, game_id) DO UPDATE SET
+			team_score, opponent_score, actual_margin,
+			su_result, spread_line, cover_margin, ats_result,
+			total_line, actual_total, ou_result,
+			game_time, sport_tag, season,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(game_id, team_id) DO UPDATE SET
 			opponent_id = excluded.opponent_id,
-			venue_role = COALESCE(excluded.venue_role, team_game_facts.venue_role),
+			venue_role = excluded.venue_role,
 			fav_dog_role = COALESCE(excluded.fav_dog_role, team_game_facts.fav_dog_role),
-			su_result = COALESCE(excluded.su_result, team_game_facts.su_result),
-			ats_result = COALESCE(excluded.ats_result, team_game_facts.ats_result),
-			ou_result = COALESCE(excluded.ou_result, team_game_facts.ou_result),
-			spread_line = COALESCE(excluded.spread_line, team_game_facts.spread_line),
-			total_line = COALESCE(excluded.total_line, team_game_facts.total_line),
-			actual_margin = COALESCE(excluded.actual_margin, team_game_facts.actual_margin),
-			cover_margin = COALESCE(excluded.cover_margin, team_game_facts.cover_margin),
-			total_margin = COALESCE(excluded.total_margin, team_game_facts.total_margin),
 			team_score = COALESCE(excluded.team_score, team_game_facts.team_score),
 			opponent_score = COALESCE(excluded.opponent_score, team_game_facts.opponent_score),
-			updated_at = excluded.updated_at`,
+			actual_margin = COALESCE(excluded.actual_margin, team_game_facts.actual_margin),
+			su_result = COALESCE(excluded.su_result, team_game_facts.su_result),
+			spread_line = COALESCE(excluded.spread_line, team_game_facts.spread_line),
+			cover_margin = COALESCE(excluded.cover_margin, team_game_facts.cover_margin),
+			ats_result = COALESCE(excluded.ats_result, team_game_facts.ats_result),
+			total_line = COALESCE(excluded.total_line, team_game_facts.total_line),
+			actual_total = COALESCE(excluded.actual_total, team_game_facts.actual_total),
+			ou_result = COALESCE(excluded.ou_result, team_game_facts.ou_result)`,
 		id,
-		input.teamId,
 		input.gameId,
+		input.teamId,
 		input.opponentId,
-		input.venueRole ?? null,
+		input.venueRole,
 		input.favDogRole ?? null,
-		input.suResult ?? null,
-		input.atsResult ?? null,
-		input.ouResult ?? null,
-		input.spreadLine ?? null,
-		input.totalLine ?? null,
-		input.actualMargin ?? null,
-		input.coverMargin ?? null,
-		input.totalMargin ?? null,
 		input.teamScore ?? null,
 		input.opponentScore ?? null,
-		input.gameDate,
+		input.actualMargin ?? null,
+		input.suResult ?? null,
+		input.spreadLine ?? null,
+		input.coverMargin ?? null,
+		input.atsResult ?? null,
+		input.totalLine ?? null,
+		input.actualTotal ?? null,
+		input.ouResult ?? null,
+		input.gameTime,
 		input.sportTag,
 		input.season ?? null,
-		now,
 		now,
 	);
 
@@ -163,9 +159,9 @@ export async function listTeamGameFacts(
 		where.push(`fav_dog_role = ?`);
 		params.push(filter.favDogRole);
 	}
-	if (filter.beforeDate) {
-		where.push(`game_date < ?`);
-		params.push(filter.beforeDate);
+	if (filter.beforeGameTime) {
+		where.push(`game_time < ?`);
+		params.push(filter.beforeGameTime);
 	}
 
 	const limit = filter.limit ?? 10;
@@ -175,7 +171,7 @@ export async function listTeamGameFacts(
 		db,
 		`SELECT * FROM team_game_facts
 		WHERE ${where.join(" AND ")}
-		ORDER BY game_date DESC
+		ORDER BY game_time DESC
 		LIMIT ?`,
 		...params,
 	);
@@ -198,7 +194,7 @@ export async function getTeamGameFact(
 
 /**
  * Get the current streak for a team in a given context.
- * Walks backward from most recent, skipping pushes.
+ * Walks backward from most recent, skipping pushes per spec (grading-rules.md §6).
  */
 export async function getTeamStreak(
 	db: Db,
@@ -220,7 +216,6 @@ export async function getTeamStreak(
 				? "ats_result"
 				: "ou_result";
 
-	// Exclude nulls and pushes from streak calculation
 	where.push(`${resultCol} IS NOT NULL`);
 	where.push(`${resultCol} != 'push'`);
 
@@ -237,12 +232,11 @@ export async function getTeamStreak(
 		params.push(options.favDogRole);
 	}
 
-	// Fetch recent facts to walk the streak
 	const rows = await all<TeamGameFactRow>(
 		db,
 		`SELECT * FROM team_game_facts
 		WHERE ${where.join(" AND ")}
-		ORDER BY game_date DESC
+		ORDER BY game_time DESC
 		LIMIT 50`,
 		...params,
 	);
@@ -250,27 +244,36 @@ export async function getTeamStreak(
 	if (rows.length === 0) return null;
 
 	const facts = rows.map(parseRow);
-	const getResult = (fact: TeamGameFact): string | undefined => {
-		if (metric === "su") return fact.suResult;
-		if (metric === "ats") {
-			if (!fact.atsResult || fact.atsResult === "push") return undefined;
-			return fact.atsResult === "cover" ? "win" : "loss";
+	const isWin = (fact: TeamGameFact): boolean | null => {
+		if (metric === "su") {
+			return fact.suResult === "win"
+				? true
+				: fact.suResult === "loss"
+					? false
+					: null;
 		}
-		// ou
-		if (!fact.ouResult || fact.ouResult === "push") return undefined;
-		return fact.ouResult === "over" || fact.ouResult === "under"
-			? "win"
-			: "loss";
+		if (metric === "ats") {
+			return fact.atsResult === "cover"
+				? true
+				: fact.atsResult === "no_cover"
+					? false
+					: null;
+		}
+		return fact.ouResult === "over"
+			? true
+			: fact.ouResult === "under"
+				? false
+				: null;
 	};
 
 	let streakType: "W" | "L" | null = null;
 	let streakLength = 0;
 
 	for (const fact of facts) {
-		const result = getResult(fact);
-		if (!result) continue;
+		const win = isWin(fact);
+		if (win === null) continue;
 
-		const currentType = result === "win" || result === "cover" ? "W" : "L";
+		const currentType = win ? "W" : "L";
 		if (streakType === null) {
 			streakType = currentType;
 			streakLength = 1;
@@ -337,7 +340,6 @@ export async function getTeamRecord(
 		params.push(options.favDogRole);
 	}
 
-	// If limit specified, use a subquery to restrict to last N games
 	let query: string;
 	if (options?.limit) {
 		query = `SELECT
@@ -347,7 +349,7 @@ export async function getTeamRecord(
 		FROM (
 			SELECT ${resultCol} FROM team_game_facts
 			WHERE ${where.join(" AND ")}
-			ORDER BY game_date DESC
+			ORDER BY game_time DESC
 			LIMIT ?
 		)`;
 		params.push(options.limit);

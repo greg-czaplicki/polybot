@@ -1,24 +1,24 @@
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
-import type { Game, GameRow, GameStatus } from "../types/canonical";
+import type { Game, GameRow } from "../types/canonical";
 
 function parseRow(row: GameRow): Game {
 	return {
 		id: row.id,
-		externalId: row.external_id ?? undefined,
 		sportTag: row.sport_tag,
 		season: row.season ?? undefined,
-		gameDate: row.game_date,
+		seasonType: row.season_type ?? undefined,
+		week: row.week ?? undefined,
+		gameTime: row.game_time ?? undefined,
 		homeTeamId: row.home_team_id,
 		awayTeamId: row.away_team_id,
-		venue: row.venue ?? undefined,
-		isNeutralSite: row.is_neutral_site === 1,
-		status: row.status as GameStatus,
+		neutralSite: row.neutral_site === 1,
 		homeScore: row.home_score ?? undefined,
 		awayScore: row.away_score ?? undefined,
 		totalScore: row.total_score ?? undefined,
-		isOvertime: row.is_overtime === 1,
+		isFinal: row.is_final === 1,
+		wentToOt: row.went_to_ot === 1,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -29,21 +29,21 @@ function generateId(): string {
 }
 
 export interface CreateGameInput {
-	externalId?: string;
+	id?: string;
 	sportTag: string;
 	season?: string;
-	gameDate: string;
+	seasonType?: string;
+	week?: string;
+	gameTime?: number;
 	homeTeamId: string;
 	awayTeamId: string;
-	venue?: string;
-	isNeutralSite?: boolean;
+	neutralSite?: boolean;
 }
 
 export interface UpdateGameResultInput {
 	homeScore: number;
 	awayScore: number;
-	isOvertime?: boolean;
-	status?: GameStatus;
+	wentToOt?: boolean;
 }
 
 export async function createGame(
@@ -51,79 +51,31 @@ export async function createGame(
 	input: CreateGameInput,
 ): Promise<Game> {
 	const now = nowUnixSeconds();
-	const id = generateId();
+	const id = input.id ?? generateId();
 
 	await run(
 		db,
 		`INSERT INTO games (
-			id, external_id, sport_tag, season, game_date,
-			home_team_id, away_team_id, venue, is_neutral_site,
-			status, home_score, away_score, total_score, is_overtime,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?, ?)`,
+			id, sport_tag, season, season_type, week, game_time,
+			home_team_id, away_team_id, neutral_site,
+			home_score, away_score, total_score,
+			is_final, went_to_ot, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?, ?)`,
 		id,
-		input.externalId ?? null,
 		input.sportTag,
 		input.season ?? null,
-		input.gameDate,
+		input.seasonType ?? null,
+		input.week ?? null,
+		input.gameTime ?? null,
 		input.homeTeamId,
 		input.awayTeamId,
-		input.venue ?? null,
-		input.isNeutralSite ? 1 : 0,
-		"scheduled",
+		input.neutralSite ? 1 : 0,
 		now,
 		now,
 	);
 
 	const row = await first<GameRow>(db, `SELECT * FROM games WHERE id = ?`, id);
 	if (!row) throw new Error(`Failed to create game: ${id}`);
-	return parseRow(row);
-}
-
-export async function upsertGameByExternalId(
-	db: Db,
-	input: CreateGameInput & { externalId: string },
-): Promise<Game> {
-	const now = nowUnixSeconds();
-	const id = generateId();
-
-	await run(
-		db,
-		`INSERT INTO games (
-			id, external_id, sport_tag, season, game_date,
-			home_team_id, away_team_id, venue, is_neutral_site,
-			status, home_score, away_score, total_score, is_overtime,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?, ?)
-		ON CONFLICT(external_id) DO UPDATE SET
-			sport_tag = excluded.sport_tag,
-			season = COALESCE(excluded.season, games.season),
-			game_date = excluded.game_date,
-			home_team_id = excluded.home_team_id,
-			away_team_id = excluded.away_team_id,
-			venue = COALESCE(excluded.venue, games.venue),
-			is_neutral_site = excluded.is_neutral_site,
-			updated_at = excluded.updated_at`,
-		id,
-		input.externalId,
-		input.sportTag,
-		input.season ?? null,
-		input.gameDate,
-		input.homeTeamId,
-		input.awayTeamId,
-		input.venue ?? null,
-		input.isNeutralSite ? 1 : 0,
-		"scheduled",
-		now,
-		now,
-	);
-
-	const row = await first<GameRow>(
-		db,
-		`SELECT * FROM games WHERE external_id = ?`,
-		input.externalId,
-	);
-	if (!row) throw new Error(`Failed to upsert game: ${input.externalId}`);
 	return parseRow(row);
 }
 
@@ -134,7 +86,6 @@ export async function updateGameResult(
 ): Promise<void> {
 	const now = nowUnixSeconds();
 	const totalScore = input.homeScore + input.awayScore;
-	const status = input.status ?? "final";
 
 	await run(
 		db,
@@ -142,15 +93,14 @@ export async function updateGameResult(
 			home_score = ?,
 			away_score = ?,
 			total_score = ?,
-			is_overtime = ?,
-			status = ?,
+			is_final = 1,
+			went_to_ot = ?,
 			updated_at = ?
 		WHERE id = ?`,
 		input.homeScore,
 		input.awayScore,
 		totalScore,
-		input.isOvertime ? 1 : 0,
-		status,
+		input.wentToOt ? 1 : 0,
 		now,
 		gameId,
 	);
@@ -158,18 +108,6 @@ export async function updateGameResult(
 
 export async function getGameById(db: Db, id: string): Promise<Game | null> {
 	const row = await first<GameRow>(db, `SELECT * FROM games WHERE id = ?`, id);
-	return row ? parseRow(row) : null;
-}
-
-export async function getGameByExternalId(
-	db: Db,
-	externalId: string,
-): Promise<Game | null> {
-	const row = await first<GameRow>(
-		db,
-		`SELECT * FROM games WHERE external_id = ?`,
-		externalId,
-	);
 	return row ? parseRow(row) : null;
 }
 
@@ -195,30 +133,33 @@ export async function listGamesByTeam(
 
 	const rows = await all<GameRow>(
 		db,
-		`SELECT * FROM games WHERE ${where.join(" AND ")} ORDER BY game_date DESC LIMIT ?`,
+		`SELECT * FROM games WHERE ${where.join(" AND ")} ORDER BY game_time DESC LIMIT ?`,
 		...params,
 	);
 	return rows.map(parseRow);
 }
 
-export async function listGamesByDate(
+export async function listGamesBySportAndSeason(
 	db: Db,
-	date: string,
-	sportTag?: string,
+	sportTag: string,
+	season?: string,
+	limit?: number,
 ): Promise<Game[]> {
-	if (sportTag) {
+	if (season) {
 		const rows = await all<GameRow>(
 			db,
-			`SELECT * FROM games WHERE game_date = ? AND sport_tag = ? ORDER BY home_team_id ASC`,
-			date,
+			`SELECT * FROM games WHERE sport_tag = ? AND season = ? ORDER BY game_time DESC LIMIT ?`,
 			sportTag,
+			season,
+			limit ?? 100,
 		);
 		return rows.map(parseRow);
 	}
 	const rows = await all<GameRow>(
 		db,
-		`SELECT * FROM games WHERE game_date = ? ORDER BY sport_tag ASC, home_team_id ASC`,
-		date,
+		`SELECT * FROM games WHERE sport_tag = ? ORDER BY game_time DESC LIMIT ?`,
+		sportTag,
+		limit ?? 100,
 	);
 	return rows.map(parseRow);
 }

@@ -2,23 +2,20 @@ import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
 import type {
-	FavDogRole,
 	TeamTrendSnapshot,
 	TeamTrendSnapshotFilter,
 	TeamTrendSnapshotRow,
-	VenueRole,
 } from "../types/canonical";
 
 function parseRow(row: TeamTrendSnapshotRow): TeamTrendSnapshot {
 	return {
 		id: row.id,
 		teamId: row.team_id,
+		asOfGameId: row.as_of_game_id,
+		asOfTime: row.as_of_time,
 		sportTag: row.sport_tag,
-		season: row.season ?? undefined,
+		snapshotType: row.snapshot_type,
 		windowSize: row.window_size,
-		scope: row.scope,
-		venueFilter: (row.venue_filter as VenueRole) ?? undefined,
-		favDogFilter: (row.fav_dog_filter as FavDogRole) ?? undefined,
 		suWins: row.su_wins,
 		suLosses: row.su_losses,
 		suPushes: row.su_pushes,
@@ -27,22 +24,19 @@ function parseRow(row: TeamTrendSnapshotRow): TeamTrendSnapshot {
 		atsLosses: row.ats_losses,
 		atsPushes: row.ats_pushes,
 		atsWinPct: row.ats_win_pct ?? undefined,
-		ouWins: row.ou_wins,
-		ouLosses: row.ou_losses,
+		ouOvers: row.ou_overs,
+		ouUnders: row.ou_unders,
 		ouPushes: row.ou_pushes,
-		ouWinPct: row.ou_win_pct ?? undefined,
+		ouOverPct: row.ou_over_pct ?? undefined,
 		atsStreakType: (row.ats_streak_type as "W" | "L") ?? undefined,
 		atsStreakLength: row.ats_streak_length,
 		ouStreakType: (row.ou_streak_type as "W" | "L") ?? undefined,
 		ouStreakLength: row.ou_streak_length,
 		suStreakType: (row.su_streak_type as "W" | "L") ?? undefined,
 		suStreakLength: row.su_streak_length,
-		computedAt: row.computed_at,
-		gameIds: row.game_ids_json
-			? (JSON.parse(row.game_ids_json) as string[])
-			: [],
+		avgCoverMargin: row.avg_cover_margin ?? undefined,
+		avgTotalMargin: row.avg_total_margin ?? undefined,
 		createdAt: row.created_at,
-		updatedAt: row.updated_at,
 	};
 }
 
@@ -50,36 +44,21 @@ function generateId(): string {
 	return `tts_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-/**
- * Build a unique scope key for snapshot deduplication.
- * Format: "last{windowSize}_{venueFilter}_{favDogFilter}" or "last10_home_favorite"
- */
-function buildScopeKey(
-	windowSize: number,
-	venueFilter?: VenueRole,
-	favDogFilter?: FavDogRole,
-): string {
-	const parts = [`last${windowSize}`];
-	if (venueFilter) parts.push(venueFilter);
-	if (favDogFilter) parts.push(favDogFilter);
-	return parts.join("_");
-}
-
 export interface UpsertTeamTrendSnapshotInput {
 	teamId: string;
+	asOfGameId: string;
+	asOfTime: number;
 	sportTag: string;
-	season?: string;
-	windowSize: number;
-	venueFilter?: VenueRole;
-	favDogFilter?: FavDogRole;
+	snapshotType: string;
+	windowSize?: number;
 	suWins: number;
 	suLosses: number;
 	suPushes: number;
 	atsWins: number;
 	atsLosses: number;
 	atsPushes: number;
-	ouWins: number;
-	ouLosses: number;
+	ouOvers: number;
+	ouUnders: number;
 	ouPushes: number;
 	atsStreakType?: "W" | "L";
 	atsStreakLength: number;
@@ -87,7 +66,8 @@ export interface UpsertTeamTrendSnapshotInput {
 	ouStreakLength: number;
 	suStreakType?: "W" | "L";
 	suStreakLength: number;
-	gameIds: string[];
+	avgCoverMargin?: number;
+	avgTotalMargin?: number;
 }
 
 export async function upsertTeamTrendSnapshot(
@@ -96,11 +76,7 @@ export async function upsertTeamTrendSnapshot(
 ): Promise<TeamTrendSnapshot> {
 	const now = nowUnixSeconds();
 	const id = generateId();
-	const scope = buildScopeKey(
-		input.windowSize,
-		input.venueFilter,
-		input.favDogFilter,
-	);
+	const windowSize = input.windowSize ?? 10;
 
 	const suWinPct =
 		input.suWins + input.suLosses > 0
@@ -110,27 +86,28 @@ export async function upsertTeamTrendSnapshot(
 		input.atsWins + input.atsLosses > 0
 			? input.atsWins / (input.atsWins + input.atsLosses)
 			: null;
-	const ouWinPct =
-		input.ouWins + input.ouLosses > 0
-			? input.ouWins / (input.ouWins + input.ouLosses)
+	const ouOverPct =
+		input.ouOvers + input.ouUnders > 0
+			? input.ouOvers / (input.ouOvers + input.ouUnders)
 			: null;
 
 	await run(
 		db,
 		`INSERT INTO team_trend_snapshots (
-			id, team_id, sport_tag, season, window_size, scope,
-			venue_filter, fav_dog_filter,
+			id, team_id, as_of_game_id, as_of_time,
+			sport_tag, snapshot_type, window_size,
 			su_wins, su_losses, su_pushes, su_win_pct,
 			ats_wins, ats_losses, ats_pushes, ats_win_pct,
-			ou_wins, ou_losses, ou_pushes, ou_win_pct,
+			ou_overs, ou_unders, ou_pushes, ou_over_pct,
 			ats_streak_type, ats_streak_length,
 			ou_streak_type, ou_streak_length,
 			su_streak_type, su_streak_length,
-			computed_at, game_ids_json,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(team_id, sport_tag, scope) DO UPDATE SET
-			season = excluded.season,
+			avg_cover_margin, avg_total_margin,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(team_id, snapshot_type, as_of_game_id) DO UPDATE SET
+			as_of_time = excluded.as_of_time,
+			window_size = excluded.window_size,
 			su_wins = excluded.su_wins,
 			su_losses = excluded.su_losses,
 			su_pushes = excluded.su_pushes,
@@ -139,27 +116,25 @@ export async function upsertTeamTrendSnapshot(
 			ats_losses = excluded.ats_losses,
 			ats_pushes = excluded.ats_pushes,
 			ats_win_pct = excluded.ats_win_pct,
-			ou_wins = excluded.ou_wins,
-			ou_losses = excluded.ou_losses,
+			ou_overs = excluded.ou_overs,
+			ou_unders = excluded.ou_unders,
 			ou_pushes = excluded.ou_pushes,
-			ou_win_pct = excluded.ou_win_pct,
+			ou_over_pct = excluded.ou_over_pct,
 			ats_streak_type = excluded.ats_streak_type,
 			ats_streak_length = excluded.ats_streak_length,
 			ou_streak_type = excluded.ou_streak_type,
 			ou_streak_length = excluded.ou_streak_length,
 			su_streak_type = excluded.su_streak_type,
 			su_streak_length = excluded.su_streak_length,
-			computed_at = excluded.computed_at,
-			game_ids_json = excluded.game_ids_json,
-			updated_at = excluded.updated_at`,
+			avg_cover_margin = excluded.avg_cover_margin,
+			avg_total_margin = excluded.avg_total_margin`,
 		id,
 		input.teamId,
+		input.asOfGameId,
+		input.asOfTime,
 		input.sportTag,
-		input.season ?? null,
-		input.windowSize,
-		scope,
-		input.venueFilter ?? null,
-		input.favDogFilter ?? null,
+		input.snapshotType,
+		windowSize,
 		input.suWins,
 		input.suLosses,
 		input.suPushes,
@@ -168,28 +143,27 @@ export async function upsertTeamTrendSnapshot(
 		input.atsLosses,
 		input.atsPushes,
 		atsWinPct,
-		input.ouWins,
-		input.ouLosses,
+		input.ouOvers,
+		input.ouUnders,
 		input.ouPushes,
-		ouWinPct,
+		ouOverPct,
 		input.atsStreakType ?? null,
 		input.atsStreakLength,
 		input.ouStreakType ?? null,
 		input.ouStreakLength,
 		input.suStreakType ?? null,
 		input.suStreakLength,
-		now,
-		input.gameIds.length > 0 ? JSON.stringify(input.gameIds) : null,
-		now,
+		input.avgCoverMargin ?? null,
+		input.avgTotalMargin ?? null,
 		now,
 	);
 
 	const row = await first<TeamTrendSnapshotRow>(
 		db,
-		`SELECT * FROM team_trend_snapshots WHERE team_id = ? AND sport_tag = ? AND scope = ?`,
+		`SELECT * FROM team_trend_snapshots WHERE team_id = ? AND snapshot_type = ? AND as_of_game_id = ?`,
 		input.teamId,
-		input.sportTag,
-		scope,
+		input.snapshotType,
+		input.asOfGameId,
 	);
 	if (!row)
 		throw new Error(`Failed to upsert trend snapshot for team ${input.teamId}`);
@@ -197,31 +171,57 @@ export async function upsertTeamTrendSnapshot(
 }
 
 /**
- * Get a specific trend snapshot for a team.
+ * Get the latest trend snapshot for a team by snapshot type.
  * Primary access pattern: "join team trend snapshot to a pick by game/team/time"
  */
-export async function getTeamTrendSnapshot(
+export async function getLatestTeamTrendSnapshot(
 	db: Db,
 	filter: TeamTrendSnapshotFilter,
 ): Promise<TeamTrendSnapshot | null> {
-	const scope = buildScopeKey(
-		filter.windowSize ?? 10,
-		filter.venueFilter,
-		filter.favDogFilter,
-	);
+	const where: string[] = [`team_id = ?`];
+	const params: unknown[] = [filter.teamId];
 
-	const where: string[] = [`team_id = ?`, `scope = ?`];
-	const params: unknown[] = [filter.teamId, scope];
-
+	if (filter.snapshotType) {
+		where.push(`snapshot_type = ?`);
+		params.push(filter.snapshotType);
+	}
 	if (filter.sportTag) {
 		where.push(`sport_tag = ?`);
 		params.push(filter.sportTag);
 	}
+	if (filter.windowSize) {
+		where.push(`window_size = ?`);
+		params.push(filter.windowSize);
+	}
 
 	const row = await first<TeamTrendSnapshotRow>(
 		db,
-		`SELECT * FROM team_trend_snapshots WHERE ${where.join(" AND ")}`,
+		`SELECT * FROM team_trend_snapshots
+		WHERE ${where.join(" AND ")}
+		ORDER BY as_of_time DESC
+		LIMIT 1`,
 		...params,
+	);
+	return row ? parseRow(row) : null;
+}
+
+/**
+ * Get the trend snapshot for a team as of a specific game.
+ * Used to join trend context to a pick at decision time.
+ */
+export async function getTeamTrendSnapshotAtGame(
+	db: Db,
+	teamId: string,
+	gameId: string,
+	snapshotType: string,
+): Promise<TeamTrendSnapshot | null> {
+	const row = await first<TeamTrendSnapshotRow>(
+		db,
+		`SELECT * FROM team_trend_snapshots
+		WHERE team_id = ? AND as_of_game_id = ? AND snapshot_type = ?`,
+		teamId,
+		gameId,
+		snapshotType,
 	);
 	return row ? parseRow(row) : null;
 }
@@ -233,7 +233,7 @@ export async function getTeamTrendSnapshot(
 export async function listTeamTrendSnapshots(
 	db: Db,
 	teamId: string,
-	options?: { sportTag?: string; season?: string },
+	options?: { sportTag?: string; snapshotType?: string },
 ): Promise<TeamTrendSnapshot[]> {
 	const where: string[] = [`team_id = ?`];
 	const params: unknown[] = [teamId];
@@ -242,14 +242,16 @@ export async function listTeamTrendSnapshots(
 		where.push(`sport_tag = ?`);
 		params.push(options.sportTag);
 	}
-	if (options?.season) {
-		where.push(`season = ?`);
-		params.push(options.season);
+	if (options?.snapshotType) {
+		where.push(`snapshot_type = ?`);
+		params.push(options.snapshotType);
 	}
 
 	const rows = await all<TeamTrendSnapshotRow>(
 		db,
-		`SELECT * FROM team_trend_snapshots WHERE ${where.join(" AND ")} ORDER BY scope ASC`,
+		`SELECT * FROM team_trend_snapshots
+		WHERE ${where.join(" AND ")}
+		ORDER BY snapshot_type ASC, as_of_time DESC`,
 		...params,
 	);
 	return rows.map(parseRow);
@@ -263,7 +265,6 @@ export async function getMatchupTrendSnapshots(
 	teamId: string,
 	opponentId: string,
 	sportTag: string,
-	windowSize?: number,
 ): Promise<{
 	team: TeamTrendSnapshot[];
 	opponent: TeamTrendSnapshot[];
@@ -273,19 +274,11 @@ export async function getMatchupTrendSnapshots(
 		listTeamTrendSnapshots(db, opponentId, { sportTag }),
 	]);
 
-	const filterByWindow = (snapshots: TeamTrendSnapshot[]) =>
-		windowSize
-			? snapshots.filter((s) => s.windowSize === windowSize)
-			: snapshots;
-
-	return {
-		team: filterByWindow(team),
-		opponent: filterByWindow(opponent),
-	};
+	return { team, opponent };
 }
 
 /**
- * Delete old snapshots for a team (useful when recomputing).
+ * Delete snapshots for a team (useful when recomputing).
  */
 export async function deleteTeamTrendSnapshots(
 	db: Db,

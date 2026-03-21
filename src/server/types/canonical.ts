@@ -1,9 +1,10 @@
 /**
  * Canonical entity types for team/game/trend analytics.
  *
- * These types map directly to the Phase 2 database tables:
+ * These types map directly to the Phase 2 database tables defined in
+ * migrations/0012_add_canonical_entities.sql:
  * - teams: stable team identity + alias normalization
- * - games: schedule, participants, venue, final score, season context
+ * - games: schedule, participants, neutral site, final score, season context
  * - game_lines: pregame and closing spread / total / moneyline snapshots
  * - team_game_facts: per-team SU / ATS / OU results and contextual flags
  * - team_trend_snapshots: precomputed rolling splits (last N home fav ATS, etc.)
@@ -22,14 +23,6 @@ export type FavDogRole = "favorite" | "dog" | "pickem";
 /** Bet type classification */
 export type BetType = "moneyline" | "spread" | "total" | "future" | "prop";
 
-/** Game status lifecycle */
-export type GameStatus =
-	| "scheduled"
-	| "in_progress"
-	| "final"
-	| "cancelled"
-	| "postponed";
-
 /** Pick result */
 export type PickResult = "win" | "loss" | "push";
 
@@ -39,11 +32,8 @@ export type AtsResult = "cover" | "no_cover" | "push";
 /** OU result */
 export type OuResult = "over" | "under" | "push";
 
-/** Line type for game_lines */
-export type LineType = "spread" | "total" | "moneyline";
-
 /** Line snapshot timing */
-export type LineSnapshot = "open" | "close";
+export type SnapshotType = "open" | "close";
 
 // ---------------------------------------------------------------------------
 // teams
@@ -80,19 +70,19 @@ export interface Team {
 /** Database row for the `games` table */
 export interface GameRow {
 	id: string;
-	external_id: string | null;
 	sport_tag: string;
 	season: string | null;
-	game_date: string;
+	season_type: string | null;
+	week: string | null;
+	game_time: number | null;
 	home_team_id: string;
 	away_team_id: string;
-	venue: string | null;
-	is_neutral_site: number;
-	status: string;
+	neutral_site: number;
 	home_score: number | null;
 	away_score: number | null;
 	total_score: number | null;
-	is_overtime: number;
+	is_final: number;
+	went_to_ot: number;
 	created_at: number;
 	updated_at: number;
 }
@@ -100,19 +90,19 @@ export interface GameRow {
 /** Parsed game entity for application use */
 export interface Game {
 	id: string;
-	externalId?: string;
 	sportTag: string;
 	season?: string;
-	gameDate: string;
+	seasonType?: string;
+	week?: string;
+	gameTime?: number;
 	homeTeamId: string;
 	awayTeamId: string;
-	venue?: string;
-	isNeutralSite: boolean;
-	status: GameStatus;
+	neutralSite: boolean;
 	homeScore?: number;
 	awayScore?: number;
 	totalScore?: number;
-	isOvertime: boolean;
+	isFinal: boolean;
+	wentToOt: boolean;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -125,12 +115,13 @@ export interface Game {
 export interface GameLineRow {
 	id: string;
 	game_id: string;
-	line_type: string;
-	snapshot: string;
-	home_value: number | null;
-	away_value: number | null;
-	total_value: number | null;
-	source: string | null;
+	source: string;
+	snapshot_type: string;
+	home_spread: number | null;
+	away_spread: number | null;
+	total_line: number | null;
+	home_moneyline: number | null;
+	away_moneyline: number | null;
 	recorded_at: number;
 	created_at: number;
 }
@@ -139,12 +130,13 @@ export interface GameLineRow {
 export interface GameLine {
 	id: string;
 	gameId: string;
-	lineType: LineType;
-	snapshot: LineSnapshot;
-	homeValue?: number;
-	awayValue?: number;
-	totalValue?: number;
-	source?: string;
+	source: string;
+	snapshotType: SnapshotType;
+	homeSpread?: number;
+	awaySpread?: number;
+	totalLine?: number;
+	homeMoneyline?: number;
+	awayMoneyline?: number;
 	recordedAt: number;
 	createdAt: number;
 }
@@ -156,51 +148,49 @@ export interface GameLine {
 /** Database row for the `team_game_facts` table */
 export interface TeamGameFactRow {
 	id: string;
-	team_id: string;
 	game_id: string;
+	team_id: string;
 	opponent_id: string;
-	venue_role: string | null;
+	venue_role: string;
 	fav_dog_role: string | null;
-	su_result: string | null;
-	ats_result: string | null;
-	ou_result: string | null;
-	spread_line: number | null;
-	total_line: number | null;
-	actual_margin: number | null;
-	cover_margin: number | null;
-	total_margin: number | null;
 	team_score: number | null;
 	opponent_score: number | null;
-	game_date: string;
+	actual_margin: number | null;
+	su_result: string | null;
+	spread_line: number | null;
+	cover_margin: number | null;
+	ats_result: string | null;
+	total_line: number | null;
+	actual_total: number | null;
+	ou_result: string | null;
+	game_time: number;
 	sport_tag: string;
 	season: string | null;
 	created_at: number;
-	updated_at: number;
 }
 
 /** Parsed team game fact entity for application use */
 export interface TeamGameFact {
 	id: string;
-	teamId: string;
 	gameId: string;
+	teamId: string;
 	opponentId: string;
-	venueRole?: VenueRole;
+	venueRole: VenueRole;
 	favDogRole?: FavDogRole;
-	suResult?: PickResult;
-	atsResult?: AtsResult;
-	ouResult?: OuResult;
-	spreadLine?: number;
-	totalLine?: number;
-	actualMargin?: number;
-	coverMargin?: number;
-	totalMargin?: number;
 	teamScore?: number;
 	opponentScore?: number;
-	gameDate: string;
+	actualMargin?: number;
+	suResult?: PickResult;
+	spreadLine?: number;
+	coverMargin?: number;
+	atsResult?: AtsResult;
+	totalLine?: number;
+	actualTotal?: number;
+	ouResult?: OuResult;
+	gameTime: number;
 	sportTag: string;
 	season?: string;
 	createdAt: number;
-	updatedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +201,11 @@ export interface TeamGameFact {
 export interface TeamTrendSnapshotRow {
 	id: string;
 	team_id: string;
+	as_of_game_id: string;
+	as_of_time: number;
 	sport_tag: string;
-	season: string | null;
+	snapshot_type: string;
 	window_size: number;
-	scope: string;
-	venue_filter: string | null;
-	fav_dog_filter: string | null;
 	su_wins: number;
 	su_losses: number;
 	su_pushes: number;
@@ -225,32 +214,30 @@ export interface TeamTrendSnapshotRow {
 	ats_losses: number;
 	ats_pushes: number;
 	ats_win_pct: number | null;
-	ou_wins: number;
-	ou_losses: number;
+	ou_overs: number;
+	ou_unders: number;
 	ou_pushes: number;
-	ou_win_pct: number | null;
+	ou_over_pct: number | null;
 	ats_streak_type: string | null;
 	ats_streak_length: number;
 	ou_streak_type: string | null;
 	ou_streak_length: number;
 	su_streak_type: string | null;
 	su_streak_length: number;
-	computed_at: number;
-	game_ids_json: string | null;
+	avg_cover_margin: number | null;
+	avg_total_margin: number | null;
 	created_at: number;
-	updated_at: number;
 }
 
 /** Parsed team trend snapshot entity for application use */
 export interface TeamTrendSnapshot {
 	id: string;
 	teamId: string;
+	asOfGameId: string;
+	asOfTime: number;
 	sportTag: string;
-	season?: string;
+	snapshotType: string;
 	windowSize: number;
-	scope: string;
-	venueFilter?: VenueRole;
-	favDogFilter?: FavDogRole;
 	suWins: number;
 	suLosses: number;
 	suPushes: number;
@@ -259,20 +246,19 @@ export interface TeamTrendSnapshot {
 	atsLosses: number;
 	atsPushes: number;
 	atsWinPct?: number;
-	ouWins: number;
-	ouLosses: number;
+	ouOvers: number;
+	ouUnders: number;
 	ouPushes: number;
-	ouWinPct?: number;
+	ouOverPct?: number;
 	atsStreakType?: "W" | "L";
 	atsStreakLength: number;
 	ouStreakType?: "W" | "L";
 	ouStreakLength: number;
 	suStreakType?: "W" | "L";
 	suStreakLength: number;
-	computedAt: number;
-	gameIds: string[];
+	avgCoverMargin?: number;
+	avgTotalMargin?: number;
 	createdAt: number;
-	updatedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,15 +273,13 @@ export interface TeamGameFactFilter {
 	venueRole?: VenueRole;
 	favDogRole?: FavDogRole;
 	limit?: number;
-	beforeDate?: string;
+	beforeGameTime?: number;
 }
 
 /** Filter for querying team trend snapshots */
 export interface TeamTrendSnapshotFilter {
 	teamId: string;
 	sportTag?: string;
-	season?: string;
+	snapshotType?: string;
 	windowSize?: number;
-	venueFilter?: VenueRole;
-	favDogFilter?: FavDogRole;
 }
