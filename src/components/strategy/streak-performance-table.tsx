@@ -4,6 +4,7 @@
 
 import { formatPercent } from "../canonical/formatters";
 import type { PerformanceBucket } from "./context-performance-table";
+import { formatRoi, roiColor, sampleBadge, winRateColor } from "./helpers";
 
 function streakBadge(bucket: string): {
 	color: string;
@@ -42,31 +43,6 @@ function streakBadge(bucket: string): {
 				: "bg-red-500/5 border-red-500/15",
 		label: `L${length}+`,
 	};
-}
-
-function winRateColor(rate: number | null): string {
-	if (rate == null) return "text-slate-400";
-	if (rate > 0.55) return "text-emerald-300";
-	if (rate < 0.45) return "text-red-300";
-	return "text-slate-200";
-}
-
-function roiColor(roi: number | null): string {
-	if (roi == null) return "text-slate-400";
-	if (roi > 0) return "text-emerald-300";
-	if (roi < 0) return "text-red-300";
-	return "text-slate-200";
-}
-
-function formatRoi(roi: number | null): string {
-	if (roi == null || !Number.isFinite(roi)) return "—";
-	return `${roi >= 0 ? "+" : ""}${(roi * 100).toFixed(1)}%`;
-}
-
-function sampleBadge(count: number): string | null {
-	if (count < 10) return "tiny";
-	if (count < 30) return "small";
-	return null;
 }
 
 export function StreakPerformanceTable({
