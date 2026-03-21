@@ -32,8 +32,39 @@ export type AtsResult = "cover" | "no_cover" | "push";
 /** OU result */
 export type OuResult = "over" | "under" | "push";
 
-/** Line snapshot timing */
+/** Line snapshot timing (game_lines.snapshot_type) */
 export type SnapshotType = "open" | "close";
+
+/** Valid snapshot_type values for team_trend_snapshots */
+export type TrendSnapshotType =
+	| "overall"
+	| "home"
+	| "away"
+	| "favorite"
+	| "dog"
+	| "home_favorite"
+	| "home_dog"
+	| "away_favorite"
+	| "away_dog";
+
+/** All valid trend snapshot types as a readonly array (useful for validation) */
+export const TREND_SNAPSHOT_TYPES: readonly TrendSnapshotType[] = [
+	"overall",
+	"home",
+	"away",
+	"favorite",
+	"dog",
+	"home_favorite",
+	"home_dog",
+	"away_favorite",
+	"away_dog",
+] as const;
+
+/** All valid line snapshot types as a readonly array (useful for validation) */
+export const SNAPSHOT_TYPES: readonly SnapshotType[] = [
+	"open",
+	"close",
+] as const;
 
 // ---------------------------------------------------------------------------
 // teams
@@ -236,7 +267,7 @@ export interface TeamTrendSnapshot {
 	asOfGameId: string;
 	asOfTime: number;
 	sportTag: string;
-	snapshotType: string;
+	snapshotType: TrendSnapshotType;
 	windowSize: number;
 	suWins: number;
 	suLosses: number;
@@ -280,6 +311,6 @@ export interface TeamGameFactFilter {
 export interface TeamTrendSnapshotFilter {
 	teamId: string;
 	sportTag?: string;
-	snapshotType?: string;
+	snapshotType?: TrendSnapshotType;
 	windowSize?: number;
 }
