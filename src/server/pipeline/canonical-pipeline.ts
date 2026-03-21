@@ -14,6 +14,7 @@
  */
 
 import type { Db } from "../db/client";
+import { all } from "../db/client";
 import { getGameById } from "../repositories/games";
 import {
 	type ComputeFactsResult,
@@ -137,8 +138,7 @@ export async function processUnprocessedGames(
 
 	params.push(limit);
 
-	const { all: allFn } = await import("../db/client");
-	const rows = await allFn<{ id: string }>(
+	const rows = await all<{ id: string }>(
 		db,
 		`SELECT g.id FROM games g
 		LEFT JOIN team_game_facts tgf ON tgf.game_id = g.id

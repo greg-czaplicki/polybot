@@ -306,7 +306,7 @@ export const resolveTeamFn = createServerFn({ method: "POST" }).handler(
 		}
 
 		const db = getDb(context);
-		const team = await findTeamByAlias(db, payload.alias, payload.sportTag);
+		const team = await findTeamByAlias(db, payload.sportTag, payload.alias);
 
 		return { team };
 	},
