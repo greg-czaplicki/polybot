@@ -7,7 +7,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { all, first } from "../db/client";
-import { getDb, requireContext } from "../env";
+import { getDb } from "../env";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -219,35 +219,31 @@ async function getEntityCounts(db: D1Database) {
 
 /**
  * Trigger a manual canonical sync cycle.
- * Proxies to the /_canonical/trigger endpoint which invokes the sync runner.
+ * Calls the canonical sync runner directly via the server function context.
  *
  * Input: { force?: boolean }
  */
 export const triggerCanonicalSyncFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const { env } = requireContext(context);
+	const db = getDb(context);
 	const payload = (data ?? {}) as { force?: boolean };
 
 	try {
-		const response = await fetch("https://localhost/_canonical/trigger", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				force: payload.force ?? false,
-				source: "admin-ui",
-			}),
+		// Import dynamically to avoid circular deps and allow T1 to land independently
+		const { runCanonicalSync } = await import(
+			"../pipeline/canonical-sync"
+		);
+		const result = await runCanonicalSync(db, {
+			source: "admin-ui",
+			force: payload.force ?? false,
 		});
-
-		// This won't actually work as a self-fetch. Instead, we'll
-		// call the sync runner directly if it's available.
-		// For now, return the method to use the HTTP endpoint.
-		const result = await response.json();
 		return { success: true, result };
 	} catch (error) {
 		return {
 			success: false,
 			error: `Sync trigger failed: ${error instanceof Error ? error.message : String(error)}`,
+			result: null,
 		};
 	}
 });
