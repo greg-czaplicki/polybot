@@ -118,7 +118,7 @@ export type WarehouseSummary = {
 export const fetchPlayerAnalyticsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as {
+	const payload = (data ?? {}) as {
 		conditionId?: string;
 		walletAddress?: string;
 		limit?: number;
@@ -182,7 +182,7 @@ export const fetchPlayerAnalyticsFn = createServerFn({
 export const fetchEventAnalyticsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as {
+	const payload = (data ?? {}) as {
 		sportSeriesId?: number;
 		conditionId?: string;
 	};
@@ -279,7 +279,7 @@ export const fetchEventAnalyticsFn = createServerFn({
 export const fetchMarketAnalyticsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as { conditionId: string };
+	const payload = (data ?? {}) as { conditionId?: string };
 	const db = getDb(context);
 
 	if (!payload.conditionId) {
