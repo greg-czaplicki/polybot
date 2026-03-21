@@ -83,7 +83,13 @@ function StrategyPage() {
 		setLoading(true);
 		setError(null);
 		try {
-			let result: { analysis: { buckets: StrategyBucketRow[]; settledPicks: number; enrichedPicks: number } };
+			let result: {
+				analysis: {
+					buckets: StrategyBucketRow[];
+					settledPicks: number;
+					enrichedPicks: number;
+				};
+			};
 
 			switch (section) {
 				case "venue":
@@ -110,9 +116,7 @@ function StrategyPage() {
 			});
 		} catch (err) {
 			console.error(`[strategy] Failed to load ${section}:`, err);
-			setError(
-				err instanceof Error ? err.message : "Failed to load analysis",
-			);
+			setError(err instanceof Error ? err.message : "Failed to load analysis");
 		} finally {
 			setLoading(false);
 		}
@@ -139,8 +143,8 @@ function StrategyPage() {
 								Strategy Analysis
 							</h1>
 							<p className="text-sm text-slate-400">
-								Pick performance by canonical context — which
-								trends and setups actually help?
+								Pick performance by canonical context — which trends and setups
+								actually help?
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">

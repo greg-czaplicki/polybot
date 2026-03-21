@@ -108,9 +108,9 @@ export function FeatureLegend() {
 			</div>
 			<p className="mb-4 text-[0.65rem] text-slate-500">
 				Features marked <SafetyBadge level="safe" /> are point-in-time safe and
-				can be used for modeling. Features marked{" "}
-				<SafetyBadge level="unsafe" /> are only available after the game result
-				and must never be used as model inputs.
+				can be used for modeling. Features marked <SafetyBadge level="unsafe" />{" "}
+				are only available after the game result and must never be used as model
+				inputs.
 			</p>
 
 			<div className="grid gap-6 lg:grid-cols-2">
