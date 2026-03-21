@@ -47,7 +47,7 @@ import type {
  */
 export const queryTeamFactsFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as {
+		const payload = (data ?? {}) as {
 			teamId: string;
 			sportTag?: string;
 			venueRole?: VenueRole;
@@ -87,7 +87,7 @@ export const queryTeamFactsFn = createServerFn({ method: "POST" }).handler(
  */
 export const queryTeamRecordFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as {
+		const payload = (data ?? {}) as {
 			teamId: string;
 			metric: "su" | "ats" | "ou";
 			sportTag?: string;
@@ -126,7 +126,7 @@ export const queryTeamRecordFn = createServerFn({ method: "POST" }).handler(
  */
 export const queryTeamStreakFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as {
+		const payload = (data ?? {}) as {
 			teamId: string;
 			metric: "su" | "ats" | "ou";
 			sportTag?: string;
@@ -165,7 +165,7 @@ export const queryTeamStreakFn = createServerFn({ method: "POST" }).handler(
 export const queryTrendSnapshotAsOfFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as {
+	const payload = (data ?? {}) as {
 		teamId: string;
 		snapshotType: TrendSnapshotType;
 		asOfTime: number;
@@ -197,7 +197,7 @@ export const queryTrendSnapshotAsOfFn = createServerFn({
 export const queryLatestTrendSnapshotFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as {
+	const payload = (data ?? {}) as {
 		teamId: string;
 		snapshotType?: TrendSnapshotType;
 		sportTag?: string;
@@ -225,7 +225,7 @@ export const queryLatestTrendSnapshotFn = createServerFn({
 export const listTrendSnapshotsFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context, data }) => {
-	const payload = data as {
+	const payload = (data ?? {}) as {
 		teamId: string;
 		sportTag?: string;
 		snapshotType?: TrendSnapshotType;
@@ -256,7 +256,7 @@ export const listTrendSnapshotsFn = createServerFn({
  */
 export const queryGameDetailFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as { gameId: string };
+		const payload = (data ?? {}) as { gameId: string };
 
 		if (!payload.gameId) {
 			return { game: null, error: "gameId is required" };
@@ -299,7 +299,7 @@ export const queryGameDetailFn = createServerFn({ method: "POST" }).handler(
  */
 export const resolveTeamFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as { alias: string; sportTag: string };
+		const payload = (data ?? {}) as { alias: string; sportTag: string };
 
 		if (!payload.alias || !payload.sportTag) {
 			return { team: null, error: "alias and sportTag are required" };
@@ -324,7 +324,7 @@ export const resolveTeamFn = createServerFn({ method: "POST" }).handler(
  */
 export const processGameFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as { gameId: string };
+		const payload = (data ?? {}) as { gameId: string };
 
 		if (!payload.gameId) {
 			return { result: null, error: "gameId is required" };
@@ -344,7 +344,7 @@ export const processGameFn = createServerFn({ method: "POST" }).handler(
  */
 export const processGamesFn = createServerFn({ method: "POST" }).handler(
 	async ({ context, data }) => {
-		const payload = data as { gameIds: string[] };
+		const payload = (data ?? {}) as { gameIds: string[] };
 
 		if (!payload.gameIds || payload.gameIds.length === 0) {
 			return { result: null, error: "gameIds array is required" };
