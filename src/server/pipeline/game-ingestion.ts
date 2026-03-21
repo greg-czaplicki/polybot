@@ -158,7 +158,10 @@ export async function ingestGameFromMarketData(
 		return {
 			game: existing,
 			created: false,
-			matchInfo: `Matched existing game ${existing.id}`,
+			matchInfo:
+				hasScores(input) && existing.isFinal
+					? `Matched existing game ${existing.id}, already finalized — scores not overwritten`
+					: `Matched existing game ${existing.id}`,
 		};
 	}
 
