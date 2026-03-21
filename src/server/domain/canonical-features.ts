@@ -171,7 +171,7 @@ export interface PickForFeatures {
 // ---------------------------------------------------------------------------
 
 /** Extract SideFeatures from a trend snapshot, or nulls if not found. */
-function extractSideFeatures(
+export function extractSideFeatures(
 	overallSnapshot: TeamTrendSnapshot | null,
 	splitSnapshot: TeamTrendSnapshot | null,
 ): SideFeatures {
@@ -308,7 +308,7 @@ export async function extractPickFeatures(
  * Derive the opponent's contextual snapshot type by mirroring venue role.
  * If our team is home favorite, opponent is away dog (and vice versa).
  */
-function deriveOpponentSnapshotType(
+export function deriveOpponentSnapshotType(
 	venueRole: VenueRole | null,
 	favDogRole: FavDogRole | null,
 ): TrendSnapshotType {
