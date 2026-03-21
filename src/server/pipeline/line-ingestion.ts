@@ -11,8 +11,8 @@
  */
 
 import type { Db } from "../db/client";
-import type { GameLine, SnapshotType } from "../types/canonical";
 import { upsertGameLine } from "../repositories/game-lines";
+import type { GameLine, SnapshotType } from "../types/canonical";
 
 // ---------------------------------------------------------------------------
 // Types

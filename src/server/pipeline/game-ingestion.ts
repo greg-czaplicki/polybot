@@ -7,8 +7,8 @@
 
 import type { Db } from "../db/client";
 import { all, first } from "../db/client";
-import type { Game } from "../types/canonical";
 import { createGame, getGameById } from "../repositories/games";
+import type { Game } from "../types/canonical";
 import { resolveTeamFromMarketTitle } from "./team-seeder";
 
 // ---------------------------------------------------------------------------

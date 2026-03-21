@@ -19,12 +19,12 @@
  *   for moneyline/spread markets (totals use Over/Under labels)
  */
 
-import type { Db } from "../db/client";
-import { all, first, run } from "../db/client";
 import { detectBetType } from "@/lib/markets";
 import { detectSportTag } from "@/lib/sports";
-import { resolveSingleTeam, parseTeamsFromTitle } from "./team-seeder";
+import type { Db } from "../db/client";
+import { all, first, run } from "../db/client";
 import type { FavDogRole, VenueRole } from "../types/canonical";
+import { parseTeamsFromTitle, resolveSingleTeam } from "./team-seeder";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,16 +76,12 @@ function parseDecisionSnapshot(
 	try {
 		const obj = JSON.parse(raw) as Record<string, unknown>;
 		return {
-			eventSlug:
-				typeof obj.eventSlug === "string" ? obj.eventSlug : undefined,
+			eventSlug: typeof obj.eventSlug === "string" ? obj.eventSlug : undefined,
 			marketTitle:
 				typeof obj.marketTitle === "string" ? obj.marketTitle : undefined,
-			eventTime:
-				typeof obj.eventTime === "string" ? obj.eventTime : undefined,
+			eventTime: typeof obj.eventTime === "string" ? obj.eventTime : undefined,
 			sportSeriesId:
-				typeof obj.sportSeriesId === "number"
-					? obj.sportSeriesId
-					: undefined,
+				typeof obj.sportSeriesId === "number" ? obj.sportSeriesId : undefined,
 		};
 	} catch {
 		return null;
@@ -247,8 +243,7 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 		try {
 			const fieldsSet: string[] = [];
 			const snapshot = parseDecisionSnapshot(pick.decision_snapshot_json);
-			const title =
-				pick.market_title ?? snapshot?.marketTitle ?? "";
+			const title = pick.market_title ?? snapshot?.marketTitle ?? "";
 
 			if (!title) {
 				result.skipped++;
@@ -262,16 +257,10 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			}
 
 			// 1. Detect bet_type
-			const betType =
-				pick.bet_type ??
-				detectBetType({ title }) ??
-				null;
+			const betType = pick.bet_type ?? detectBetType({ title }) ?? null;
 
 			// 2. Detect sport_tag
-			const sportTag =
-				pick.sport_tag ??
-				detectSportTag({ title }) ??
-				null;
+			const sportTag = pick.sport_tag ?? detectSportTag({ title }) ?? null;
 
 			// 3. Parse team names and resolve IDs
 			let teamId = pick.team_id ?? null;
@@ -282,16 +271,8 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			if (!teamId && sportTag) {
 				const parsed = parseTeamsFromTitle(title);
 				if (parsed) {
-					const homeTeam = await resolveSingleTeam(
-						db,
-						sportTag,
-						parsed.home,
-					);
-					const awayTeam = await resolveSingleTeam(
-						db,
-						sportTag,
-						parsed.away,
-					);
+					const homeTeam = await resolveSingleTeam(db, sportTag, parsed.home);
+					const awayTeam = await resolveSingleTeam(db, sportTag, parsed.away);
 
 					if (homeTeam && awayTeam) {
 						// For spread/ML, the picked team is typically the one with the line
