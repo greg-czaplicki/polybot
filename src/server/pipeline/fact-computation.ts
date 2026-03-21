@@ -212,7 +212,7 @@ function buildTeamFact(params: BuildTeamFactParams): UpsertTeamGameFactInput {
  * Per grading-rules.md §2.1: win if margin > 0, loss if < 0.
  * Ties are treated as push (rare in most sports but possible).
  */
-function deriveSuResult(actualMargin: number): PickResult {
+export function deriveSuResult(actualMargin: number): PickResult {
 	if (actualMargin > 0) return "win";
 	if (actualMargin < 0) return "loss";
 	return "push";
@@ -223,7 +223,7 @@ function deriveSuResult(actualMargin: number): PickResult {
  * home_spread is the spread for the home team (negative = home favored).
  * For the away team, the spread is the negation of home_spread.
  */
-function deriveSpreadLine(
+export function deriveSpreadLine(
 	line: GameLine | null,
 	isHome: boolean,
 ): number | undefined {
@@ -240,20 +240,21 @@ function deriveSpreadLine(
 
 /**
  * Derive ATS result from actual margin and spread line.
- * Per grading-rules.md §2.2:
- *   cover_margin = actual_margin - spread_line
+ * Per grading-rules.md §2.2 examples:
+ *   cover_margin = actual_margin + spread_line
  *   cover if cover_margin > 0, push if = 0, no_cover if < 0
  *
- * NOTE: spread_line is from the team's perspective. A home favorite at -3.5
- * means they need to win by > 3.5 to cover.
+ * NOTE: spread_line is from the team's perspective (sportsbook convention).
+ * A home favorite at -3.5 must win by > 3.5 to cover.
  * actual_margin = team_score - opponent_score.
- * cover_margin = actual_margin - spread_line
- *   e.g. won by 7 with spread -3.5 → cover_margin = 7 - (-3.5) = 10.5 → cover
- *   e.g. won by 3 with spread -3.5 → cover_margin = 3 - (-3.5) = 6.5 → cover
- *   e.g. lost by 1 with spread -3.5 → cover_margin = -1 - (-3.5) = 2.5 → cover
- *   e.g. lost by 4 with spread -3.5 → cover_margin = -4 - (-3.5) = -0.5 → no_cover
+ * cover_margin = actual_margin + spread_line
+ *   e.g. fav won by 7  with spread -3.5 → 7 + (-3.5)   = +3.5  → cover
+ *   e.g. fav won by 3  with spread -3.0 → 3 + (-3.0)   =  0    → push
+ *   e.g. fav lost by 1 with spread -3.5 → -1 + (-3.5)  = -4.5  → no_cover
+ *   e.g. dog lost by 1 with spread +3.5 → -1 + 3.5      = +2.5  → cover
+ *   e.g. dog lost by 4 with spread +3.5 → -4 + 3.5      = -0.5  → no_cover
  */
-function deriveAtsResult(
+export function deriveAtsResult(
 	actualMargin: number,
 	spreadLine: number | undefined,
 ): { coverMargin: number | undefined; atsResult: AtsResult | undefined } {
@@ -261,7 +262,7 @@ function deriveAtsResult(
 		return { coverMargin: undefined, atsResult: undefined };
 	}
 
-	const coverMargin = actualMargin - spreadLine;
+	const coverMargin = actualMargin + spreadLine;
 	let atsResult: AtsResult;
 	if (coverMargin > 0) {
 		atsResult = "cover";
@@ -281,7 +282,7 @@ function deriveAtsResult(
  *
  * Note: OU result is the same for both teams in a game (it's a game-level metric).
  */
-function deriveOuResult(
+export function deriveOuResult(
 	actualTotal: number,
 	totalLine: number | undefined,
 ): OuResult | undefined {
@@ -303,7 +304,7 @@ function deriveOuResult(
  * home_spread > 0 means away is favored (home is "getting" points).
  * home_spread = 0 means pick'em.
  */
-function deriveFavDogRoles(line: GameLine | null): {
+export function deriveFavDogRoles(line: GameLine | null): {
 	homeFavDog: FavDogRole | undefined;
 	awayFavDog: FavDogRole | undefined;
 } {
