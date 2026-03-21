@@ -8,6 +8,14 @@ import {
 } from "../components/strategy/context-performance-table";
 import { FeatureLegend } from "../components/strategy/feature-legend";
 import { StreakPerformanceTable } from "../components/strategy/streak-performance-table";
+import {
+	getStrategyContextPerformanceFn,
+	getStrategyMatchupEdgePerformanceFn,
+	getStrategyStreakPerformanceFn,
+	getStrategyTrendPerformanceFn,
+	getStrategyVenueRolePerformanceFn,
+} from "../server/api/strategy-analysis";
+import type { StrategyBucketRow } from "../server/repositories/strategy-analysis";
 
 export const Route = createFileRoute("/strategy")({
 	component: StrategyPage,
@@ -19,7 +27,6 @@ export const Route = createFileRoute("/strategy")({
 
 type SectionKey =
 	| "venue"
-	| "favdog"
 	| "trend"
 	| "streak"
 	| "matchup"
@@ -27,8 +34,7 @@ type SectionKey =
 	| "features";
 
 const SECTION_TABS: { key: SectionKey; label: string }[] = [
-	{ key: "venue", label: "Venue" },
-	{ key: "favdog", label: "Fav/Dog" },
+	{ key: "venue", label: "Venue / Role" },
 	{ key: "trend", label: "ATS Trend" },
 	{ key: "streak", label: "Streaks" },
 	{ key: "matchup", label: "Matchup Edge" },
@@ -37,42 +43,30 @@ const SECTION_TABS: { key: SectionKey; label: string }[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Types for API responses
+// Adapter: API bucket → UI bucket
 // ---------------------------------------------------------------------------
 
-type StrategyAnalysisResult = {
-	byVenueRole: PerformanceBucket[];
-	byFavDogRole: PerformanceBucket[];
-	byAtsTrend: PerformanceBucket[];
-	byAtsStreak: PerformanceBucket[];
-	byOuStreak: PerformanceBucket[];
-	byMatchupEdge: PerformanceBucket[];
-	byCombinedContext: PerformanceBucket[];
-	totalPicks: number;
+function toBuckets(rows: StrategyBucketRow[]): PerformanceBucket[] {
+	return rows.map((r) => ({
+		bucket: r.bucket,
+		picks: r.picks,
+		wins: r.wins,
+		losses: r.losses,
+		pushes: r.pushes,
+		winRate: r.winRate,
+		avgRoi: r.avgRoi,
+	}));
+}
+
+// ---------------------------------------------------------------------------
+// Section state
+// ---------------------------------------------------------------------------
+
+type SectionData = {
+	buckets: PerformanceBucket[];
 	settledPicks: number;
 	enrichedPicks: number;
-	computedAt: number;
 };
-
-// ---------------------------------------------------------------------------
-// Data loading
-// ---------------------------------------------------------------------------
-
-async function loadStrategyAnalysis(): Promise<StrategyAnalysisResult | null> {
-	try {
-		// Dynamically import to avoid build errors if the API file doesn't exist yet
-		const mod = await import("../server/api/strategy-analysis");
-		const res = await mod.getStrategyAnalysisFn();
-		if (res.error) {
-			console.error("[strategy] API error:", res.error);
-			return null;
-		}
-		return res.analysis ?? null;
-	} catch (err) {
-		console.error("[strategy] Failed to load strategy analysis:", err);
-		return null;
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Page component
@@ -80,21 +74,42 @@ async function loadStrategyAnalysis(): Promise<StrategyAnalysisResult | null> {
 
 function StrategyPage() {
 	const [activeSection, setActiveSection] = useState<SectionKey>("venue");
-	const [analysis, setAnalysis] = useState<StrategyAnalysisResult | null>(null);
+	const [sectionData, setSectionData] = useState<SectionData | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const refresh = useCallback(async () => {
+	const loadSection = useCallback(async (section: SectionKey) => {
+		if (section === "features") return; // No data loading needed
 		setLoading(true);
 		setError(null);
 		try {
-			const result = await loadStrategyAnalysis();
-			if (result) {
-				setAnalysis(result);
-			} else {
-				setError("No analysis data available. Ensure picks have canonical context enrichment.");
+			let result: { analysis: { buckets: StrategyBucketRow[]; settledPicks: number; enrichedPicks: number } };
+
+			switch (section) {
+				case "venue":
+					result = await getStrategyVenueRolePerformanceFn();
+					break;
+				case "trend":
+					result = await getStrategyTrendPerformanceFn();
+					break;
+				case "streak":
+					result = await getStrategyStreakPerformanceFn();
+					break;
+				case "matchup":
+					result = await getStrategyMatchupEdgePerformanceFn();
+					break;
+				case "combined":
+					result = await getStrategyContextPerformanceFn();
+					break;
 			}
+
+			setSectionData({
+				buckets: toBuckets(result.analysis.buckets),
+				settledPicks: result.analysis.settledPicks,
+				enrichedPicks: result.analysis.enrichedPicks,
+			});
 		} catch (err) {
+			console.error(`[strategy] Failed to load ${section}:`, err);
 			setError(
 				err instanceof Error ? err.message : "Failed to load analysis",
 			);
@@ -103,9 +118,15 @@ function StrategyPage() {
 		}
 	}, []);
 
+	// Load data when section changes
 	useEffect(() => {
-		void refresh();
-	}, [refresh]);
+		void loadSection(activeSection);
+	}, [activeSection, loadSection]);
+
+	const handleTabClick = (key: SectionKey) => {
+		setSectionData(null);
+		setActiveSection(key);
+	};
 
 	return (
 		<AuthGate>
@@ -137,7 +158,7 @@ function StrategyPage() {
 							</a>
 							<button
 								type="button"
-								onClick={refresh}
+								onClick={() => loadSection(activeSection)}
 								disabled={loading}
 								className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:opacity-50"
 							>
@@ -147,11 +168,10 @@ function StrategyPage() {
 					</div>
 
 					{/* Summary banner */}
-					{analysis && (
+					{sectionData && (
 						<div className="mb-4 flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.2em] text-slate-400">
-							<span>{analysis.totalPicks} total picks</span>
-							<span>{analysis.settledPicks} settled</span>
-							<span>{analysis.enrichedPicks} enriched</span>
+							<span>{sectionData.settledPicks} settled picks</span>
+							<span>{sectionData.enrichedPicks} with trend data</span>
 						</div>
 					)}
 
@@ -161,7 +181,7 @@ function StrategyPage() {
 							<button
 								type="button"
 								key={tab.key}
-								onClick={() => setActiveSection(tab.key)}
+								onClick={() => handleTabClick(tab.key)}
 								className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition-colors ${
 									activeSection === tab.key
 										? "bg-cyan-500 text-white"
@@ -183,16 +203,8 @@ function StrategyPage() {
 					{/* Content sections */}
 					{activeSection === "venue" && (
 						<ContextPerformanceTable
-							title="Performance by Venue Role"
-							data={analysis?.byVenueRole ?? []}
-							loading={loading}
-						/>
-					)}
-
-					{activeSection === "favdog" && (
-						<ContextPerformanceTable
-							title="Performance by Fav/Dog Role"
-							data={analysis?.byFavDogRole ?? []}
+							title="Performance by Venue + Fav/Dog Role"
+							data={sectionData?.buckets ?? []}
 							loading={loading}
 						/>
 					)}
@@ -200,38 +212,31 @@ function StrategyPage() {
 					{activeSection === "trend" && (
 						<ContextPerformanceTable
 							title="Performance by ATS Trend Bucket"
-							data={analysis?.byAtsTrend ?? []}
+							data={sectionData?.buckets ?? []}
 							loading={loading}
 						/>
 					)}
 
 					{activeSection === "streak" && (
-						<div className="space-y-4">
-							<StreakPerformanceTable
-								title="Performance by ATS Streak"
-								data={analysis?.byAtsStreak ?? []}
-								loading={loading}
-							/>
-							<StreakPerformanceTable
-								title="Performance by O/U Streak"
-								data={analysis?.byOuStreak ?? []}
-								loading={loading}
-							/>
-						</div>
+						<StreakPerformanceTable
+							title="Performance by ATS Streak"
+							data={sectionData?.buckets ?? []}
+							loading={loading}
+						/>
 					)}
 
 					{activeSection === "matchup" && (
 						<ContextPerformanceTable
 							title="Performance by Matchup Edge (ATS Delta)"
-							data={analysis?.byMatchupEdge ?? []}
+							data={sectionData?.buckets ?? []}
 							loading={loading}
 						/>
 					)}
 
 					{activeSection === "combined" && (
 						<ContextPerformanceTable
-							title="Performance by Combined Context"
-							data={analysis?.byCombinedContext ?? []}
+							title="Performance by Combined Context (venue|trend|streak)"
+							data={sectionData?.buckets ?? []}
 							loading={loading}
 						/>
 					)}
