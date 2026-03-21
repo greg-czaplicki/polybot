@@ -5,9 +5,11 @@ import {
 	deriveFavDogRole,
 	resolvePickedSide as resolvePickedSideForEnrichment,
 } from "../pipeline/pick-enrichment-helpers";
+import { splitFiltersForSnapshotType } from "../domain/trend-summary";
+import type { TrendSnapshotType, VenueRole, FavDogRole } from "../types/canonical";
 
 // ---------------------------------------------------------------------------
-// deriveSnapshotType
+// deriveSnapshotType — comprehensive coverage
 // ---------------------------------------------------------------------------
 
 describe("deriveSnapshotType", () => {
@@ -40,6 +42,81 @@ describe("deriveSnapshotType", () => {
 	it("returns overall for neutral venue without fav/dog", () => {
 		expect(deriveSnapshotType("neutral", null)).toBe("overall");
 	});
+
+	// Additional edge cases
+	it("returns overall for neutral venue even with pickem", () => {
+		expect(deriveSnapshotType("neutral", "pickem")).toBe("overall");
+	});
+
+	it("returns fav/dog for neutral venue with fav/dog role", () => {
+		// neutral is not "home" or "away", so combined types won't match
+		expect(deriveSnapshotType("neutral", "favorite")).toBe("favorite");
+		expect(deriveSnapshotType("neutral", "dog")).toBe("dog");
+	});
+
+	it("all valid combined types are in the TrendSnapshotType union", () => {
+		// Verify that deriveSnapshotType only returns valid TrendSnapshotType values
+		const venueRoles: (VenueRole | null)[] = ["home", "away", "neutral", null];
+		const favDogRoles: (FavDogRole | null)[] = [
+			"favorite",
+			"dog",
+			"pickem",
+			null,
+		];
+
+		const validTypes: TrendSnapshotType[] = [
+			"overall",
+			"home",
+			"away",
+			"favorite",
+			"dog",
+			"home_favorite",
+			"home_dog",
+			"away_favorite",
+			"away_dog",
+		];
+
+		for (const venue of venueRoles) {
+			for (const favDog of favDogRoles) {
+				const result = deriveSnapshotType(venue, favDog);
+				expect(validTypes).toContain(result);
+			}
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// deriveSnapshotType × splitFiltersForSnapshotType round-trip consistency
+// ---------------------------------------------------------------------------
+
+describe("deriveSnapshotType round-trip with splitFiltersForSnapshotType", () => {
+	it("home+favorite → home_favorite → {venueRole: home, favDogRole: favorite}", () => {
+		const snapshotType = deriveSnapshotType("home", "favorite");
+		expect(snapshotType).toBe("home_favorite");
+		const filters = splitFiltersForSnapshotType(snapshotType);
+		expect(filters).toEqual({ venueRole: "home", favDogRole: "favorite" });
+	});
+
+	it("away+dog → away_dog → {venueRole: away, favDogRole: dog}", () => {
+		const snapshotType = deriveSnapshotType("away", "dog");
+		expect(snapshotType).toBe("away_dog");
+		const filters = splitFiltersForSnapshotType(snapshotType);
+		expect(filters).toEqual({ venueRole: "away", favDogRole: "dog" });
+	});
+
+	it("home+null → home → {venueRole: home}", () => {
+		const snapshotType = deriveSnapshotType("home", null);
+		expect(snapshotType).toBe("home");
+		const filters = splitFiltersForSnapshotType(snapshotType);
+		expect(filters).toEqual({ venueRole: "home" });
+	});
+
+	it("null+null → overall → {}", () => {
+		const snapshotType = deriveSnapshotType(null, null);
+		expect(snapshotType).toBe("overall");
+		const filters = splitFiltersForSnapshotType(snapshotType);
+		expect(filters).toEqual({});
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -71,6 +148,17 @@ describe("deriveFavDogRole", () => {
 
 	it("returns favorite for away team when home spread is positive", () => {
 		expect(deriveFavDogRole(7, false)).toBe("favorite");
+	});
+
+	// Edge cases for typical spreads
+	it("handles small favorites correctly", () => {
+		expect(deriveFavDogRole(-1, true)).toBe("favorite");
+		expect(deriveFavDogRole(-0.5, true)).toBe("favorite");
+	});
+
+	it("handles large spreads correctly", () => {
+		expect(deriveFavDogRole(-21.5, true)).toBe("favorite");
+		expect(deriveFavDogRole(-21.5, false)).toBe("dog");
 	});
 });
 
@@ -189,5 +277,54 @@ describe("resolvePickedSideForEnrichment", () => {
 			sideBLabel: null,
 		});
 		expect(result).toBeNull();
+	});
+
+	// Additional edge cases
+	it("matches team name substring when side labels are absent", () => {
+		const result = resolvePickedSideForEnrichment({
+			...baseOpts,
+			pickedLabel: "San Francisco",
+			sideALabel: null,
+			sideBLabel: null,
+		});
+		expect(result).toEqual({
+			teamId: "team_sf",
+			opponentId: "team_kc",
+			venueRole: "away",
+			isHomeTeam: false,
+		});
+	});
+
+	it("prefers exact side label match over substring", () => {
+		// If sideA is "49ers" and pickedLabel is "49ers", should match even if
+		// team name also contains it
+		const result = resolvePickedSideForEnrichment({
+			...baseOpts,
+			pickedLabel: "49ers",
+			sideALabel: "49ers",
+			sideBLabel: "Chiefs",
+		});
+		expect(result!.teamId).toBe("team_sf");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Server function contract validation
+// ---------------------------------------------------------------------------
+
+describe("server function contract shapes", () => {
+	it("getTeamTrendSummaryFn is exported and callable", async () => {
+		// Verify the server fn module exports are structurally sound
+		const mod = await import("./canonical-analytics");
+		expect(mod.getTeamTrendSummaryFn).toBeDefined();
+		expect(mod.getTeamTrendOverviewFn).toBeDefined();
+		expect(mod.getMatchupComparisonFn).toBeDefined();
+		expect(mod.getPickContextFn).toBeDefined();
+		expect(mod.getPipelineStatusFn).toBeDefined();
+	});
+
+	it("deriveSnapshotType is exported for external use", async () => {
+		const mod = await import("./canonical-analytics");
+		expect(typeof mod.deriveSnapshotType).toBe("function");
 	});
 });
