@@ -1,9 +1,9 @@
 /**
  * Opportunity Scoring — Phase 8
  *
- * Scores upcoming (pending) opportunities using only leakage-safe
- * pre-pick canonical features. Every score is fully explainable:
- * the output includes the total score, individual factor contributions,
+ * Scores upcoming opportunities using only leakage-safe pre-pick
+ * canonical features. Every score is fully explainable: the output
+ * includes the total score, individual factor contributions,
  * warnings, and the raw feature values used.
  *
  * Leakage safety:
@@ -15,10 +15,7 @@
  */
 
 import type { SideFeatures } from "./canonical-features";
-import {
-	type ScoringConfig,
-	DEFAULT_SCORING_CONFIG,
-} from "./scoring-weights";
+import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "./scoring-weights";
 
 // ---------------------------------------------------------------------------
 // Score factor types
@@ -28,30 +25,15 @@ import {
  * A single contributing factor to an opportunity score.
  * Positive points = favorable signal; negative = unfavorable.
  */
-export interface ScoreFactor {
-	/** Human-readable label for this factor */
+export interface ScoringFactor {
+	/** Machine-readable factor name (e.g., "ats_trend") */
+	name: string;
+	/** Human-readable label for display */
 	label: string;
-	/** Category grouping (e.g., "ats_trend", "streak", "matchup") */
-	category: string;
 	/** Points contributed (positive or negative) */
 	points: number;
-	/** The raw feature value that drove this factor */
-	rawValue: string | number | null;
-}
-
-/**
- * A warning about data quality or conflicting signals.
- */
-export interface ScoreWarning {
-	/** Warning type for programmatic handling */
-	type:
-		| "missing_team_snapshot"
-		| "missing_opponent_snapshot"
-		| "no_context"
-		| "conflicting_signals"
-		| "stale_data";
-	/** Human-readable warning message */
-	message: string;
+	/** Optional detail string (raw value formatted for display) */
+	detail?: string;
 }
 
 /**
@@ -80,19 +62,13 @@ export interface PrePickFeatures {
  */
 export interface OpportunityScore {
 	/** Normalized score 0–100 */
-	score: number;
+	totalScore: number;
 	/** Raw (un-normalized) score for debugging */
 	rawScore: number;
-	/** All contributing factors, sorted by abs(points) descending */
-	factors: ScoreFactor[];
-	/** Top positive factors */
-	topPositive: ScoreFactor[];
-	/** Top negative factors */
-	topNegative: ScoreFactor[];
-	/** Data quality and signal warnings */
-	warnings: ScoreWarning[];
-	/** The pre-pick features used for scoring */
-	features: PrePickFeatures;
+	/** All contributing factors (positive and negative), sorted by abs(points) desc */
+	factors: ScoringFactor[];
+	/** Data quality and signal warnings as human-readable strings */
+	warnings: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -110,8 +86,8 @@ export function scoreOpportunity(
 	features: PrePickFeatures,
 	config: ScoringConfig = DEFAULT_SCORING_CONFIG,
 ): OpportunityScore {
-	const factors: ScoreFactor[] = [];
-	const warnings: ScoreWarning[] = [];
+	const factors: ScoringFactor[] = [];
+	const warnings: string[] = [];
 
 	// --- Data quality checks ---
 	scoreDataQuality(features, config, factors, warnings);
@@ -141,7 +117,7 @@ export function scoreOpportunity(
 	const rawScore = factors.reduce((sum, f) => sum + f.points, 0);
 
 	// Normalize to 0–100
-	const normalized = Math.max(
+	const totalScore = Math.max(
 		0,
 		Math.min(100, Math.round((rawScore / config.maxRawScore) * 100)),
 	);
@@ -149,22 +125,20 @@ export function scoreOpportunity(
 	// Sort factors by absolute contribution
 	factors.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
 
-	const topPositive = factors
-		.filter((f) => f.points > 0)
-		.slice(0, 3);
-	const topNegative = factors
-		.filter((f) => f.points < 0)
-		.slice(0, 3);
+	return { totalScore, rawScore, factors, warnings };
+}
 
-	return {
-		score: normalized,
-		rawScore,
-		factors,
-		topPositive,
-		topNegative,
-		warnings,
-		features,
-	};
+/**
+ * Score and rank multiple opportunities.
+ * Returns scores sorted descending by totalScore.
+ */
+export function rankOpportunities(
+	featuresList: PrePickFeatures[],
+	config?: ScoringConfig,
+): OpportunityScore[] {
+	return featuresList
+		.map((f) => scoreOpportunity(f, config))
+		.sort((a, b) => b.totalScore - a.totalScore);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,56 +148,48 @@ export function scoreOpportunity(
 function scoreDataQuality(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
-	warnings: ScoreWarning[],
+	factors: ScoringFactor[],
+	warnings: string[],
 ): void {
 	if (!features.teamSnapshotFound && !features.opponentSnapshotFound) {
 		factors.push({
+			name: "no_context",
 			label: "No canonical context available",
-			category: "data_quality",
 			points: config.dataQuality.noContextPenalty,
-			rawValue: null,
 		});
-		warnings.push({
-			type: "no_context",
-			message:
-				"Neither team nor opponent has trend snapshot data. Score is unreliable.",
-		});
+		warnings.push(
+			"Neither team nor opponent has trend snapshot data. Score is unreliable.",
+		);
 		return;
 	}
 
 	if (!features.teamSnapshotFound) {
 		factors.push({
+			name: "missing_team_snapshot",
 			label: "Missing team trend data",
-			category: "data_quality",
 			points: config.dataQuality.missingTeamSnapshotPenalty,
-			rawValue: null,
 		});
-		warnings.push({
-			type: "missing_team_snapshot",
-			message: "Team trend snapshot not found. ATS/streak signals unavailable.",
-		});
+		warnings.push(
+			"Team trend snapshot not found. ATS/streak signals unavailable.",
+		);
 	}
 
 	if (!features.opponentSnapshotFound) {
 		factors.push({
+			name: "missing_opponent_snapshot",
 			label: "Missing opponent trend data",
-			category: "data_quality",
 			points: config.dataQuality.missingOpponentSnapshotPenalty,
-			rawValue: null,
 		});
-		warnings.push({
-			type: "missing_opponent_snapshot",
-			message:
-				"Opponent trend snapshot not found. Matchup delta unavailable.",
-		});
+		warnings.push(
+			"Opponent trend snapshot not found. Matchup delta unavailable.",
+		);
 	}
 }
 
 function scoreAtsTrend(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { atsTrend } = config;
 	const atsWinPct = features.team.atsWinPct;
@@ -233,18 +199,18 @@ function scoreAtsTrend(
 	if (atsWinPct >= atsTrend.hotThreshold) {
 		const points = Math.min(atsTrend.hotBonus, atsTrend.maxContribution);
 		factors.push({
+			name: "ats_trend",
 			label: `Team ATS hot (${(atsWinPct * 100).toFixed(0)}%)`,
-			category: "ats_trend",
 			points,
-			rawValue: atsWinPct,
+			detail: `ATS win pct: ${(atsWinPct * 100).toFixed(1)}%`,
 		});
 	} else if (atsWinPct <= atsTrend.coldThreshold) {
 		const points = Math.max(atsTrend.coldPenalty, -atsTrend.maxContribution);
 		factors.push({
+			name: "ats_trend",
 			label: `Team ATS cold (${(atsWinPct * 100).toFixed(0)}%)`,
-			category: "ats_trend",
 			points,
-			rawValue: atsWinPct,
+			detail: `ATS win pct: ${(atsWinPct * 100).toFixed(1)}%`,
 		});
 	}
 }
@@ -252,7 +218,7 @@ function scoreAtsTrend(
 function scoreAtsSplit(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { atsSplit } = config;
 	const splitPct = features.team.atsSplitPct;
@@ -260,15 +226,12 @@ function scoreAtsSplit(
 	if (splitPct == null) return;
 
 	if (splitPct >= atsSplit.splitHotThreshold) {
-		const points = Math.min(
-			atsSplit.splitHotBonus,
-			atsSplit.maxContribution,
-		);
+		const points = Math.min(atsSplit.splitHotBonus, atsSplit.maxContribution);
 		factors.push({
+			name: "ats_split",
 			label: `Split ATS strong (${(splitPct * 100).toFixed(0)}%)`,
-			category: "ats_split",
 			points,
-			rawValue: splitPct,
+			detail: `Split ATS pct: ${(splitPct * 100).toFixed(1)}%`,
 		});
 	} else if (splitPct <= atsSplit.splitColdThreshold) {
 		const points = Math.max(
@@ -276,10 +239,10 @@ function scoreAtsSplit(
 			-atsSplit.maxContribution,
 		);
 		factors.push({
+			name: "ats_split",
 			label: `Split ATS weak (${(splitPct * 100).toFixed(0)}%)`,
-			category: "ats_split",
 			points,
-			rawValue: splitPct,
+			detail: `Split ATS pct: ${(splitPct * 100).toFixed(1)}%`,
 		});
 	}
 }
@@ -287,7 +250,7 @@ function scoreAtsSplit(
 function scoreStreak(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { streak } = config;
 	const { atsStreakType, atsStreakLength } = features.team;
@@ -301,19 +264,19 @@ function scoreStreak(
 		const raw = cappedLength * streak.winStreakPerGame;
 		const points = Math.min(raw, streak.maxContribution);
 		factors.push({
+			name: "streak",
 			label: `ATS win streak (${atsStreakLength}W)`,
-			category: "streak",
 			points,
-			rawValue: atsStreakLength,
+			detail: `${atsStreakLength} consecutive ATS wins`,
 		});
 	} else {
 		const raw = cappedLength * streak.lossStreakPerGame;
 		const points = Math.max(raw, -streak.maxContribution);
 		factors.push({
+			name: "streak",
 			label: `ATS loss streak (${atsStreakLength}L)`,
-			category: "streak",
 			points,
-			rawValue: atsStreakLength,
+			detail: `${atsStreakLength} consecutive ATS losses`,
 		});
 	}
 }
@@ -321,7 +284,7 @@ function scoreStreak(
 function scoreMatchupDelta(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { matchupDelta } = config;
 	const delta = features.matchupAtsDelta;
@@ -341,17 +304,17 @@ function scoreMatchupDelta(
 
 	const sign = delta >= 0 ? "+" : "";
 	factors.push({
+		name: "matchup",
 		label: `Matchup ATS edge (${sign}${(delta * 100).toFixed(0)}pp)`,
-		category: "matchup",
 		points: Math.round(points * 10) / 10,
-		rawValue: delta,
+		detail: `ATS delta: ${sign}${(delta * 100).toFixed(1)}pp`,
 	});
 }
 
 function scoreVenueRole(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { venueRole: weights } = config;
 	let points = 0;
@@ -365,10 +328,7 @@ function scoreVenueRole(
 	if (features.favDogRole === "favorite") {
 		points += weights.favoriteBonus;
 		labels.push("favorite");
-	} else if (
-		features.venueRole === "away" &&
-		features.favDogRole === "dog"
-	) {
+	} else if (features.venueRole === "away" && features.favDogRole === "dog") {
 		points += weights.awayDogPenalty;
 		labels.push("away dog");
 	}
@@ -381,34 +341,33 @@ function scoreVenueRole(
 	);
 
 	factors.push({
+		name: "venue_role",
 		label: `Venue/role: ${labels.join(", ")}`,
-		category: "venue_role",
 		points,
-		rawValue: `${features.venueRole ?? "?"}_${features.favDogRole ?? "?"}`,
+		detail: `${features.venueRole ?? "?"} / ${features.favDogRole ?? "?"}`,
 	});
 }
 
 function scoreOuTrend(
 	features: PrePickFeatures,
 	config: ScoringConfig,
-	factors: ScoreFactor[],
+	factors: ScoringFactor[],
 ): void {
 	const { ouTrend } = config;
 	const ouOverPct = features.team.ouOverPct;
 
 	if (ouOverPct == null || features.betType !== "total") return;
 
-	// For totals bets, strong directional OU trend is a signal
 	if (ouOverPct >= ouTrend.overHotThreshold) {
 		const points = Math.min(
 			ouTrend.strongAlignmentBonus,
 			ouTrend.maxContribution,
 		);
 		factors.push({
+			name: "ou_trend",
 			label: `Strong over trend (${(ouOverPct * 100).toFixed(0)}%)`,
-			category: "ou_trend",
 			points,
-			rawValue: ouOverPct,
+			detail: `Over pct: ${(ouOverPct * 100).toFixed(1)}%`,
 		});
 	} else if (ouOverPct <= ouTrend.underHotThreshold) {
 		const points = Math.min(
@@ -416,29 +375,29 @@ function scoreOuTrend(
 			ouTrend.maxContribution,
 		);
 		factors.push({
+			name: "ou_trend",
 			label: `Strong under trend (${((1 - ouOverPct) * 100).toFixed(0)}%)`,
-			category: "ou_trend",
 			points,
-			rawValue: ouOverPct,
+			detail: `Over pct: ${(ouOverPct * 100).toFixed(1)}% (under-leaning)`,
 		});
 	}
 }
 
 function checkConflictingSignals(
-	factors: ScoreFactor[],
-	warnings: ScoreWarning[],
+	factors: ScoringFactor[],
+	warnings: string[],
 ): void {
 	const positive = factors.filter((f) => f.points > 0);
 	const negative = factors.filter((f) => f.points < 0);
 
-	// Flag if there are strong signals in both directions
 	const maxPositive = Math.max(0, ...positive.map((f) => f.points));
 	const maxNegative = Math.min(0, ...negative.map((f) => f.points));
 
 	if (maxPositive >= 10 && maxNegative <= -6) {
-		warnings.push({
-			type: "conflicting_signals",
-			message: `Strong positive signal (${positive[0]?.label}) conflicts with negative signal (${negative[0]?.label}). Exercise caution.`,
-		});
+		const topPos = positive.sort((a, b) => b.points - a.points)[0];
+		const topNeg = negative.sort((a, b) => a.points - b.points)[0];
+		warnings.push(
+			`Conflicting signals: ${topPos?.label} vs ${topNeg?.label}. Exercise caution.`,
+		);
 	}
 }
