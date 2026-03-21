@@ -1,7 +1,8 @@
 # Phase 2 Schema Design — Canonical Team/Game/Trend Entities
 
 > Design rationale for the canonical data model introduced in Phase 2.
-> Migration: `migrations/0012_add_canonical_entities.sql`
+> Schema migration: `migrations/0012_add_canonical_entities.sql`
+> Constraint migration: `migrations/0013_add_snapshot_type_checks.sql`
 
 ---
 
@@ -86,12 +87,12 @@ One row per sporting event. Links two teams and stores the final score.
 
 ### `game_lines`
 
-Pregame and closing line snapshots for a game. Multiple rows per game are expected (opening, closing, possibly intermediate).
+Pregame and closing line snapshots for a game. Two rows per game are expected: `'open'` and `'close'`. Values are constrained by a validation trigger (migration 0013).
 
 | Column | Purpose |
 |--------|---------|
 | `source` | Line source identifier — defaults to `'consensus'`; could also be `'polymarket'`, `'pinnacle'`, etc. |
-| `snapshot_type` | `'opening'` or `'closing'` — determines which snapshot is used for grading |
+| `snapshot_type` | `'open'` or `'close'` — determines which snapshot is used for grading (constrained by trigger in migration 0013) |
 | `home_spread` / `away_spread` | Spread from each team's perspective; `away_spread = -home_spread` |
 | `total_line` | Over/under line |
 | `home_moneyline` / `away_moneyline` | Moneyline prices (implied probability 0–1 scale matching Polymarket convention) |
@@ -130,7 +131,7 @@ Precomputed rolling windows that answer questions like "Michigan last 10 as home
 |--------|---------|
 | `as_of_game_id` | Which game this snapshot was computed after — enables point-in-time lookups |
 | `as_of_time` | Unix timestamp for ordering and time-based joins |
-| `snapshot_type` | Composite key identifying the filter combination: `'overall'`, `'home'`, `'away'`, `'favorite'`, `'dog'`, `'home_favorite'`, `'home_dog'`, `'away_favorite'`, `'away_dog'` |
+| `snapshot_type` | Composite key identifying the filter combination — constrained to `TrendSnapshotType` values by trigger (migration 0013): `'overall'`, `'home'`, `'away'`, `'favorite'`, `'dog'`, `'home_favorite'`, `'home_dog'`, `'away_favorite'`, `'away_dog'` |
 | `window_size` | Number of games in the rolling window (default 10) |
 | `su_*` / `ats_*` / `ou_*` | Precomputed record counts and win percentages |
 | `*_streak_*` | Current streak type and length per grading-rules.md §6 |
@@ -163,7 +164,7 @@ Each index is justified by a specific query pattern from the swarm goal:
 | `idx_games_sport_season` | List games for a sport/season combination |
 | `idx_games_game_time` | Time-ordered game listing across all sports |
 | `idx_games_home_team` / `idx_games_away_team` | "All games for team X" (union of home + away) |
-| `idx_game_lines_game_snapshot` (UNIQUE) | Fetch opening/closing lines for a game; supports `ON CONFLICT(game_id, snapshot_type)` upsert |
+| `idx_game_lines_game_snapshot` (UNIQUE) | Fetch open/close lines for a game; supports `ON CONFLICT(game_id, snapshot_type)` upsert |
 | `idx_tgf_team` | "Team X last 10 games" — the most common query |
 | `idx_tgf_team_venue` | "Team X last 10 as home/away" |
 | `idx_tgf_team_favdog` | "Team X last 10 as favorite/dog" |
@@ -231,7 +232,7 @@ These denormalized fields on `manual_picks` serve as query-time convenience colu
 
 2. **Game ingestion** — Populate `games` from Polymarket event data, grouping related markets by game. Add final scores from resolution data or an external API.
 
-3. **Line ingestion** — Populate `game_lines` with opening/closing lines from an odds feed or by deriving from `sharp_money_history` market prices.
+3. **Line ingestion** — Populate `game_lines` with open/close lines from an odds feed or by deriving from `sharp_money_history` market prices.
 
 4. **Fact computation** — After games finalize, compute `team_game_facts` rows for each team. Derive `su_result`, `ats_result`, `ou_result`, `fav_dog_role` from game data + lines.
 
