@@ -348,8 +348,10 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 				homeSpread = lines.homeSpread;
 			}
 
-			// 6. Derive fav_dog_role
+			// 6. Get facts (fav_dog_role, venue_role, actual_margin, actual_total)
 			let favDogRole: FavDogRole | null = null;
+			let actualMargin: number | null = null;
+			let actualTotal: number | null = null;
 			if (gameId && teamId) {
 				const facts = await getFactValues(db, gameId, teamId);
 				if (facts.favDogRole) {
@@ -359,18 +361,11 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 					venueRole = facts.venueRole;
 					isHomeTeam = venueRole === "home";
 				}
+				actualMargin = facts.actualMargin;
+				actualTotal = facts.actualTotal;
 			}
 			if (!favDogRole && homeSpread !== null) {
 				favDogRole = deriveFavDogRole(homeSpread, isHomeTeam);
-			}
-
-			// 7. Get actual_margin / actual_total from facts
-			let actualMargin: number | null = null;
-			let actualTotal: number | null = null;
-			if (gameId && teamId) {
-				const facts = await getFactValues(db, gameId, teamId);
-				actualMargin = facts.actualMargin;
-				actualTotal = facts.actualTotal;
 			}
 
 			// Build UPDATE SET clauses for non-null values
