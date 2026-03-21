@@ -14,6 +14,7 @@ import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DebugRouteImport } from './routes/debug'
+import { Route as CanonicalRouteImport } from './routes/canonical'
 import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SharpMarketConditionIdRouteImport } from './routes/sharp.market.$conditionId'
@@ -43,6 +44,11 @@ const DebugRoute = DebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CanonicalRoute = CanonicalRouteImport.update({
+  id: '/canonical',
+  path: '/canonical',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BotRoute = BotRouteImport.update({
   id: '/bot',
   path: '/bot',
@@ -62,6 +68,7 @@ const SharpMarketConditionIdRoute = SharpMarketConditionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/canonical': typeof CanonicalRoute
   '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
   '/runtime': typeof RuntimeRoute
@@ -95,6 +104,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/bot'
+    | '/canonical'
     | '/debug'
     | '/login'
     | '/runtime'
@@ -105,6 +115,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/bot'
+    | '/canonical'
     | '/debug'
     | '/login'
     | '/runtime'
@@ -115,6 +126,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/bot'
+    | '/canonical'
     | '/debug'
     | '/login'
     | '/runtime'
@@ -126,6 +138,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BotRoute: typeof BotRoute
+  CanonicalRoute: typeof CanonicalRoute
   DebugRoute: typeof DebugRoute
   LoginRoute: typeof LoginRoute
   RuntimeRoute: typeof RuntimeRoute
@@ -170,6 +183,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DebugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/canonical': {
+      id: '/canonical'
+      path: '/canonical'
+      fullPath: '/canonical'
+      preLoaderRoute: typeof CanonicalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/bot': {
       id: '/bot'
       path: '/bot'
@@ -207,6 +227,7 @@ const SharpRouteWithChildren = SharpRoute._addFileChildren(SharpRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BotRoute: BotRoute,
+  CanonicalRoute: CanonicalRoute,
   DebugRoute: DebugRoute,
   LoginRoute: LoginRoute,
   RuntimeRoute: RuntimeRoute,
