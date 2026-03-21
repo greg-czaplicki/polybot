@@ -1,13 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import {
 	getMatchupComparisonFn,
 	getPickContextFn,
-	getPipelineStatusFn,
 	getTeamTrendOverviewFn,
 } from "../server/api/canonical-analytics";
+import {
+	type CanonicalFreshnessStatus,
+	type SyncRunSummary,
+	getCanonicalFreshnessFn,
+	triggerCanonicalSyncFn,
+} from "../server/api/canonical-sync-api";
 
 export const Route = createFileRoute("/canonical")({
 	component: CanonicalPage,
@@ -30,72 +35,6 @@ function formatMargin(value: number | null | undefined): string {
 function formatTimestamp(ts: number | null | undefined): string {
 	if (!ts) return "—";
 	return new Date(ts * 1000).toLocaleString();
-}
-
-// ---------------------------------------------------------------------------
-// Pipeline Status Section
-// ---------------------------------------------------------------------------
-
-function PipelineStatusSection() {
-	const [status, setStatus] = useState<{
-		teams: number;
-		games: { total: number; finalized: number };
-		facts: number;
-		snapshots: number;
-		picks: { total: number; enriched: number; enrichmentRate: number | null };
-	} | null>(null);
-	const [loading, setLoading] = useState(false);
-
-	const refresh = useCallback(async () => {
-		setLoading(true);
-		try {
-			const res = await getPipelineStatusFn();
-			setStatus(res.status);
-		} finally {
-			setLoading(false);
-		}
-	}, []);
-
-	return (
-		<section>
-			<div
-				style={{
-					display: "flex",
-					alignItems: "center",
-					gap: 12,
-					marginBottom: 12,
-				}}
-			>
-				<h2 style={{ margin: 0 }}>Pipeline Status</h2>
-				<button type="button" onClick={refresh} disabled={loading}>
-					{loading ? "Loading..." : "Refresh"}
-				</button>
-			</div>
-			{status && (
-				<div
-					style={{
-						display: "grid",
-						gridTemplateColumns: "repeat(5, 1fr)",
-						gap: 12,
-					}}
-				>
-					<StatCard label="Teams" value={status.teams} />
-					<StatCard
-						label="Games"
-						value={`${status.games.finalized}/${status.games.total}`}
-						sub="finalized/total"
-					/>
-					<StatCard label="Facts" value={status.facts} />
-					<StatCard label="Snapshots" value={status.snapshots} />
-					<StatCard
-						label="Pick Enrichment"
-						value={`${status.picks.enriched}/${status.picks.total}`}
-						sub={formatPercent(status.picks.enrichmentRate)}
-					/>
-				</div>
-			)}
-		</section>
-	);
 }
 
 function StatCard({
@@ -679,6 +618,393 @@ function SnapshotCard({
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline Health Section (Phase 6)
+// ---------------------------------------------------------------------------
+
+function PipelineHealthSection() {
+	const [freshness, setFreshness] = useState<CanonicalFreshnessStatus | null>(
+		null,
+	);
+	const [loading, setLoading] = useState(false);
+	const [triggering, setTriggering] = useState(false);
+	const [triggerResult, setTriggerResult] = useState<string | null>(null);
+
+	const refresh = useCallback(async () => {
+		setLoading(true);
+		try {
+			const res = await getCanonicalFreshnessFn();
+			setFreshness(res.freshness);
+		} catch (e) {
+			console.error("[canonical-health] Failed to load freshness", e);
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	const triggerSync = useCallback(
+		async (skipSeeding: boolean) => {
+			setTriggering(true);
+			setTriggerResult(null);
+			try {
+				const res = await triggerCanonicalSyncFn({
+					data: { skipSeeding },
+				});
+				if (res.success) {
+					setTriggerResult("Sync completed successfully");
+					refresh();
+				} else {
+					setTriggerResult(`Failed: ${res.error}`);
+				}
+			} catch (e) {
+				setTriggerResult(
+					`Error: ${e instanceof Error ? e.message : String(e)}`,
+				);
+			} finally {
+				setTriggering(false);
+			}
+		},
+		[refresh],
+	);
+
+	useEffect(() => {
+		refresh();
+	}, [refresh]);
+
+	return (
+		<section>
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: 12,
+					marginBottom: 12,
+				}}
+			>
+				<h2 style={{ margin: 0 }}>Pipeline Health</h2>
+				<button type="button" onClick={refresh} disabled={loading}>
+					{loading ? "Loading..." : "Refresh"}
+				</button>
+				<button
+					type="button"
+					onClick={() => triggerSync(false)}
+					disabled={triggering}
+					style={{
+						background: "#2a6",
+						color: "#fff",
+						border: "none",
+						padding: "4px 12px",
+						borderRadius: 4,
+						cursor: triggering ? "not-allowed" : "pointer",
+					}}
+				>
+					{triggering ? "Running..." : "Full Sync"}
+				</button>
+				<button
+					type="button"
+					onClick={() => triggerSync(true)}
+					disabled={triggering}
+					style={{
+						background: "#c82",
+						color: "#fff",
+						border: "none",
+						padding: "4px 12px",
+						borderRadius: 4,
+						cursor: triggering ? "not-allowed" : "pointer",
+					}}
+				>
+					Quick Sync (skip seeding)
+				</button>
+			</div>
+
+			{triggerResult && (
+				<div
+					style={{
+						padding: 8,
+						marginBottom: 12,
+						borderRadius: 4,
+						background: triggerResult.startsWith("Sync")
+							? "#1a3a1a"
+							: "#3a1a1a",
+						color: triggerResult.startsWith("Sync") ? "#4a9" : "#f55",
+						fontSize: 13,
+					}}
+				>
+					{triggerResult}
+				</div>
+			)}
+
+			{freshness && (
+				<>
+					<FreshnessIndicator staleness={freshness.staleness} />
+					<EntityCountsGrid counts={freshness.counts} />
+					{freshness.recentRuns.length > 0 && (
+						<RecentSyncRuns runs={freshness.recentRuns} />
+					)}
+				</>
+			)}
+		</section>
+	);
+}
+
+function FreshnessIndicator({
+	staleness,
+}: {
+	staleness: CanonicalFreshnessStatus["staleness"];
+}) {
+	const color = staleness.isStale ? "#f55" : "#4a9";
+	const label = staleness.isStale ? "STALE" : "FRESH";
+
+	return (
+		<div
+			style={{
+				display: "flex",
+				alignItems: "center",
+				gap: 12,
+				padding: "8px 12px",
+				marginBottom: 12,
+				border: `1px solid ${color}33`,
+				borderRadius: 6,
+				background: `${color}11`,
+			}}
+		>
+			<div
+				style={{
+					width: 10,
+					height: 10,
+					borderRadius: "50%",
+					background: color,
+				}}
+			/>
+			<span style={{ fontWeight: 600, color }}>{label}</span>
+			<span style={{ color: "#888", fontSize: 13 }}>
+				{staleness.lastSuccessAt
+					? `Last success: ${formatRelativeTimestamp(staleness.lastSuccessAt)} (${staleness.minutesSinceLastSuccess}m ago)`
+					: "No successful sync recorded"}
+			</span>
+			<span style={{ color: "#555", fontSize: 12, marginLeft: "auto" }}>
+				Threshold: {staleness.staleThresholdMinutes}m
+			</span>
+		</div>
+	);
+}
+
+function EntityCountsGrid({
+	counts,
+}: {
+	counts: CanonicalFreshnessStatus["counts"];
+}) {
+	return (
+		<div
+			style={{
+				display: "grid",
+				gridTemplateColumns: "repeat(6, 1fr)",
+				gap: 10,
+				marginBottom: 16,
+			}}
+		>
+			<StatCard label="Teams" value={counts.teams} />
+			<StatCard
+				label="Games"
+				value={`${counts.games.finalized}/${counts.games.total}`}
+				sub="finalized/total"
+			/>
+			<StatCard label="Facts" value={counts.facts} />
+			<StatCard label="Snapshots" value={counts.snapshots} />
+			<StatCard
+				label="Pick Enrichment"
+				value={`${counts.picks.enriched}/${counts.picks.total}`}
+				sub={formatPercent(counts.picks.enrichmentRate)}
+			/>
+			<StatCard
+				label="Unprocessed"
+				value={counts.unprocessedGames}
+				sub={
+					counts.unprocessedGames > 0
+						? "games need processing"
+						: "all caught up"
+				}
+			/>
+		</div>
+	);
+}
+
+function RecentSyncRuns({ runs }: { runs: SyncRunSummary[] }) {
+	const [expanded, setExpanded] = useState<string | null>(null);
+
+	return (
+		<div>
+			<h3 style={{ fontSize: 14, marginBottom: 8, color: "#aaa" }}>
+				Recent Sync Runs
+			</h3>
+			<table
+				style={{
+					width: "100%",
+					borderCollapse: "collapse",
+					fontSize: 13,
+				}}
+			>
+				<thead>
+					<tr style={{ borderBottom: "2px solid #444" }}>
+						<th style={thStyle}>Status</th>
+						<th style={thStyle}>Started</th>
+						<th style={thStyle}>Duration</th>
+						<th style={thStyle}>Processed</th>
+						<th style={thStyle}>Details</th>
+					</tr>
+				</thead>
+				<tbody>
+					{runs.map((run) => (
+						<SyncRunRow
+							key={run.id}
+							run={run}
+							isExpanded={expanded === run.id}
+							onToggle={() =>
+								setExpanded(expanded === run.id ? null : run.id)
+							}
+						/>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+function SyncRunRow({
+	run,
+	isExpanded,
+	onToggle,
+}: {
+	run: SyncRunSummary;
+	isExpanded: boolean;
+	onToggle: () => void;
+}) {
+	const statusColor =
+		run.status === "success"
+			? "#4a9"
+			: run.status === "failed"
+				? "#f55"
+				: "#fa0";
+
+	return (
+		<>
+			<tr
+				style={{
+					borderBottom: "1px solid #333",
+					cursor: run.steps.length > 0 ? "pointer" : "default",
+				}}
+				onClick={run.steps.length > 0 ? onToggle : undefined}
+			>
+				<td style={tdStyle}>
+					<span
+						style={{
+							color: statusColor,
+							fontWeight: 500,
+						}}
+					>
+						{run.status.toUpperCase()}
+					</span>
+				</td>
+				<td style={tdStyle}>
+					{formatRelativeTimestamp(run.startedAt)}
+				</td>
+				<td style={tdStyle}>
+					{`${(run.durationMs / 1000).toFixed(1)}s`}
+				</td>
+				<td style={tdStyle}>
+					{run.gamesProcessed}g / {run.factsComputed}f / {run.picksBackfilled}p
+				</td>
+				<td style={tdStyle}>
+					{run.steps.length > 0
+						? `${run.steps.length} steps ${isExpanded ? "▼" : "▶"}`
+						: "—"}
+					{run.errorSummary && (
+						<span style={{ color: "#f55", marginLeft: 8 }}>
+							{run.errorSummary}
+						</span>
+					)}
+				</td>
+			</tr>
+			{isExpanded && run.steps.length > 0 && (
+				<tr>
+					<td colSpan={5} style={{ padding: "8px 16px" }}>
+						<SyncStepDetails steps={run.steps} />
+					</td>
+				</tr>
+			)}
+		</>
+	);
+}
+
+function SyncStepDetails({
+	steps,
+}: { steps: SyncRunSummary["steps"] }) {
+	return (
+		<div
+			style={{
+				display: "grid",
+				gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+				gap: 8,
+			}}
+		>
+			{steps.map((step) => {
+				const color =
+					step.status === "success"
+						? "#4a9"
+						: step.status === "error"
+							? "#f55"
+							: "#888";
+				return (
+					<div
+						key={step.step}
+						style={{
+							padding: 8,
+							border: `1px solid ${color}33`,
+							borderRadius: 4,
+							fontSize: 12,
+						}}
+					>
+						<div
+							style={{
+								fontWeight: 500,
+								color,
+								marginBottom: 4,
+							}}
+						>
+							{step.step}
+						</div>
+						{step.counts && (
+							<div style={{ color: "#ccc" }}>
+								{Object.entries(step.counts).map(([k, v]) => (
+									<div key={k}>{k}: {v}</div>
+								))}
+							</div>
+						)}
+						<div style={{ color: "#888" }}>
+							{(step.durationMs / 1000).toFixed(1)}s
+						</div>
+						{step.error && (
+							<div style={{ color: "#f55", fontSize: 11 }}>
+								{step.error}
+							</div>
+						)}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+function formatRelativeTimestamp(ts: number): string {
+	const diffMs = Date.now() - ts;
+	const diffMin = Math.floor(diffMs / 60000);
+	if (diffMin < 1) return "Just now";
+	if (diffMin < 60) return `${diffMin}m ago`;
+	const diffHours = Math.floor(diffMin / 60);
+	if (diffHours < 24) return `${diffHours}h ago`;
+	return `${Math.floor(diffHours / 24)}d ago`;
+}
+
+// ---------------------------------------------------------------------------
 // Shared styles
 // ---------------------------------------------------------------------------
 
@@ -712,7 +1038,7 @@ function CanonicalPage() {
 					Team trends, matchup comparisons, and pick enrichment inspection.
 				</p>
 
-				<PipelineStatusSection />
+				<PipelineHealthSection />
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
 				<TeamTrendSection />
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />

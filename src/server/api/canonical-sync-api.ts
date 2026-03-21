@@ -3,44 +3,35 @@
  *
  * Server functions for canonical pipeline freshness, status, and manual triggers.
  * Provides the admin/operational visibility layer for the canonical sync runner.
+ *
+ * Reads from the canonical_sync_runs table persisted by the sync runner
+ * (see canonical-sync.ts).
  */
 
 import { createServerFn } from "@tanstack/react-start";
 import { all, first } from "../db/client";
 import { getDb } from "../env";
+import type {
+	CanonicalSyncResult,
+	CanonicalSyncRun,
+	CanonicalSyncStepResult,
+} from "../pipeline/canonical-sync";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types (API-facing shapes for the UI layer)
 // ---------------------------------------------------------------------------
-
-export interface CanonicalSyncRunRow {
-	id: number;
-	started_at: string;
-	finished_at: string | null;
-	status: "running" | "success" | "error";
-	trigger_source: string;
-	steps_json: string | null;
-	error_message: string | null;
-}
 
 export interface SyncRunSummary {
-	id: number;
-	startedAt: string;
-	finishedAt: string | null;
-	status: "running" | "success" | "error";
-	triggerSource: string;
-	durationMs: number | null;
-	steps: SyncStepSummary[] | null;
-	errorMessage: string | null;
-}
-
-export interface SyncStepSummary {
-	step: string;
-	status: "success" | "skipped" | "error";
-	count?: number;
-	errors?: number;
-	detail?: string;
-	durationMs?: number;
+	id: string;
+	startedAt: number;
+	completedAt: number;
+	durationMs: number;
+	status: "success" | "partial" | "failed";
+	gamesProcessed: number;
+	factsComputed: number;
+	picksBackfilled: number;
+	steps: CanonicalSyncStepResult[];
+	errorSummary: string | null;
 }
 
 export interface CanonicalFreshnessStatus {
@@ -48,7 +39,7 @@ export interface CanonicalFreshnessStatus {
 	recentRuns: SyncRunSummary[];
 	staleness: {
 		isStale: boolean;
-		lastSuccessAt: string | null;
+		lastSuccessAt: number | null;
 		minutesSinceLastSuccess: number | null;
 		staleThresholdMinutes: number;
 	};
@@ -66,34 +57,27 @@ export interface CanonicalFreshnessStatus {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const STALE_THRESHOLD_MINUTES = 30;
+const STALE_THRESHOLD_MINUTES = 360; // 6 hours, matching canonical-sync.ts
 
-function rowToSummary(row: CanonicalSyncRunRow): SyncRunSummary {
-	let durationMs: number | null = null;
-	if (row.finished_at && row.started_at) {
-		durationMs =
-			new Date(row.finished_at).getTime() -
-			new Date(row.started_at).getTime();
-	}
-
-	let steps: SyncStepSummary[] | null = null;
-	if (row.steps_json) {
-		try {
-			steps = JSON.parse(row.steps_json);
-		} catch {
-			// ignore malformed JSON
-		}
+function syncRunToSummary(run: CanonicalSyncRun): SyncRunSummary {
+	let steps: CanonicalSyncStepResult[] = [];
+	try {
+		steps = JSON.parse(run.stepsJson);
+	} catch {
+		// ignore malformed JSON
 	}
 
 	return {
-		id: row.id,
-		startedAt: row.started_at,
-		finishedAt: row.finished_at,
-		status: row.status,
-		triggerSource: row.trigger_source,
-		durationMs,
+		id: run.id,
+		startedAt: run.startedAt,
+		completedAt: run.completedAt,
+		durationMs: run.durationMs,
+		status: run.status,
+		gamesProcessed: run.gamesProcessed,
+		factsComputed: run.factsComputed,
+		picksBackfilled: run.picksBackfilled,
 		steps,
-		errorMessage: row.error_message,
+		errorSummary: run.errorSummary,
 	};
 }
 
@@ -110,45 +94,29 @@ export const getCanonicalFreshnessFn = createServerFn({
 }).handler(async ({ context }) => {
 	const db = getDb(context);
 
-	// Fetch recent sync runs and entity counts in parallel
-	const [recentRunRows, lastSuccessRow, counts] = await Promise.all([
-		all<CanonicalSyncRunRow>(
-			db,
-			`SELECT id, started_at, finished_at, status, trigger_source, steps_json, error_message
-			 FROM canonical_sync_runs
-			 ORDER BY started_at DESC
-			 LIMIT 10`,
-		).catch(() => [] as CanonicalSyncRunRow[]),
-
-		first<CanonicalSyncRunRow>(
-			db,
-			`SELECT id, started_at, finished_at, status, trigger_source, steps_json, error_message
-			 FROM canonical_sync_runs
-			 WHERE status = 'success'
-			 ORDER BY finished_at DESC
-			 LIMIT 1`,
-		).catch(() => null),
-
+	const [recentRuns, counts] = await Promise.all([
+		getRecentRunsFromDb(db),
 		getEntityCounts(db),
 	]);
 
-	const recentRuns = recentRunRows.map(rowToSummary);
-	const lastRun = recentRuns.length > 0 ? recentRuns[0] : null;
+	const summaries = recentRuns.map(syncRunToSummary);
+	const lastRun = summaries.length > 0 ? summaries[0] : null;
 
-	// Compute staleness
-	const lastSuccessAt = lastSuccessRow?.finished_at ?? null;
+	// Find last successful run
+	const lastSuccess = summaries.find((r) => r.status === "success");
+	const lastSuccessAt = lastSuccess?.completedAt ?? null;
 	let minutesSinceLastSuccess: number | null = null;
 	let isStale = true;
 
 	if (lastSuccessAt) {
-		const diffMs = Date.now() - new Date(lastSuccessAt).getTime();
+		const diffMs = Date.now() - lastSuccessAt;
 		minutesSinceLastSuccess = Math.round(diffMs / 60000);
 		isStale = minutesSinceLastSuccess > STALE_THRESHOLD_MINUTES;
 	}
 
 	const freshness: CanonicalFreshnessStatus = {
 		lastRun,
-		recentRuns,
+		recentRuns: summaries,
 		staleness: {
 			isStale,
 			lastSuccessAt,
@@ -160,6 +128,46 @@ export const getCanonicalFreshnessFn = createServerFn({
 
 	return { freshness };
 });
+
+async function getRecentRunsFromDb(db: D1Database): Promise<CanonicalSyncRun[]> {
+	try {
+		const rows = await all<{
+			id: string;
+			started_at: number;
+			completed_at: number;
+			duration_ms: number;
+			status: string;
+			steps_json: string;
+			games_processed: number;
+			facts_computed: number;
+			picks_backfilled: number;
+			error_summary: string | null;
+		}>(
+			db,
+			`SELECT id, started_at, completed_at, duration_ms, status, steps_json,
+			        games_processed, facts_computed, picks_backfilled, error_summary
+			 FROM canonical_sync_runs
+			 ORDER BY started_at DESC
+			 LIMIT 10`,
+		);
+
+		return rows.map((row) => ({
+			id: row.id,
+			startedAt: row.started_at,
+			completedAt: row.completed_at,
+			durationMs: row.duration_ms,
+			status: row.status as CanonicalSyncRun["status"],
+			stepsJson: row.steps_json,
+			gamesProcessed: row.games_processed,
+			factsComputed: row.facts_computed,
+			picksBackfilled: row.picks_backfilled,
+			errorSummary: row.error_summary,
+		}));
+	} catch {
+		// Table may not exist yet (migration not run)
+		return [];
+	}
+}
 
 async function getEntityCounts(db: D1Database) {
 	const [teams, games, facts, snapshots, picksTotal, picksEnriched, unprocessed] =
@@ -219,34 +227,34 @@ async function getEntityCounts(db: D1Database) {
 
 /**
  * Trigger a manual canonical sync cycle.
- * Calls the canonical sync runner directly via the server function context.
+ * Calls the canonical sync runner directly and persists the result.
  *
- * Input: { force?: boolean }
+ * Input: { skipSeeding?: boolean }
  */
 export const triggerCanonicalSyncFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as { force?: boolean };
+})
+	.inputValidator((d: { skipSeeding?: boolean }) => d)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
 
-	try {
-		// Import dynamically to avoid circular deps and allow T1 to land independently
-		const { runCanonicalSync } = await import(
-			"../pipeline/canonical-sync"
-		);
-		const result = await runCanonicalSync(db, {
-			source: "admin-ui",
-			force: payload.force ?? false,
-		});
-		return { success: true, result };
-	} catch (error) {
-		return {
-			success: false,
-			error: `Sync trigger failed: ${error instanceof Error ? error.message : String(error)}`,
-			result: null,
-		};
-	}
-});
+		try {
+			const { runCanonicalSync, persistSyncRun } = await import(
+				"../pipeline/canonical-sync"
+			);
+			const result: CanonicalSyncResult = await runCanonicalSync(db, {
+				skipSeeding: data.skipSeeding,
+			});
+			await persistSyncRun(db, result);
+			return { success: true as const, result };
+		} catch (error) {
+			return {
+				success: false as const,
+				error: `Sync trigger failed: ${error instanceof Error ? error.message : String(error)}`,
+				result: null,
+			};
+		}
+	});
 
 // ---------------------------------------------------------------------------
 // Recent Sync Runs
@@ -259,19 +267,19 @@ export const triggerCanonicalSyncFn = createServerFn({
  */
 export const getCanonicalSyncRunsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as { limit?: number };
-	const limit = Math.min(payload.limit ?? 20, 50);
+})
+	.inputValidator((d: { limit?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const limit = Math.min(data.limit ?? 20, 50);
 
-	const rows = await all<CanonicalSyncRunRow>(
-		db,
-		`SELECT id, started_at, finished_at, status, trigger_source, steps_json, error_message
-		 FROM canonical_sync_runs
-		 ORDER BY started_at DESC
-		 LIMIT ?`,
-		limit,
-	).catch(() => [] as CanonicalSyncRunRow[]);
-
-	return { runs: rows.map(rowToSummary) };
-});
+		try {
+			const { getRecentSyncRuns } = await import(
+				"../pipeline/canonical-sync"
+			);
+			const runs = await getRecentSyncRuns(db, limit);
+			return { runs: runs.map(syncRunToSummary) };
+		} catch {
+			return { runs: [] as SyncRunSummary[] };
+		}
+	});
