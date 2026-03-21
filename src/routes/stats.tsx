@@ -2,6 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { MatchupCard } from "@/components/canonical/matchup-card";
+import { PickContextPanel } from "@/components/canonical/pick-context-panel";
+import { TeamTrendCard } from "@/components/canonical/team-trend-card";
 import {
 	clearManualPicksFn,
 	listManualPicksFn,
@@ -59,7 +62,7 @@ function StatsPage() {
 		if (!confirm("Clear all picks? This cannot be undone.")) return;
 		setIsClearing(true);
 		try {
-			await clearManualPicksFn({ data: {} });
+			await clearManualPicksFn();
 			setSettledPicks([]);
 		} catch (error) {
 			console.error("Failed to clear picks:", error);
@@ -119,8 +122,12 @@ function StatsPage() {
 			};
 		}
 		const wins = filteredPicks.filter((pick) => pick.status === "win").length;
-		const losses = filteredPicks.filter((pick) => pick.status === "loss").length;
-		const pushes = filteredPicks.filter((pick) => pick.status === "push").length;
+		const losses = filteredPicks.filter(
+			(pick) => pick.status === "loss",
+		).length;
+		const pushes = filteredPicks.filter(
+			(pick) => pick.status === "push",
+		).length;
 		const pending = filteredPicks.filter(
 			(pick) => pick.status === "pending",
 		).length;
@@ -176,9 +183,7 @@ function StatsPage() {
 							<span className="text-emerald-300">{stats.wins} W</span>
 							<span className="text-red-300">{stats.losses} L</span>
 							<span className="text-slate-300">{stats.pushes} P</span>
-							<span className="text-slate-400">
-								{stats.pending} pending
-							</span>
+							<span className="text-slate-400">{stats.pending} pending</span>
 							<span>Win% {stats.winRate}</span>
 						</div>
 					</div>
@@ -212,61 +217,64 @@ function StatsPage() {
 							<div className="text-sm text-slate-400">Loading...</div>
 						)}
 						{!isLoading && filteredPicks.length === 0 && (
-							<div className="text-sm text-slate-400">
-								No picks yet.
-							</div>
+							<div className="text-sm text-slate-400">No picks yet.</div>
 						)}
 						<div className="space-y-2">
 							{filteredPicks.map((pick) => (
 								<div
 									key={pick.id}
-									className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2"
+									className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2"
 								>
-									<div className="min-w-0">
-										<div className="truncate text-sm font-semibold text-slate-100">
-											{pick.marketTitle}
+									<div className="flex flex-wrap items-center justify-between gap-3">
+										<div className="min-w-0">
+											<div className="truncate text-sm font-semibold text-slate-100">
+												{pick.marketTitle}
+											</div>
+											<div className="text-[0.65rem] text-slate-400">
+												{pick.grade ?? "—"} ·{" "}
+												{pick.signalScore?.toFixed(1) ?? "—"} ·{" "}
+												{formatRelativeTime(pick.pickedAt)}
+											</div>
 										</div>
-										<div className="text-[0.65rem] text-slate-400">
-											{pick.grade ?? "—"} · {pick.signalScore?.toFixed(1) ?? "—"} · {formatRelativeTime(pick.pickedAt)}
-										</div>
-									</div>
-									<div className="flex items-center gap-2">
-										{pick.settledAt && (
-											<span className="text-[0.65rem] text-slate-500">
-												Settled {formatRelativeTime(pick.settledAt)}
-											</span>
-										)}
-										<span
-											className={`rounded border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${
-												pick.status === "win"
-													? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
-													: pick.status === "loss"
-														? "border-red-500/40 bg-red-500/15 text-red-200"
-														: "border-slate-500/40 bg-slate-700/30 text-slate-200"
-											}`}
-										>
-											{pick.status}
-										</span>
-										<div className="flex items-center gap-1">
-											{(["win", "loss", "push", "pending"] as const).map(
-												(status) => (
-													<button
-														key={status}
-														type="button"
-														onClick={() =>
-															handleUpdateStatus(pick.id, status)
-														}
-														disabled={updatingId === pick.id}
-														className={`rounded border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide transition-colors ${
-															pick.status === status
-																? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
-																: "border-slate-700/60 bg-slate-900/60 text-slate-300 hover:bg-slate-800/60"
-														}`}
-													>
-														{status}
-													</button>
-												),
+										<div className="flex items-center gap-2">
+											{pick.settledAt && (
+												<span className="text-[0.65rem] text-slate-500">
+													Settled {formatRelativeTime(pick.settledAt)}
+												</span>
 											)}
+											<span
+												className={`rounded border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${
+													pick.status === "win"
+														? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+														: pick.status === "loss"
+															? "border-red-500/40 bg-red-500/15 text-red-200"
+															: "border-slate-500/40 bg-slate-700/30 text-slate-200"
+												}`}
+											>
+												{pick.status}
+											</span>
+											<PickContextPanel pickId={pick.id} />
+											<div className="flex items-center gap-1">
+												{(["win", "loss", "push", "pending"] as const).map(
+													(status) => (
+														<button
+															key={status}
+															type="button"
+															onClick={() =>
+																handleUpdateStatus(pick.id, status)
+															}
+															disabled={updatingId === pick.id}
+															className={`rounded border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide transition-colors ${
+																pick.status === status
+																	? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+																	: "border-slate-700/60 bg-slate-900/60 text-slate-300 hover:bg-slate-800/60"
+															}`}
+														>
+															{status}
+														</button>
+													),
+												)}
+											</div>
 										</div>
 									</div>
 								</div>
@@ -301,6 +309,12 @@ function StatsPage() {
 								</div>
 							))}
 						</div>
+					</div>
+
+					{/* Canonical Analytics Section */}
+					<div className="mt-6 grid gap-6 lg:grid-cols-2">
+						<TeamTrendCard />
+						<MatchupCard />
 					</div>
 				</div>
 			</div>
