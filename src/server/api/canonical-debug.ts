@@ -6,6 +6,9 @@
  * - Look up trend snapshots as-of a point in time
  * - Verify SU/ATS/OU grading for sample games
  * - Process games through the canonical pipeline
+ * - Seed canonical teams (admin/validation)
+ * - Ingest games and lines from market data (admin/validation)
+ * - Run manual pick backfill (admin/validation)
  *
  * These endpoints prove the pipeline works end-to-end.
  * Not intended for production dashboard use.
@@ -14,6 +17,22 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getDb } from "../env";
 import { processGame, processGames } from "../pipeline/canonical-pipeline";
+import {
+	type MarketGameInput,
+	batchIngestGames,
+	ingestGameFromMarketData,
+} from "../pipeline/game-ingestion";
+import {
+	type MarketLineInput,
+	batchIngestLines,
+	ingestLineFromMarket,
+} from "../pipeline/line-ingestion";
+import { backfillManualPicks } from "../pipeline/pick-backfill";
+import {
+	type SeedResult,
+	seedAllTeams,
+	seedTeamsForSport,
+} from "../pipeline/team-seeder";
 import { getGameLines } from "../repositories/game-lines";
 import { getGameById } from "../repositories/games";
 import {
@@ -352,6 +371,159 @@ export const processGamesFn = createServerFn({ method: "POST" }).handler(
 
 		const db = getDb(context);
 		const result = await processGames(db, payload.gameIds);
+
+		return { result };
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Admin/Validation: Team seeding
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed all teams for a specific sport (or all sports).
+ * Admin-only — upserts canonical team records from built-in seed data.
+ *
+ * Input: { sportTag?: string }
+ * If sportTag is omitted, seeds all sports.
+ */
+export const seedTeamsFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as { sportTag?: string };
+		const db = getDb(context);
+
+		let results: SeedResult[];
+		if (payload.sportTag) {
+			const result = await seedTeamsForSport(db, payload.sportTag);
+			results = [result];
+		} else {
+			results = await seedAllTeams(db);
+		}
+
+		const totalSeeded = results.reduce((sum, r) => sum + r.seeded, 0);
+		return { results, totalSeeded };
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Admin/Validation: Game ingestion
+// ---------------------------------------------------------------------------
+
+/**
+ * Ingest a single game from market data.
+ * Admin-only — creates/matches a canonical game and persists final scores.
+ *
+ * Input: MarketGameInput
+ */
+export const ingestGameFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as MarketGameInput;
+
+		if (!payload.marketTitle || !payload.sportTag || !payload.eventTime) {
+			return {
+				result: null,
+				error: "marketTitle, sportTag, and eventTime are required",
+			};
+		}
+
+		const db = getDb(context);
+		const result = await ingestGameFromMarketData(db, payload);
+
+		if (!result) {
+			return {
+				result: null,
+				error: "Could not resolve teams from market title",
+			};
+		}
+
+		return { result };
+	},
+);
+
+/**
+ * Batch ingest games from market data.
+ * Admin-only — creates/matches canonical games in bulk.
+ *
+ * Input: { games: MarketGameInput[] }
+ */
+export const batchIngestGamesFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as { games: MarketGameInput[] };
+
+		if (!payload.games || payload.games.length === 0) {
+			return { result: null, error: "games array is required" };
+		}
+
+		const db = getDb(context);
+		const result = await batchIngestGames(db, payload.games);
+
+		return { result };
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Admin/Validation: Line ingestion
+// ---------------------------------------------------------------------------
+
+/**
+ * Ingest a single line from market data.
+ * Admin-only — creates a game_line record.
+ *
+ * Input: MarketLineInput
+ */
+export const ingestLineFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as MarketLineInput;
+
+		if (!payload.gameId || !payload.marketTitle || !payload.snapshotType) {
+			return {
+				result: null,
+				error: "gameId, marketTitle, and snapshotType are required",
+			};
+		}
+
+		const db = getDb(context);
+		const result = await ingestLineFromMarket(db, payload);
+
+		return { result };
+	},
+);
+
+/**
+ * Batch ingest lines from market data.
+ * Admin-only — creates game_line records in bulk.
+ *
+ * Input: { lines: MarketLineInput[] }
+ */
+export const batchIngestLinesFn = createServerFn({ method: "POST" }).handler(
+	async ({ context, data }) => {
+		const payload = (data ?? {}) as { lines: MarketLineInput[] };
+
+		if (!payload.lines || payload.lines.length === 0) {
+			return { result: null, error: "lines array is required" };
+		}
+
+		const db = getDb(context);
+		const result = await batchIngestLines(db, payload.lines);
+
+		return { result };
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Admin/Validation: Manual pick backfill
+// ---------------------------------------------------------------------------
+
+/**
+ * Run manual pick backfill — links picks to canonical teams/games.
+ * Admin-only — scans unlinked picks and attempts team/game resolution.
+ *
+ * Input: {} (no parameters needed)
+ */
+export const backfillPicksFn = createServerFn({ method: "POST" }).handler(
+	async ({ context }) => {
+		const db = getDb(context);
+		const result = await backfillManualPicks(db);
 
 		return { result };
 	},
