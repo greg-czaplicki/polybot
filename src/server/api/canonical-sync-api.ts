@@ -2,14 +2,12 @@
  * Canonical Sync API — Phase 6
  *
  * Server functions for canonical pipeline freshness, status, and manual triggers.
- * Provides the admin/operational visibility layer for the canonical sync runner.
- *
- * Reads from the canonical_sync_runs table persisted by the sync runner
- * (see canonical-sync.ts).
+ * Delegates to canonical-sync.ts for sync execution and run history (DRY).
+ * Adds enhanced entity counts and staleness for the UI layer.
  */
 
 import { createServerFn } from "@tanstack/react-start";
-import { all, first } from "../db/client";
+import { first } from "../db/client";
 import { getDb } from "../env";
 import type {
 	CanonicalSyncResult,
@@ -57,8 +55,6 @@ export interface CanonicalFreshnessStatus {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const STALE_THRESHOLD_MINUTES = 360; // 6 hours, matching canonical-sync.ts
-
 function syncRunToSummary(run: CanonicalSyncRun): SyncRunSummary {
 	let steps: CanonicalSyncStepResult[] = [];
 	try {
@@ -87,41 +83,44 @@ function syncRunToSummary(run: CanonicalSyncRun): SyncRunSummary {
 
 /**
  * Get full canonical pipeline freshness status.
- * Combines sync run history with entity counts and staleness detection.
+ * Delegates run history and staleness to canonical-sync.ts,
+ * adds enhanced entity counts for the UI.
  */
 export const getCanonicalFreshnessFn = createServerFn({
 	method: "POST",
 }).handler(async ({ context }) => {
 	const db = getDb(context);
 
-	const [recentRuns, counts] = await Promise.all([
-		getRecentRunsFromDb(db),
-		getEntityCounts(db),
+	// Delegate to canonical-sync.ts for freshness and run history
+	const [coreFreshness, counts] = await Promise.all([
+		import("../pipeline/canonical-sync")
+			.then(({ getCanonicalFreshness }) => getCanonicalFreshness(db))
+			.catch(() => null),
+		getEnhancedEntityCounts(db),
 	]);
 
-	const summaries = recentRuns.map(syncRunToSummary);
+	const summaries = coreFreshness?.recentRuns.map(syncRunToSummary) ?? [];
 	const lastRun = summaries.length > 0 ? summaries[0] : null;
 
-	// Find last successful run
-	const lastSuccess = summaries.find((r) => r.status === "success");
-	const lastSuccessAt = lastSuccess?.completedAt ?? null;
+	const lastSuccessAt = coreFreshness?.lastSuccessAt ?? null;
 	let minutesSinceLastSuccess: number | null = null;
-	let isStale = true;
-
 	if (lastSuccessAt) {
-		const diffMs = Date.now() - lastSuccessAt;
-		minutesSinceLastSuccess = Math.round(diffMs / 60000);
-		isStale = minutesSinceLastSuccess > STALE_THRESHOLD_MINUTES;
+		minutesSinceLastSuccess = Math.round(
+			(Date.now() - lastSuccessAt) / 60000,
+		);
 	}
+
+	// Use staleness threshold from canonical-sync.ts (6 hours = 360 minutes)
+	const staleThresholdMinutes = 360;
 
 	const freshness: CanonicalFreshnessStatus = {
 		lastRun,
 		recentRuns: summaries,
 		staleness: {
-			isStale,
+			isStale: coreFreshness?.isStale ?? true,
 			lastSuccessAt,
 			minutesSinceLastSuccess,
-			staleThresholdMinutes: STALE_THRESHOLD_MINUTES,
+			staleThresholdMinutes,
 		},
 		counts,
 	};
@@ -129,47 +128,10 @@ export const getCanonicalFreshnessFn = createServerFn({
 	return { freshness };
 });
 
-async function getRecentRunsFromDb(db: D1Database): Promise<CanonicalSyncRun[]> {
-	try {
-		const rows = await all<{
-			id: string;
-			started_at: number;
-			completed_at: number;
-			duration_ms: number;
-			status: string;
-			steps_json: string;
-			games_processed: number;
-			facts_computed: number;
-			picks_backfilled: number;
-			error_summary: string | null;
-		}>(
-			db,
-			`SELECT id, started_at, completed_at, duration_ms, status, steps_json,
-			        games_processed, facts_computed, picks_backfilled, error_summary
-			 FROM canonical_sync_runs
-			 ORDER BY started_at DESC
-			 LIMIT 10`,
-		);
-
-		return rows.map((row) => ({
-			id: row.id,
-			startedAt: row.started_at,
-			completedAt: row.completed_at,
-			durationMs: row.duration_ms,
-			status: row.status as CanonicalSyncRun["status"],
-			stepsJson: row.steps_json,
-			gamesProcessed: row.games_processed,
-			factsComputed: row.facts_computed,
-			picksBackfilled: row.picks_backfilled,
-			errorSummary: row.error_summary,
-		}));
-	} catch {
-		// Table may not exist yet (migration not run)
-		return [];
-	}
-}
-
-async function getEntityCounts(db: D1Database) {
+/**
+ * Enhanced entity counts with game/pick breakdowns not in canonical-sync.ts.
+ */
+async function getEnhancedEntityCounts(db: D1Database) {
 	const [teams, games, facts, snapshots, picksTotal, picksEnriched, unprocessed] =
 		await Promise.all([
 			first<{ count: number }>(db, "SELECT COUNT(*) as count FROM teams"),
@@ -262,6 +224,7 @@ export const triggerCanonicalSyncFn = createServerFn({
 
 /**
  * Get recent canonical sync run history.
+ * Delegates to getRecentSyncRuns from canonical-sync.ts.
  *
  * Input: { limit?: number }
  */

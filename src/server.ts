@@ -132,10 +132,18 @@ const serverEntry = {
         }),
     )
     executionCtx.waitUntil(
-      runCanonicalSync(env.POLYWHALER_DB, { skipSeeding: true })
-        .then((result) => persistSyncRun(env.POLYWHALER_DB, result))
-        .then((id) => {
-          console.log(`[canonical-sync] Scheduled sync complete: ${id}`)
+      getCanonicalFreshness(env.POLYWHALER_DB)
+        .then((freshness) => {
+          // Cooldown: skip if last run was within 5 minutes
+          const COOLDOWN_MS = 5 * 60 * 1000
+          if (freshness.lastRunAt && Date.now() - freshness.lastRunAt < COOLDOWN_MS) {
+            return
+          }
+          return runCanonicalSync(env.POLYWHALER_DB, { skipSeeding: true })
+            .then((result) => persistSyncRun(env.POLYWHALER_DB, result))
+            .then((id) => {
+              console.log(`[canonical-sync] Scheduled sync complete: ${id}`)
+            })
         })
         .catch((error) => {
           console.error('[canonical-sync] Scheduled sync failed', error)
