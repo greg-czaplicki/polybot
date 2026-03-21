@@ -46,6 +46,17 @@ export interface ManualPickRow {
 	order_id?: string | null;
 	exchange_trade_id?: string | null;
 	execution_notes?: string | null;
+	game_id?: string | null;
+	team_id?: string | null;
+	opponent_id?: string | null;
+	bet_type?: string | null;
+	sport_tag?: string | null;
+	venue_role?: string | null;
+	fav_dog_role?: string | null;
+	spread_line?: number | null;
+	total_line?: number | null;
+	actual_margin?: number | null;
+	actual_total?: number | null;
 	status: ManualPickStatus;
 	settled_at?: number | null;
 }
@@ -86,6 +97,17 @@ export interface ManualPickEntry {
 	orderId?: string;
 	exchangeTradeId?: string;
 	executionNotes?: string;
+	gameId?: string;
+	teamId?: string;
+	opponentId?: string;
+	betType?: string;
+	sportTag?: string;
+	venueRole?: string;
+	favDogRole?: string;
+	spreadLine?: number;
+	totalLine?: number;
+	actualMargin?: number;
+	actualTotal?: number;
 	status: ManualPickStatus;
 	settledAt?: number;
 }
@@ -409,6 +431,17 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		orderId: row.order_id ?? undefined,
 		exchangeTradeId: row.exchange_trade_id ?? undefined,
 		executionNotes: row.execution_notes ?? undefined,
+		gameId: row.game_id ?? undefined,
+		teamId: row.team_id ?? undefined,
+		opponentId: row.opponent_id ?? undefined,
+		betType: row.bet_type ?? undefined,
+		sportTag: row.sport_tag ?? undefined,
+		venueRole: row.venue_role ?? undefined,
+		favDogRole: row.fav_dog_role ?? undefined,
+		spreadLine: row.spread_line ?? undefined,
+		totalLine: row.total_line ?? undefined,
+		actualMargin: row.actual_margin ?? undefined,
+		actualTotal: row.actual_total ?? undefined,
 		status: row.status,
 		settledAt: row.settled_at ?? undefined,
 	};
