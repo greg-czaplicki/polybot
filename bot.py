@@ -1185,7 +1185,6 @@ def run_loop() -> None:
 					log_event(
 						"candidate_skip_already_placed_group",
 						idx=idx,
-						marketGroupKey=market_group_key,
 						placedAt=placed_group_row.get("placedAt"),
 						placedEventTime=placed_group_row.get("eventTime"),
 						placedConditionId=placed_group_row.get("conditionId"),
