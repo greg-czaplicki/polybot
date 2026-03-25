@@ -564,9 +564,20 @@ function incrementCounter(record: Record<string, number>, key: string): void {
 	record[key] = (record[key] ?? 0) + 1;
 }
 
+const GAME_PROP_KEYWORDS = [
+	"nrfi",
+	"yrfi",
+	"btts",
+	"both teams to score",
+	"draw no bet",
+	"first goal",
+	"clean sheet",
+	"double result",
+];
+
 function getMarketTypeLabel(
 	marketTitle: string,
-): "total" | "spread" | "moneyline" | "other" {
+): "total" | "spread" | "moneyline" | "prop" | "other" {
 	const lower = marketTitle.toLowerCase();
 	const plainMatchup =
 		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
@@ -580,6 +591,7 @@ function getMarketTypeLabel(
 	if (lower.includes("spread")) return "spread";
 	if (plainMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
+	if (GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw))) return "prop";
 	return "other";
 }
 

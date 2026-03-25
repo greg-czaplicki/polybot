@@ -398,6 +398,17 @@ function formatEventTime(isoDate?: string): string | null {
 	}
 }
 
+const GAME_PROP_KEYWORDS = [
+	"nrfi",
+	"yrfi",
+	"btts",
+	"both teams to score",
+	"draw no bet",
+	"first goal",
+	"clean sheet",
+	"double result",
+];
+
 function getMarketTypeLabel(marketTitle: string): string {
 	const lower = marketTitle.toLowerCase();
 	const plainMatchup =
@@ -412,6 +423,7 @@ function getMarketTypeLabel(marketTitle: string): string {
 	if (lower.includes("spread")) return "spread";
 	if (plainMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
+	if (GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw))) return "prop";
 	return "other";
 }
 
@@ -509,7 +521,10 @@ function formatBotInspectStatus(result: BotInspectResult | null): {
 		};
 	}
 	if (result.stage === "dedup_seed" || result.wonDedup) {
-		return { message: "Bot-eligible (won dedup)", tone: "good" };
+		return {
+			message: "Bot-eligible snapshot (won dedup)",
+			tone: "good",
+		};
 	}
 	if (result.stage === "entries" || result.foundInEntries) {
 		return { message: "In bot candidate pool", tone: "good" };
@@ -2556,7 +2571,7 @@ function SharpMoneyCard({
 					includeStarted: defaults.includeStarted,
 					requireMicrostructure: defaults.requireMicrostructure,
 					marketQualityThreshold: defaults.marketQualityThreshold,
-					limit: 500,
+					limit: defaults.candidateLimit,
 				},
 			});
 			if ("error" in response && response.error) {
