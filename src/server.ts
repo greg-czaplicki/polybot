@@ -133,13 +133,18 @@ const serverEntry = {
     )
     executionCtx.waitUntil(
       getCanonicalFreshness(env.POLYWHALER_DB)
-        .then((freshness) => {
+        .then(async (freshness) => {
           // Cooldown: skip if last run was within 5 minutes
           const COOLDOWN_MS = 5 * 60 * 1000
           if (freshness.lastRunAt && Date.now() - freshness.lastRunAt < COOLDOWN_MS) {
             return
           }
-          return runCanonicalSync(env.POLYWHALER_DB, { skipSeeding: true })
+          // Seed teams if none exist yet (one-time bootstrap)
+          const teamCount = await env.POLYWHALER_DB.prepare(
+            'SELECT COUNT(*) as c FROM teams',
+          ).first<{ c: number }>()
+          const skipSeeding = (teamCount?.c ?? 0) > 0
+          return runCanonicalSync(env.POLYWHALER_DB, { skipSeeding })
             .then((result) => persistSyncRun(env.POLYWHALER_DB, result))
             .then((id) => {
               console.log(`[canonical-sync] Scheduled sync complete: ${id}`)
