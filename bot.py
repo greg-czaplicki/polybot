@@ -39,10 +39,6 @@ class BotConfig:
 	poly_usdc_token: str
 	poly_conditional_token: str
 	low_roi_threshold: float
-	require_l2_alpha: bool
-	skip_if_l2_missing: bool
-	l2_imbalance_near_mid_threshold: float
-	fallback_no_l2_stake_multiplier: float
 	stop_on_403: bool
 	poll_jitter_ratio: float
 	poll_backoff_base: float
@@ -165,14 +161,6 @@ def load_config() -> BotConfig:
 		poly_usdc_token=poly_usdc_token,
 		poly_conditional_token=poly_conditional_token,
 		low_roi_threshold=low_roi_threshold,
-		require_l2_alpha=env_flag("BOT_REQUIRE_L2_ALPHA", True),
-		skip_if_l2_missing=env_flag("BOT_SKIP_IF_L2_MISSING", False),
-		l2_imbalance_near_mid_threshold=float(
-			os.getenv("BOT_L2_IMBALANCE_NEAR_MID_THRESHOLD", "-0.10")
-		),
-		fallback_no_l2_stake_multiplier=float(
-			os.getenv("BOT_FALLBACK_NO_L2_STAKE_MULTIPLIER", "0.5")
-		),
 		stop_on_403=stop_on_403,
 		poll_jitter_ratio=poll_jitter_ratio,
 		poll_backoff_base=poll_backoff_base,
@@ -259,20 +247,6 @@ def parse_float(value: Any) -> float | None:
 		except Exception:
 			return None
 	return None
-
-
-def evaluate_l2_alpha(
-	entry: Dict[str, Any], threshold: float
-) -> tuple[bool, bool]:
-	imbalance_near_mid = parse_float(entry.get("l2ImbalanceNearMid"))
-	disagreement = entry.get("l2Disagreement")
-	has_disagreement = isinstance(disagreement, bool)
-	has_l2 = imbalance_near_mid is not None or has_disagreement
-	meets_alpha = (
-		(imbalance_near_mid is not None and imbalance_near_mid <= threshold)
-		or disagreement is True
-	)
-	return has_l2, meets_alpha
 
 
 def get_market_type_label(market_title: str) -> str:
@@ -475,10 +449,6 @@ def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str,
 			"includeStarted": "true" if config.include_started else "false",
 			"requireMicrostructure": "true" if config.require_microstructure else "false",
 			"marketQualityThreshold": str(config.market_quality_threshold),
-			"includeL2Signals": "true",
-			"requireL2Alpha": "true" if config.require_l2_alpha else "false",
-			"skipMissingL2": "true" if config.skip_if_l2_missing else "false",
-			"l2ImbalanceNearMidThreshold": str(config.l2_imbalance_near_mid_threshold),
 			"debug": "true",
 		}
 	)
@@ -506,11 +476,9 @@ def log_event(event_name: str, **fields: Any) -> None:
 
 def candidate_context(
 	candidate: Dict[str, Any],
-	l2_threshold: float = -0.10,
 ) -> Dict[str, Any]:
 	entry = candidate.get("entry") or {}
 	grade = candidate.get("grade") or {}
-	has_l2, meets_l2_alpha = evaluate_l2_alpha(entry, l2_threshold)
 	event_label = (
 		entry.get("eventTitle")
 		or entry.get("eventSlug")
@@ -529,10 +497,6 @@ def candidate_context(
 		"signalScore": grade.get("signalScore"),
 		"edgeRating": grade.get("edgeRating"),
 		"microstructureScore": grade.get("microstructureScore"),
-		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
-		"l2Disagreement": entry.get("l2Disagreement"),
-		"hasL2Signal": has_l2,
-		"meetsL2Alpha": meets_l2_alpha,
 		"warnings": grade.get("warnings"),
 	}
 
@@ -896,31 +860,11 @@ def place_bet(
 			price,
 		)
 		return False
-	has_l2_signal, meets_l2_alpha = evaluate_l2_alpha(
-		entry,
-		config.l2_imbalance_near_mid_threshold,
-	)
-	if config.require_l2_alpha and has_l2_signal and not meets_l2_alpha:
-		print(
-			"[bot] skip l2 alpha not met",
-			entry.get("marketTitle"),
-			"imbalanceNearMid",
-			entry.get("l2ImbalanceNearMid"),
-			"disagreement",
-			entry.get("l2Disagreement"),
-		)
-		return False
-	if config.require_l2_alpha and not has_l2_signal and config.skip_if_l2_missing:
-		print("[bot] skip missing L2 signal", entry.get("marketTitle"))
-		return False
-
 	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
 	kelly = kelly_fraction(prob, float(price))
 	stake = state.get("bankroll", config.paper_bankroll) * kelly * config.kelly_fraction
 	if config.fixed_stake > 0:
 		stake = config.fixed_stake
-	if config.require_l2_alpha and not has_l2_signal:
-		stake *= max(0.0, config.fallback_no_l2_stake_multiplier)
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
@@ -936,7 +880,6 @@ def place_bet(
 		"signalScore": grade.get("signalScore"),
 		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
 		"l2Disagreement": entry.get("l2Disagreement"),
-		"l2AlphaQualified": meets_l2_alpha if has_l2_signal else None,
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
@@ -1129,8 +1072,6 @@ def run_loop() -> None:
 				config.min_grade,
 				"includeStarted",
 				config.include_started,
-				"requireL2Alpha",
-				config.require_l2_alpha,
 			)
 			call_timestamps.append(time.time())
 			candidates, candidate_debug = fetch_candidates(config)
@@ -1157,14 +1098,14 @@ def run_loop() -> None:
 				log_event(
 					"candidate",
 					idx=idx,
-					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					**candidate_context(candidate),
 				)
 				if not condition_id:
 					skipped_missing_condition += 1
 					log_event(
 						"candidate_skip_missing_condition_id",
 						idx=idx,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				if condition_id in placed:
@@ -1175,7 +1116,7 @@ def run_loop() -> None:
 						idx=idx,
 						placedAt=placed_row.get("placedAt"),
 						placedEventTime=placed_row.get("eventTime"),
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				market_group_key = get_market_group_key(entry)
@@ -1188,7 +1129,7 @@ def run_loop() -> None:
 						placedAt=placed_group_row.get("placedAt"),
 						placedEventTime=placed_group_row.get("eventTime"),
 						placedConditionId=placed_group_row.get("conditionId"),
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				minutes_until_start = minutes_to_start(entry.get("eventTime"))
@@ -1197,7 +1138,7 @@ def run_loop() -> None:
 					log_event(
 						"candidate_skip_missing_event_time",
 						idx=idx,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				if (
@@ -1211,13 +1152,13 @@ def run_loop() -> None:
 						minMinutes=config.min_minutes_to_start,
 						maxMinutes=config.max_minutes_to_start,
 						minutesToStart=minutes_until_start,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				log_event(
 					"candidate_considering",
 					idx=idx,
-					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					**candidate_context(candidate),
 				)
 				did_place = place_bet(candidate, config, state)
 				if did_place:
