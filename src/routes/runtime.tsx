@@ -715,10 +715,6 @@ function RuntimePage() {
 					includeStarted: true,
 					requireMicrostructure: true,
 					marketQualityThreshold: 0.7,
-					includeL2Signals: true,
-					requireL2Alpha: true,
-					skipMissingL2: false,
-					l2ImbalanceNearMidThreshold: -0.1,
 				},
 			});
 			if ("error" in result) {
@@ -998,10 +994,6 @@ function RuntimePage() {
 					includeStarted: true,
 					requireMicrostructure: true,
 					marketQualityThreshold: 0.7,
-					includeL2Signals: true,
-					requireL2Alpha: true,
-					skipMissingL2: false,
-					l2ImbalanceNearMidThreshold: -0.1,
 				},
 			});
 			if ("error" in refreshedCandidateDebug) {
@@ -1216,8 +1208,6 @@ function RuntimePage() {
 							signalScore: candidate.signalScore ?? null,
 							marketQualityScore: candidate.marketQualityScore ?? null,
 							minutesToStart: candidate.minutesToStart ?? null,
-							l2ImbalanceNearMid: candidate.l2ImbalanceNearMid ?? null,
-							l2Disagreement: candidate.l2Disagreement ?? null,
 						})),
 					returnedCandidates: refreshedCandidateDebug.candidates
 						.slice(0, 5)

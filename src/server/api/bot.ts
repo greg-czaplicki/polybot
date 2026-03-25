@@ -61,8 +61,6 @@ type BotCandidateNearMiss = {
 	signalScore?: number;
 	marketQualityScore?: number;
 	minutesToStart?: number | null;
-	l2ImbalanceNearMid?: number | null;
-	l2Disagreement?: boolean | null;
 };
 
 type BotCandidatesDebug = {
@@ -91,10 +89,6 @@ type BotCandidatesOptions = {
 	includeStarted?: boolean;
 	requireMicrostructure?: boolean;
 	marketQualityThreshold?: number;
-	includeL2Signals?: boolean;
-	requireL2Alpha?: boolean;
-	skipMissingL2?: boolean;
-	l2ImbalanceNearMidThreshold?: number;
 	inspectConditionId?: string | null;
 };
 
@@ -125,7 +119,6 @@ type BotCandidateMarketType = ReturnType<typeof getMarketTypeLabel>;
 type BotCandidatePolicy = {
 	minGrade: GradeLabel;
 	marketQualityThreshold: number;
-	requireStrongL2: boolean;
 	reject?: boolean;
 	rejectReason?: string;
 };
@@ -135,6 +128,8 @@ export type BotInspectDefaults = {
 	windowMinutes: number;
 	minMinutesToStart: number;
 	maxMinutesToStart: number;
+	maxBets: number;
+	candidateLimit: number;
 	requireReady: boolean;
 	includeStarted: boolean;
 	requireMicrostructure: boolean;
@@ -173,6 +168,8 @@ async function loadBotInspectDefaults(env: Env): Promise<BotInspectDefaults> {
 		windowMinutes: DEFAULT_CANDIDATE_WINDOW_MINUTES,
 		minMinutesToStart: DEFAULT_MIN_MINUTES_TO_START,
 		maxMinutesToStart: DEFAULT_CANDIDATE_WINDOW_MINUTES,
+		maxBets: 5,
+		candidateLimit: 15,
 		requireReady: DEFAULT_BOT_REQUIRE_READY,
 		includeStarted: DEFAULT_BOT_INCLUDE_STARTED,
 		requireMicrostructure: DEFAULT_BOT_REQUIRE_MICROSTRUCTURE,
@@ -198,6 +195,10 @@ async function loadBotInspectDefaults(env: Env): Promise<BotInspectDefaults> {
 		};
 		const botEnv = payload.env ?? {};
 		const minGrade = parseMinGrade(botEnv.BOT_MIN_GRADE ?? null);
+		const maxBets = Math.max(
+			1,
+			Math.floor(parseNumberEnv(botEnv.BOT_MAX_BETS, defaults.maxBets)),
+		);
 
 		return {
 			minGrade: minGrade ?? defaults.minGrade,
@@ -213,6 +214,8 @@ async function loadBotInspectDefaults(env: Env): Promise<BotInspectDefaults> {
 				botEnv.BOT_MAX_MINUTES_TO_START,
 				defaults.maxMinutesToStart,
 			),
+			maxBets,
+			candidateLimit: Math.min(maxBets * 3, MAX_CANDIDATE_LIMIT),
 			requireReady: parseBooleanEnv(
 				botEnv.BOT_REQUIRE_READY,
 				defaults.requireReady,
@@ -632,14 +635,12 @@ function getBotCandidatePolicy(input: {
 	const timingBucket = resolveTimingBucket(input.minutesToStart);
 	let minGrade = input.baseMinGrade;
 	let marketQualityThreshold = input.baseMarketQualityThreshold;
-	let requireStrongL2 = false;
 
 	// Kill 0-15m picks entirely — catastrophic performance (-1709 CLV bps, 33% win rate)
 	if (timingBucket === "0-15m") {
 		return {
 			minGrade: "A+",
 			marketQualityThreshold: 1,
-			requireStrongL2: true,
 			reject: true,
 			rejectReason: "0-15m_timing_excluded",
 		};
@@ -650,7 +651,6 @@ function getBotCandidatePolicy(input: {
 		return {
 			minGrade: "A+",
 			marketQualityThreshold: 1,
-			requireStrongL2: true,
 			reject: true,
 			rejectReason: "nhl_sport_excluded",
 		};
@@ -663,7 +663,6 @@ function getBotCandidatePolicy(input: {
 	if (input.marketType === "moneyline") {
 		minGrade = stricterGrade(minGrade, "A");
 		marketQualityThreshold = Math.max(marketQualityThreshold, 0.75);
-		requireStrongL2 = true;
 	}
 
 	if (input.marketType === "spread") {
@@ -706,7 +705,6 @@ function getBotCandidatePolicy(input: {
 	return {
 		minGrade,
 		marketQualityThreshold: Math.min(0.9, marketQualityThreshold),
-		requireStrongL2,
 	};
 }
 
@@ -723,25 +721,7 @@ function getBotCandidatePolicyKey(input: {
 			: input.sportSeriesId === 10346
 				? "nhl"
 				: "default";
-	return `${sportKey}|${input.marketType}|${timingBucket}|${input.policy.minGrade}|q${input.policy.marketQualityThreshold.toFixed(2)}|l2${input.policy.requireStrongL2 ? "strong" : "base"}`;
-}
-
-function getL2PreferenceScore(
-	candidate: BotCandidate,
-	l2ImbalanceNearMidThreshold: number,
-): number {
-	if (candidate.entry.l2Disagreement === true) return 4;
-	if (
-		typeof candidate.entry.l2ImbalanceNearMid === "number" &&
-		Number.isFinite(candidate.entry.l2ImbalanceNearMid)
-	) {
-		if (candidate.entry.l2ImbalanceNearMid <= l2ImbalanceNearMidThreshold) {
-			return 3;
-		}
-		if (candidate.entry.l2ImbalanceNearMid < 0) return 2;
-		return 0;
-	}
-	return 1;
+	return `${sportKey}|${input.marketType}|${timingBucket}|${input.policy.minGrade}|q${input.policy.marketQualityThreshold.toFixed(2)}`;
 }
 
 function getCompressedGradeRank(grade: GradeLabel): number {
@@ -767,15 +747,10 @@ function getCandidatePriceValueScore(candidate: BotCandidate): number {
 function compareBotCandidates(
 	left: BotCandidate,
 	right: BotCandidate,
-	l2ImbalanceNearMidThreshold: number,
 ): number {
 	const leftQuality = left.grade.microstructureScore ?? 0;
 	const rightQuality = right.grade.microstructureScore ?? 0;
 	if (leftQuality !== rightQuality) return rightQuality - leftQuality;
-
-	const leftL2 = getL2PreferenceScore(left, l2ImbalanceNearMidThreshold);
-	const rightL2 = getL2PreferenceScore(right, l2ImbalanceNearMidThreshold);
-	if (leftL2 !== rightL2) return rightL2 - leftL2;
 
 	const leftTiming = getTimingPreferenceScore(getCandidateMinutesToStart(left));
 	const rightTiming = getTimingPreferenceScore(
@@ -992,16 +967,6 @@ async function listBotCandidates(
 		options.maxMinutesToStart > 0
 			? options.maxMinutesToStart
 			: windowMinutes;
-	const shouldIncludeL2Signals = options.includeL2Signals ?? false;
-	const shouldRequireL2Alpha = options.requireL2Alpha ?? false;
-	const shouldSkipMissingL2 = options.skipMissingL2 ?? false;
-	const l2ImbalanceNearMidThreshold =
-		typeof options.l2ImbalanceNearMidThreshold === "number" &&
-		Number.isFinite(options.l2ImbalanceNearMidThreshold)
-			? options.l2ImbalanceNearMidThreshold
-			: -0.1;
-	const shouldFetchL2Signals =
-		shouldIncludeL2Signals || shouldRequireL2Alpha || shouldSkipMissingL2;
 	const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
 	const now = Date.now();
 	const maxMinutesWindow = Math.max(maxMinutesToStart, minMinutesToStart);
@@ -1322,117 +1287,7 @@ async function listBotCandidates(
 			};
 		})
 		.filter((candidate) => candidate !== null);
-	const candidates = shouldFetchL2Signals
-		? (
-				await Promise.all(
-					baseCandidates.map(async (candidate) => {
-						const l2 = await fetchL2SignalsForPick({
-							conditionId: candidate.entry.conditionId,
-							sharpSide: candidate.entry.sharpSide,
-							sideALabel: candidate.entry.sideA.label,
-							sideBLabel: candidate.entry.sideB.label,
-						});
-						const hasImbalanceNearMid =
-							typeof l2.l2ImbalanceNearMid === "number" &&
-							Number.isFinite(l2.l2ImbalanceNearMid);
-						const hasDisagreement = typeof l2.l2Disagreement === "boolean";
-						const hasL2Signal = hasImbalanceNearMid || hasDisagreement;
-						const meetsL2Alpha =
-							(hasImbalanceNearMid &&
-								(l2.l2ImbalanceNearMid as number) <=
-									l2ImbalanceNearMidThreshold) ||
-							l2.l2Disagreement === true;
-						if (shouldRequireL2Alpha && hasL2Signal && !meetsL2Alpha) {
-							incrementCounter(debug.excluded, "l2_alpha_not_met");
-							pushNearMiss(debug, {
-								reason: "l2_alpha_not_met",
-								conditionId: candidate.entry.conditionId,
-								marketTitle: candidate.entry.marketTitle,
-								sportSeriesId: candidate.entry.sportSeriesId,
-								marketType: candidate.entry.marketType,
-								sharpSide: candidate.entry.sharpSide,
-								sharpSidePrice: candidate.entry.sharpSidePrice,
-								grade: candidate.grade.grade,
-								policyMinGrade: candidate.policy.minGrade,
-								signalScore: candidate.grade.signalScore,
-								marketQualityScore: candidate.grade.microstructureScore,
-								minutesToStart: getCandidateMinutesToStart(candidate),
-								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
-								l2Disagreement: l2.l2Disagreement ?? null,
-							});
-							if (
-								inspectConditionId &&
-								candidate.entry.conditionId === inspectConditionId
-							) {
-								debug.inspect = {
-									conditionId: inspectConditionId,
-									foundInEntries: true,
-									stage: "filtered_l2",
-									reason: "l2_alpha_not_met",
-								};
-							}
-							return null;
-						}
-						if (candidate.policy.requireStrongL2 && !meetsL2Alpha) {
-							incrementCounter(debug.excluded, "below_policy_l2");
-							pushNearMiss(debug, {
-								reason: "below_policy_l2",
-								conditionId: candidate.entry.conditionId,
-								marketTitle: candidate.entry.marketTitle,
-								sportSeriesId: candidate.entry.sportSeriesId,
-								marketType: candidate.entry.marketType,
-								sharpSide: candidate.entry.sharpSide,
-								sharpSidePrice: candidate.entry.sharpSidePrice,
-								grade: candidate.grade.grade,
-								policyMinGrade: candidate.policy.minGrade,
-								signalScore: candidate.grade.signalScore,
-								marketQualityScore: candidate.grade.microstructureScore,
-								minutesToStart: getCandidateMinutesToStart(candidate),
-								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
-								l2Disagreement: l2.l2Disagreement ?? null,
-							});
-							if (
-								inspectConditionId &&
-								candidate.entry.conditionId === inspectConditionId
-							) {
-								debug.inspect = {
-									conditionId: inspectConditionId,
-									foundInEntries: true,
-									stage: "filtered_l2",
-									reason: "below_policy_l2",
-								};
-							}
-							return null;
-						}
-						if (shouldSkipMissingL2 && !hasL2Signal) {
-							incrementCounter(debug.excluded, "missing_l2_signals");
-							if (
-								inspectConditionId &&
-								candidate.entry.conditionId === inspectConditionId
-							) {
-								debug.inspect = {
-									conditionId: inspectConditionId,
-									foundInEntries: true,
-									stage: "filtered_l2",
-									reason: "missing_l2_signals",
-								};
-							}
-							return null;
-						}
-						return {
-							...candidate,
-							entry: {
-								...candidate.entry,
-								l2Imbalance: l2.l2Imbalance ?? null,
-								l2ImbalanceNearMid: l2.l2ImbalanceNearMid ?? null,
-								l2Spread: l2.l2Spread ?? null,
-								l2Disagreement: l2.l2Disagreement ?? null,
-							},
-						};
-					}),
-				)
-			).filter((candidate) => candidate !== null)
-		: baseCandidates;
+	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	const deduped = new Map<string, (typeof candidates)[number]>();
 	for (const candidate of candidates) {
@@ -1458,7 +1313,6 @@ async function listBotCandidates(
 		const comparison = compareBotCandidates(
 			candidate,
 			existing,
-			l2ImbalanceNearMidThreshold,
 		);
 		if (comparison < 0) {
 			debug.dedupDropped += 1;
@@ -1485,7 +1339,7 @@ async function listBotCandidates(
 		}
 	}
 	const dedupedCandidates = [...deduped.values()].sort((left, right) =>
-		compareBotCandidates(left, right, l2ImbalanceNearMidThreshold),
+		compareBotCandidates(left, right),
 	);
 	for (const candidate of dedupedCandidates) {
 		incrementCounter(debug.returnedByMarketType, candidate.entry.marketType);
@@ -1536,10 +1390,6 @@ export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
 				includeStarted: payload.includeStarted,
 				requireMicrostructure: payload.requireMicrostructure,
 				marketQualityThreshold: payload.marketQualityThreshold,
-				includeL2Signals: payload.includeL2Signals,
-				requireL2Alpha: payload.requireL2Alpha,
-				skipMissingL2: payload.skipMissingL2,
-				l2ImbalanceNearMidThreshold: payload.l2ImbalanceNearMidThreshold,
 				inspectConditionId: payload.inspectConditionId ?? null,
 			});
 			return result;
@@ -1567,10 +1417,6 @@ export const getBotCandidateInspectFn = createServerFn({
 		includeStarted?: boolean;
 		requireMicrostructure?: boolean;
 		marketQualityThreshold?: number;
-		includeL2Signals?: boolean;
-		requireL2Alpha?: boolean;
-		skipMissingL2?: boolean;
-		l2ImbalanceNearMidThreshold?: number;
 		limit?: number;
 	};
 	const conditionId = payload.conditionId?.trim();
@@ -1598,10 +1444,6 @@ export const getBotCandidateInspectFn = createServerFn({
 			includeStarted: payload.includeStarted,
 			requireMicrostructure: payload.requireMicrostructure,
 			marketQualityThreshold: payload.marketQualityThreshold,
-			includeL2Signals: payload.includeL2Signals,
-			requireL2Alpha: payload.requireL2Alpha,
-			skipMissingL2: payload.skipMissingL2,
-			l2ImbalanceNearMidThreshold: payload.l2ImbalanceNearMidThreshold,
 			inspectConditionId: conditionId,
 		});
 		const inspect = result.debug.inspect ?? {
@@ -1649,6 +1491,11 @@ export const getBotCandidateInspectFn = createServerFn({
 				diagnosticReason = "started_excluded";
 			} else if (!inEventWindow) {
 				diagnosticReason = "outside_event_window";
+			} else if (inRecentCacheWindow) {
+				// The market exists in cache and passes the coarse window/readiness checks,
+				// but it was not part of the limited candidate scan returned by
+				// listSharpMoneyCache(...) for this inspect request.
+				diagnosticReason = "not_in_limited_candidate_scan";
 			}
 			return {
 				inspect: {
@@ -1755,12 +1602,6 @@ export async function handleBotRequest(
 		const requireReady = url.searchParams.get("requireReady");
 		const includeStarted = url.searchParams.get("includeStarted");
 		const requireMicrostructure = url.searchParams.get("requireMicrostructure");
-		const includeL2Signals = url.searchParams.get("includeL2Signals");
-		const requireL2Alpha = url.searchParams.get("requireL2Alpha");
-		const skipMissingL2 = url.searchParams.get("skipMissingL2");
-		const l2ImbalanceNearMidThresholdParam = Number(
-			url.searchParams.get("l2ImbalanceNearMidThreshold"),
-		);
 		const includeDebug =
 			url.searchParams.get("debug")?.toLowerCase() === "true";
 		const inspectConditionId = url.searchParams.get("inspectConditionId");
@@ -1792,14 +1633,6 @@ export async function handleBotRequest(
 				requireMicrostructure:
 					requireMicrostructure === null ||
 					requireMicrostructure.toLowerCase() === "true",
-				includeL2Signals: includeL2Signals?.toLowerCase() === "true",
-				requireL2Alpha: requireL2Alpha?.toLowerCase() === "true",
-				skipMissingL2: skipMissingL2?.toLowerCase() === "true",
-				l2ImbalanceNearMidThreshold: Number.isFinite(
-					l2ImbalanceNearMidThresholdParam,
-				)
-					? l2ImbalanceNearMidThresholdParam
-					: undefined,
 				marketQualityThreshold:
 					Number.isFinite(marketQualityThresholdParam) &&
 					marketQualityThresholdParam >= 0 &&
