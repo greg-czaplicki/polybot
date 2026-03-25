@@ -56,7 +56,7 @@ function StatCard({
 			</div>
 			<div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
 			{sub && (
-				<div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{sub}</div>
+				<div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>{sub}</div>
 			)}
 		</div>
 	);
@@ -134,7 +134,7 @@ function TeamTrendSection() {
 					<option value="NBA">NBA</option>
 					<option value="MLB">MLB</option>
 				</select>
-				<button type="button" onClick={search} disabled={loading}>
+				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
 					{loading ? "..." : "Search"}
 				</button>
 			</div>
@@ -279,7 +279,7 @@ function MatchupComparisonSection() {
 					onKeyDown={(e) => e.key === "Enter" && search()}
 					style={inputStyle}
 				/>
-				<span style={{ alignSelf: "center", color: "#666" }}>vs</span>
+				<span style={{ alignSelf: "center", color: "#aaa" }}>vs</span>
 				<input
 					type="text"
 					placeholder="Opponent (e.g., Ohio State)"
@@ -299,7 +299,7 @@ function MatchupComparisonSection() {
 					<option value="NBA">NBA</option>
 					<option value="MLB">MLB</option>
 				</select>
-				<button type="button" onClick={search} disabled={loading}>
+				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
 					{loading ? "..." : "Compare"}
 				</button>
 			</div>
@@ -442,7 +442,7 @@ function PickContextSection() {
 					onKeyDown={(e) => e.key === "Enter" && search()}
 					style={{ ...inputStyle, flex: 1 }}
 				/>
-				<button type="button" onClick={search} disabled={loading}>
+				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
 					{loading ? "..." : "Lookup"}
 				</button>
 			</div>
@@ -546,7 +546,7 @@ function EnrichField({
 }: { label: string; value: string | null | undefined }) {
 	return (
 		<div>
-			<div style={{ color: "#666", fontSize: 10 }}>{label}</div>
+			<div style={{ color: "#aaa", fontSize: 10 }}>{label}</div>
 			<div style={{ color: value ? "#eee" : "#555" }}>
 				{value ?? "—"}
 			</div>
@@ -580,7 +580,7 @@ function SnapshotCard({
 				}}
 			>
 				<div style={{ color: "#888", marginBottom: 4 }}>{label}</div>
-				<div style={{ color: "#555" }}>No snapshot available</div>
+				<div style={{ color: "#999" }}>No snapshot available</div>
 			</div>
 		);
 	}
@@ -681,7 +681,7 @@ function PipelineHealthSection() {
 				}}
 			>
 				<h2 style={{ margin: 0 }}>Pipeline Health</h2>
-				<button type="button" onClick={refresh} disabled={loading}>
+				<button type="button" onClick={refresh} disabled={loading} style={buttonStyle}>
 					{loading ? "Loading..." : "Refresh"}
 				</button>
 				<button
@@ -781,7 +781,7 @@ function FreshnessIndicator({
 					? `Last success: ${formatRelativeTimestamp(staleness.lastSuccessAt)} (${staleness.minutesSinceLastSuccess}m ago)`
 					: "No successful sync recorded"}
 			</span>
-			<span style={{ color: "#555", fontSize: 12, marginLeft: "auto" }}>
+			<span style={{ color: "#999", fontSize: 12, marginLeft: "auto" }}>
 				Threshold: {staleness.staleThresholdMinutes}m
 			</span>
 		</div>
@@ -1008,6 +1008,16 @@ function formatRelativeTimestamp(ts: number): string {
 // Shared styles
 // ---------------------------------------------------------------------------
 
+const buttonStyle: React.CSSProperties = {
+	padding: "6px 14px",
+	border: "1px solid #444",
+	borderRadius: 6,
+	background: "#2a2a2a",
+	color: "#eee",
+	cursor: "pointer",
+	fontSize: 13,
+};
+
 const inputStyle: React.CSSProperties = {
 	padding: "6px 10px",
 	border: "1px solid #444",
@@ -1032,7 +1042,7 @@ const selectStyle: React.CSSProperties = {
 function CanonicalPage() {
 	return (
 		<AuthGate>
-			<div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+			<div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", color: "#eee" }}>
 				<h1>Canonical Analytics</h1>
 				<p style={{ color: "#888", marginBottom: 24 }}>
 					Team trends, matchup comparisons, and pick enrichment inspection.
