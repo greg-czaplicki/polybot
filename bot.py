@@ -249,6 +249,11 @@ def parse_float(value: Any) -> float | None:
 	return None
 
 
+GAME_PROP_KEYWORDS = [
+	"nrfi", "yrfi", "btts", "both teams to score",
+	"draw no bet", "first goal", "clean sheet", "double result",
+]
+
 def get_market_type_label(market_title: str) -> str:
 	lower = market_title.lower()
 	plain_matchup = ":" not in market_title and re.search(r"\bvs\.?\b", market_title, re.I)
@@ -260,6 +265,8 @@ def get_market_type_label(market_title: str) -> str:
 		return "moneyline"
 	if "moneyline" in lower or "ml" in lower:
 		return "moneyline"
+	if any(kw in lower for kw in GAME_PROP_KEYWORDS):
+		return "prop"
 	return "other"
 
 
