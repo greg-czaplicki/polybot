@@ -322,7 +322,7 @@ async function ingestOddsForGames(
 
 	// Check which games already have closing lines (batched to stay under D1's 999-variable limit)
 	const gameIds = pending.map((p) => p.gameId);
-	const BATCH_SIZE = 500;
+	const BATCH_SIZE = 80; // D1 allows max 100 bind params per query
 	const hasLine = new Set<string>();
 	for (let i = 0; i < gameIds.length; i += BATCH_SIZE) {
 		const batch = gameIds.slice(i, i + BATCH_SIZE);
