@@ -1,7 +1,28 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { GradeLabel } from "@/lib/sharp-grade";
+import { deriveSnapshotType } from "../api/canonical-analytics";
+import type { Db } from "../db/client";
+import { extractSideFeatures } from "../domain/canonical-features";
+import { scoreOpportunity } from "../domain/opportunity-scoring";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
+import {
+	extractSpreadFromTitle,
+	identifySpreadTeamPosition,
+} from "../pipeline/line-ingestion";
+import {
+	deriveFavDogRole,
+	extractSpreadPickedLabel,
+	resolvePickedSide,
+} from "../pipeline/pick-enrichment-helpers";
+import {
+	parseTeamsFromTitle,
+	resolveSingleTeam,
+} from "../pipeline/team-seeder";
+import {
+	insertBotCandidateSnapshot,
+	listBotCandidateSnapshots,
+} from "../repositories/bot-candidate-snapshots";
 import {
 	createManualPick,
 	type ManualPickStatus,
@@ -13,6 +34,7 @@ import {
 	getSharpMoneyCacheFreshnessStats,
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
+import { getLatestTeamTrendSnapshot } from "../repositories/team-trend-snapshots";
 import { computeBotEval } from "./bot-eval";
 import {
 	computePriceEdgeFromEntry,
@@ -31,12 +53,20 @@ const DEFAULT_BOT_REQUIRE_READY = true;
 const DEFAULT_BOT_INCLUDE_STARTED = false;
 const DEFAULT_BOT_REQUIRE_MICROSTRUCTURE = true;
 const DEFAULT_BOT_MARKET_QUALITY_THRESHOLD = 0.72;
+const NBA_SPORT_SERIES_ID = 10345;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	A: 4,
 	B: 3,
 	C: 2,
 	D: 1,
+};
+
+type ResolvedTeam = Awaited<ReturnType<typeof resolveSingleTeam>>;
+type TrendSnapshot = Awaited<ReturnType<typeof getLatestTeamTrendSnapshot>>;
+type CanonicalScoreCache = {
+	teamByAlias: Map<string, Promise<ResolvedTeam>>;
+	snapshotByKey: Map<string, Promise<TrendSnapshot>>;
 };
 
 type BotCandidateDebugInspect = {
@@ -101,6 +131,13 @@ type BotCandidatesResult = {
 			edgeRating?: number;
 			scoreDifferential?: number;
 			microstructureScore?: number;
+			segmentScore?: number;
+			segmentKey?: string;
+			segmentLabel?: string;
+			segmentNotes?: string[];
+			canonicalScore?: number | null;
+			canonicalSnapshotType?: string | null;
+			canonicalWarnings?: string[];
 			isReady?: boolean;
 			warnings?: string[];
 			computedAt?: number;
@@ -119,6 +156,10 @@ type BotCandidateMarketType = ReturnType<typeof getMarketTypeLabel>;
 type BotCandidatePolicy = {
 	minGrade: GradeLabel;
 	marketQualityThreshold: number;
+	segmentKey: string;
+	segmentLabel: string;
+	rankingAdjustment: number;
+	notes: string[];
 	reject?: boolean;
 	rejectReason?: string;
 };
@@ -136,7 +177,10 @@ export type BotInspectDefaults = {
 	marketQualityThreshold: number;
 };
 
-function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+function parseBooleanEnv(
+	value: string | undefined,
+	fallback: boolean,
+): boolean {
 	if (!value) return fallback;
 	const normalized = value.trim().toLowerCase();
 	if (["1", "true", "yes", "on"].includes(normalized)) return true;
@@ -244,6 +288,10 @@ function clampUnit(value: number): number {
 
 function stricterGrade(left: GradeLabel, right: GradeLabel): GradeLabel {
 	return GRADE_RANK[left] >= GRADE_RANK[right] ? left : right;
+}
+
+function looserGrade(left: GradeLabel, right: GradeLabel): GradeLabel {
+	return GRADE_RANK[left] <= GRADE_RANK[right] ? left : right;
 }
 
 function normalizeMarketPrice(price?: number | null): number | null {
@@ -626,7 +674,7 @@ function getTimingPreferenceScore(minutesToStart: number | null): number {
 	return -1;
 }
 
-function resolveTimingBucket(
+export function resolveTimingBucket(
 	minutesToStart: number | null,
 ): "0-15m" | "15-60m" | "1-3h" | "3h+" | "unknown" {
 	if (minutesToStart === null || !Number.isFinite(minutesToStart))
@@ -637,7 +685,37 @@ function resolveTimingBucket(
 	return "3h+";
 }
 
-function getBotCandidatePolicy(input: {
+function getSportPolicyKey(sportSeriesId?: number): string {
+	if (sportSeriesId === NBA_SPORT_SERIES_ID) return "nba";
+	if (sportSeriesId === 3) return "mlb";
+	if (sportSeriesId === 10470) return "ncaab";
+	if (sportSeriesId === 10346) return "nhl";
+	return "default";
+}
+
+function buildPolicy(
+	input: {
+		sportSeriesId?: number;
+		marketType: BotCandidateMarketType;
+		timingBucket: ReturnType<typeof resolveTimingBucket>;
+		baseMinGrade: GradeLabel;
+		baseMarketQualityThreshold: number;
+	},
+	override: Partial<BotCandidatePolicy> = {},
+): BotCandidatePolicy {
+	const sportKey = getSportPolicyKey(input.sportSeriesId);
+	return {
+		minGrade: input.baseMinGrade,
+		marketQualityThreshold: input.baseMarketQualityThreshold,
+		segmentKey: `${sportKey}|${input.marketType}|${input.timingBucket}`,
+		segmentLabel: `${sportKey.toUpperCase()} ${input.marketType} ${input.timingBucket}`,
+		rankingAdjustment: 0,
+		notes: [],
+		...override,
+	};
+}
+
+export function getBotCandidatePolicy(input: {
 	marketType: BotCandidateMarketType;
 	sportSeriesId?: number;
 	minutesToStart: number | null;
@@ -645,78 +723,221 @@ function getBotCandidatePolicy(input: {
 	baseMarketQualityThreshold: number;
 }): BotCandidatePolicy {
 	const timingBucket = resolveTimingBucket(input.minutesToStart);
-	let minGrade = input.baseMinGrade;
-	let marketQualityThreshold = input.baseMarketQualityThreshold;
-
-	// Kill 0-15m picks entirely — catastrophic performance (-1709 CLV bps, 33% win rate)
 	if (timingBucket === "0-15m") {
-		return {
-			minGrade: "A+",
-			marketQualityThreshold: 1,
-			reject: true,
-			rejectReason: "0-15m_timing_excluded",
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "All markets 0-15m",
+				rankingAdjustment: -100,
+				notes: ["late_window"],
+				reject: true,
+				rejectReason: "0-15m_timing_excluded",
+			},
+		);
+	}
+
+	if (input.sportSeriesId === 10346) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NHL excluded",
+				rankingAdjustment: -100,
+				notes: ["sport_excluded"],
+				reject: true,
+				rejectReason: "nhl_sport_excluded",
+			},
+		);
+	}
+
+	if (input.sportSeriesId === 10470 && input.marketType === "spread") {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NCAAB spread excluded",
+				rankingAdjustment: -100,
+				notes: ["sport_market_excluded"],
+				reject: true,
+				rejectReason: "ncaab_spread_excluded",
+			},
+		);
+	}
+
+	if (timingBucket === "15-60m" && input.marketType === "spread") {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "15-60m spread excluded",
+				rankingAdjustment: -100,
+				notes: ["late_spread_excluded"],
+				reject: true,
+				rejectReason: "15-60m_spread_excluded",
+			},
+		);
+	}
+
+	let policy = buildPolicy({
+		...input,
+		timingBucket,
+	});
+
+	if (input.marketType === "moneyline") {
+		policy = {
+			...policy,
+			minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.74),
+			rankingAdjustment: policy.rankingAdjustment + 6,
+			notes: [...policy.notes, "moneyline_bias"],
 		};
 	}
 
-	// NHL sport gate — deeply negative (-2035 CLV bps, 27% win rate)
-	if (input.sportSeriesId === 10346) {
-		return {
-			minGrade: "A+",
-			marketQualityThreshold: 1,
-			reject: true,
-			rejectReason: "nhl_sport_excluded",
+	if (input.marketType === "spread") {
+		policy = {
+			...policy,
+			minGrade: stricterGrade(policy.minGrade, "A"),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.74),
+			rankingAdjustment: policy.rankingAdjustment - 14,
+			notes: [...policy.notes, "spread_penalty"],
+		};
+	}
+
+	if (input.marketType === "total") {
+		policy = {
+			...policy,
+			minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.7),
+			rankingAdjustment: policy.rankingAdjustment + 4,
+			notes: [...policy.notes, "total_bias"],
+		};
+	}
+
+	if (timingBucket === "15-60m") {
+		policy = {
+			...policy,
+			minGrade: stricterGrade(policy.minGrade, "A"),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.75),
+			rankingAdjustment:
+				policy.rankingAdjustment +
+				(input.marketType === "moneyline" ? -8 : -22),
+			notes: [...policy.notes, "late_window_penalty"],
 		};
 	}
 
 	if (timingBucket === "1-3h") {
-		// 1-3h shows promise — use default quality threshold (0.70), don't raise to 0.74
+		policy = {
+			...policy,
+			rankingAdjustment: policy.rankingAdjustment + 10,
+			notes: [...policy.notes, "preferred_window"],
+		};
 	}
 
-	if (input.marketType === "moneyline") {
-		minGrade = stricterGrade(minGrade, "A");
-		marketQualityThreshold = Math.max(marketQualityThreshold, 0.75);
+	if (timingBucket === "3h+") {
+		policy = {
+			...policy,
+			rankingAdjustment: policy.rankingAdjustment - 4,
+			notes: [...policy.notes, "early_window_penalty"],
+		};
 	}
 
-	if (input.marketType === "spread") {
-		marketQualityThreshold = Math.max(marketQualityThreshold, 0.72);
+	if (input.sportSeriesId === NBA_SPORT_SERIES_ID) {
+		if (timingBucket === "1-3h" && input.marketType === "moneyline") {
+			policy = {
+				...policy,
+				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.68),
+				rankingAdjustment: policy.rankingAdjustment + 22,
+				notes: [...policy.notes, "nba_moneyline_core"],
+			};
+		}
+		if (timingBucket === "1-3h" && input.marketType === "total") {
+			policy = {
+				...policy,
+				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.66),
+				rankingAdjustment: policy.rankingAdjustment + 18,
+				notes: [...policy.notes, "nba_total_core"],
+			};
+		}
+		if (input.marketType === "spread") {
+			policy = {
+				...policy,
+				rankingAdjustment: policy.rankingAdjustment - 8,
+				notes: [...policy.notes, "nba_spread_penalty"],
+			};
+		}
 	}
 
-	// Tighten totals quality — still negative after quality filter (-141 CLV bps)
-	if (input.marketType === "total") {
-		marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
-	}
-
-	if (
-		timingBucket === "15-60m" &&
-		(input.marketType === "spread" || input.marketType === "total")
-	) {
-		minGrade = stricterGrade(minGrade, "C");
-	}
-
-	if (
-		timingBucket === "1-3h" &&
-		(input.marketType === "spread" || input.marketType === "total")
-	) {
-		minGrade = stricterGrade(minGrade, "C");
-	}
-
-	// Cap policy minGrade at A — A+ is not outperforming A
-	if (minGrade === "A+") {
-		minGrade = "A";
+	if (input.sportSeriesId === 3) {
+		if (timingBucket === "1-3h" && input.marketType === "moneyline") {
+			policy = {
+				...policy,
+				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.68),
+				rankingAdjustment: policy.rankingAdjustment + 14,
+				notes: [...policy.notes, "mlb_moneyline_preferred"],
+			};
+		}
+		if (timingBucket === "1-3h" && input.marketType === "total") {
+			policy = {
+				...policy,
+				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.66),
+				rankingAdjustment: policy.rankingAdjustment + 10,
+				notes: [...policy.notes, "mlb_total_preferred"],
+			};
+		}
 	}
 
 	if (input.sportSeriesId === 10470) {
-		if (input.marketType === "total") {
-			marketQualityThreshold = Math.max(marketQualityThreshold, 0.74);
+		policy = {
+			...policy,
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.75),
+			rankingAdjustment: policy.rankingAdjustment - 18,
+			notes: [...policy.notes, "ncaab_penalty"],
+		};
+		if (timingBucket === "1-3h" && input.marketType === "total") {
+			policy = {
+				...policy,
+				minGrade: stricterGrade(policy.minGrade, "A"),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.78),
+				rankingAdjustment: policy.rankingAdjustment - 12,
+				notes: [...policy.notes, "ncaab_total_caution"],
+			};
 		}
-		if (input.marketType === "spread") {
-			marketQualityThreshold = Math.max(marketQualityThreshold, 0.71);
+		if (input.marketType === "moneyline") {
+			policy = {
+				...policy,
+				minGrade: stricterGrade(policy.minGrade, "A"),
+				rankingAdjustment: policy.rankingAdjustment - 12,
+				notes: [...policy.notes, "ncaab_moneyline_caution"],
+			};
 		}
 	}
 
 	return {
-		minGrade,
-		marketQualityThreshold: Math.min(0.9, marketQualityThreshold),
+		...policy,
+		minGrade: policy.minGrade === "A+" ? "A" : policy.minGrade,
+		marketQualityThreshold: Math.min(0.9, policy.marketQualityThreshold),
+		notes: Array.from(new Set(policy.notes)),
 	};
 }
 
@@ -756,13 +977,159 @@ function getCandidatePriceValueScore(candidate: BotCandidate): number {
 	return 1 - price;
 }
 
-function compareBotCandidates(
-	left: BotCandidate,
-	right: BotCandidate,
-): number {
+async function computeCanonicalBotCandidateScore(
+	db: Db,
+	cache: CanonicalScoreCache,
+	entry: {
+		marketTitle: string;
+		sportSeriesId?: number;
+		sharpSide: "A" | "B" | "EVEN";
+		sideA: { label: string; price?: number | null };
+		sideB: { label: string; price?: number | null };
+	},
+): Promise<{
+	totalScore: number;
+	snapshotType: string;
+	warnings: string[];
+} | null> {
+	if (entry.sportSeriesId !== NBA_SPORT_SERIES_ID) return null;
+	const marketType = getMarketTypeLabel(entry.marketTitle);
+	if (marketType !== "spread" && marketType !== "moneyline") return null;
+	if (entry.sharpSide !== "A" && entry.sharpSide !== "B") return null;
+
+	const matchupTitle = entry.marketTitle.split(":", 1)[0]?.trim() ?? "";
+	const parsedTeams = parseTeamsFromTitle(matchupTitle);
+	if (!parsedTeams) return null;
+
+	const getCachedTeam = (alias: string) => {
+		const cacheKey = `nba:${alias.trim().toLowerCase()}`;
+		const existing = cache.teamByAlias.get(cacheKey);
+		if (existing) return existing;
+		const pending = resolveSingleTeam(db, "nba", alias);
+		cache.teamByAlias.set(cacheKey, pending);
+		return pending;
+	};
+	const [homeTeam, awayTeam] = await Promise.all([
+		getCachedTeam(parsedTeams.home),
+		getCachedTeam(parsedTeams.away),
+	]);
+	if (!homeTeam || !awayTeam) return null;
+
+	const pickedLabel =
+		extractSpreadPickedLabel(entry.marketTitle) ?? entry.sharpSide;
+	const pickedSide = resolvePickedSide({
+		pickedLabel,
+		marketTitle: entry.marketTitle,
+		sideALabel: entry.sideA.label,
+		sideBLabel: entry.sideB.label,
+		homeTeamName: homeTeam.name,
+		awayTeamName: awayTeam.name,
+		homeTeamId: homeTeam.id,
+		awayTeamId: awayTeam.id,
+	});
+	if (!pickedSide) return null;
+
+	let homeSpread: number | null = null;
+	if (marketType === "spread") {
+		const parsedSpread = extractSpreadFromTitle(entry.marketTitle);
+		if (parsedSpread !== null) {
+			const spreadPosition = identifySpreadTeamPosition(entry.marketTitle);
+			homeSpread = spreadPosition === "first" ? -parsedSpread : parsedSpread;
+		}
+	}
+
+	const favDogRole =
+		marketType === "spread"
+			? deriveFavDogRole(homeSpread, pickedSide.isHomeTeam)
+			: null;
+	const venueRole = pickedSide.venueRole;
+	const snapshotType = deriveSnapshotType(venueRole, favDogRole);
+	const mirroredVenue =
+		venueRole === "home" ? "away" : venueRole === "away" ? "home" : venueRole;
+	const mirroredFavDog =
+		favDogRole === "favorite"
+			? "dog"
+			: favDogRole === "dog"
+				? "favorite"
+				: favDogRole;
+	const opponentSnapshotType = deriveSnapshotType(
+		mirroredVenue,
+		mirroredFavDog,
+	);
+
+	const getCachedSnapshot = (teamId: string, candidateSnapshotType: string) => {
+		const cacheKey = `${teamId}:${candidateSnapshotType}`;
+		const existing = cache.snapshotByKey.get(cacheKey);
+		if (existing) return existing;
+		const pending = getLatestTeamTrendSnapshot(db, {
+			teamId,
+			snapshotType: candidateSnapshotType,
+		});
+		cache.snapshotByKey.set(cacheKey, pending);
+		return pending;
+	};
+	const [teamOverall, teamSplit, opponentOverall, opponentSplit] =
+		await Promise.all([
+			getCachedSnapshot(pickedSide.teamId, "overall"),
+			snapshotType !== "overall"
+				? getCachedSnapshot(pickedSide.teamId, snapshotType)
+				: Promise.resolve(null),
+			getCachedSnapshot(pickedSide.opponentId, "overall"),
+			opponentSnapshotType !== "overall"
+				? getCachedSnapshot(pickedSide.opponentId, opponentSnapshotType)
+				: Promise.resolve(null),
+		]);
+
+	const team = extractSideFeatures(teamOverall, teamSplit);
+	const opponent = extractSideFeatures(opponentOverall, opponentSplit);
+	const score = scoreOpportunity({
+		sportTag: "nba",
+		betType: marketType,
+		venueRole,
+		favDogRole,
+		spreadLine:
+			homeSpread === null
+				? null
+				: pickedSide.isHomeTeam
+					? homeSpread
+					: -homeSpread,
+		totalLine: null,
+		team,
+		opponent,
+		matchupAtsDelta:
+			team.atsWinPct != null && opponent.atsWinPct != null
+				? team.atsWinPct - opponent.atsWinPct
+				: null,
+		matchupOuDelta:
+			team.ouOverPct != null && opponent.ouOverPct != null
+				? team.ouOverPct - opponent.ouOverPct
+				: null,
+		matchupCoverMarginDelta:
+			team.avgCoverMargin != null && opponent.avgCoverMargin != null
+				? team.avgCoverMargin - opponent.avgCoverMargin
+				: null,
+		teamSnapshotFound: teamOverall !== null,
+		opponentSnapshotFound: opponentOverall !== null,
+	});
+
+	return {
+		totalScore: score.totalScore,
+		snapshotType,
+		warnings: score.warnings,
+	};
+}
+
+function compareBotCandidates(left: BotCandidate, right: BotCandidate): number {
 	const leftQuality = left.grade.microstructureScore ?? 0;
 	const rightQuality = right.grade.microstructureScore ?? 0;
+	const leftSegment = left.grade.segmentScore ?? 0;
+	const rightSegment = right.grade.segmentScore ?? 0;
+	if (leftSegment !== rightSegment) return rightSegment - leftSegment;
 	if (leftQuality !== rightQuality) return rightQuality - leftQuality;
+
+	const leftCanonical = left.grade.canonicalScore ?? 0;
+	const rightCanonical = right.grade.canonicalScore ?? 0;
+	if (leftCanonical !== rightCanonical) return rightCanonical - leftCanonical;
 
 	const leftTiming = getTimingPreferenceScore(getCandidateMinutesToStart(left));
 	const rightTiming = getTimingPreferenceScore(
@@ -979,7 +1346,7 @@ async function listBotCandidates(
 		options.maxMinutesToStart > 0
 			? options.maxMinutesToStart
 			: windowMinutes;
-	const windowHours = Math.max(1, Math.ceil(windowMinutes / 60));
+	const windowHours = Math.max(1, Math.ceil(Math.max(windowMinutes, maxMinutesToStart) / 60));
 	const now = Date.now();
 	const maxMinutesWindow = Math.max(maxMinutesToStart, minMinutesToStart);
 	const cutoffMs = maxMinutesWindow * 60 * 1000;
@@ -1102,7 +1469,7 @@ async function listBotCandidates(
 	});
 	debug.upcomingEntries = upcomingEntries.length;
 	if (upcomingEntries.length === 0) {
-		return {
+		const result = {
 			candidates: [],
 			requested: 0,
 			returned: 0,
@@ -1110,6 +1477,31 @@ async function listBotCandidates(
 			computedAt: nowUnixSeconds(),
 			debug,
 		};
+		if (!inspectConditionId) {
+			await insertBotCandidateSnapshot(db, {
+				createdAt: result.computedAt,
+				minGrade: options.minGrade,
+				windowMinutes: options.windowMinutes,
+				minMinutesToStart: options.minMinutesToStart,
+				maxMinutesToStart: options.maxMinutesToStart,
+				requireReady: shouldRequireReady,
+				includeStarted: allowStarted,
+				requireMicrostructure: shouldRequireMicrostructure,
+				marketQualityThreshold,
+				requested: result.requested,
+				returned: result.returned,
+				totalEntries: debug.totalEntries,
+				upcomingEntries: debug.upcomingEntries,
+				candidatesBeforeDedup: debug.candidatesBeforeDedup,
+				returnedAfterDedup: debug.returnedAfterDedup,
+				excluded: debug.excluded,
+				policyMatched: debug.policyMatched,
+				returnedByMarketType: debug.returnedByMarketType,
+				returnedByTimingBucket: debug.returnedByTimingBucket,
+				returnedBySportSeries: debug.returnedBySportSeries,
+			});
+		}
+		return result;
 	}
 	const gradesResult = await computeSharpMoneyGrades(db, {
 		conditionIds: upcomingEntries.map((entry) => entry.conditionId),
@@ -1120,185 +1512,209 @@ async function listBotCandidates(
 	const gradeByConditionId = new Map(
 		gradesResult.results.map((result) => [result.conditionId, result]),
 	);
-	const baseCandidates = upcomingEntries
-		.map((entry) => {
-			const grade = gradeByConditionId.get(entry.conditionId) ?? null;
-			const policyEventTime = parseEventTime(entry.eventTime);
-			const policyMinutesToStart =
-				policyEventTime !== null
-					? (policyEventTime.getTime() - now) / 60_000
-					: null;
-			const policy = getBotCandidatePolicy({
-				marketType: getMarketTypeLabel(entry.marketTitle),
-				sportSeriesId: entry.sportSeriesId,
-				minutesToStart: policyMinutesToStart,
-				baseMinGrade: options.minGrade,
-				baseMarketQualityThreshold: marketQualityThreshold,
-			});
-			const policyKey = getBotCandidatePolicyKey({
-				policy,
-				marketType: getMarketTypeLabel(entry.marketTitle),
-				sportSeriesId: entry.sportSeriesId,
-				minutesToStart: policyMinutesToStart,
-			});
-			incrementCounter(debug.policyMatched, policyKey);
-			if (policy.reject) {
-				const rejectReason = policy.rejectReason ?? "policy_rejected";
-				incrementCounter(debug.excluded, rejectReason);
-				pushNearMiss(debug, {
-					reason: rejectReason,
-					conditionId: entry.conditionId,
-					marketTitle: entry.marketTitle,
-					sportSeriesId: entry.sportSeriesId,
+	const canonicalScoreCache: CanonicalScoreCache = {
+		teamByAlias: new Map(),
+		snapshotByKey: new Map(),
+	};
+	const baseCandidates = (
+		await Promise.all(
+			upcomingEntries.map(async (entry) => {
+				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
+				const policyEventTime = parseEventTime(entry.eventTime);
+				const policyMinutesToStart =
+					policyEventTime !== null
+						? (policyEventTime.getTime() - now) / 60_000
+						: null;
+				const policy = getBotCandidatePolicy({
 					marketType: getMarketTypeLabel(entry.marketTitle),
-					sharpSide: entry.sharpSide,
-					sharpSidePrice:
-						entry.sharpSide === "A"
-							? (entry.sideA.price ?? null)
-							: entry.sharpSide === "B"
-								? (entry.sideB.price ?? null)
-								: null,
-					grade: grade?.grade ?? undefined,
-					policyMinGrade: policy.minGrade,
-					signalScore: grade?.signalScore,
-					marketQualityScore: grade?.microstructureScore,
+					sportSeriesId: entry.sportSeriesId,
+					minutesToStart: policyMinutesToStart,
+					baseMinGrade: options.minGrade,
+					baseMarketQualityThreshold: marketQualityThreshold,
+				});
+				const policyKey = getBotCandidatePolicyKey({
+					policy,
+					marketType: getMarketTypeLabel(entry.marketTitle),
+					sportSeriesId: entry.sportSeriesId,
 					minutesToStart: policyMinutesToStart,
 				});
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_policy",
+				incrementCounter(debug.policyMatched, policyKey);
+				if (policy.reject) {
+					const rejectReason = policy.rejectReason ?? "policy_rejected";
+					incrementCounter(debug.excluded, rejectReason);
+					pushNearMiss(debug, {
 						reason: rejectReason,
-					};
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade?.grade ?? undefined,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade?.signalScore,
+						marketQualityScore: grade?.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_policy",
+							reason: rejectReason,
+						};
+					}
+					return null;
 				}
-				return null;
-			}
-			if (!grade?.grade) {
-				incrementCounter(debug.excluded, "missing_grade");
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_grade",
-						reason: "missing_grade",
-					};
+				if (!grade?.grade) {
+					incrementCounter(debug.excluded, "missing_grade");
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "missing_grade",
+						};
+					}
+					return null;
 				}
-				return null;
-			}
-			if (GRADE_RANK[grade.grade] < GRADE_RANK[policy.minGrade]) {
-				incrementCounter(debug.excluded, "below_policy_grade");
-				pushNearMiss(debug, {
-					reason: "below_policy_grade",
-					conditionId: entry.conditionId,
-					marketTitle: entry.marketTitle,
-					sportSeriesId: entry.sportSeriesId,
-					marketType: getMarketTypeLabel(entry.marketTitle),
-					sharpSide: entry.sharpSide,
-					sharpSidePrice:
-						entry.sharpSide === "A"
-							? (entry.sideA.price ?? null)
-							: entry.sharpSide === "B"
-								? (entry.sideB.price ?? null)
-								: null,
-					grade: grade.grade,
-					policyMinGrade: policy.minGrade,
-					signalScore: grade.signalScore,
-					marketQualityScore: grade.microstructureScore,
-					minutesToStart: policyMinutesToStart,
-				});
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_grade",
+				if (GRADE_RANK[grade.grade] < GRADE_RANK[policy.minGrade]) {
+					incrementCounter(debug.excluded, "below_policy_grade");
+					pushNearMiss(debug, {
 						reason: "below_policy_grade",
-					};
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "below_policy_grade",
+						};
+					}
+					return null;
 				}
-				return null;
-			}
-			if ((grade.warnings ?? []).includes("no_price_edge")) {
-				incrementCounter(debug.excluded, "no_price_edge");
-				pushNearMiss(debug, {
-					reason: "no_price_edge",
-					conditionId: entry.conditionId,
-					marketTitle: entry.marketTitle,
-					sportSeriesId: entry.sportSeriesId,
-					marketType: getMarketTypeLabel(entry.marketTitle),
-					sharpSide: entry.sharpSide,
-					sharpSidePrice:
-						entry.sharpSide === "A"
-							? (entry.sideA.price ?? null)
-							: entry.sharpSide === "B"
-								? (entry.sideB.price ?? null)
-								: null,
-					grade: grade.grade,
-					policyMinGrade: policy.minGrade,
-					signalScore: grade.signalScore,
-					marketQualityScore: grade.microstructureScore,
-					minutesToStart: policyMinutesToStart,
-				});
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_grade",
+				if ((grade.warnings ?? []).includes("no_price_edge")) {
+					incrementCounter(debug.excluded, "no_price_edge");
+					pushNearMiss(debug, {
 						reason: "no_price_edge",
-					};
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "no_price_edge",
+						};
+					}
+					return null;
 				}
-				return null;
-			}
-			if (
-				shouldRequireMicrostructure &&
-				(grade.microstructureScore ?? 0) < policy.marketQualityThreshold
-			) {
-				incrementCounter(debug.excluded, "below_policy_microstructure");
-				pushNearMiss(debug, {
-					reason: "below_policy_microstructure",
-					conditionId: entry.conditionId,
-					marketTitle: entry.marketTitle,
-					sportSeriesId: entry.sportSeriesId,
-					marketType: getMarketTypeLabel(entry.marketTitle),
-					sharpSide: entry.sharpSide,
-					sharpSidePrice:
-						entry.sharpSide === "A"
-							? (entry.sideA.price ?? null)
-							: entry.sharpSide === "B"
-								? (entry.sideB.price ?? null)
-								: null,
-					grade: grade.grade,
-					policyMinGrade: policy.minGrade,
-					signalScore: grade.signalScore,
-					marketQualityScore: grade.microstructureScore,
-					minutesToStart: policyMinutesToStart,
-				});
-				if (inspectConditionId && entry.conditionId === inspectConditionId) {
-					debug.inspect = {
-						conditionId: inspectConditionId,
-						foundInEntries: true,
-						stage: "filtered_grade",
+				if (
+					shouldRequireMicrostructure &&
+					(grade.microstructureScore ?? 0) < policy.marketQualityThreshold
+				) {
+					incrementCounter(debug.excluded, "below_policy_microstructure");
+					pushNearMiss(debug, {
 						reason: "below_policy_microstructure",
-					};
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "below_policy_microstructure",
+						};
+					}
+					return null;
 				}
-				return null;
-			}
-			return {
-				entry: toSlimCandidate(entry),
-				grade: {
-					grade: grade.grade,
-					signalScore: grade.signalScore,
-					edgeRating: grade.edgeRating,
-					scoreDifferential: grade.scoreDifferential,
-					microstructureScore: grade.microstructureScore,
-					isReady: grade.isReady,
-					warnings: grade.warnings,
-					computedAt: grade.computedAt,
-					historyUpdatedAt: grade.historyUpdatedAt,
-				},
-				policy,
-			};
-		})
-		.filter((candidate) => candidate !== null);
+				const canonicalScore = await computeCanonicalBotCandidateScore(
+					db,
+					canonicalScoreCache,
+					{
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						sharpSide: entry.sharpSide,
+						sideA: entry.sideA,
+						sideB: entry.sideB,
+					},
+				);
+				return {
+					entry: toSlimCandidate(entry),
+					grade: {
+						grade: grade.grade,
+						signalScore: grade.signalScore,
+						edgeRating: grade.edgeRating,
+						scoreDifferential: grade.scoreDifferential,
+						microstructureScore: grade.microstructureScore,
+						segmentScore: policy.rankingAdjustment,
+						segmentKey: policy.segmentKey,
+						segmentLabel: policy.segmentLabel,
+						segmentNotes: policy.notes,
+						canonicalScore: canonicalScore?.totalScore ?? null,
+						canonicalSnapshotType: canonicalScore?.snapshotType ?? null,
+						canonicalWarnings: canonicalScore?.warnings ?? [],
+						isReady: grade.isReady,
+						warnings: grade.warnings,
+						computedAt: grade.computedAt,
+						historyUpdatedAt: grade.historyUpdatedAt,
+					},
+					policy,
+				};
+			}),
+		)
+	).filter((candidate) => candidate !== null);
 	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	const deduped = new Map<string, (typeof candidates)[number]>();
@@ -1322,10 +1738,7 @@ async function listBotCandidates(
 			}
 			continue;
 		}
-		const comparison = compareBotCandidates(
-			candidate,
-			existing,
-		);
+		const comparison = compareBotCandidates(candidate, existing);
 		if (comparison < 0) {
 			debug.dedupDropped += 1;
 			incrementCounter(debug.dedupReasons, "candidate_priority");
@@ -1374,7 +1787,7 @@ async function listBotCandidates(
 			stage: "not_found_in_entries",
 		};
 	}
-	return {
+	const result = {
 		candidates: dedupedCandidates,
 		requested: gradesResult.requested,
 		returned: dedupedCandidates.length,
@@ -1382,6 +1795,31 @@ async function listBotCandidates(
 		computedAt: gradesResult.computedAt,
 		debug,
 	};
+	if (!inspectConditionId) {
+		await insertBotCandidateSnapshot(db, {
+			createdAt: result.computedAt,
+			minGrade: options.minGrade,
+			windowMinutes: options.windowMinutes,
+			minMinutesToStart: options.minMinutesToStart,
+			maxMinutesToStart: options.maxMinutesToStart,
+			requireReady: shouldRequireReady,
+			includeStarted: allowStarted,
+			requireMicrostructure: shouldRequireMicrostructure,
+			marketQualityThreshold,
+			requested: result.requested,
+			returned: result.returned,
+			totalEntries: debug.totalEntries,
+			upcomingEntries: debug.upcomingEntries,
+			candidatesBeforeDedup: debug.candidatesBeforeDedup,
+			returnedAfterDedup: debug.returnedAfterDedup,
+			excluded: debug.excluded,
+			policyMatched: debug.policyMatched,
+			returnedByMarketType: debug.returnedByMarketType,
+			returnedByTimingBucket: debug.returnedByTimingBucket,
+			returnedBySportSeries: debug.returnedBySportSeries,
+		});
+	}
+	return result;
 }
 
 export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
@@ -1544,6 +1982,19 @@ export const getBotInspectDefaultsFn = createServerFn({
 	};
 });
 
+export const getBotCohortsFn = createServerFn({
+	method: "GET",
+}).handler(async ({ context, data }) => {
+	const payload = (data ?? {}) as { limit?: number };
+	const limit =
+		typeof payload.limit === "number" && payload.limit > 0
+			? Math.min(payload.limit, 100)
+			: 20;
+	return {
+		snapshots: await listBotCandidateSnapshots(getDb(context), limit),
+	};
+});
+
 export async function handleBotRequest(
 	request: Request,
 	env: Env,
@@ -1695,6 +2146,19 @@ export async function handleBotRequest(
 			minGrade,
 		});
 		return jsonResponse(result);
+	}
+
+	if (url.pathname === "/api/bot/cohorts") {
+		if (request.method !== "GET") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const limitParam = Number(url.searchParams.get("limit"));
+		const limit =
+			Number.isFinite(limitParam) && limitParam > 0
+				? Math.min(limitParam, 100)
+				: 20;
+		const snapshots = await listBotCandidateSnapshots(env.POLYWHALER_DB, limit);
+		return jsonResponse({ snapshots });
 	}
 
 	if (url.pathname === "/api/bot/grades") {
