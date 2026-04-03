@@ -16,3 +16,4 @@ polymarket_info.md
 __pycache__/
 *.pyc
 *.pyo
+.codex
