@@ -57,9 +57,9 @@
 | Total Line | `total_line` | REAL | Extracted from market title (e.g., "47.5" from "Over 47.5") | OU grading, total_margin |
 | Actual Margin | `actual_margin` | REAL | `picked_side_score - opponent_score` (set at settlement) | cover_margin |
 | Actual Total | `actual_total` | REAL | `team_a_score + team_b_score` (set at settlement) | total_margin |
-| Opening Line | `opening_line` | REAL | Earliest `sharp_money_history` price for this condition | Line movement, fav/dog classification |
+| Opening Price | `opening_price` | REAL | Earliest `sharp_money_history` price for this condition and picked side | Line movement, CLV context |
 | Venue Role | `venue_role` | TEXT | Parsed from market title / event metadata: `home | away | neutral` | Home/away splits |
-| Fav/Dog Role | `fav_dog_role` | TEXT | Derived from `opening_line`: `favorite | dog | pickem` | Favorite/dog splits |
+| Fav/Dog Role | `fav_dog_role` | TEXT | Derived from canonical pregame game lines: `favorite | dog | pickem` | Favorite/dog splits |
 
 ---
 
@@ -114,15 +114,15 @@ Each metric and the exact fields it reads:
 | `total_line` | **NEW** `manual_picks.total_line` | Yes |
 | `bet_type` | **NEW** `manual_picks.bet_type` | Yes — filter to `'total'` |
 
-### opening_line
+### opening_price
 
 | Input | Source | Required? |
 |-------|--------|-----------|
 | `condition_id` | `manual_picks.condition_id` | Yes (join key) |
 | Earliest snapshot | `sharp_money_history` WHERE `condition_id` matches, `ORDER BY recorded_at ASC LIMIT 1` | Preferred |
-| `opening_line` | **NEW** `manual_picks.opening_line` | Fallback — denormalized at pick time |
+| `opening_price` | **NEW** `manual_picks.opening_price` | Fallback — denormalized at pick time |
 
-### closing_line
+### closing_price
 
 | Input | Source | Required? |
 |-------|--------|-----------|
@@ -148,8 +148,8 @@ Each metric and the exact fields it reads:
 | Input | Source | Required? |
 |-------|--------|-----------|
 | `fav_dog_role` | **NEW** `manual_picks.fav_dog_role` | Yes |
-| `opening_line` | **NEW** `manual_picks.opening_line` | Yes (derivation source) |
-| `close_price` | `manual_picks.close_price` | Fallback if opening unavailable |
+| Canonical pregame game line | `game_lines` / equivalent canonical source | Yes |
+| `close_price` | `manual_picks.close_price` | No — execution context only, not preferred for classification |
 
 ### Streak
 
@@ -180,7 +180,7 @@ ALTER TABLE manual_picks ADD COLUMN spread_line REAL;
 ALTER TABLE manual_picks ADD COLUMN total_line REAL;
 ALTER TABLE manual_picks ADD COLUMN actual_margin REAL;
 ALTER TABLE manual_picks ADD COLUMN actual_total REAL;
-ALTER TABLE manual_picks ADD COLUMN opening_line REAL;
+ALTER TABLE manual_picks ADD COLUMN opening_price REAL;
 ALTER TABLE manual_picks ADD COLUMN venue_role TEXT;
 ALTER TABLE manual_picks ADD COLUMN fav_dog_role TEXT;
 ```
@@ -197,11 +197,11 @@ CREATE INDEX idx_manual_picks_stats ON manual_picks(sport_tag, bet_type, status)
 
 **Backfill strategy:**
 1. `bet_type` and `sport_tag` can be backfilled from existing `market_title` using `detectBetType()` and `detectSportTag()`.
-2. `opening_line` can be backfilled by joining on `sharp_money_history` (earliest snapshot per condition_id).
+2. `opening_price` can be backfilled by joining on `sharp_money_history` (earliest snapshot per condition_id and picked side).
 3. `spread_line`, `total_line`: Backfill by parsing `market_title` for embedded numbers.
 4. `actual_margin`, `actual_total`: Require game result data — must come from an external results feed or manual entry. Cannot be backfilled from existing data.
 5. `venue_role`: Parse from `market_title` ("Away @ Home" convention) or event metadata.
-6. `fav_dog_role`: Derive from `opening_line` after backfill.
+6. `fav_dog_role`: Prefer deriving from canonical game lines after team/game normalization. Pick-level heuristics are transitional only.
 
 ---
 
@@ -214,14 +214,14 @@ Which metrics can be computed from existing data vs. requiring new data sources:
 | SU record | Partial — need `bet_type` column (derivable from `market_title`) | No |
 | ATS record | No — need `spread_line` + `actual_margin` | Game results feed |
 | OU record | No — need `total_line` + `actual_total` | Game results feed |
-| closing_line | Yes — `close_price` exists | No |
+| closing_price | Yes — `close_price` exists | No |
 | CLV | Yes — `clv` exists | No |
-| opening_line | Partial — derivable from `sharp_money_history` | No |
+| opening_price | Partial — derivable from `sharp_money_history` | No |
 | cover_margin | No — need `actual_margin` | Game results feed |
 | total_margin | No — need `actual_total` | Game results feed |
 | streak | Yes — needs only `status` + `picked_at` | No |
 | home/away | Partial — parseable from `market_title` | No (heuristic parsing) |
-| favorite/dog | Partial — needs `opening_line` (derivable) | No |
+| favorite/dog | No — should come from canonical game lines | Canonical game-line source |
 | push rate | Yes — `status = 'push'` exists | No |
 
 **Key dependency:** ATS grading, OU grading, cover_margin, and total_margin all require game result data (`actual_margin`, `actual_total`) that is **not currently captured**. This is the primary new data source needed for v1 stats.
@@ -235,7 +235,26 @@ For metrics requiring game results:
 | Data Point | Needed For | Possible Sources |
 |------------|-----------|-----------------|
 | Final score (both teams) | `actual_margin`, `actual_total` | Polymarket resolution data, ESPN API, odds-api.com |
-| Opening lines | `opening_line` (validation) | `sharp_money_history` (already captured), odds-api.com |
+| Opening prices | `opening_price` (validation) | `sharp_money_history` (already captured), odds-api.com |
 | Home/away designation | `venue_role` | Market title parsing (primary), event metadata |
+| Pregame favorite/dog | `fav_dog_role`, `spread_line`, `moneyline context` | Odds feed / canonical game-line source |
 
 **Recommendation:** Since Polymarket resolves markets with final results, the resolution event data should be the primary source for game scores. Supplement with `sharp_money_history` for line data.
+
+---
+
+## Canonical Entity Targets
+
+The `manual_picks` columns above are transitional denormalized fields. The
+canonical long-term source of truth for team-trend analytics should be:
+
+| Entity | Purpose |
+|--------|---------|
+| `teams` | Stable team identity and alias normalization |
+| `games` | Schedule, participants, venue, final score, season context |
+| `game_lines` | Pregame and closing spread / total / moneyline snapshots |
+| `team_game_facts` | Per-team SU / ATS / OU facts and contextual flags |
+| `team_trend_snapshots` | Precomputed rolling splits like last 10 away dog ATS |
+
+Phase 2 should populate these entities first, then derive or backfill any
+pick-level convenience fields from them.

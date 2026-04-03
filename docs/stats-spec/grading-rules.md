@@ -33,31 +33,30 @@ The simplest record: did the picked side win?
 
 ### 2.2 Against The Spread (ATS)
 
-In Polymarket context, "the spread" is the **fair price** (implied probability) at
-pick time. ATS measures whether the pick beat the market's implied probability.
+ATS uses the market's game line and the actual game result, not model fair value.
+For spread markets, grade from the picked team's perspective.
 
 | Field | Formula |
 |-------|---------|
-| `spread` | `fairPrice` at time of pick (from sharp signal model) |
-| `ats_result` | See grading table below |
+| `spread_line` | Canonical spread for the picked side |
+| `cover_margin` | `actual_margin - spread_line` |
+| `ats_result` | `"cover"` if `cover_margin > 0`, `"push"` if `cover_margin = 0`, `"no_cover"` if `cover_margin < 0` |
 | `ats_wins` | `COUNT(ats_result = "cover")` over scope |
 | `ats_losses` | `COUNT(ats_result = "no_cover")` over scope |
 | `ats_pushes` | `COUNT(ats_result = "push")` over scope |
 | `ats_record` | `"{covers}-{no_covers}-{pushes}"` |
 | `cover_rate` | `ats_wins / (ats_wins + ats_losses)` — pushes excluded |
 
-**ATS Grading Table:**
+**Examples:**
 
-| Outcome | Entry Price | Fair Price | ATS Result |
-|---------|------------|------------|------------|
-| Win | `price < fairPrice` | — | `cover` (bought below fair value, won) |
-| Win | `price >= fairPrice` | — | `no_cover` (overpaid, still won) |
-| Win | `price == fairPrice` | — | `push` |
-| Loss | — | — | `no_cover` (always) |
+| Actual Margin | Spread Line | Cover Margin | ATS Result |
+|---------------|-------------|--------------|------------|
+| `+7` | `-3.5` | `+3.5` | `cover` |
+| `+3` | `-3.0` | `0` | `push` |
+| `-1` | `-3.5` | `-4.5` | `no_cover` |
 
-**Rationale:** A "cover" means you got positive expected value AND the pick won.
-Buying below fair price and winning = beating the spread. Overpaying even on a
-win = not beating the spread, because the position had negative expected value.
+**Important:** model fair value, entry price, and execution quality are tracked
+separately as `price_edge` / CLV-style metrics. They are not ATS.
 
 ### 2.3 Over/Under (OU)
 
@@ -76,22 +75,31 @@ The "total" is the line set by the market, and the pick is either Over or Under.
 **Applicability:** Only computed for picks where `betType = "total"`. For non-total
 markets, OU fields are `null`.
 
+### 2.4 Push Handling
+
+| Scenario | Result |
+|----------|--------|
+| Cancelled / invalid market | `push` |
+| Spread market with `cover_margin = 0` | `push` |
+| Total market with `actual_total = total_line` | `push` |
+| Moneyline tie in a market that resolves as a push | `push` |
+
 ---
 
 ## 3. Line Metrics
 
-### 3.1 Opening Line
+### 3.1 Opening Price
 
 | Field | Formula |
 |-------|---------|
-| `opening_line` | First recorded `outcomePrices[pickedSideIndex]` from sharp money history for this condition |
+| `opening_price` | First recorded market price for the picked side from sharp money history for this condition |
 | Source | `sharp_money_history` table, `MIN(snapshot_time)` for the condition |
 
-### 3.2 Closing Line
+### 3.2 Closing Price
 
 | Field | Formula |
 |-------|---------|
-| `closing_line` | Last recorded `outcomePrices[pickedSideIndex]` before market resolution |
+| `closing_price` | Last recorded market price for the picked side before market resolution |
 | Source | `sharp_money_history` table, `MAX(snapshot_time)` where `snapshot_time < resolved_at` |
 | Fallback | If no history available: `close_price` from resolution data |
 
@@ -101,7 +109,7 @@ CLV measures whether you got a better price than the market's final consensus.
 
 | Field | Formula |
 |-------|---------|
-| `clv` | `closing_line - entry_price` (in price units, 0.00–1.00 scale) |
+| `clv` | `closing_price - entry_price` (in price units, 0.00–1.00 scale) |
 | `clv_bps` | `clv * 10000` (in basis points for display) |
 | Interpretation | Positive = bought cheaper than close (good). Negative = overpaid vs close (bad). |
 
@@ -118,14 +126,21 @@ How far the pick beat (or missed) the spread.
 
 | Field | Formula |
 |-------|---------|
-| `cover_margin` | `fairPrice - entry_price` (positive = bought below fair value) |
-| Interpretation | Positive margin = got a bargain. Negative = overpaid. |
-| Units | Price units (0.00–1.00 scale) |
-
-**Note:** This is the pre-resolution expected-value margin. It measures edge at
-entry, independent of outcome.
+| `cover_margin` | `actual_margin - spread_line` |
+| Interpretation | Positive margin = covered by that amount. Negative = missed by that amount. |
+| Units | Points / goals / runs, depending on sport |
 
 ### 4.2 Total Margin (ROI)
+
+How far the game finished above or below the total line.
+
+| Field | Formula |
+|-------|---------|
+| `total_margin` | `actual_total - total_line` |
+| Interpretation | Positive = finished over the total. Negative = finished under. |
+| Units | Points / goals / runs, depending on sport |
+
+### 4.3 ROI
 
 The actual profit/loss on the pick.
 
@@ -137,9 +152,6 @@ The actual profit/loss on the pick.
 | `roi` (no entry price) | `null` |
 | `avg_roi` | `SUM(roi) / COUNT(roi IS NOT NULL)` over scope |
 | `total_roi` | `SUM(roi)` over scope |
-
-**Example:** Entry at 0.40, win → ROI = (1/0.40) - 1 = 1.50 = +150%.
-Entry at 0.40, loss → ROI = -1 = -100%.
 
 ---
 
@@ -161,13 +173,12 @@ See edge-cases.md §1 (Neutral Sites) for additional rules.
 
 | Field | Formula |
 |-------|---------|
-| `role` | `"favorite"` if `fairPrice >= 0.50`, `"dog"` if `fairPrice < 0.50` |
-| `pick_em` | `true` if `abs(fairPrice - 0.50) < 0.005` (within 0.5¢ of even) |
+| `role` | `"favorite"` if canonical pregame game line favors the picked team, `"dog"` otherwise |
+| `pick_em` | `true` if the canonical pregame game line is effectively even |
 | `favorite_record` | SU record filtered to `role = "favorite"` |
 | `dog_record` | SU record filtered to `role = "dog"` |
 
-**Note:** Role is determined by the **fair price** at pick time, not entry price.
-A side with fairPrice = 0.60 is a -150 favorite; fairPrice = 0.35 is a +186 dog.
+**Note:** Role is determined by game context, not model fair price or entry price.
 
 ---
 

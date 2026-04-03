@@ -14,7 +14,7 @@ March Madness, international friendlies, bowl games).
 |------|----------|
 | Detection | Market title/slug contains neutral-site indicators: "Super Bowl", "Final Four", "bowl game", "neutral", or the event is a known neutral-site event |
 | Home/Away assignment | `position = null` — neither side is tagged home or away |
-| Favorite/Dog | Still computed from `fairPrice` (price-based, not venue-based) |
+| Favorite/Dog | Still computed from canonical pregame game lines (not venue-based) |
 | Aggregation | Neutral-site picks are **excluded** from home/away breakdowns but **included** in overall SU/ATS/OU records |
 | Fallback | If detection is uncertain, default to `position = null` rather than guessing |
 
@@ -22,20 +22,19 @@ March Madness, international friendlies, bowl games).
 
 ## 2. Pick'em (Even Money)
 
-**Definition:** A market where neither side has a meaningful edge — fairPrice is
-near 0.50 for both sides.
+**Definition:** A game where the canonical pregame line shows no meaningful edge.
 
 | Rule | Behavior |
 |------|----------|
-| Threshold | `abs(fairPrice - 0.50) < 0.005` (within 0.5¢ of even) |
+| Threshold | Spread of `0` / `PK`, or equivalent even-money pregame classification |
 | Favorite/Dog | `role = null`, `pick_em = true` |
-| ATS grading | Still applies — entry price vs fair price still produces cover/no_cover |
+| ATS grading | Still applies — use game line and actual result |
 | Aggregation | Pick'em games are **excluded** from favorite/dog breakdowns but **included** in overall records |
 | Display | Show as "PK" in line displays instead of a spread number |
 
 ---
 
-## 3. Missing Closing Line
+## 3. Missing Closing Price
 
 **Scenario:** No sharp money history snapshots exist near market close, or the
 market resolved without price movement data.
@@ -43,7 +42,7 @@ market resolved without price movement data.
 | Rule | Behavior |
 |------|----------|
 | CLV | `clv = null`, `clv_bps = null` |
-| Closing line | `closing_line = null` |
+| Closing price | `closing_price = null` |
 | Aggregation | Pick is **excluded** from CLV averages (`COUNT(clv IS NOT NULL)`) |
 | SU/ATS/ROI | Unaffected — these don't depend on closing line |
 | Display | Show "—" for CLV column |
@@ -53,16 +52,16 @@ history), CLV should be recomputed on the next settlement sweep.
 
 ---
 
-## 4. Missing Opening Line
+## 4. Missing Opening Price
 
 **Scenario:** No early snapshots exist for this market — pick was made before
 any history was recorded, or history was not captured.
 
 | Rule | Behavior |
 |------|----------|
-| Opening line | `opening_line = null` |
-| Line movement | Cannot compute `line_movement = closing_line - opening_line` |
-| Display | Show "—" for opening line column |
+| Opening price | `opening_price = null` |
+| Line movement | Cannot compute `line_movement = closing_price - opening_price` |
+| Display | Show "—" for opening price column |
 | Impact | No effect on grading or other metrics |
 
 ---
@@ -80,7 +79,7 @@ oracle. This includes disputed markets and markets that violate Polymarket rules
 | CLV | `clv = null` (no meaningful close price) |
 | SU record | Counted in `pushes`, **excluded** from wins and losses |
 | Win rate | **Excluded** from denominator (`wins + losses` only) |
-| ATS | `ats_result = null` — not graded |
+| ATS | `ats_result = null` — not graded if the market itself resolves as push/cancel |
 | Streaks | **Skipped** — does not break or extend any streak |
 | Display | Show "P" or "Push" in result column |
 
@@ -94,7 +93,7 @@ extra time/penalties (soccer).
 | Rule | Behavior |
 |------|----------|
 | SU grading | **Includes overtime.** Final result after all periods counts. |
-| ATS grading | **Includes overtime.** The market resolves to a final winner regardless of regulation/OT. |
+| ATS grading | **Includes overtime.** Grade against the final score unless the market explicitly says regulation only. |
 | OU grading | **Includes overtime.** Total points/goals include OT scoring. |
 | Rationale | Polymarket binary markets resolve on the actual final outcome, not regulation time. There is no "regulation only" variant in Polymarket. |
 | Edge case | If a market explicitly specifies "regulation" in its title, grade against regulation result only. Detection: title contains "regulation" or "reg time". |
@@ -110,8 +109,8 @@ instead of the consensus spread).
 |------|----------|
 | Detection | `betType = "spread"` or `betType = "total"` with a non-standard line embedded in the title |
 | Grading | Grade against the **market's own line**, not any external consensus line |
-| ATS | Still computed — fair price reflects the alternate line's implied probability |
-| Aggregation | Included in overall ATS/OU records (the fair price already accounts for the alternate line) |
+| ATS | Still computed — use the market's own spread / total line |
+| Aggregation | Included in overall ATS/OU records using the market's actual embedded line |
 | Display | Show the specific line from the market title if parseable |
 
 **Rationale:** On Polymarket, every market is self-contained. The "spread" IS the
@@ -128,24 +127,24 @@ tracking before execution, or a signal-only pick not actually traded).
 |------|----------|
 | ROI | `roi = null` |
 | CLV | `clv = null` (requires entry price for the delta) |
-| Cover margin | `cover_margin = null` |
-| ATS | `ats_result = null` (requires entry price vs fair price comparison) |
+| Cover margin | Unaffected if game line and result are known |
+| ATS | Unaffected if game line and result are known |
 | SU | **Still graded** — win/loss only requires resolved side vs picked side |
-| Streaks | **Still counted** — streaks use SU result, not price data |
+| Streaks | **Still counted** — streaks use resolved result, not price data |
 
 ---
 
-## 9. Missing Fair Price
+## 9. Missing Game Line
 
-**Scenario:** Sharp signal model did not produce a fair price for this market
-(e.g., insufficient data, new market type, model failure).
+**Scenario:** The canonical spread / total / moneyline context is unavailable for
+the game at grading time.
 
 | Rule | Behavior |
 |------|----------|
-| ATS | `ats_result = null` — cannot grade without fair price |
+| ATS | `ats_result = null` — cannot grade without a game line |
 | Cover margin | `cover_margin = null` |
-| Favorite/Dog | `role = null` — cannot determine without fair price |
-| SU/ROI/CLV | **Unaffected** — these don't require fair price |
+| Favorite/Dog | `role = null` — cannot determine without game line context |
+| SU/ROI/CLV | **Unaffected** — these don't require a game line |
 | Aggregation | Excluded from ATS and favorite/dog breakdowns |
 
 ---

@@ -96,12 +96,12 @@ Split dimensions partition records (SU, ATS, OU) by contextual attributes of the
 
 | Value | Rule |
 |-------|------|
-| `favorite` | The picked side's **opening moneyline implied probability > 0.50** (or closing, if opening unavailable). |
-| `dog` | The picked side's opening implied probability < 0.50. |
+| `favorite` | The picked team is favored by the canonical pregame game line. |
+| `dog` | The picked team is the underdog by the canonical pregame game line. |
 | `pickem` | Both sides within 0.50 +/- 0.02 (48%–52%). See edge cases. |
 
-- **Source:** Derived from `opening_line` (preferred) or `closing_line` price.
-- Polymarket prices directly represent implied probability (0–1 scale), so no American/decimal odds conversion is needed.
+- **Source:** Derived from canonical game-line data. Use pregame moneyline if available; otherwise use spread sign/magnitude. If neither exists, leave null.
+- Polymarket prices can inform execution analysis, but favorite/dog classification is a game-context concept and should not be inferred from pick-specific fair price.
 - **Storage:** `fav_dog_role` enum: `favorite | dog | pickem`.
 
 ---
@@ -131,32 +131,42 @@ How much the actual game total exceeded or fell short of the total line.
 - For "Over" picks, positive = win; for "Under" picks, negative = win.
 - Only applies to `bet_type = 'total'`.
 
+### price_edge — Execution Edge At Entry
+
+How much better or worse the pick price was than the model's estimated fair value.
+
+| Field | Formula |
+|-------|---------|
+| `price_edge` | `fair_price - fill_price` (or `fair_price - price` if unfilled) |
+
+- Positive = bought below fair value.
+- This is an execution-quality metric, not a sports ATS metric.
+- Units: implied probability price on a 0–1 scale.
+
 ---
 
 ## Metric Category: Line Metrics
 
-### opening_line
+### opening_price
 
-The earliest available line/price for a market after it opens.
-
-| Field | Formula |
-|-------|---------|
-| `opening_line` | First recorded price from `sharp_money_history` for this `condition_id`, taken from the earliest `recorded_at` entry. |
-
-- For moneyline markets: the implied probability price (0–1).
-- For spread markets: the spread number embedded in the market title at open.
-- For total markets: the total number embedded in the market title at open.
-- **Polymarket note:** Since Polymarket prices are implied probabilities, `opening_line` for moneyline is the raw price (e.g., 0.65 = 65% implied).
-
-### closing_line
-
-The final line/price at market close (game start or market resolution, whichever is earlier).
+The earliest available market price for the picked side after the market opens.
 
 | Field | Formula |
 |-------|---------|
-| `closing_line` | `close_price` from the `manual_picks` table, or the last `sharp_money_history` entry before resolution. |
+| `opening_price` | First recorded price from `sharp_money_history` for this `condition_id`, taken from the earliest `recorded_at` entry for the picked side. |
 
-- Same unit conventions as `opening_line`.
+- Applies to execution-quality and line-movement analysis in price space.
+- Units: implied probability price on a 0–1 scale.
+
+### closing_price
+
+The final market price for the picked side before market close, game start, or resolution, whichever is earlier.
+
+| Field | Formula |
+|-------|---------|
+| `closing_price` | `close_price` from the `manual_picks` table, or the last `sharp_money_history` entry before resolution for the picked side. |
+
+- Same unit conventions as `opening_price`.
 - Used as the benchmark for CLV (closing line value) calculation.
 
 ### CLV — Closing Line Value
@@ -165,8 +175,8 @@ Already tracked in the existing system. Included here for completeness.
 
 | Field | Formula |
 |-------|---------|
-| `clv` | `fill_price - close_price` (for picks where lower price = better value on the picked side) |
-| `clv_pct` | `(close_price - fill_price) / fill_price * 100` |
+| `clv` | `closing_price - fill_price` |
+| `clv_pct` | `(closing_price - fill_price) / fill_price * 100` |
 
 - Positive CLV means the pick captured value vs. the closing market.
 - Existing field: `manual_picks.clv`.
@@ -214,14 +224,15 @@ Metrics ranked by implementation priority for v1:
 | P0 | SU record + win_pct | Core performance indicator; requires only existing `status` field |
 | P0 | ATS record + win_pct | Primary edge metric for spread bettors |
 | P0 | OU record + win_pct | Completes the bet-type trifecta |
-| P0 | closing_line, CLV | Already partially implemented; key signal quality metric |
-| P1 | opening_line | Enables line movement analysis |
+| P0 | closing_price, CLV | Already partially implemented; key signal quality metric |
+| P1 | opening_price | Enables line movement analysis |
 | P1 | cover_margin, total_margin | Quantifies *how much* picks win/lose by |
 | P1 | streak | High user engagement; visible on dashboards |
 | P1 | home/away split | Standard contextual filter |
 | P1 | favorite/dog split | Reveals selection bias patterns |
 | P2 | push rate | Diagnostic metric; lower priority |
 | P2 | Aggregate ROI by split | Combine existing ROI with new split dimensions |
+| P2 | price_edge | Execution diagnostic, separate from sports grading |
 
 **P0** = Must ship in v1 stats tables.
 **P1** = Ship in v1 if data is available; degrade gracefully if not.
@@ -249,9 +260,9 @@ How new metrics relate to existing polywhaler fields:
 
 | New Metric | Existing Field(s) | New Field(s) Needed |
 |------------|--------------------|---------------------|
-| SU/ATS/OU records | `manual_picks.status` | `bet_type` (via `detectBetType()` — already computed but not stored) |
-| opening_line | `sharp_money_history` (earliest entry) | `opening_line` on picks table |
-| closing_line | `manual_picks.close_price` | None (already stored) |
+| SU/ATS/OU records | `manual_picks.status` | `bet_type` plus canonical game facts |
+| opening_price | `sharp_money_history` (earliest entry) | `opening_price` on picks table |
+| closing_price | `manual_picks.close_price` | None (already stored) |
 | CLV | `manual_picks.clv` | None (already stored) |
 | cover_margin | — | `spread_line`, `actual_margin` |
 | total_margin | — | `total_line`, `actual_total` |
@@ -259,3 +270,4 @@ How new metrics relate to existing polywhaler fields:
 | favorite/dog | — | `fav_dog_role` |
 | streak | Computed at query time | None (derived metric) |
 | push | `manual_picks.status = 'push'` | None (already stored) |
+| price_edge | `manual_picks.fair_price`, `manual_picks.fill_price`, `manual_picks.price` | None (already mostly stored) |
