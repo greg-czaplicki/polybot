@@ -9,7 +9,7 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
-import { first } from "../db/client";
+import { all, first } from "../db/client";
 import {
 	buildMatchupComparison,
 	buildMatchupComparisonByNames,
@@ -28,6 +28,45 @@ import type {
 	TrendSnapshotType,
 	VenueRole,
 } from "../types/canonical";
+
+// ---------------------------------------------------------------------------
+// Sport Tags
+// ---------------------------------------------------------------------------
+
+/**
+ * List distinct sport tags that have at least one team seeded.
+ * Used to populate sport-tag dropdowns on the canonical page.
+ */
+export const listSportTagsFn = createServerFn({ method: "GET" }).handler(
+	async ({ context }) => {
+		const db = getDb(context);
+		const rows = await all<{ sport_tag: string }>(
+			db,
+			`SELECT DISTINCT sport_tag FROM teams ORDER BY sport_tag ASC`,
+		);
+		return { sportTags: rows.map((r) => r.sport_tag) };
+	},
+);
+
+/**
+ * List all teams, returning id/name/sportTag for dropdown population.
+ */
+export const listTeamsForDropdownFn = createServerFn({ method: "GET" }).handler(
+	async ({ context }) => {
+		const db = getDb(context);
+		const rows = await all<{ id: string; name: string; sport_tag: string }>(
+			db,
+			`SELECT id, name, sport_tag FROM teams ORDER BY sport_tag ASC, name ASC`,
+		);
+		return {
+			teams: rows.map((r) => ({
+				id: r.id,
+				name: r.name,
+				sportTag: r.sport_tag,
+			})),
+		};
+	},
+);
 
 // ---------------------------------------------------------------------------
 // Team Trend Summary
@@ -64,13 +103,14 @@ export const getTeamTrendSummaryFn = createServerFn({
 		}
 
 		const db = getDb(context);
+		const sportTag = data.sportTag.toLowerCase();
 		const snapshotType = data.snapshotType ?? "overall";
 
 		if (data.alias && !data.teamId) {
 			const summary = await buildTeamTrendSummaryByName(
 				db,
 				data.alias,
-				data.sportTag,
+				sportTag,
 				snapshotType,
 				{ window: data.window, asOfTime: data.asOfTime },
 			);
@@ -86,7 +126,7 @@ export const getTeamTrendSummaryFn = createServerFn({
 			data.teamId,
 			snapshotType,
 			{
-				sportTag: data.sportTag,
+				sportTag,
 				window: data.window,
 				asOfTime: data.asOfTime,
 			},
@@ -111,10 +151,11 @@ export const getTeamTrendOverviewFn = createServerFn({
 	.inputValidator((d: TrendOverviewInput) => d)
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
+		const sportTag = data.sportTag?.toLowerCase();
 
 		let teamId = data.teamId;
-		if (!teamId && data.alias && data.sportTag) {
-			const team = await findTeamByAlias(db, data.sportTag, data.alias);
+		if (!teamId && data.alias && sportTag) {
+			const team = await findTeamByAlias(db, sportTag, data.alias);
 			if (!team) {
 				return { overview: null, error: `Team not found: ${data.alias}` };
 			}
@@ -129,7 +170,7 @@ export const getTeamTrendOverviewFn = createServerFn({
 		}
 
 		const overview = await buildTeamTrendOverview(db, teamId, {
-			sportTag: data.sportTag,
+			sportTag,
 		});
 		return { overview };
 	});
@@ -169,6 +210,7 @@ export const getMatchupComparisonFn = createServerFn({
 		}
 
 		const db = getDb(context);
+		const sportTag = data.sportTag.toLowerCase();
 
 		// If gameId provided, build comparison from game context
 		if (data.gameId && !data.teamId && !data.teamAlias) {
@@ -186,7 +228,7 @@ export const getMatchupComparisonFn = createServerFn({
 				db,
 				data.teamAlias,
 				data.opponentAlias,
-				data.sportTag,
+				sportTag,
 				{
 					gameId: data.gameId,
 					teamVenueRole: data.teamVenueRole,
@@ -211,7 +253,7 @@ export const getMatchupComparisonFn = createServerFn({
 			data.teamId,
 			data.opponentId,
 			{
-				sportTag: data.sportTag,
+				sportTag,
 				gameId: data.gameId,
 				teamVenueRole: data.teamVenueRole,
 				teamFavDogRole: data.teamFavDogRole,

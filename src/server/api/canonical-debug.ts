@@ -18,14 +18,14 @@ import { createServerFn } from "@tanstack/react-start";
 import { getDb } from "../env";
 import { processGame, processGames } from "../pipeline/canonical-pipeline";
 import {
-	type MarketGameInput,
 	batchIngestGames,
 	ingestGameFromMarketData,
+	type MarketGameInput,
 } from "../pipeline/game-ingestion";
 import {
-	type MarketLineInput,
 	batchIngestLines,
 	ingestLineFromMarket,
+	type MarketLineInput,
 } from "../pipeline/line-ingestion";
 import { backfillManualPicks } from "../pipeline/pick-backfill";
 import {
@@ -521,9 +521,16 @@ export const batchIngestLinesFn = createServerFn({ method: "POST" }).handler(
  * Input: {} (no parameters needed)
  */
 export const backfillPicksFn = createServerFn({ method: "POST" }).handler(
-	async ({ context }) => {
+	async ({ context, data }) => {
 		const db = getDb(context);
-		const result = await backfillManualPicks(db);
+		const payload = (data ?? {}) as {
+			mode?: "incremental" | "full";
+			repairWindowHours?: number;
+		};
+		const result = await backfillManualPicks(db, {
+			mode: payload.mode ?? "full",
+			repairWindowHours: payload.repairWindowHours,
+		});
 
 		return { result };
 	},

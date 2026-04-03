@@ -179,7 +179,7 @@ async function loadSideSnapshots(
 	return { overall, split: split ?? null };
 }
 
-async function buildPrePickFeatures(
+export async function buildPrePickFeatures(
 	db: Db,
 	teamId: string | null,
 	opponentId: string | null,

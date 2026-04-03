@@ -96,13 +96,36 @@ export async function findTeamByAlias(
 	sportTag: string,
 	alias: string,
 ): Promise<Team | null> {
+	const normalizedAlias = alias.trim();
+	if (!normalizedAlias) {
+		return null;
+	}
+
 	// First try exact name match
-	const exact = await getTeamByName(db, sportTag, alias);
+	const exact = await getTeamByName(db, sportTag, normalizedAlias);
 	if (exact) return exact;
+
+	// Next try short name / abbreviation exact match.
+	const exactShortOrAbbreviation = await first<TeamRow>(
+		db,
+		`SELECT * FROM teams
+		 WHERE sport_tag = ?
+		   AND (
+		   	LOWER(short_name) = LOWER(?)
+		   	OR LOWER(abbreviation) = LOWER(?)
+		   )
+		 LIMIT 1`,
+		sportTag,
+		normalizedAlias,
+		normalizedAlias,
+	);
+	if (exactShortOrAbbreviation) {
+		return parseRow(exactShortOrAbbreviation);
+	}
 
 	// Search aliases (JSON array contains check)
 	// Escape SQL LIKE wildcards (%, _) in the alias before using in LIKE pattern
-	const escapedAlias = alias.replace(/[%_]/g, "\\$&");
+	const escapedAlias = normalizedAlias.replace(/[%_]/g, "\\$&");
 	const rows = await all<TeamRow>(
 		db,
 		`SELECT * FROM teams WHERE sport_tag = ? AND aliases_json LIKE ? ESCAPE '\\'`,
@@ -112,7 +135,11 @@ export async function findTeamByAlias(
 
 	for (const row of rows) {
 		const team = parseRow(row);
-		if (team.aliases.some((a) => a.toLowerCase() === alias.toLowerCase())) {
+		if (
+			team.aliases.some(
+				(a) => a.toLowerCase() === normalizedAlias.toLowerCase(),
+			)
+		) {
 			return team;
 		}
 	}

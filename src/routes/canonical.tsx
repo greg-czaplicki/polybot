@@ -1,16 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import {
 	getMatchupComparisonFn,
 	getPickContextFn,
 	getTeamTrendOverviewFn,
+	listTeamsForDropdownFn,
 } from "../server/api/canonical-analytics";
 import {
 	type CanonicalFreshnessStatus,
-	type SyncRunSummary,
 	getCanonicalFreshnessFn,
+	type SyncRunSummary,
 	triggerCanonicalSyncFn,
 } from "../server/api/canonical-sync-api";
 
@@ -37,11 +38,26 @@ function formatTimestamp(ts: number | null | undefined): string {
 	return new Date(ts * 1000).toLocaleString();
 }
 
+function formatCoverage(count: number, total: number): string {
+	if (total <= 0) return "—";
+	return `${count}/${total} (${((count / total) * 100).toFixed(1)}%)`;
+}
+
+function topEntries(record: Record<string, number>, limit: number = 6) {
+	return Object.entries(record)
+		.sort((left, right) => right[1] - left[1])
+		.slice(0, limit);
+}
+
 function StatCard({
 	label,
 	value,
 	sub,
-}: { label: string; value: string | number; sub?: string }) {
+}: {
+	label: string;
+	value: string | number;
+	sub?: string;
+}) {
 	return (
 		<div
 			style={{
@@ -63,6 +79,70 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
+// Shared team dropdown types
+// ---------------------------------------------------------------------------
+
+interface DropdownTeam {
+	id: string;
+	name: string;
+	sportTag: string;
+}
+
+function TeamSelect({
+	teams,
+	sportTags,
+	sportTag,
+	onSportTagChange,
+	selectedTeamId,
+	onTeamChange,
+	label,
+}: {
+	teams: DropdownTeam[];
+	sportTags: string[];
+	sportTag: string;
+	onSportTagChange: (tag: string) => void;
+	selectedTeamId: string;
+	onTeamChange: (teamId: string) => void;
+	label?: string;
+}) {
+	const filtered = useMemo(
+		() => teams.filter((t) => t.sportTag === sportTag),
+		[teams, sportTag],
+	);
+
+	return (
+		<>
+			<select
+				value={sportTag}
+				onChange={(e) => {
+					onSportTagChange(e.target.value);
+					onTeamChange("");
+				}}
+				style={selectStyle}
+			>
+				{sportTags.map((tag) => (
+					<option key={tag} value={tag}>
+						{tag.toUpperCase()}
+					</option>
+				))}
+			</select>
+			<select
+				value={selectedTeamId}
+				onChange={(e) => onTeamChange(e.target.value)}
+				style={{ ...selectStyle, flex: 1 }}
+			>
+				<option value="">{label ?? "Select team..."}</option>
+				{filtered.map((t) => (
+					<option key={t.id} value={t.id}>
+						{t.name}
+					</option>
+				))}
+			</select>
+		</>
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Team Trend Section
 // ---------------------------------------------------------------------------
 
@@ -70,20 +150,30 @@ type TrendOverviewResult = Awaited<
 	ReturnType<typeof getTeamTrendOverviewFn>
 >["overview"];
 
-function TeamTrendSection() {
-	const [alias, setAlias] = useState("");
-	const [sportTag, setSportTag] = useState("NCAAB");
+function TeamTrendSection({
+	teams,
+	sportTags,
+}: {
+	teams: DropdownTeam[];
+	sportTags: string[];
+}) {
+	const [sportTag, setSportTag] = useState("");
+	const [teamId, setTeamId] = useState("");
+
+	useEffect(() => {
+		if (!sportTag && sportTags.length > 0) setSportTag(sportTags[0]);
+	}, [sportTag, sportTags]);
 	const [overview, setOverview] = useState<TrendOverviewResult>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 
 	const search = useCallback(async () => {
-		if (!alias.trim()) return;
+		if (!teamId) return;
 		setLoading(true);
 		setError(null);
 		try {
 			const res = await getTeamTrendOverviewFn({
-				data: { alias: alias.trim(), sportTag },
+				data: { teamId, sportTag },
 			});
 			if (res.error) {
 				setError(res.error);
@@ -96,45 +186,26 @@ function TeamTrendSection() {
 		} finally {
 			setLoading(false);
 		}
-	}, [alias, sportTag]);
+	}, [teamId, sportTag]);
 
 	return (
 		<section>
 			<h2>Team Trends</h2>
 			<div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-				<input
-					type="text"
-					placeholder="Team name (e.g., Michigan)"
-					value={alias}
-					onChange={(e) => setAlias(e.target.value)}
-					onKeyDown={(e) => e.key === "Enter" && search()}
-					style={{
-						padding: "6px 10px",
-						border: "1px solid #444",
-						borderRadius: 6,
-						background: "#1a1a1a",
-						color: "#eee",
-						flex: 1,
-					}}
+				<TeamSelect
+					teams={teams}
+					sportTags={sportTags}
+					sportTag={sportTag}
+					onSportTagChange={setSportTag}
+					selectedTeamId={teamId}
+					onTeamChange={setTeamId}
 				/>
-				<select
-					value={sportTag}
-					onChange={(e) => setSportTag(e.target.value)}
-					style={{
-						padding: "6px 10px",
-						border: "1px solid #444",
-						borderRadius: 6,
-						background: "#1a1a1a",
-						color: "#eee",
-					}}
+				<button
+					type="button"
+					onClick={search}
+					disabled={loading || !teamId}
+					style={buttonStyle}
 				>
-					<option value="NCAAB">NCAAB</option>
-					<option value="NCAAF">NCAAF</option>
-					<option value="NFL">NFL</option>
-					<option value="NBA">NBA</option>
-					<option value="MLB">MLB</option>
-				</select>
-				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
 					{loading ? "..." : "Search"}
 				</button>
 			</div>
@@ -144,7 +215,11 @@ function TeamTrendSection() {
 	);
 }
 
-function TrendOverviewTable({ overview }: { overview: NonNullable<TrendOverviewResult> }) {
+function TrendOverviewTable({
+	overview,
+}: {
+	overview: NonNullable<TrendOverviewResult>;
+}) {
 	const splitOrder = [
 		"overall",
 		"home",
@@ -234,23 +309,33 @@ type MatchupResult = Awaited<
 	ReturnType<typeof getMatchupComparisonFn>
 >["comparison"];
 
-function MatchupComparisonSection() {
-	const [teamAlias, setTeamAlias] = useState("");
-	const [opponentAlias, setOpponentAlias] = useState("");
-	const [sportTag, setSportTag] = useState("NCAAB");
+function MatchupComparisonSection({
+	teams,
+	sportTags,
+}: {
+	teams: DropdownTeam[];
+	sportTags: string[];
+}) {
+	const [sportTag, setSportTag] = useState("");
+	const [teamId, setTeamId] = useState("");
+
+	useEffect(() => {
+		if (!sportTag && sportTags.length > 0) setSportTag(sportTags[0]);
+	}, [sportTag, sportTags]);
+	const [opponentId, setOpponentId] = useState("");
 	const [comparison, setComparison] = useState<MatchupResult>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 
 	const search = useCallback(async () => {
-		if (!teamAlias.trim() || !opponentAlias.trim()) return;
+		if (!teamId || !opponentId) return;
 		setLoading(true);
 		setError(null);
 		try {
 			const res = await getMatchupComparisonFn({
 				data: {
-					teamAlias: teamAlias.trim(),
-					opponentAlias: opponentAlias.trim(),
+					teamId,
+					opponentId,
 					sportTag,
 				},
 			});
@@ -265,41 +350,63 @@ function MatchupComparisonSection() {
 		} finally {
 			setLoading(false);
 		}
-	}, [teamAlias, opponentAlias, sportTag]);
+	}, [teamId, opponentId, sportTag]);
+
+	const filtered = useMemo(
+		() => teams.filter((t) => t.sportTag === sportTag),
+		[teams, sportTag],
+	);
 
 	return (
 		<section>
 			<h2>Matchup Comparison</h2>
 			<div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-				<input
-					type="text"
-					placeholder="Team (e.g., Michigan)"
-					value={teamAlias}
-					onChange={(e) => setTeamAlias(e.target.value)}
-					onKeyDown={(e) => e.key === "Enter" && search()}
-					style={inputStyle}
-				/>
-				<span style={{ alignSelf: "center", color: "#aaa" }}>vs</span>
-				<input
-					type="text"
-					placeholder="Opponent (e.g., Ohio State)"
-					value={opponentAlias}
-					onChange={(e) => setOpponentAlias(e.target.value)}
-					onKeyDown={(e) => e.key === "Enter" && search()}
-					style={inputStyle}
-				/>
 				<select
 					value={sportTag}
-					onChange={(e) => setSportTag(e.target.value)}
+					onChange={(e) => {
+						setSportTag(e.target.value);
+						setTeamId("");
+						setOpponentId("");
+					}}
 					style={selectStyle}
 				>
-					<option value="NCAAB">NCAAB</option>
-					<option value="NCAAF">NCAAF</option>
-					<option value="NFL">NFL</option>
-					<option value="NBA">NBA</option>
-					<option value="MLB">MLB</option>
+					{sportTags.map((tag) => (
+						<option key={tag} value={tag}>
+							{tag.toUpperCase()}
+						</option>
+					))}
 				</select>
-				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
+				<select
+					value={teamId}
+					onChange={(e) => setTeamId(e.target.value)}
+					style={{ ...selectStyle, flex: 1 }}
+				>
+					<option value="">Select team...</option>
+					{filtered.map((t) => (
+						<option key={t.id} value={t.id}>
+							{t.name}
+						</option>
+					))}
+				</select>
+				<span style={{ alignSelf: "center", color: "#aaa" }}>vs</span>
+				<select
+					value={opponentId}
+					onChange={(e) => setOpponentId(e.target.value)}
+					style={{ ...selectStyle, flex: 1 }}
+				>
+					<option value="">Select opponent...</option>
+					{filtered.map((t) => (
+						<option key={t.id} value={t.id}>
+							{t.name}
+						</option>
+					))}
+				</select>
+				<button
+					type="button"
+					onClick={search}
+					disabled={loading || !teamId || !opponentId}
+					style={buttonStyle}
+				>
 					{loading ? "..." : "Compare"}
 				</button>
 			</div>
@@ -311,7 +418,9 @@ function MatchupComparisonSection() {
 
 function MatchupDisplay({
 	comparison,
-}: { comparison: NonNullable<MatchupResult> }) {
+}: {
+	comparison: NonNullable<MatchupResult>;
+}) {
 	return (
 		<div>
 			<h3>{comparison.headline}</h3>
@@ -372,7 +481,11 @@ function MatchupDisplay({
 										)}
 									</td>
 									<td style={tdStyle}>
-										<EdgeBadge edge={m.edge} teamName={comparison.team.name} opponentName={comparison.opponent.name} />
+										<EdgeBadge
+											edge={m.edge}
+											teamName={comparison.team.name}
+											opponentName={comparison.opponent.name}
+										/>
 									</td>
 								</tr>
 							))}
@@ -388,7 +501,11 @@ function EdgeBadge({
 	edge,
 	teamName,
 	opponentName,
-}: { edge: string; teamName: string; opponentName: string }) {
+}: {
+	edge: string;
+	teamName: string;
+	opponentName: string;
+}) {
 	if (edge === "even") {
 		return <span style={{ color: "#888" }}>Even</span>;
 	}
@@ -442,7 +559,12 @@ function PickContextSection() {
 					onKeyDown={(e) => e.key === "Enter" && search()}
 					style={{ ...inputStyle, flex: 1 }}
 				/>
-				<button type="button" onClick={search} disabled={loading} style={buttonStyle}>
+				<button
+					type="button"
+					onClick={search}
+					disabled={loading}
+					style={buttonStyle}
+				>
 					{loading ? "..." : "Lookup"}
 				</button>
 			</div>
@@ -454,7 +576,9 @@ function PickContextSection() {
 
 function PickContextDisplay({
 	context,
-}: { context: NonNullable<PickContextResult> }) {
+}: {
+	context: NonNullable<PickContextResult>;
+}) {
 	const e = context.enrichment;
 	return (
 		<div
@@ -475,7 +599,12 @@ function PickContextDisplay({
 
 			<div style={{ marginBottom: 12 }}>
 				<div
-					style={{ fontSize: 12, color: "#888", fontWeight: 500, marginBottom: 4 }}
+					style={{
+						fontSize: 12,
+						color: "#888",
+						fontWeight: 500,
+						marginBottom: 4,
+					}}
 				>
 					Enrichment Fields
 				</div>
@@ -521,7 +650,12 @@ function PickContextDisplay({
 
 			<div>
 				<div
-					style={{ fontSize: 12, color: "#888", fontWeight: 500, marginBottom: 4 }}
+					style={{
+						fontSize: 12,
+						color: "#888",
+						fontWeight: 500,
+						marginBottom: 4,
+					}}
 				>
 					Trend Snapshot (at pick time)
 				</div>
@@ -543,13 +677,14 @@ function PickContextDisplay({
 function EnrichField({
 	label,
 	value,
-}: { label: string; value: string | null | undefined }) {
+}: {
+	label: string;
+	value: string | null | undefined;
+}) {
 	return (
 		<div>
 			<div style={{ color: "#aaa", fontSize: 10 }}>{label}</div>
-			<div style={{ color: value ? "#eee" : "#555" }}>
-				{value ?? "—"}
-			</div>
+			<div style={{ color: value ? "#eee" : "#555" }}>{value ?? "—"}</div>
 		</div>
 	);
 }
@@ -681,7 +816,12 @@ function PipelineHealthSection() {
 				}}
 			>
 				<h2 style={{ margin: 0 }}>Pipeline Health</h2>
-				<button type="button" onClick={refresh} disabled={loading} style={buttonStyle}>
+				<button
+					type="button"
+					onClick={refresh}
+					disabled={loading}
+					style={buttonStyle}
+				>
 					{loading ? "Loading..." : "Refresh"}
 				</button>
 				<button
@@ -737,12 +877,170 @@ function PipelineHealthSection() {
 				<>
 					<FreshnessIndicator staleness={freshness.staleness} />
 					<EntityCountsGrid counts={freshness.counts} />
+					<EnrichmentDiagnostics freshness={freshness} />
 					{freshness.recentRuns.length > 0 && (
 						<RecentSyncRuns runs={freshness.recentRuns} />
 					)}
 				</>
 			)}
 		</section>
+	);
+}
+
+function EnrichmentDiagnostics({
+	freshness,
+}: {
+	freshness: CanonicalFreshnessStatus;
+}) {
+	const total = freshness.counts.picks.total;
+	const coverageRows = [
+		["sport_tag", freshness.counts.picks.fieldCoverage.sportTag],
+		["team_id", freshness.counts.picks.fieldCoverage.teamId],
+		["opponent_id", freshness.counts.picks.fieldCoverage.opponentId],
+		["game_id", freshness.counts.picks.fieldCoverage.gameId],
+		["venue_role", freshness.counts.picks.fieldCoverage.venueRole],
+		["fav_dog_role", freshness.counts.picks.fieldCoverage.favDogRole],
+		["spread_line", freshness.counts.picks.fieldCoverage.spreadLine],
+		["total_line", freshness.counts.picks.fieldCoverage.totalLine],
+	] as const;
+	const changedFields = topEntries(freshness.backfillDiagnostics.changedFields);
+	const failureReasons = topEntries(
+		freshness.backfillDiagnostics.failureReasons,
+	);
+	const betTypeBreakdown = topEntries(
+		freshness.counts.picks.betTypeBreakdown,
+		8,
+	);
+
+	return (
+		<div
+			style={{
+				marginBottom: 16,
+				padding: 12,
+				border: "1px solid #333",
+				borderRadius: 8,
+			}}
+		>
+			<h3 style={{ fontSize: 14, margin: "0 0 10px", color: "#aaa" }}>
+				Enrichment Diagnostics
+			</h3>
+			<div
+				style={{
+					display: "grid",
+					gridTemplateColumns: "1.3fr 1fr 1fr",
+					gap: 12,
+				}}
+			>
+				<div>
+					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+						Field coverage
+					</div>
+					<div
+						style={{
+							display: "grid",
+							gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+							gap: 6,
+							fontSize: 12,
+						}}
+					>
+						{coverageRows.map(([label, count]) => (
+							<div
+								key={label}
+								style={{
+									padding: 8,
+									border: "1px solid #2f2f2f",
+									borderRadius: 6,
+								}}
+							>
+								<div style={{ color: "#888", marginBottom: 4 }}>{label}</div>
+								<div>{formatCoverage(count, total)}</div>
+							</div>
+						))}
+					</div>
+				</div>
+				<div>
+					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+						Latest changed fields
+					</div>
+					{changedFields.length > 0 ? (
+						<div style={{ display: "grid", gap: 6, fontSize: 12 }}>
+							{changedFields.map(([label, count]) => (
+								<div
+									key={label}
+									style={{
+										display: "flex",
+										justifyContent: "space-between",
+										padding: "6px 8px",
+										border: "1px solid #2f2f2f",
+										borderRadius: 6,
+									}}
+								>
+									<span style={{ color: "#ccc" }}>{label}</span>
+									<strong>{count}</strong>
+								</div>
+							))}
+						</div>
+					) : (
+						<div style={{ color: "#777", fontSize: 12 }}>No recent changes</div>
+					)}
+				</div>
+				<div>
+					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+						Latest failure reasons
+					</div>
+					{failureReasons.length > 0 ? (
+						<div style={{ display: "grid", gap: 6, fontSize: 12 }}>
+							{failureReasons.map(([label, count]) => (
+								<div
+									key={label}
+									style={{
+										display: "flex",
+										justifyContent: "space-between",
+										padding: "6px 8px",
+										border: "1px solid #2f2f2f",
+										borderRadius: 6,
+									}}
+								>
+									<span style={{ color: "#ccc" }}>{label}</span>
+									<strong>{count}</strong>
+								</div>
+							))}
+						</div>
+					) : (
+						<div style={{ color: "#777", fontSize: 12 }}>
+							No failure reasons on latest run
+						</div>
+					)}
+				</div>
+			</div>
+			<div style={{ marginTop: 12 }}>
+				<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+					Bet type breakdown
+				</div>
+				<div
+					style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12 }}
+				>
+					{betTypeBreakdown.map(([label, count]) => (
+						<div
+							key={label}
+							style={{
+								padding: "6px 10px",
+								border: "1px solid #2f2f2f",
+								borderRadius: 999,
+							}}
+						>
+							<span style={{ color: "#888", marginRight: 6 }}>{label}</span>
+							<strong>{count}</strong>
+						</div>
+					))}
+				</div>
+				{freshness.backfillDiagnostics.latestRunId && (
+					<div style={{ color: "#777", fontSize: 11, marginTop: 8 }}>
+						Latest backfill run: {freshness.backfillDiagnostics.latestRunId}
+					</div>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -858,9 +1156,7 @@ function RecentSyncRuns({ runs }: { runs: SyncRunSummary[] }) {
 							key={run.id}
 							run={run}
 							isExpanded={expanded === run.id}
-							onToggle={() =>
-								setExpanded(expanded === run.id ? null : run.id)
-							}
+							onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
 						/>
 					))}
 				</tbody>
@@ -904,12 +1200,8 @@ function SyncRunRow({
 						{run.status.toUpperCase()}
 					</span>
 				</td>
-				<td style={tdStyle}>
-					{formatRelativeTimestamp(run.startedAt)}
-				</td>
-				<td style={tdStyle}>
-					{`${(run.durationMs / 1000).toFixed(1)}s`}
-				</td>
+				<td style={tdStyle}>{formatRelativeTimestamp(run.startedAt)}</td>
+				<td style={tdStyle}>{`${(run.durationMs / 1000).toFixed(1)}s`}</td>
 				<td style={tdStyle}>
 					{run.gamesProcessed}g / {run.factsComputed}f / {run.picksBackfilled}p
 				</td>
@@ -935,9 +1227,7 @@ function SyncRunRow({
 	);
 }
 
-function SyncStepDetails({
-	steps,
-}: { steps: SyncRunSummary["steps"] }) {
+function SyncStepDetails({ steps }: { steps: SyncRunSummary["steps"] }) {
 	return (
 		<div
 			style={{
@@ -975,7 +1265,9 @@ function SyncStepDetails({
 						{step.counts && (
 							<div style={{ color: "#ccc" }}>
 								{Object.entries(step.counts).map(([k, v]) => (
-									<div key={k}>{k}: {v}</div>
+									<div key={k}>
+										{k}: {v}
+									</div>
 								))}
 							</div>
 						)}
@@ -983,9 +1275,7 @@ function SyncStepDetails({
 							{(step.durationMs / 1000).toFixed(1)}s
 						</div>
 						{step.error && (
-							<div style={{ color: "#f55", fontSize: 11 }}>
-								{step.error}
-							</div>
+							<div style={{ color: "#f55", fontSize: 11 }}>{step.error}</div>
 						)}
 					</div>
 				);
@@ -1040,9 +1330,22 @@ const selectStyle: React.CSSProperties = {
 // ---------------------------------------------------------------------------
 
 function CanonicalPage() {
+	const [teams, setTeams] = useState<DropdownTeam[]>([]);
+	const [sportTags, setSportTags] = useState<string[]>([]);
+
+	useEffect(() => {
+		listTeamsForDropdownFn().then((res) => {
+			setTeams(res.teams);
+			const tags = [...new Set(res.teams.map((t) => t.sportTag))].sort();
+			setSportTags(tags);
+		});
+	}, []);
+
 	return (
 		<AuthGate>
-			<div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", color: "#eee" }}>
+			<div
+				style={{ padding: 24, maxWidth: 1200, margin: "0 auto", color: "#eee" }}
+			>
 				<h1>Canonical Analytics</h1>
 				<p style={{ color: "#888", marginBottom: 24 }}>
 					Team trends, matchup comparisons, and pick enrichment inspection.
@@ -1050,9 +1353,9 @@ function CanonicalPage() {
 
 				<PipelineHealthSection />
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
-				<TeamTrendSection />
+				<TeamTrendSection teams={teams} sportTags={sportTags} />
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
-				<MatchupComparisonSection />
+				<MatchupComparisonSection teams={teams} sportTags={sportTags} />
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
 				<PickContextSection />
 			</div>

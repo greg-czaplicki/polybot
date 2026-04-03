@@ -46,8 +46,28 @@ export interface CanonicalFreshnessStatus {
 		games: { total: number; finalized: number };
 		facts: number;
 		snapshots: number;
-		picks: { total: number; enriched: number; enrichmentRate: number | null };
+		picks: {
+			total: number;
+			enriched: number;
+			enrichmentRate: number | null;
+			fieldCoverage: {
+				sportTag: number;
+				teamId: number;
+				opponentId: number;
+				gameId: number;
+				venueRole: number;
+				favDogRole: number;
+				spreadLine: number;
+				totalLine: number;
+			};
+			betTypeBreakdown: Record<string, number>;
+		};
 		unprocessedGames: number;
+	};
+	backfillDiagnostics: {
+		latestRunId: string | null;
+		changedFields: Record<string, number>;
+		failureReasons: Record<string, number>;
 	};
 }
 
@@ -101,13 +121,23 @@ export const getCanonicalFreshnessFn = createServerFn({
 
 	const summaries = coreFreshness?.recentRuns.map(syncRunToSummary) ?? [];
 	const lastRun = summaries.length > 0 ? summaries[0] : null;
+	const latestBackfillStep =
+		lastRun?.steps.find((step) => step.step === "pick-backfill") ?? null;
+	const changedFields = Object.fromEntries(
+		Object.entries(latestBackfillStep?.counts ?? {})
+			.filter(([key]) => key.startsWith("changed_"))
+			.map(([key, value]) => [key.replace(/^changed_/, ""), value]),
+	);
+	const failureReasons = Object.fromEntries(
+		Object.entries(latestBackfillStep?.counts ?? {})
+			.filter(([key]) => key.startsWith("reason_"))
+			.map(([key, value]) => [key.replace(/^reason_/, ""), value]),
+	);
 
 	const lastSuccessAt = coreFreshness?.lastSuccessAt ?? null;
 	let minutesSinceLastSuccess: number | null = null;
 	if (lastSuccessAt) {
-		minutesSinceLastSuccess = Math.round(
-			(Date.now() - lastSuccessAt) / 60000,
-		);
+		minutesSinceLastSuccess = Math.round((Date.now() - lastSuccessAt) / 60000);
 	}
 
 	// Use staleness threshold from canonical-sync.ts (6 hours = 360 minutes)
@@ -123,6 +153,11 @@ export const getCanonicalFreshnessFn = createServerFn({
 			staleThresholdMinutes,
 		},
 		counts,
+		backfillDiagnostics: {
+			latestRunId: lastRun?.id ?? null,
+			changedFields,
+			failureReasons,
+		},
 	};
 
 	return { freshness };
@@ -132,36 +167,73 @@ export const getCanonicalFreshnessFn = createServerFn({
  * Enhanced entity counts with game/pick breakdowns not in canonical-sync.ts.
  */
 async function getEnhancedEntityCounts(db: D1Database) {
-	const [teams, games, facts, snapshots, picksTotal, picksEnriched, unprocessed] =
-		await Promise.all([
-			first<{ count: number }>(db, "SELECT COUNT(*) as count FROM teams"),
-			first<{ total: number; finalized: number }>(
-				db,
-				"SELECT COUNT(*) as total, SUM(CASE WHEN is_final = 1 THEN 1 ELSE 0 END) as finalized FROM games",
-			),
-			first<{ count: number }>(
-				db,
-				"SELECT COUNT(*) as count FROM team_game_facts",
-			),
-			first<{ count: number }>(
-				db,
-				"SELECT COUNT(*) as count FROM team_trend_snapshots",
-			),
-			first<{ count: number }>(
-				db,
-				"SELECT COUNT(*) as count FROM manual_picks",
-			),
-			first<{ count: number }>(
-				db,
-				"SELECT COUNT(*) as count FROM manual_picks WHERE team_id IS NOT NULL",
-			),
-			first<{ count: number }>(
-				db,
-				`SELECT COUNT(*) as count FROM games g
+	const [
+		teams,
+		games,
+		facts,
+		snapshots,
+		picksTotal,
+		picksEnriched,
+		pickCoverage,
+		betTypeRows,
+		unprocessed,
+	] = await Promise.all([
+		first<{ count: number }>(db, "SELECT COUNT(*) as count FROM teams"),
+		first<{ total: number; finalized: number }>(
+			db,
+			"SELECT COUNT(*) as total, SUM(CASE WHEN is_final = 1 THEN 1 ELSE 0 END) as finalized FROM games",
+		),
+		first<{ count: number }>(
+			db,
+			"SELECT COUNT(*) as count FROM team_game_facts",
+		),
+		first<{ count: number }>(
+			db,
+			"SELECT COUNT(*) as count FROM team_trend_snapshots",
+		),
+		first<{ count: number }>(db, "SELECT COUNT(*) as count FROM manual_picks"),
+		first<{ count: number }>(
+			db,
+			"SELECT COUNT(*) as count FROM manual_picks WHERE team_id IS NOT NULL",
+		),
+		first<{
+			sport_tag: number;
+			team_id: number;
+			opponent_id: number;
+			game_id: number;
+			venue_role: number;
+			fav_dog_role: number;
+			spread_line: number;
+			total_line: number;
+		}>(
+			db,
+			`SELECT
+					COUNT(sport_tag) as sport_tag,
+					COUNT(team_id) as team_id,
+					COUNT(opponent_id) as opponent_id,
+					COUNT(game_id) as game_id,
+					COUNT(venue_role) as venue_role,
+					COUNT(fav_dog_role) as fav_dog_role,
+					COUNT(spread_line) as spread_line,
+					COUNT(total_line) as total_line
+				 FROM manual_picks`,
+		),
+		first<{ breakdown_json: string | null }>(
+			db,
+			`SELECT json_group_object(bet_type_key, count_value) as breakdown_json
+				 FROM (
+				 	SELECT COALESCE(bet_type, 'NULL') as bet_type_key, COUNT(*) as count_value
+				 	FROM manual_picks
+				 	GROUP BY COALESCE(bet_type, 'NULL')
+				 )`,
+		),
+		first<{ count: number }>(
+			db,
+			`SELECT COUNT(*) as count FROM games g
 				 LEFT JOIN team_game_facts tgf ON tgf.game_id = g.id
 				 WHERE g.is_final = 1 AND tgf.id IS NULL`,
-			),
-		]);
+		),
+	]);
 
 	const total = picksTotal?.count ?? 0;
 	const enriched = picksEnriched?.count ?? 0;
@@ -178,6 +250,19 @@ async function getEnhancedEntityCounts(db: D1Database) {
 			total,
 			enriched,
 			enrichmentRate: total > 0 ? enriched / total : null,
+			fieldCoverage: {
+				sportTag: pickCoverage?.sport_tag ?? 0,
+				teamId: pickCoverage?.team_id ?? 0,
+				opponentId: pickCoverage?.opponent_id ?? 0,
+				gameId: pickCoverage?.game_id ?? 0,
+				venueRole: pickCoverage?.venue_role ?? 0,
+				favDogRole: pickCoverage?.fav_dog_role ?? 0,
+				spreadLine: pickCoverage?.spread_line ?? 0,
+				totalLine: pickCoverage?.total_line ?? 0,
+			},
+			betTypeBreakdown: betTypeRows?.breakdown_json
+				? (JSON.parse(betTypeRows.breakdown_json) as Record<string, number>)
+				: {},
 		},
 		unprocessedGames: unprocessed?.count ?? 0,
 	};
@@ -237,9 +322,7 @@ export const getCanonicalSyncRunsFn = createServerFn({
 		const limit = Math.min(data.limit ?? 20, 50);
 
 		try {
-			const { getRecentSyncRuns } = await import(
-				"../pipeline/canonical-sync"
-			);
+			const { getRecentSyncRuns } = await import("../pipeline/canonical-sync");
 			const runs = await getRecentSyncRuns(db, limit);
 			return { runs: runs.map(syncRunToSummary) };
 		} catch {
