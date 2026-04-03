@@ -15,21 +15,25 @@
  * - Side labels from sharp_money_cache are used for team resolution
  * - actual_margin / actual_total will be null for most picks until a score
  *   feed is integrated (known limitation)
- * - The "Away vs Home" convention means side_a = away, side_b = home
- *   for moneyline/spread markets (totals use Over/Under labels)
+ * - For sports spreads/moneylines, sharp_money_cache side labels are treated as
+ *   the named market side first; in the observed "Away vs Home" titles here,
+ *   side_a has mapped to the home team and side_b to the away team
  */
 
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag } from "@/lib/sports";
+import { detectSportTag, detectSportTagFromSeriesId } from "@/lib/sports";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
+import { nowUnixSeconds } from "../env";
 import type { FavDogRole, VenueRole } from "../types/canonical";
 import {
 	deriveFavDogRole,
+	extractSpreadPickedLabel,
 	findGameForPick,
 	getFactValues,
 	getLineValues,
 	getSideLabels,
+	mapPickedTeamToSide,
 	resolvePickedSide,
 } from "./pick-enrichment-helpers";
 import { parseTeamsFromTitle, resolveSingleTeam } from "./team-seeder";
@@ -47,9 +51,16 @@ interface ManualPickRow {
 	decision_snapshot_json: string | null;
 	game_id: string | null;
 	team_id: string | null;
+	opponent_id: string | null;
 	bet_type: string | null;
 	sport_tag: string | null;
 	sharp_side: string | null;
+	venue_role: string | null;
+	fav_dog_role: string | null;
+	spread_line: number | null;
+	total_line: number | null;
+	actual_margin: number | null;
+	actual_total: number | null;
 }
 
 /** Parsed decision snapshot fields we care about. */
@@ -68,12 +79,20 @@ export interface BackfillResult {
 	updated: number;
 	skipped: number;
 	errors: number;
+	changedFieldCounts: Record<string, number>;
+	failureReasonCounts: Record<string, number>;
 	details: Array<{
 		pickId: string;
 		status: "updated" | "skipped" | "error";
 		reason?: string;
 		fieldsSet: string[];
+		failureReasons?: string[];
 	}>;
+}
+
+export interface BackfillOptions {
+	mode?: "incremental" | "full";
+	repairWindowHours?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,38 +134,70 @@ function parseDecisionSnapshot(
  * Iterates all picks that are missing at least one linkage field and
  * attempts to populate from canonical teams, games, game_lines, and facts.
  */
-export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
+export async function backfillManualPicks(
+	db: Db,
+	options: BackfillOptions = {},
+): Promise<BackfillResult> {
 	const result: BackfillResult = {
 		total: 0,
 		updated: 0,
 		skipped: 0,
 		errors: 0,
+		changedFieldCounts: {},
+		failureReasonCounts: {},
 		details: [],
 	};
 
-	// Fetch picks that need backfill (missing bet_type or sport_tag or team_id)
+	const mode = options.mode ?? "incremental";
+	const repairWindowHours = Math.max(1, options.repairWindowHours ?? 72);
+	const repairWindowCutoff = nowUnixSeconds() - repairWindowHours * 60 * 60;
+	const selectionWhere =
+		mode === "full"
+			? ""
+			: `WHERE
+				bet_type IS NULL
+				OR sport_tag IS NULL
+				OR team_id IS NULL
+				OR opponent_id IS NULL
+				OR game_id IS NULL
+				OR venue_role IS NULL
+				OR fav_dog_role IS NULL
+				OR spread_line IS NULL
+				OR total_line IS NULL
+				OR picked_at >= ?`;
+
 	const picks = await all<ManualPickRow>(
 		db,
 		`SELECT id, condition_id, market_title, event_time,
-		        decision_snapshot_json, game_id, team_id, bet_type, sport_tag,
-		        sharp_side
+		        decision_snapshot_json, game_id, team_id, opponent_id, bet_type, sport_tag,
+		        sharp_side, venue_role, fav_dog_role, spread_line, total_line,
+		        actual_margin, actual_total
 		 FROM manual_picks
-		 WHERE bet_type IS NULL
-		    OR sport_tag IS NULL
-		    OR team_id IS NULL
+		 ${selectionWhere}
 		 ORDER BY picked_at DESC`,
+		...(mode === "full" ? [] : [repairWindowCutoff]),
 	);
 
 	result.total = picks.length;
 
+	function incrementCounter(
+		bucket: Record<string, number>,
+		key: string | null | undefined,
+	) {
+		if (!key) return;
+		bucket[key] = (bucket[key] ?? 0) + 1;
+	}
+
 	for (const pick of picks) {
 		try {
 			const fieldsSet: string[] = [];
+			const failureReasons: string[] = [];
 			const snapshot = parseDecisionSnapshot(pick.decision_snapshot_json);
 			const title = pick.market_title ?? snapshot?.marketTitle ?? "";
 
 			if (!title) {
 				result.skipped++;
+				incrementCounter(result.failureReasonCounts, "missing_market_title");
 				result.details.push({
 					pickId: pick.id,
 					status: "skipped",
@@ -160,7 +211,14 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			const betType = pick.bet_type ?? detectBetType({ title }) ?? null;
 
 			// 2. Detect sport_tag
-			const sportTag = pick.sport_tag ?? detectSportTag({ title }) ?? null;
+			const inferredSportTag =
+				detectSportTagFromSeriesId(snapshot?.sportSeriesId) ??
+				detectSportTag({
+					title,
+					eventSlug: snapshot?.eventSlug,
+				}) ??
+				null;
+			const sportTag = inferredSportTag ?? pick.sport_tag ?? null;
 
 			// 3. Parse team names and resolve IDs.
 			// We use the picked side label (from sharp_side, decision snapshot, or
@@ -171,6 +229,8 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			let opponentId: string | null = null;
 			let venueRole: VenueRole | null = null;
 			let isHomeTeam = false;
+			let homeTeamId: string | null = null;
+			let awayTeamId: string | null = null;
 
 			if (!teamId && sportTag) {
 				const parsed = parseTeamsFromTitle(title);
@@ -179,6 +239,8 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 					const awayTeam = await resolveSingleTeam(db, sportTag, parsed.away);
 
 					if (homeTeam && awayTeam) {
+						homeTeamId = homeTeam.id;
+						awayTeamId = awayTeam.id;
 						// Determine picked side label from available sources
 						const pickedLabel =
 							pick.sharp_side ??
@@ -191,6 +253,7 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 
 						const resolved = resolvePickedSide({
 							pickedLabel,
+							marketTitle: title,
 							sideALabel: sideLabels.sideALabel,
 							sideBLabel: sideLabels.sideBLabel,
 							homeTeamName: homeTeam.name,
@@ -204,12 +267,36 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 							opponentId = resolved.opponentId;
 							venueRole = resolved.venueRole;
 							isHomeTeam = resolved.isHomeTeam;
+						} else {
+							const explicitPickedLabel = extractSpreadPickedLabel(title);
+							const resolvedPickedTeam = explicitPickedLabel
+								? await resolveSingleTeam(db, sportTag, explicitPickedLabel)
+								: null;
+							const mappedPickedTeam = mapPickedTeamToSide({
+								pickedTeamId: resolvedPickedTeam?.id ?? null,
+								homeTeamId: homeTeam.id,
+								awayTeamId: awayTeam.id,
+							});
+							if (mappedPickedTeam) {
+								teamId = mappedPickedTeam.teamId;
+								opponentId = mappedPickedTeam.opponentId;
+								venueRole = mappedPickedTeam.venueRole;
+								isHomeTeam = mappedPickedTeam.isHomeTeam;
+							} else {
+								failureReasons.push("picked_side_ambiguous");
+							}
 						}
 						// If resolved is null, we skip team assignment — prefer no data
 						// over likely-wrong linkage. The pick can still get bet_type and
 						// sport_tag populated.
+					} else {
+						failureReasons.push("team_alias_not_found");
 					}
+				} else {
+					failureReasons.push("teams_parse_failed");
 				}
+			} else if (!sportTag) {
+				failureReasons.push("sport_tag_unknown");
 			}
 
 			// 4. Match game_id
@@ -228,10 +315,20 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 				}
 			}
 
-			if (!gameId && teamId && opponentId && eventTimeUnix && sportTag) {
-				// Use venue roles to correctly map home/away for game lookup
-				const homeId = isHomeTeam ? teamId : opponentId;
-				const awayId = isHomeTeam ? opponentId : teamId;
+			if (!gameId && eventTimeUnix && sportTag) {
+				// Use venue roles when known; otherwise fall back to parsed teams.
+				const homeId =
+					teamId && opponentId
+						? isHomeTeam
+							? teamId
+							: opponentId
+						: homeTeamId;
+				const awayId =
+					teamId && opponentId
+						? isHomeTeam
+							? opponentId
+							: teamId
+						: awayTeamId;
 				gameId = await findGameForPick(db, {
 					eventSlug: snapshot?.eventSlug,
 					homeTeamId: homeId,
@@ -239,6 +336,9 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 					eventTime: eventTimeUnix,
 					sportTag,
 				});
+				if (!gameId && homeId && awayId) {
+					failureReasons.push("game_match_failed");
+				}
 			}
 
 			// 5. Get line values from game_lines
@@ -277,33 +377,50 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			const updates: string[] = [];
 			const params: unknown[] = [];
 
-			function addField(column: string, value: unknown, label: string) {
-				if (value !== null && value !== undefined) {
+			function addField(
+				column: string,
+				value: unknown,
+				currentValue: unknown,
+				label: string,
+			) {
+				if (value !== null && value !== undefined && value !== currentValue) {
 					updates.push(`${column} = ?`);
 					params.push(value);
 					fieldsSet.push(label);
 				}
 			}
 
-			addField("bet_type", betType, "bet_type");
-			addField("sport_tag", sportTag, "sport_tag");
-			addField("team_id", teamId, "team_id");
-			addField("opponent_id", opponentId, "opponent_id");
-			addField("game_id", gameId, "game_id");
-			addField("venue_role", venueRole, "venue_role");
-			addField("fav_dog_role", favDogRole, "fav_dog_role");
-			addField("spread_line", spreadLine, "spread_line");
-			addField("total_line", totalLine, "total_line");
-			addField("actual_margin", actualMargin, "actual_margin");
-			addField("actual_total", actualTotal, "actual_total");
+			addField("bet_type", betType, pick.bet_type, "bet_type");
+			addField("sport_tag", sportTag, pick.sport_tag, "sport_tag");
+			addField("team_id", teamId, pick.team_id, "team_id");
+			addField("opponent_id", opponentId, pick.opponent_id, "opponent_id");
+			addField("game_id", gameId, pick.game_id, "game_id");
+			addField("venue_role", venueRole, pick.venue_role, "venue_role");
+			addField("fav_dog_role", favDogRole, pick.fav_dog_role, "fav_dog_role");
+			addField("spread_line", spreadLine, pick.spread_line, "spread_line");
+			addField("total_line", totalLine, pick.total_line, "total_line");
+			addField(
+				"actual_margin",
+				actualMargin,
+				pick.actual_margin,
+				"actual_margin",
+			);
+			addField("actual_total", actualTotal, pick.actual_total, "actual_total");
+
+			const uniqueFailureReasons = Array.from(new Set(failureReasons));
+			for (const reason of uniqueFailureReasons) {
+				incrementCounter(result.failureReasonCounts, reason);
+			}
 
 			if (updates.length === 0) {
 				result.skipped++;
+				incrementCounter(result.failureReasonCounts, "no_effective_change");
 				result.details.push({
 					pickId: pick.id,
 					status: "skipped",
-					reason: "No fields could be derived",
+					reason: "No new fields could be derived",
 					fieldsSet: [],
+					failureReasons: uniqueFailureReasons,
 				});
 				continue;
 			}
@@ -316,13 +433,18 @@ export async function backfillManualPicks(db: Db): Promise<BackfillResult> {
 			);
 
 			result.updated++;
+			for (const field of fieldsSet) {
+				incrementCounter(result.changedFieldCounts, field);
+			}
 			result.details.push({
 				pickId: pick.id,
 				status: "updated",
 				fieldsSet,
+				failureReasons: uniqueFailureReasons,
 			});
 		} catch (err) {
 			result.errors++;
+			incrementCounter(result.failureReasonCounts, "exception");
 			result.details.push({
 				pickId: pick.id,
 				status: "error",

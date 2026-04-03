@@ -3,11 +3,12 @@
  *
  * Orchestrates one full canonical pipeline cycle:
  *   1. Team seeding (upsert all canonical teams)
- *   2. Game ingestion (from sharp_money_cache market data)
- *   3. Line ingestion (extract lines from market titles)
- *   4. Result ingestion (finalize completed games with ESPN scores)
- *   5. Fact computation (process finalized games without facts)
- *   6. Pick backfill (enrich manual_picks with canonical linkage)
+ *   2. ESPN schedule ingestion (full schedule from ESPN scoreboard API)
+ *   3. Game ingestion (from sharp_money_cache market data)
+ *   4. Line ingestion (extract lines from market titles)
+ *   5. Result ingestion (finalize completed games with ESPN scores)
+ *   6. Fact computation (process finalized games without facts)
+ *   7. Pick backfill (enrich manual_picks with canonical linkage)
  *
  * Each step is error-isolated so a failure in one does not halt the cycle.
  * Results are persisted to canonical_sync_runs for freshness/status visibility.
@@ -21,14 +22,18 @@ import {
 	processUnprocessedGames,
 } from "./canonical-pipeline";
 import {
+	type EspnScheduleIngestionResult,
+	ingestEspnSchedule,
+} from "./espn-schedule-ingestion";
+import {
 	type BatchGameIngestionResult,
-	type MarketGameInput,
 	batchIngestGames,
+	type MarketGameInput,
 } from "./game-ingestion";
 import {
 	type BatchLineIngestionResult,
-	type MarketLineInput,
 	batchIngestLines,
+	type MarketLineInput,
 } from "./line-ingestion";
 import { type BackfillResult, backfillManualPicks } from "./pick-backfill";
 import {
@@ -276,11 +281,12 @@ async function runStep(
  *
  * Steps:
  * 1. Team seeding (safe upserts)
- * 2. Game ingestion from sharp_money_cache
- * 3. Line ingestion for newly-matched games
- * 4. Result ingestion (finalize completed games via ESPN scores)
- * 5. Fact computation for finalized games without facts
- * 6. Pick backfill for manual_picks missing linkage
+ * 2. ESPN schedule ingestion (full game coverage from ESPN scoreboard)
+ * 3. Game ingestion from sharp_money_cache
+ * 4. Line ingestion for newly-matched games
+ * 5. Result ingestion (finalize completed games via ESPN scores)
+ * 6. Fact computation for finalized games without facts
+ * 7. Pick backfill for manual_picks missing linkage
  *
  * Each step is error-isolated. Returns a structured result.
  */
@@ -318,16 +324,32 @@ export async function runCanonicalSync(
 		});
 	}
 
-	// Step 2: Game ingestion from sharp_money_cache
+	// Step 2: ESPN schedule ingestion — full game coverage from ESPN
+	const espnStep = await runStep("espn-schedule", async () => {
+		const result: EspnScheduleIngestionResult = await ingestEspnSchedule(
+			db,
+			sportTags,
+		);
+		gamesProcessed += result.created;
+		return {
+			created: result.created,
+			matched: result.matched,
+			finalized: result.finalized,
+			linesIngested: result.linesIngested,
+			skipped: result.skipped,
+			errors: result.errors,
+			espnFetches: result.espnFetches,
+		};
+	});
+	steps.push(espnStep);
+
+	// Step 3: Game ingestion from sharp_money_cache
 	const gameStep = await runStep("game-ingestion", async () => {
 		const inputs = await getMarketInputsFromCache(db);
 		if (inputs.length === 0) {
 			return { markets: 0, created: 0, matched: 0, skipped: 0, errors: 0 };
 		}
-		const result: BatchGameIngestionResult = await batchIngestGames(
-			db,
-			inputs,
-		);
+		const result: BatchGameIngestionResult = await batchIngestGames(db, inputs);
 		gamesProcessed += result.created + result.matched;
 		return {
 			markets: inputs.length,
@@ -339,7 +361,7 @@ export async function runCanonicalSync(
 	});
 	steps.push(gameStep);
 
-	// Step 3: Line ingestion
+	// Step 4: Line ingestion
 	const lineStep = await runStep("line-ingestion", async () => {
 		const inputs = await getLineInputsFromCache(db);
 		if (inputs.length === 0) {
@@ -355,7 +377,7 @@ export async function runCanonicalSync(
 	});
 	steps.push(lineStep);
 
-	// Step 4: Result ingestion — finalize completed games via ESPN scores
+	// Step 5: Result ingestion — finalize completed games via ESPN scores
 	const resultStep = await runStep("result-ingestion", async () => {
 		const result: BatchResultIngestionResult = await finalizeCompletedGames(
 			db,
@@ -370,7 +392,7 @@ export async function runCanonicalSync(
 	});
 	steps.push(resultStep);
 
-	// Step 5: Fact computation for each sport
+	// Step 6: Fact computation for each sport
 	const factStep = await runStep("fact-computation", async () => {
 		let totalProcessed = 0;
 		let totalSkipped = 0;
@@ -396,15 +418,30 @@ export async function runCanonicalSync(
 	});
 	steps.push(factStep);
 
-	// Step 6: Pick backfill
+	// Step 7: Pick backfill
 	const backfillStep = await runStep("pick-backfill", async () => {
-		const result: BackfillResult = await backfillManualPicks(db);
+		const result: BackfillResult = await backfillManualPicks(db, {
+			mode: "incremental",
+			repairWindowHours: 6,
+		});
 		picksBackfilled = result.updated;
 		return {
 			total: result.total,
 			updated: result.updated,
 			skipped: result.skipped,
 			errors: result.errors,
+			...Object.fromEntries(
+				Object.entries(result.changedFieldCounts).map(([key, value]) => [
+					`changed_${key}`,
+					value,
+				]),
+			),
+			...Object.fromEntries(
+				Object.entries(result.failureReasonCounts).map(([key, value]) => [
+					`reason_${key}`,
+					value,
+				]),
+			),
 		};
 	});
 	steps.push(backfillStep);

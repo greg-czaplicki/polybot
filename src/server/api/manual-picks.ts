@@ -1,15 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag } from "@/lib/sports";
+import { detectSportTag, detectSportTagFromSeriesId } from "@/lib/sports";
 import type { Db } from "../db/client";
 import { run } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
 import {
 	deriveFavDogRole,
+	extractSpreadPickedLabel,
 	findGameForPick,
 	getFactValues,
 	getLineValues,
 	getSideLabels,
+	mapPickedTeamToSide,
 	resolvePickedSide,
 } from "../pipeline/pick-enrichment-helpers";
 import {
@@ -18,7 +20,6 @@ import {
 } from "../pipeline/team-seeder";
 import {
 	type CreateManualPickInput,
-	type ManualPickEntry,
 	clearManualPicks,
 	createManualPick,
 	getManualPicksBucketPerformanceSummary,
@@ -30,6 +31,7 @@ import {
 	getManualPicksSportPerformanceSummary,
 	getManualPicksSummary,
 	listManualPicks,
+	type ManualPickEntry,
 	type ManualPickStatus,
 	settleManualPick,
 	updateManualPickOutcome,
@@ -280,6 +282,7 @@ interface EnrichmentSnapshotFields {
 	eventSlug?: string;
 	marketTitle?: string;
 	eventTime?: string;
+	sportSeriesId?: number;
 	sharpSideLabel?: string;
 	selectedOutcome?: string;
 }
@@ -294,12 +297,12 @@ function parseEnrichmentSnapshot(
 		marketTitle:
 			typeof obj.marketTitle === "string" ? obj.marketTitle : undefined,
 		eventTime: typeof obj.eventTime === "string" ? obj.eventTime : undefined,
+		sportSeriesId:
+			typeof obj.sportSeriesId === "number" ? obj.sportSeriesId : undefined,
 		sharpSideLabel:
 			typeof obj.sharpSideLabel === "string" ? obj.sharpSideLabel : undefined,
 		selectedOutcome:
-			typeof obj.selectedOutcome === "string"
-				? obj.selectedOutcome
-				: undefined,
+			typeof obj.selectedOutcome === "string" ? obj.selectedOutcome : undefined,
 	};
 }
 
@@ -314,6 +317,7 @@ function parseEnrichmentSnapshot(
 export interface PickEnrichmentResult {
 	fieldsSet: string[];
 	trendSnapshotAttached: boolean;
+	failureReasons: string[];
 }
 
 /**
@@ -337,6 +341,7 @@ async function enrichPickInline(
 	const result: PickEnrichmentResult = {
 		fieldsSet: [],
 		trendSnapshotAttached: false,
+		failureReasons: [],
 	};
 
 	const title = input.marketTitle;
@@ -346,13 +351,18 @@ async function enrichPickInline(
 	const betType = detectBetType({ title }) ?? null;
 
 	// 2. Detect sport_tag
-	const sportTag = detectSportTag({ title }) ?? null;
+	const sportTag =
+		detectSportTagFromSeriesId(snapshot?.sportSeriesId) ??
+		detectSportTag({ title }) ??
+		null;
 
 	// 3. Parse team names and resolve IDs
 	let teamId: string | null = null;
 	let opponentId: string | null = null;
 	let venueRole: VenueRole | null = null;
 	let isHomeTeam = false;
+	let homeTeamId: string | null = null;
+	let awayTeamId: string | null = null;
 
 	if (sportTag) {
 		const parsed = parseTeamsFromTitle(title);
@@ -363,19 +373,19 @@ async function enrichPickInline(
 			]);
 
 			if (homeTeam && awayTeam) {
+				homeTeamId = homeTeam.id;
+				awayTeamId = awayTeam.id;
 				const pickedLabel =
 					input.sharpSide ??
 					snapshot?.sharpSideLabel ??
 					snapshot?.selectedOutcome ??
 					null;
 
-				const sideLabels = await getSideLabels(
-					db,
-					input.conditionId,
-				);
+				const sideLabels = await getSideLabels(db, input.conditionId);
 
 				const resolved = resolvePickedSide({
 					pickedLabel,
+					marketTitle: title,
 					sideALabel: sideLabels.sideALabel,
 					sideBLabel: sideLabels.sideBLabel,
 					homeTeamName: homeTeam.name,
@@ -389,9 +399,33 @@ async function enrichPickInline(
 					opponentId = resolved.opponentId;
 					venueRole = resolved.venueRole;
 					isHomeTeam = resolved.isHomeTeam;
+				} else {
+					const explicitPickedLabel = extractSpreadPickedLabel(title);
+					const resolvedPickedTeam = explicitPickedLabel
+						? await resolveSingleTeam(db, sportTag, explicitPickedLabel)
+						: null;
+					const mappedPickedTeam = mapPickedTeamToSide({
+						pickedTeamId: resolvedPickedTeam?.id ?? null,
+						homeTeamId: homeTeam.id,
+						awayTeamId: awayTeam.id,
+					});
+					if (mappedPickedTeam) {
+						teamId = mappedPickedTeam.teamId;
+						opponentId = mappedPickedTeam.opponentId;
+						venueRole = mappedPickedTeam.venueRole;
+						isHomeTeam = mappedPickedTeam.isHomeTeam;
+					} else {
+						result.failureReasons.push("picked_side_ambiguous");
+					}
 				}
+			} else {
+				result.failureReasons.push("team_alias_not_found");
 			}
+		} else {
+			result.failureReasons.push("teams_parse_failed");
 		}
+	} else {
+		result.failureReasons.push("sport_tag_unknown");
 	}
 
 	// 4. Match game_id
@@ -406,15 +440,20 @@ async function enrichPickInline(
 		}
 	}
 
-	if (teamId && opponentId && eventTimeUnix && sportTag) {
-		const homeId = isHomeTeam ? teamId : opponentId;
-		const awayId = isHomeTeam ? opponentId : teamId;
+	if (eventTimeUnix && sportTag) {
+		const homeId =
+			teamId && opponentId ? (isHomeTeam ? teamId : opponentId) : homeTeamId;
+		const awayId =
+			teamId && opponentId ? (isHomeTeam ? opponentId : teamId) : awayTeamId;
 		gameId = await findGameForPick(db, {
 			homeTeamId: homeId,
 			awayTeamId: awayId,
 			eventTime: eventTimeUnix,
 			sportTag,
 		});
+		if (!gameId && homeId && awayId) {
+			result.failureReasons.push("game_match_failed");
+		}
 	}
 
 	// 5. Get line values
@@ -500,6 +539,8 @@ async function enrichPickInline(
 		}
 	}
 
+	result.failureReasons = Array.from(new Set(result.failureReasons));
+
 	return result;
 }
 
@@ -509,14 +550,14 @@ async function enrichPickInline(
  * data is always JSON-parsed at the repository layer.
  */
 type SerializablePickEntry = Omit<ManualPickEntry, "decisionSnapshot"> & {
-	decisionSnapshot?: Record<string, {}>;
+	decisionSnapshot?: Record<string, unknown>;
 };
 
 function toSerializablePick(pick: ManualPickEntry): SerializablePickEntry {
 	return {
 		...pick,
 		decisionSnapshot: pick.decisionSnapshot as
-			| Record<string, {}>
+			| Record<string, unknown>
 			| undefined,
 	};
 }
@@ -556,9 +597,7 @@ export const createManualPickFn = createServerFn({
 export const listManualPicksFn = createServerFn({
 	method: "POST",
 })
-	.inputValidator(
-		(d: { status?: ManualPickStatus; limit?: number }) => d,
-	)
+	.inputValidator((d: { status?: ManualPickStatus; limit?: number }) => d)
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
 		const picks = await listManualPicks(db, {

@@ -141,9 +141,17 @@ export interface ManualPickCalibrationSummary {
 	withSignalScore: number;
 	withQualityScore: number;
 	withEventTime: number;
+	withEdgeRating: number;
+	withScoreDifferential: number;
+	withPriceEdge: number;
+	withPriceEdgeRatio: number;
 	bySignalScore: ManualPickCalibrationBucket[];
 	byQualityScore: ManualPickCalibrationBucket[];
 	byTimeToStart: ManualPickCalibrationBucket[];
+	byEdgeRating: ManualPickCalibrationBucket[];
+	byScoreDifferential: ManualPickCalibrationBucket[];
+	byPriceEdge: ManualPickCalibrationBucket[];
+	byPriceEdgeRatio: ManualPickCalibrationBucket[];
 }
 
 export interface BucketPerformanceRow {
@@ -261,6 +269,10 @@ export interface ManualPickGradeRecalibrationRow {
 	avgSignalScore: number | null;
 	minSignalScore: number | null;
 	maxSignalScore: number | null;
+	avgEdgeRating: number | null;
+	avgScoreDifferential: number | null;
+	avgPriceEdge: number | null;
+	avgPriceEdgeRatio: number | null;
 }
 
 export interface ManualPickGradeRecalibrationSummary {
@@ -342,6 +354,38 @@ const PERFORMANCE_L2_IMBALANCE_BUCKETS = [
 	{ label: "<=-0.10", min: Number.NEGATIVE_INFINITY, max: -0.1 },
 	{ label: "-0.10 to 0.10", min: -0.1, max: 0.1 },
 	{ label: ">=0.10", min: 0.1, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const EDGE_RATING_BUCKETS = [
+	{ label: "<66", min: Number.NEGATIVE_INFINITY, max: 66 },
+	{ label: "66-72", min: 66, max: 72 },
+	{ label: "72-80", min: 72, max: 80 },
+	{ label: "80-90", min: 80, max: 90 },
+	{ label: "90+", min: 90, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const SCORE_DIFFERENTIAL_BUCKETS = [
+	{ label: "<10", min: Number.NEGATIVE_INFINITY, max: 10 },
+	{ label: "10-20", min: 10, max: 20 },
+	{ label: "20-30", min: 20, max: 30 },
+	{ label: "30-45", min: 30, max: 45 },
+	{ label: "45+", min: 45, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const PRICE_EDGE_BUCKETS = [
+	{ label: "<0 (negative)", min: Number.NEGATIVE_INFINITY, max: 0 },
+	{ label: "0-0.02", min: 0, max: 0.02 },
+	{ label: "0.02-0.04", min: 0.02, max: 0.04 },
+	{ label: "0.04-0.08", min: 0.04, max: 0.08 },
+	{ label: "0.08+", min: 0.08, max: Number.POSITIVE_INFINITY },
+] as const;
+
+const PRICE_EDGE_RATIO_BUCKETS = [
+	{ label: "<1.0", min: Number.NEGATIVE_INFINITY, max: 1.0 },
+	{ label: "1.0-1.5", min: 1.0, max: 1.5 },
+	{ label: "1.5-2.0", min: 1.5, max: 2.0 },
+	{ label: "2.0-3.0", min: 2.0, max: 3.0 },
+	{ label: "3.0+", min: 3.0, max: Number.POSITIVE_INFINITY },
 ] as const;
 
 const GRADE_TO_SIGNAL_SCORE: Record<string, number> = {
@@ -716,6 +760,14 @@ type MutableGradeBucketStats = MutableBucketStats & {
 	signalScoreCount: number;
 	minSignalScore: number | null;
 	maxSignalScore: number | null;
+	edgeRatingSum: number;
+	edgeRatingCount: number;
+	scoreDiffSum: number;
+	scoreDiffCount: number;
+	priceEdgeSum: number;
+	priceEdgeCount: number;
+	priceEdgeRatioSum: number;
+	priceEdgeRatioCount: number;
 };
 
 function createMutableBuckets(labels: string[]): MutableBucketStats[] {
@@ -747,6 +799,14 @@ function initMutableGradeBucket(label: string): MutableGradeBucketStats {
 		signalScoreCount: 0,
 		minSignalScore: null,
 		maxSignalScore: null,
+		edgeRatingSum: 0,
+		edgeRatingCount: 0,
+		scoreDiffSum: 0,
+		scoreDiffCount: 0,
+		priceEdgeSum: 0,
+		priceEdgeCount: 0,
+		priceEdgeRatioSum: 0,
+		priceEdgeRatioCount: 0,
 	};
 }
 
@@ -776,6 +836,15 @@ function bucketIndexFromRange(
 	return ranges.findIndex((range) => value >= range.min && value < range.max);
 }
 
+function computeMinPriceEdgeForPick(pick: ManualPickEntry): number | null {
+	const confidence = pick.confidence;
+	const edgeRating = pick.edgeRating;
+	if (!confidence || typeof edgeRating !== "number" || !Number.isFinite(edgeRating)) return null;
+	const base = confidence === "HIGH" ? 0.02 : confidence === "MEDIUM" ? 0.03 : 0.04;
+	const edgeBoost = Math.max(0, Math.min((edgeRating - 70) / 30, 1)) * 0.01;
+	return Math.max(0.01, base - edgeBoost);
+}
+
 function applyPickToBucket(
 	bucket: MutableBucketStats,
 	pick: ManualPickEntry,
@@ -800,17 +869,38 @@ function applyPickToGradeBucket(
 ): void {
 	applyPickToBucket(bucket, pick);
 	const signalScore = resolveSignalScore(pick);
-	if (signalScore === null || !Number.isFinite(signalScore)) return;
-	bucket.signalScoreSum += signalScore;
-	bucket.signalScoreCount += 1;
-	bucket.minSignalScore =
-		bucket.minSignalScore === null
-			? signalScore
-			: Math.min(bucket.minSignalScore, signalScore);
-	bucket.maxSignalScore =
-		bucket.maxSignalScore === null
-			? signalScore
-			: Math.max(bucket.maxSignalScore, signalScore);
+	if (signalScore !== null && Number.isFinite(signalScore)) {
+		bucket.signalScoreSum += signalScore;
+		bucket.signalScoreCount += 1;
+		bucket.minSignalScore =
+			bucket.minSignalScore === null
+				? signalScore
+				: Math.min(bucket.minSignalScore, signalScore);
+		bucket.maxSignalScore =
+			bucket.maxSignalScore === null
+				? signalScore
+				: Math.max(bucket.maxSignalScore, signalScore);
+	}
+	if (typeof pick.edgeRating === "number" && Number.isFinite(pick.edgeRating)) {
+		bucket.edgeRatingSum += pick.edgeRating;
+		bucket.edgeRatingCount += 1;
+	}
+	if (
+		typeof pick.scoreDifferential === "number" &&
+		Number.isFinite(pick.scoreDifferential)
+	) {
+		bucket.scoreDiffSum += pick.scoreDifferential;
+		bucket.scoreDiffCount += 1;
+	}
+	if (typeof pick.priceEdge === "number" && Number.isFinite(pick.priceEdge)) {
+		bucket.priceEdgeSum += pick.priceEdge;
+		bucket.priceEdgeCount += 1;
+		const minPriceEdge = computeMinPriceEdgeForPick(pick);
+		if (minPriceEdge !== null && minPriceEdge > 0) {
+			bucket.priceEdgeRatioSum += pick.priceEdge / minPriceEdge;
+			bucket.priceEdgeRatioCount += 1;
+		}
+	}
 }
 
 function toPerformanceRows(
@@ -1114,10 +1204,26 @@ export async function getManualPicksCalibrationSummary(
 	const timeBuckets = createMutableBuckets(
 		TIME_TO_START_BUCKETS.map((bucket) => bucket.label),
 	);
+	const edgeRatingBuckets = createMutableBuckets(
+		EDGE_RATING_BUCKETS.map((bucket) => bucket.label),
+	);
+	const scoreDiffBuckets = createMutableBuckets(
+		SCORE_DIFFERENTIAL_BUCKETS.map((bucket) => bucket.label),
+	);
+	const priceEdgeBuckets = createMutableBuckets(
+		PRICE_EDGE_BUCKETS.map((bucket) => bucket.label),
+	);
+	const priceEdgeRatioBuckets = createMutableBuckets(
+		PRICE_EDGE_RATIO_BUCKETS.map((bucket) => bucket.label),
+	);
 
 	let withSignalScore = 0;
 	let withQualityScore = 0;
 	let withEventTime = 0;
+	let withEdgeRating = 0;
+	let withScoreDifferential = 0;
+	let withPriceEdge = 0;
+	let withPriceEdgeRatio = 0;
 
 	for (const pick of settled) {
 		const signalScore = resolveSignalScore(pick);
@@ -1157,6 +1263,52 @@ export async function getManualPicksCalibrationSummary(
 				}
 			}
 		}
+
+		if (
+			typeof pick.edgeRating === "number" &&
+			Number.isFinite(pick.edgeRating)
+		) {
+			const index = bucketIndexFromRange(pick.edgeRating, EDGE_RATING_BUCKETS);
+			if (index >= 0) {
+				withEdgeRating += 1;
+				applyPickToBucket(edgeRatingBuckets[index], pick);
+			}
+		}
+
+		if (
+			typeof pick.scoreDifferential === "number" &&
+			Number.isFinite(pick.scoreDifferential)
+		) {
+			const index = bucketIndexFromRange(
+				pick.scoreDifferential,
+				SCORE_DIFFERENTIAL_BUCKETS,
+			);
+			if (index >= 0) {
+				withScoreDifferential += 1;
+				applyPickToBucket(scoreDiffBuckets[index], pick);
+			}
+		}
+
+		if (typeof pick.priceEdge === "number" && Number.isFinite(pick.priceEdge)) {
+			const index = bucketIndexFromRange(pick.priceEdge, PRICE_EDGE_BUCKETS);
+			if (index >= 0) {
+				withPriceEdge += 1;
+				applyPickToBucket(priceEdgeBuckets[index], pick);
+			}
+
+			const minPriceEdge = computeMinPriceEdgeForPick(pick);
+			if (minPriceEdge !== null && minPriceEdge > 0) {
+				const ratio = pick.priceEdge / minPriceEdge;
+				const ratioIndex = bucketIndexFromRange(
+					ratio,
+					PRICE_EDGE_RATIO_BUCKETS,
+				);
+				if (ratioIndex >= 0) {
+					withPriceEdgeRatio += 1;
+					applyPickToBucket(priceEdgeRatioBuckets[ratioIndex], pick);
+				}
+			}
+		}
 	}
 
 	return {
@@ -1166,9 +1318,17 @@ export async function getManualPicksCalibrationSummary(
 		withSignalScore,
 		withQualityScore,
 		withEventTime,
+		withEdgeRating,
+		withScoreDifferential,
+		withPriceEdge,
+		withPriceEdgeRatio,
 		bySignalScore: signalBuckets.map(bucketToOutput),
 		byQualityScore: qualityBuckets.map(bucketToOutput),
 		byTimeToStart: timeBuckets.map(bucketToOutput),
+		byEdgeRating: edgeRatingBuckets.map(bucketToOutput),
+		byScoreDifferential: scoreDiffBuckets.map(bucketToOutput),
+		byPriceEdge: priceEdgeBuckets.map(bucketToOutput),
+		byPriceEdgeRatio: priceEdgeRatioBuckets.map(bucketToOutput),
 	};
 }
 
@@ -1776,6 +1936,22 @@ export async function getManualPicksGradeRecalibrationSummary(
 					: null,
 			minSignalScore: bucket.minSignalScore,
 			maxSignalScore: bucket.maxSignalScore,
+			avgEdgeRating:
+				bucket.edgeRatingCount > 0
+					? bucket.edgeRatingSum / bucket.edgeRatingCount
+					: null,
+			avgScoreDifferential:
+				bucket.scoreDiffCount > 0
+					? bucket.scoreDiffSum / bucket.scoreDiffCount
+					: null,
+			avgPriceEdge:
+				bucket.priceEdgeCount > 0
+					? bucket.priceEdgeSum / bucket.priceEdgeCount
+					: null,
+			avgPriceEdgeRatio:
+				bucket.priceEdgeRatioCount > 0
+					? bucket.priceEdgeRatioSum / bucket.priceEdgeRatioCount
+					: null,
 		}))
 		.filter((row) => row.count > 0)
 		.sort((a, b) => {

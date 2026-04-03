@@ -2,8 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
-import { getBotCandidatesFn } from "../server/api/bot";
-import { getBotEvalFn } from "../server/api/bot-eval";
+import {
+	getBotCandidatesFn,
+	getBotCohortsFn,
+	getBotInspectDefaultsFn,
+} from "../server/api/bot";
 import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
@@ -71,6 +74,42 @@ function formatMinutesToStart(eventTime?: string): string {
 	return `${minutes}m`;
 }
 
+function getCanonicalScoreBand(score: number | null | undefined): {
+	label: string;
+	className: string;
+} {
+	if (score === null || score === undefined || !Number.isFinite(score)) {
+		return {
+			label: "no context",
+			className: "border-slate-700 bg-slate-900/60 text-slate-400",
+		};
+	}
+	if (score >= 70) {
+		return {
+			label: "strong",
+			className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+		};
+	}
+	if (score >= 45) {
+		return {
+			label: "mixed",
+			className: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+		};
+	}
+	return {
+		label: "weak",
+		className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+	};
+}
+
+function formatCanonicalWarningLabel(warning: string): string {
+	return warning.replace(/\.$/, "").replaceAll("_", " ");
+}
+
+function formatSegmentNote(note: string): string {
+	return note.replaceAll("_", " ");
+}
+
 function coverageStatus(
 	covered: number,
 	total: number,
@@ -130,6 +169,46 @@ function topEntries(record: Record<string, number>, limit: number = 5) {
 	return Object.entries(record)
 		.sort((left, right) => right[1] - left[1])
 		.slice(0, limit);
+}
+
+function formatTopEntriesForClipboard(
+	record: Record<string, number>,
+	limit: number = 5,
+): string {
+	const rows = topEntries(record, limit);
+	if (rows.length === 0) return "none";
+	return rows.map(([key, count]) => `${key}: ${count}`).join("\n");
+}
+
+function sumRecordEntries(
+	snapshots: BotCandidateCohortSnapshot[],
+	select: (snapshot: BotCandidateCohortSnapshot) => Record<string, number>,
+): Record<string, number> {
+	const totals: Record<string, number> = {};
+	for (const snapshot of snapshots) {
+		for (const [key, value] of Object.entries(select(snapshot))) {
+			totals[key] = (totals[key] ?? 0) + value;
+		}
+	}
+	return totals;
+}
+
+function areBotInspectDefaultsEqual(
+	left: BotInspectDefaults,
+	right: BotInspectDefaults,
+): boolean {
+	return (
+		left.minGrade === right.minGrade &&
+		left.windowMinutes === right.windowMinutes &&
+		left.minMinutesToStart === right.minMinutesToStart &&
+		left.maxMinutesToStart === right.maxMinutesToStart &&
+		left.maxBets === right.maxBets &&
+		left.candidateLimit === right.candidateLimit &&
+		left.requireReady === right.requireReady &&
+		left.includeStarted === right.includeStarted &&
+		left.requireMicrostructure === right.requireMicrostructure &&
+		left.marketQualityThreshold === right.marketQualityThreshold
+	);
 }
 
 type RuntimeStats = {
@@ -199,50 +278,6 @@ type RuntimeStats = {
 	};
 };
 
-type EvalBucket = {
-	triggered: number;
-	resolved: number;
-	hitRate: number | null;
-	avgMoveBps: number | null;
-	medianMoveBps: number | null;
-};
-
-type EvalStrategy = {
-	triggered: number;
-	resolved: number;
-	hitRate: number | null;
-	avgMoveBps: number | null;
-	medianMoveBps: number | null;
-	byGrade: Record<string, EvalBucket>;
-	byHourToStart: Record<string, EvalBucket>;
-};
-
-type EvalResult = {
-	computedAt: number;
-	windowHours: number;
-	horizonMinutes: number;
-	historyWindowMinutes: number;
-	minGrade: string;
-	includeStarted: boolean;
-	filteredQualityThreshold: number;
-	totalHistoryRows: number;
-	eligibleSnapshots: number;
-	strategies: {
-		baseline: EvalStrategy;
-		filtered: EvalStrategy;
-	};
-	thresholdSweep: Array<{
-		threshold: number;
-		triggered: number;
-		resolved: number;
-		hitRate: number | null;
-		avgMoveBps: number | null;
-		medianMoveBps: number | null;
-		retainedRate: number | null;
-		avgMoveDeltaBps: number | null;
-	}>;
-};
-
 type CalibrationBucket = {
 	label: string;
 	count: number;
@@ -261,9 +296,17 @@ type CalibrationResult = {
 	withSignalScore: number;
 	withQualityScore: number;
 	withEventTime: number;
+	withEdgeRating: number;
+	withScoreDifferential: number;
+	withPriceEdge: number;
+	withPriceEdgeRatio: number;
 	bySignalScore: CalibrationBucket[];
 	byQualityScore: CalibrationBucket[];
 	byTimeToStart: CalibrationBucket[];
+	byEdgeRating: CalibrationBucket[];
+	byScoreDifferential: CalibrationBucket[];
+	byPriceEdge: CalibrationBucket[];
+	byPriceEdgeRatio: CalibrationBucket[];
 };
 
 type PerformanceBucket = {
@@ -381,6 +424,10 @@ type GradeRecalibrationRow = {
 	avgSignalScore: number | null;
 	minSignalScore: number | null;
 	maxSignalScore: number | null;
+	avgEdgeRating: number | null;
+	avgScoreDifferential: number | null;
+	avgPriceEdge: number | null;
+	avgPriceEdgeRatio: number | null;
 };
 
 type GradeRecalibrationResult = {
@@ -418,6 +465,13 @@ type CandidateDebugCandidate = {
 		edgeRating?: number;
 		scoreDifferential?: number;
 		microstructureScore?: number;
+		segmentScore?: number;
+		segmentKey?: string;
+		segmentLabel?: string;
+		segmentNotes?: string[];
+		canonicalScore?: number | null;
+		canonicalSnapshotType?: string | null;
+		canonicalWarnings?: string[];
 		isReady?: boolean;
 		warnings?: string[];
 		computedAt?: number;
@@ -462,6 +516,30 @@ type CandidateDebugResult = {
 	};
 };
 
+type BotCandidateCohortSnapshot = {
+	id: string;
+	createdAt: number;
+	minGrade: string;
+	windowMinutes: number;
+	minMinutesToStart: number;
+	maxMinutesToStart: number;
+	requireReady: boolean;
+	includeStarted: boolean;
+	requireMicrostructure: boolean;
+	marketQualityThreshold: number;
+	requested: number;
+	returned: number;
+	totalEntries: number;
+	upcomingEntries: number;
+	candidatesBeforeDedup: number;
+	returnedAfterDedup: number;
+	excluded: Record<string, number>;
+	policyMatched: Record<string, number>;
+	returnedByMarketType: Record<string, number>;
+	returnedByTimingBucket: Record<string, number>;
+	returnedBySportSeries: Record<string, number>;
+};
+
 type SnapshotRuntimeSummary =
 	| {
 			fetchedAt: number;
@@ -480,6 +558,32 @@ type SnapshotRuntimeSummary =
 	  }
 	| null;
 
+type BotInspectDefaults = {
+	minGrade: "A+" | "A" | "B" | "C" | "D";
+	windowMinutes: number;
+	minMinutesToStart: number;
+	maxMinutesToStart: number;
+	maxBets: number;
+	candidateLimit: number;
+	requireReady: boolean;
+	includeStarted: boolean;
+	requireMicrostructure: boolean;
+	marketQualityThreshold: number;
+};
+
+const FALLBACK_BOT_DEFAULTS: BotInspectDefaults = {
+	minGrade: "B",
+	windowMinutes: 90,
+	minMinutesToStart: 15,
+	maxMinutesToStart: 75,
+	maxBets: 5,
+	candidateLimit: 100,
+	requireReady: true,
+	includeStarted: true,
+	requireMicrostructure: true,
+	marketQualityThreshold: 0.7,
+};
+
 function RuntimePage() {
 	const [stats, setStats] = useState<RuntimeStats | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -487,20 +591,12 @@ function RuntimePage() {
 	const [error, setError] = useState<string | null>(null);
 	const [backfillResult, setBackfillResult] = useState<string | null>(null);
 
-	const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
-	const [isEvaluating, setIsEvaluating] = useState(false);
-	const [evalError, setEvalError] = useState<string | null>(null);
-	const [evalWindowHours, setEvalWindowHours] = useState("24");
-	const [evalHorizonMinutes, setEvalHorizonMinutes] = useState("15");
-	const [evalHistoryWindowMinutes, setEvalHistoryWindowMinutes] =
-		useState("60");
-	const [evalMinGrade, setEvalMinGrade] = useState<
-		"A+" | "A" | "B" | "C" | "D"
-	>("A");
-	const [evalIncludeStarted, setEvalIncludeStarted] = useState(false);
-	const [evalSweepThresholds, setEvalSweepThresholds] = useState(
-		"0.58,0.62,0.66,0.70",
-	);
+	const [gradeRecalCopyStatus, setGradeRecalCopyStatus] = useState<
+		string | null
+	>(null);
+	const [calibrationCopyStatus, setCalibrationCopyStatus] = useState<
+		string | null
+	>(null);
 
 	const [calibrationResult, setCalibrationResult] =
 		useState<CalibrationResult | null>(null);
@@ -559,9 +655,25 @@ function RuntimePage() {
 	const [candidateDebugError, setCandidateDebugError] = useState<string | null>(
 		null,
 	);
+	const [candidateCohorts, setCandidateCohorts] = useState<
+		BotCandidateCohortSnapshot[]
+	>([]);
+	const [isCandidateCohortsLoading, setIsCandidateCohortsLoading] =
+		useState(false);
+	const [candidateCohortsError, setCandidateCohortsError] = useState<
+		string | null
+	>(null);
+	const [_botDefaults, setBotDefaults] = useState<BotInspectDefaults>(
+		FALLBACK_BOT_DEFAULTS,
+	);
+	const botDefaultsRef = useRef<BotInspectDefaults>(FALLBACK_BOT_DEFAULTS);
 	const [copySnapshotStatus, setCopySnapshotStatus] = useState<string | null>(
 		null,
 	);
+	const [copyCandidateStatus, setCopyCandidateStatus] = useState<string | null>(
+		null,
+	);
+	const [copyCohortStatus, setCopyCohortStatus] = useState<string | null>(null);
 	const [isCopyingSnapshot, setIsCopyingSnapshot] = useState(false);
 	const [sinceFilter, setSinceFilter] = useState<string>("");
 	const sincePickedAtRef = useRef<number | undefined>(undefined);
@@ -570,18 +682,6 @@ function RuntimePage() {
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
 		: 0;
 
-	const evalHourBuckets = useMemo(
-		() =>
-			evalResult
-				? Array.from(
-						new Set([
-							...Object.keys(evalResult.strategies.baseline.byHourToStart),
-							...Object.keys(evalResult.strategies.filtered.byHourToStart),
-						]),
-					)
-				: [],
-		[evalResult],
-	);
 	const ncaabSportRow = useMemo(
 		() =>
 			sportPerformanceResult?.rows.find(
@@ -686,6 +786,102 @@ function RuntimePage() {
 		() => candidateDebugResult?.debug.nearMisses.slice(0, 5) ?? [],
 		[candidateDebugResult],
 	);
+	const cohortLatest = candidateCohorts[0] ?? null;
+	const cohortSummary = useMemo(() => {
+		if (candidateCohorts.length === 0) return null;
+		const scans = candidateCohorts.length;
+		const returnedScans = candidateCohorts.filter(
+			(snapshot) => snapshot.returnedAfterDedup > 0,
+		).length;
+		const totalReturned = candidateCohorts.reduce(
+			(sum, snapshot) => sum + snapshot.returnedAfterDedup,
+			0,
+		);
+		const totalUpcoming = candidateCohorts.reduce(
+			(sum, snapshot) => sum + snapshot.upcomingEntries,
+			0,
+		);
+		return {
+			scans,
+			returnedScans,
+			totalReturned,
+			totalUpcoming,
+			avgReturned: totalReturned / scans,
+			hitRate: returnedScans / scans,
+			aggregatedExcluded: sumRecordEntries(
+				candidateCohorts,
+				(snapshot) => snapshot.excluded,
+			),
+			aggregatedReturnedByMarketType: sumRecordEntries(
+				candidateCohorts,
+				(snapshot) => snapshot.returnedByMarketType,
+			),
+			aggregatedReturnedByTimingBucket: sumRecordEntries(
+				candidateCohorts,
+				(snapshot) => snapshot.returnedByTimingBucket,
+			),
+			aggregatedReturnedBySportSeries: sumRecordEntries(
+				candidateCohorts,
+				(snapshot) => snapshot.returnedBySportSeries,
+			),
+		};
+	}, [candidateCohorts]);
+	const cohortExclusionRows = useMemo(
+		() => topEntries(cohortLatest?.excluded ?? {}, 6),
+		[cohortLatest],
+	);
+	const cohortReturnedSections = useMemo(
+		() =>
+			cohortLatest
+				? [
+						{
+							title: "Returned by market type",
+							rows: Object.entries(cohortLatest.returnedByMarketType).sort(
+								(left, right) => right[1] - left[1],
+							),
+						},
+						{
+							title: "Returned by timing bucket",
+							rows: Object.entries(cohortLatest.returnedByTimingBucket).sort(
+								(left, right) => right[1] - left[1],
+							),
+						},
+						{
+							title: "Returned by sport series",
+							rows: Object.entries(cohortLatest.returnedBySportSeries).sort(
+								(left, right) => right[1] - left[1],
+							),
+						},
+					]
+				: [],
+		[cohortLatest],
+	);
+	const cohortTrendSections = useMemo(
+		() =>
+			cohortSummary
+				? [
+						{
+							title: "Returned by market type",
+							rows: topEntries(cohortSummary.aggregatedReturnedByMarketType, 6),
+						},
+						{
+							title: "Returned by timing bucket",
+							rows: topEntries(
+								cohortSummary.aggregatedReturnedByTimingBucket,
+								6,
+							),
+						},
+						{
+							title: "Returned by sport series",
+							rows: topEntries(
+								cohortSummary.aggregatedReturnedBySportSeries,
+								6,
+							),
+						},
+					]
+				: [],
+		[cohortSummary],
+	);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -700,32 +896,74 @@ function RuntimePage() {
 		}
 	}, []);
 
-	const loadCandidateDebug = useCallback(async () => {
-		setIsCandidateDebugLoading(true);
-		setCandidateDebugError(null);
+	const applyBotDefaults = useCallback((nextDefaults: BotInspectDefaults) => {
+		botDefaultsRef.current = nextDefaults;
+		setBotDefaults((current) =>
+			areBotInspectDefaultsEqual(current, nextDefaults)
+				? current
+				: nextDefaults,
+		);
+	}, []);
+
+	const loadBotDefaults = useCallback(async () => {
 		try {
-			const result = await getBotCandidatesFn({
-				data: {
-					minGrade: "B",
-					windowMinutes: 90,
-					minMinutesToStart: 15,
-					maxMinutesToStart: 75,
-					limit: 100,
-					requireReady: true,
-					includeStarted: true,
-					requireMicrostructure: true,
-					marketQualityThreshold: 0.7,
-				},
-			});
-			if ("error" in result) {
-				throw new Error(result.error);
+			const result = await getBotInspectDefaultsFn();
+			if (result?.defaults) {
+				applyBotDefaults(result.defaults as BotInspectDefaults);
 			}
-			setCandidateDebugResult(result as CandidateDebugResult);
 		} catch (err) {
-			console.error("Failed to load candidate debug", err);
-			setCandidateDebugError("Failed to load candidate debug");
+			console.error("Failed to load bot inspect defaults", err);
+		}
+	}, [applyBotDefaults]);
+
+	const loadCandidateDebug = useCallback(
+		async (defaultsOverride?: BotInspectDefaults) => {
+			const activeDefaults = defaultsOverride ?? botDefaultsRef.current;
+			setIsCandidateDebugLoading(true);
+			setCandidateDebugError(null);
+			try {
+				const result = await getBotCandidatesFn({
+					data: {
+						minGrade: activeDefaults.minGrade,
+						windowMinutes: activeDefaults.windowMinutes,
+						minMinutesToStart: activeDefaults.minMinutesToStart,
+						maxMinutesToStart: activeDefaults.maxMinutesToStart,
+						limit: Math.max(activeDefaults.candidateLimit, 100),
+						requireReady: activeDefaults.requireReady,
+						includeStarted: activeDefaults.includeStarted,
+						requireMicrostructure: activeDefaults.requireMicrostructure,
+						marketQualityThreshold: activeDefaults.marketQualityThreshold,
+					},
+				});
+				if ("error" in result) {
+					throw new Error(result.error);
+				}
+				setCandidateDebugResult(result as CandidateDebugResult);
+			} catch (err) {
+				console.error("Failed to load candidate debug", err);
+				setCandidateDebugError("Failed to load candidate debug");
+			} finally {
+				setIsCandidateDebugLoading(false);
+			}
+		},
+		[],
+	);
+
+	const loadCandidateCohorts = useCallback(async () => {
+		setIsCandidateCohortsLoading(true);
+		setCandidateCohortsError(null);
+		try {
+			const result = await getBotCohortsFn({
+				data: { limit: 24 },
+			});
+			setCandidateCohorts(
+				(result.snapshots ?? []) as BotCandidateCohortSnapshot[],
+			);
+		} catch (err) {
+			console.error("Failed to load candidate cohorts", err);
+			setCandidateCohortsError("Failed to load candidate cohorts");
 		} finally {
-			setIsCandidateDebugLoading(false);
+			setIsCandidateCohortsLoading(false);
 		}
 	}, []);
 
@@ -963,13 +1201,14 @@ function RuntimePage() {
 			});
 			await loadStats();
 			await loadCandidateDebug();
+			await loadCandidateCohorts();
 		} catch (err) {
 			console.error("Failed to refresh runtime stats", err);
 			setError("Failed to refresh runtime stats");
 		} finally {
 			setIsLoading(false);
 		}
-	}, [loadStats, loadCandidateDebug]);
+	}, [loadStats, loadCandidateDebug, loadCandidateCohorts]);
 
 	const copySnapshot = useCallback(async () => {
 		setCopySnapshotStatus(null);
@@ -977,30 +1216,33 @@ function RuntimePage() {
 		try {
 			const calibrationLimitValue = Number(calibrationLimit);
 			const clvThresholdValue = Number(clvQualityThreshold);
-			const evalWindowHoursValue = Number(evalWindowHours);
-			const evalHorizonMinutesValue = Number(evalHorizonMinutes);
-			const evalHistoryWindowMinutesValue = Number(evalHistoryWindowMinutes);
 			const refreshedStats = await getRuntimeMarketStatsFn({
 				data: { freshnessWindowHours: 24 },
 			});
+			const refreshedDefaults = await getBotInspectDefaultsFn();
+			const activeDefaults = (refreshedDefaults.defaults ??
+				botDefaultsRef.current) as BotInspectDefaults;
 			const refreshedCandidateDebug = await getBotCandidatesFn({
 				data: {
-					minGrade: "B",
-					windowMinutes: 90,
-					minMinutesToStart: 15,
-					maxMinutesToStart: 75,
-					limit: 100,
-					requireReady: true,
-					includeStarted: true,
-					requireMicrostructure: true,
-					marketQualityThreshold: 0.7,
+					minGrade: activeDefaults.minGrade,
+					windowMinutes: activeDefaults.windowMinutes,
+					minMinutesToStart: activeDefaults.minMinutesToStart,
+					maxMinutesToStart: activeDefaults.maxMinutesToStart,
+					limit: Math.max(activeDefaults.candidateLimit, 100),
+					requireReady: activeDefaults.requireReady,
+					includeStarted: activeDefaults.includeStarted,
+					requireMicrostructure: activeDefaults.requireMicrostructure,
+					marketQualityThreshold: activeDefaults.marketQualityThreshold,
 				},
 			});
 			if ("error" in refreshedCandidateDebug) {
 				throw new Error(refreshedCandidateDebug.error);
 			}
+			applyBotDefaults(activeDefaults);
+			const refreshedCandidateCohorts = await getBotCohortsFn({
+				data: { limit: 24 },
+			});
 			const [
-				refreshedEval,
 				refreshedCalibration,
 				refreshedBucketPerformance,
 				refreshedClvTiming,
@@ -1008,31 +1250,6 @@ function RuntimePage() {
 				refreshedMarketTypePerformance,
 				refreshedGradeRecalibration,
 			] = await Promise.all([
-				getBotEvalFn({
-					data: {
-						windowHours:
-							Number.isFinite(evalWindowHoursValue) && evalWindowHoursValue > 0
-								? evalWindowHoursValue
-								: 24,
-						horizonMinutes:
-							Number.isFinite(evalHorizonMinutesValue) &&
-							evalHorizonMinutesValue > 0
-								? evalHorizonMinutesValue
-								: 15,
-						historyWindowMinutes:
-							Number.isFinite(evalHistoryWindowMinutesValue) &&
-							evalHistoryWindowMinutesValue > 0
-								? evalHistoryWindowMinutesValue
-								: 60,
-						minGrade: evalMinGrade,
-						includeStarted: evalIncludeStarted,
-						limit: 10000,
-						sweepThresholds: evalSweepThresholds
-							.split(",")
-							.map((value) => Number(value.trim()))
-							.filter((value) => Number.isFinite(value)),
-					},
-				}),
 				getManualPicksCalibrationFn({
 					data: {
 						limit:
@@ -1108,7 +1325,10 @@ function RuntimePage() {
 			]);
 			setStats((refreshedStats.stats ?? null) as RuntimeStats | null);
 			setCandidateDebugResult(refreshedCandidateDebug as CandidateDebugResult);
-			setEvalResult(refreshedEval as EvalResult);
+			setCandidateCohorts(
+				(refreshedCandidateCohorts.snapshots ??
+					[]) as BotCandidateCohortSnapshot[],
+			);
 			setCalibrationResult(
 				(refreshedCalibration.calibration ?? null) as CalibrationResult | null,
 			);
@@ -1145,8 +1365,7 @@ function RuntimePage() {
 						fetchedAt: refreshedRuntimeStats.fetchedAt,
 						filteredMarketsWindow: refreshedFilteredTotalMarkets,
 						expandedEventCount: refreshedRuntimeStats.expandedEventCount ?? 0,
-						expandedMarketCount:
-							refreshedRuntimeStats.expandedMarketCount ?? 0,
+						expandedMarketCount: refreshedRuntimeStats.expandedMarketCount ?? 0,
 						retryCount: refreshedRuntimeStats.retryCount ?? 0,
 						failureCount: refreshedRuntimeStats.failureCount ?? 0,
 						totalRuns: refreshedRuntimeStats.totalRuns ?? 0,
@@ -1221,6 +1440,9 @@ function RuntimePage() {
 							grade: candidate.grade.grade,
 							signalScore: candidate.grade.signalScore ?? null,
 							marketQualityScore: candidate.grade.microstructureScore ?? null,
+							canonicalScore: candidate.grade.canonicalScore ?? null,
+							canonicalSnapshotType:
+								candidate.grade.canonicalSnapshotType ?? null,
 							minutesToStart: candidate.entry.eventTime
 								? Math.round(
 										(new Date(candidate.entry.eventTime).getTime() -
@@ -1230,7 +1452,6 @@ function RuntimePage() {
 								: null,
 						})),
 				},
-				eval: refreshedEval,
 				clvTiming: refreshedClvTiming.timing ?? null,
 				calibration: refreshedCalibration.calibration ?? null,
 				bucketPerformance: refreshedBucketPerformance.performance ?? null,
@@ -1253,12 +1474,7 @@ function RuntimePage() {
 	}, [
 		calibrationLimit,
 		clvQualityThreshold,
-		evalWindowHours,
-		evalHorizonMinutes,
-		evalHistoryWindowMinutes,
-		evalMinGrade,
-		evalIncludeStarted,
-		evalSweepThresholds,
+		applyBotDefaults,
 	]);
 
 	const handleBackfill = useCallback(async () => {
@@ -1288,55 +1504,161 @@ function RuntimePage() {
 		}
 	}, [isBackfilling, loadStats]);
 
-	const runEval = useCallback(async () => {
-		if (isEvaluating) return;
-		setIsEvaluating(true);
-		setEvalError(null);
+	const copyCandidatePolicySummary = useCallback(async () => {
+		if (!candidateDebugResult) return;
+		setCopyCandidateStatus(null);
+		const payload = [
+			"Candidate Policy",
+			`Entries: ${candidateDebugResult.debug.totalEntries}`,
+			`Upcoming: ${candidateDebugResult.debug.upcomingEntries}`,
+			`Before dedup: ${candidateDebugResult.debug.candidatesBeforeDedup}`,
+			`Returned: ${candidateDebugResult.returned}`,
+			`Top exclusion: ${formatTopEntriesForClipboard(
+				candidateDebugResult.debug.excluded,
+				5,
+			)}`,
+			`Top policy buckets: ${formatTopEntriesForClipboard(
+				candidateDebugResult.debug.policyMatched,
+				8,
+			)}`,
+			`Returned by market type: ${formatTopEntriesForClipboard(
+				candidateDebugResult.debug.returnedByMarketType,
+				5,
+			)}`,
+			`Returned by timing bucket: ${formatTopEntriesForClipboard(
+				candidateDebugResult.debug.returnedByTimingBucket,
+				5,
+			)}`,
+			`Returned by sport series: ${formatTopEntriesForClipboard(
+				candidateDebugResult.debug.returnedBySportSeries,
+				5,
+			)}`,
+		].join("\n\n");
 		try {
-			const windowHours = Number(evalWindowHours);
-			const horizonMinutes = Number(evalHorizonMinutes);
-			const historyWindowMinutes = Number(evalHistoryWindowMinutes);
-			const result = await getBotEvalFn({
-				data: {
-					windowHours:
-						Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
-					horizonMinutes:
-						Number.isFinite(horizonMinutes) && horizonMinutes > 0
-							? horizonMinutes
-							: 15,
-					historyWindowMinutes:
-						Number.isFinite(historyWindowMinutes) && historyWindowMinutes > 0
-							? historyWindowMinutes
-							: 60,
-					minGrade: evalMinGrade,
-					includeStarted: evalIncludeStarted,
-					limit: 10000,
-					sweepThresholds: evalSweepThresholds
-						.split(",")
-						.map((value) => Number(value.trim()))
-						.filter((value) => Number.isFinite(value)),
-				},
-			});
-			setEvalResult(result as EvalResult);
-		} catch (err) {
-			console.error("Failed to run eval", err);
-			setEvalError("Failed to run eval comparison");
-		} finally {
-			setIsEvaluating(false);
+			await navigator.clipboard.writeText(payload);
+			setCopyCandidateStatus("Candidate policy copied");
+			window.setTimeout(() => setCopyCandidateStatus(null), 2500);
+		} catch {
+			setCopyCandidateStatus("Copy failed");
+			window.setTimeout(() => setCopyCandidateStatus(null), 2500);
 		}
-	}, [
-		isEvaluating,
-		evalWindowHours,
-		evalHorizonMinutes,
-		evalHistoryWindowMinutes,
-		evalMinGrade,
-		evalIncludeStarted,
-		evalSweepThresholds,
-	]);
+	}, [candidateDebugResult]);
+
+	const copyCandidateCohortsSummary = useCallback(async () => {
+		if (!cohortLatest || !cohortSummary) return;
+		setCopyCohortStatus(null);
+		const payload = [
+			"Candidate Cohorts",
+			`Latest scan: ${formatRelativeTime(cohortLatest.createdAt)}`,
+			`Latest returned: ${cohortLatest.returned}`,
+			`Latest config: ${cohortLatest.minGrade} | ${cohortLatest.minMinutesToStart}-${cohortLatest.maxMinutesToStart}m | q${cohortLatest.marketQualityThreshold.toFixed(2)}`,
+			`Recent scans: ${cohortSummary.scans}`,
+			`Returned scans: ${cohortSummary.returnedScans} (${formatPercent(cohortSummary.hitRate)})`,
+			`Total returned: ${cohortSummary.totalReturned}`,
+			`Avg returned/scan: ${cohortSummary.avgReturned.toFixed(2)}`,
+			`Trend top exclusions: ${formatTopEntriesForClipboard(
+				cohortSummary.aggregatedExcluded,
+				8,
+			)}`,
+			`Returned by market type: ${formatTopEntriesForClipboard(
+				cohortSummary.aggregatedReturnedByMarketType,
+				6,
+			)}`,
+			`Returned by timing bucket: ${formatTopEntriesForClipboard(
+				cohortSummary.aggregatedReturnedByTimingBucket,
+				6,
+			)}`,
+			`Returned by sport series: ${formatTopEntriesForClipboard(
+				cohortSummary.aggregatedReturnedBySportSeries,
+				6,
+			)}`,
+		].join("\n\n");
+		try {
+			await navigator.clipboard.writeText(payload);
+			setCopyCohortStatus("Candidate cohorts copied");
+			window.setTimeout(() => setCopyCohortStatus(null), 2500);
+		} catch {
+			setCopyCohortStatus("Copy failed");
+			window.setTimeout(() => setCopyCohortStatus(null), 2500);
+		}
+	}, [cohortLatest, cohortSummary]);
+
+	const copyGradeRecal = useCallback(async () => {
+		if (!gradeRecalibrationResult) return;
+		const header = "grade\tcount\twins\tlosses\tpushes\twinRate\tavgRoi\tavgClvBps\tavgSignalScore\tavgEdgeRating\tavgScoreDiff\tavgPriceEdge\tavgPriceEdgeRatio";
+		const lines = gradeRecalibrationResult.rows.map((r) =>
+			[
+				r.grade,
+				r.count,
+				r.wins,
+				r.losses,
+				r.pushes,
+				r.winRate !== null ? `${(r.winRate * 100).toFixed(1)}%` : "—",
+				r.avgRoi !== null ? `${(r.avgRoi * 100).toFixed(1)}%` : "—",
+				r.avgClvBps !== null ? r.avgClvBps.toFixed(1) : "—",
+				r.avgSignalScore !== null ? r.avgSignalScore.toFixed(1) : "—",
+				r.avgEdgeRating !== null ? r.avgEdgeRating.toFixed(1) : "—",
+				r.avgScoreDifferential !== null ? r.avgScoreDifferential.toFixed(1) : "—",
+				r.avgPriceEdge !== null ? r.avgPriceEdge.toFixed(4) : "—",
+				r.avgPriceEdgeRatio !== null ? r.avgPriceEdgeRatio.toFixed(2) : "—",
+			].join("\t"),
+		);
+		const text = `${header}\n${lines.join("\n")}`;
+		try {
+			await navigator.clipboard.writeText(text);
+			setGradeRecalCopyStatus("Copied!");
+			window.setTimeout(() => setGradeRecalCopyStatus(null), 2500);
+		} catch {
+			setGradeRecalCopyStatus("Copy failed");
+			window.setTimeout(() => setGradeRecalCopyStatus(null), 2500);
+		}
+	}, [gradeRecalibrationResult]);
+
+	const copyCalibration = useCallback(async () => {
+		if (!calibrationResult) return;
+		const allTables = [
+			{ title: "Signal Score", rows: calibrationResult.bySignalScore },
+			{ title: "Quality Score", rows: calibrationResult.byQualityScore },
+			{ title: "Time to Start", rows: calibrationResult.byTimeToStart },
+			{ title: "Edge Rating", rows: calibrationResult.byEdgeRating },
+			{ title: "Score Differential", rows: calibrationResult.byScoreDifferential },
+			{ title: "Price Edge", rows: calibrationResult.byPriceEdge },
+			{ title: "Price Edge Ratio", rows: calibrationResult.byPriceEdgeRatio },
+		];
+		const header = "dimension\tbucket\tcount\twins\tlosses\twinRate\tavgRoi\tavgClvBps";
+		const lines: string[] = [];
+		for (const table of allTables) {
+			for (const row of table.rows) {
+				lines.push(
+					[
+						table.title,
+						row.label,
+						row.count,
+						row.wins,
+						row.losses,
+						row.winRate !== null ? `${(row.winRate * 100).toFixed(1)}%` : "—",
+						row.avgRoi !== null ? `${(row.avgRoi * 100).toFixed(1)}%` : "—",
+						row.avgClvBps !== null ? row.avgClvBps.toFixed(1) : "—",
+					].join("\t"),
+				);
+			}
+		}
+		const text = `${header}\n${lines.join("\n")}`;
+		try {
+			await navigator.clipboard.writeText(text);
+			setCalibrationCopyStatus("Copied!");
+			window.setTimeout(() => setCalibrationCopyStatus(null), 2500);
+		} catch {
+			setCalibrationCopyStatus("Copy failed");
+			window.setTimeout(() => setCalibrationCopyStatus(null), 2500);
+		}
+	}, [calibrationResult]);
 
 	useEffect(() => {
 		void loadStats();
+		void loadBotDefaults();
 		void loadCandidateDebug();
+		void loadCandidateCohorts();
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
 		void loadClvTiming(2000, 0.66);
@@ -1346,7 +1668,9 @@ function RuntimePage() {
 		void loadGradeRecalibration(2000);
 	}, [
 		loadStats,
+		loadBotDefaults,
 		loadCandidateDebug,
+		loadCandidateCohorts,
 		loadCalibration,
 		loadBucketPerformance,
 		loadClvTiming,
@@ -1481,10 +1805,23 @@ function RuntimePage() {
 										? "Refreshing..."
 										: "Refresh Candidate Debug"}
 								</button>
+								<button
+									type="button"
+									onClick={() => void copyCandidatePolicySummary()}
+									disabled={!candidateDebugResult}
+									className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-100 hover:bg-sky-500/20 disabled:opacity-60"
+								>
+									Copy Candidate Policy
+								</button>
 							</div>
 							{candidateDebugError && (
 								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
 									{candidateDebugError}
+								</div>
+							)}
+							{copyCandidateStatus && (
+								<div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm text-sky-100">
+									{copyCandidateStatus}
 								</div>
 							)}
 							{candidateDebugResult && (
@@ -1591,61 +1928,136 @@ function RuntimePage() {
 														<th className="pb-2 pr-4">Type</th>
 														<th className="pb-2 pr-4">Side</th>
 														<th className="pb-2 pr-4">Grade</th>
+														<th className="pb-2 pr-4">Segment</th>
 														<th className="pb-2 pr-4">Quality</th>
+														<th className="pb-2 pr-4">Canonical</th>
+														<th className="pb-2 pr-4">Why</th>
 														<th className="pb-2 pr-4">Score</th>
 														<th className="pb-2 pr-4">Price</th>
 														<th className="pb-2">Start</th>
 													</tr>
 												</thead>
 												<tbody>
-													{returnedCandidates.map((candidate) => (
-														<tr
-															key={candidate.entry.conditionId}
-															className="border-t border-slate-800/80 align-top"
-														>
-															<td className="py-2 pr-4 text-slate-200">
-																<div className="font-semibold text-slate-100">
-																	{candidate.entry.marketTitle}
-																</div>
-																<div className="text-xs text-slate-500">
-																	Series:{" "}
-																	{candidate.entry.sportSeriesId ?? "unknown"}
-																</div>
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.entry.marketType}
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.entry.sharpSide}
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.grade.grade}
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.grade.microstructureScore !==
-																undefined
-																	? candidate.grade.microstructureScore.toFixed(
-																			2,
-																		)
-																	: "—"}
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.grade.signalScore !== undefined
-																	? candidate.grade.signalScore.toFixed(1)
-																	: "—"}
-															</td>
-															<td className="py-2 pr-4">
-																{candidate.entry.sharpSidePrice !== null
-																	? candidate.entry.sharpSidePrice.toFixed(3)
-																	: "—"}
-															</td>
-															<td className="py-2">
-																{formatMinutesToStart(
-																	candidate.entry.eventTime,
-																)}
-															</td>
-														</tr>
-													))}
+													{returnedCandidates.map((candidate) => {
+														const canonicalBand = getCanonicalScoreBand(
+															candidate.grade.canonicalScore,
+														);
+														return (
+															<tr
+																key={candidate.entry.conditionId}
+																className="border-t border-slate-800/80 align-top"
+															>
+																<td className="py-2 pr-4 text-slate-200">
+																	<div className="font-semibold text-slate-100">
+																		{candidate.entry.marketTitle}
+																	</div>
+																	<div className="text-xs text-slate-500">
+																		Series:{" "}
+																		{candidate.entry.sportSeriesId ?? "unknown"}
+																	</div>
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.entry.marketType}
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.entry.sharpSide}
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.grade.grade}
+																</td>
+																<td className="py-2 pr-4">
+																	<div>
+																		{candidate.grade.segmentScore !== undefined
+																			? candidate.grade.segmentScore > 0
+																				? `+${candidate.grade.segmentScore}`
+																				: `${candidate.grade.segmentScore}`
+																			: "—"}
+																	</div>
+																	{candidate.grade.segmentLabel && (
+																		<div className="text-xs text-slate-500">
+																			{candidate.grade.segmentLabel}
+																		</div>
+																	)}
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.grade.microstructureScore !==
+																	undefined
+																		? candidate.grade.microstructureScore.toFixed(
+																				2,
+																			)
+																		: "—"}
+																</td>
+																<td className="py-2 pr-4">
+																	<div>
+																		{candidate.grade.canonicalScore != null
+																			? candidate.grade.canonicalScore.toFixed(
+																					0,
+																				)
+																			: "—"}
+																	</div>
+																	{candidate.grade.canonicalSnapshotType && (
+																		<div className="text-xs text-slate-500">
+																			{candidate.grade.canonicalSnapshotType}
+																		</div>
+																	)}
+																</td>
+																<td className="py-2 pr-4">
+																	<div
+																		className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${canonicalBand.className}`}
+																	>
+																		{canonicalBand.label}
+																	</div>
+																	{(candidate.grade.segmentNotes ?? []).length >
+																		0 && (
+																		<div className="mt-1 flex flex-wrap gap-1">
+																			{candidate.grade.segmentNotes
+																				.slice(0, 2)
+																				.map((note) => (
+																					<span
+																						key={note}
+																						className="rounded-full border border-sky-900/70 bg-sky-950/40 px-2 py-0.5 text-[11px] text-sky-200"
+																					>
+																						{formatSegmentNote(note)}
+																					</span>
+																				))}
+																		</div>
+																	)}
+																	{(candidate.grade.canonicalWarnings ?? [])
+																		.length > 0 && (
+																		<div className="mt-1 flex flex-wrap gap-1">
+																			{candidate.grade.canonicalWarnings
+																				.slice(0, 2)
+																				.map((warning) => (
+																					<span
+																						key={warning}
+																						className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[11px] text-slate-300"
+																					>
+																						{formatCanonicalWarningLabel(
+																							warning,
+																						)}
+																					</span>
+																				))}
+																		</div>
+																	)}
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.grade.signalScore !== undefined
+																		? candidate.grade.signalScore.toFixed(1)
+																		: "—"}
+																</td>
+																<td className="py-2 pr-4">
+																	{candidate.entry.sharpSidePrice !== null
+																		? candidate.entry.sharpSidePrice.toFixed(3)
+																		: "—"}
+																</td>
+																<td className="py-2">
+																	{formatMinutesToStart(
+																		candidate.entry.eventTime,
+																	)}
+																</td>
+															</tr>
+														);
+													})}
 												</tbody>
 											</table>
 										) : (
@@ -1732,254 +2144,283 @@ function RuntimePage() {
 
 					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
 						<div className="flex flex-col gap-4">
-							<div>
-								<h2 className="text-lg font-semibold text-slate-50">
-									Eval Comparison
-								</h2>
-								<p className="mt-1 text-sm text-slate-400">
-									Compare baseline candidate logic vs filtered market-quality
-									logic using historical snapshots.
-								</p>
-							</div>
-							<div className="grid gap-3 md:grid-cols-6">
+							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
 								<div>
-									<label
-										htmlFor="eval-window-hours"
-										className="block text-xs text-slate-400"
-									>
-										Window hours
-									</label>
-									<input
-										id="eval-window-hours"
-										value={evalWindowHours}
-										onChange={(event) => setEvalWindowHours(event.target.value)}
-										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
-									/>
+									<h2 className="text-lg font-semibold text-slate-50">
+										Candidate Cohorts
+									</h2>
+									<p className="mt-1 text-sm text-slate-400">
+										Recent production candidate scans persisted by the bot API.
+									</p>
 								</div>
-								<div>
-									<label
-										htmlFor="eval-horizon-mins"
-										className="block text-xs text-slate-400"
-									>
-										Horizon (mins)
-									</label>
-									<input
-										id="eval-horizon-mins"
-										value={evalHorizonMinutes}
-										onChange={(event) =>
-											setEvalHorizonMinutes(event.target.value)
-										}
-										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
-									/>
-								</div>
-								<div>
-									<label
-										htmlFor="eval-history-mins"
-										className="block text-xs text-slate-400"
-									>
-										Signal window (mins)
-									</label>
-									<input
-										id="eval-history-mins"
-										value={evalHistoryWindowMinutes}
-										onChange={(event) =>
-											setEvalHistoryWindowMinutes(event.target.value)
-										}
-										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
-									/>
-								</div>
-								<div>
-									<label
-										htmlFor="eval-min-grade"
-										className="block text-xs text-slate-400"
-									>
-										Min grade
-									</label>
-									<select
-										id="eval-min-grade"
-										value={evalMinGrade}
-										onChange={(event) =>
-											setEvalMinGrade(
-												event.target.value as "A+" | "A" | "B" | "C" | "D",
-											)
-										}
-										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
-									>
-										<option value="A+">A+</option>
-										<option value="A">A</option>
-										<option value="B">B</option>
-										<option value="C">C</option>
-										<option value="D">D</option>
-									</select>
-								</div>
-								<div className="flex items-end gap-2">
+								<div className="flex flex-wrap gap-2">
 									<button
 										type="button"
-										onClick={runEval}
-										disabled={isEvaluating}
-										className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+										onClick={() => void loadCandidateCohorts()}
+										disabled={isCandidateCohortsLoading}
+										className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800/60 disabled:opacity-60"
 									>
-										{isEvaluating ? "Running..." : "Run Eval"}
+										{isCandidateCohortsLoading
+											? "Refreshing..."
+											: "Refresh Cohorts"}
+									</button>
+									<button
+										type="button"
+										onClick={() => void copyCandidateCohortsSummary()}
+										disabled={!cohortLatest || !cohortSummary}
+										className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-100 hover:bg-sky-500/20 disabled:opacity-60"
+									>
+										Copy Candidate Cohorts
 									</button>
 								</div>
-								<div className="md:col-span-6">
-									<label
-										htmlFor="eval-thresholds"
-										className="block text-xs text-slate-400"
-									>
-										Sweep thresholds (comma separated)
-									</label>
-									<input
-										id="eval-thresholds"
-										value={evalSweepThresholds}
-										onChange={(event) =>
-											setEvalSweepThresholds(event.target.value)
-										}
-										className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
-										placeholder="0.58,0.62,0.66,0.70"
-									/>
-								</div>
 							</div>
-							<label className="inline-flex items-center gap-2 text-sm text-slate-300">
-								<input
-									type="checkbox"
-									checked={evalIncludeStarted}
-									onChange={(event) =>
-										setEvalIncludeStarted(event.target.checked)
-									}
-								/>
-								Include started events
-							</label>
-							{evalError && (
+							{candidateCohortsError && (
 								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
-									{evalError}
+									{candidateCohortsError}
 								</div>
 							)}
-							{evalResult && (
+							{copyCohortStatus && (
+								<div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm text-sky-100">
+									{copyCohortStatus}
+								</div>
+							)}
+							{cohortLatest && (
 								<div className="space-y-5">
-									<div className="grid gap-3 md:grid-cols-2">
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">
-												Baseline
+									<div className="grid gap-3 md:grid-cols-4">
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Latest: {formatRelativeTime(cohortLatest.createdAt)}
 											</p>
-											<p className="mt-2 text-sm text-slate-300">
-												Triggered: {evalResult.strategies.baseline.triggered} •
-												Resolved: {evalResult.strategies.baseline.resolved}
+											<p>Returned: {cohortLatest.returned}</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>Upcoming: {cohortLatest.upcomingEntries}</p>
+											<p>Before dedup: {cohortLatest.candidatesBeforeDedup}</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Config: {cohortLatest.minGrade} •{" "}
+												{cohortLatest.minMinutesToStart}-
+												{cohortLatest.maxMinutesToStart}m
 											</p>
-											<p className="text-sm text-slate-300">
-												Hit rate:{" "}
-												{formatPercent(evalResult.strategies.baseline.hitRate)}{" "}
-												• Avg move:{" "}
-												{formatBps(evalResult.strategies.baseline.avgMoveBps)}
+											<p>
+												Quality:{" "}
+												{cohortLatest.marketQualityThreshold.toFixed(2)}
 											</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">
-												Filtered
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<p>
+												Started:{" "}
+												{cohortLatest.includeStarted ? "included" : "excluded"}
 											</p>
-											<p className="mt-1 text-xs text-slate-400">
-												Quality threshold:{" "}
-												{evalResult.filteredQualityThreshold.toFixed(2)}
-											</p>
-											<p className="mt-2 text-sm text-slate-300">
-												Triggered: {evalResult.strategies.filtered.triggered} •
-												Resolved: {evalResult.strategies.filtered.resolved}
-											</p>
-											<p className="text-sm text-slate-300">
-												Hit rate:{" "}
-												{formatPercent(evalResult.strategies.filtered.hitRate)}{" "}
-												• Avg move:{" "}
-												{formatBps(evalResult.strategies.filtered.avgMoveBps)}
+											<p>
+												Microstructure:{" "}
+												{cohortLatest.requireMicrostructure ? "on" : "off"}
 											</p>
 										</div>
 									</div>
-									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<p className="text-sm font-semibold text-slate-100">
-											By hour to start
-										</p>
-										<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-											<thead>
-												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-													<th className="pb-2">Bucket</th>
-													<th className="pb-2">Base Hit</th>
-													<th className="pb-2">Base Avg</th>
-													<th className="pb-2">Filt Hit</th>
-													<th className="pb-2">Filt Avg</th>
-												</tr>
-											</thead>
-											<tbody>
-												{evalHourBuckets.map((bucket) => {
-													const base =
-														evalResult.strategies.baseline.byHourToStart[
-															bucket
-														];
-													const filt =
-														evalResult.strategies.filtered.byHourToStart[
-															bucket
-														];
-													return (
+									{cohortSummary && (
+										<div className="grid gap-3 md:grid-cols-4">
+											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+												<p>Recent scans: {cohortSummary.scans}</p>
+												<p>
+													Returned scans: {cohortSummary.returnedScans} (
+													{formatPercent(cohortSummary.hitRate)})
+												</p>
+											</div>
+											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+												<p>Total returned: {cohortSummary.totalReturned}</p>
+												<p>
+													Avg returned/scan:{" "}
+													{cohortSummary.avgReturned.toFixed(2)}
+												</p>
+											</div>
+											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+												<p>Total upcoming: {cohortSummary.totalUpcoming}</p>
+												<p>
+													Avg upcoming/scan: (cohortSummary.totalUpcoming /
+													cohortSummary.scans).toFixed(1)
+												</p>
+											</div>
+											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+												<p>
+													Trend top exclusion:{" "}
+													{topEntries(
+														cohortSummary.aggregatedExcluded,
+														1,
+													)[0]?.join(" = ") ?? "—"}
+												</p>
+												<p>
+													Window: last {cohortSummary.scans} persisted scans
+												</p>
+											</div>
+										</div>
+									)}
+									<div className="grid gap-4 lg:grid-cols-2">
+										<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+											<h3 className="text-sm font-semibold text-slate-100">
+												Top exclusions
+											</h3>
+											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+												<tbody>
+													{cohortExclusionRows.map(([key, count]) => (
 														<tr
-															key={bucket}
-															className="border-t border-slate-800"
+															key={key}
+															className="border-t border-slate-800/80"
 														>
-															<td className="py-2 pr-4 font-semibold text-slate-100">
-																{bucket}
+															<td className="py-2 pr-4 text-slate-200">
+																{key}
 															</td>
-															<td className="py-2 pr-4">
-																{formatPercent(base?.hitRate)}
-															</td>
-															<td className="py-2 pr-4">
-																{formatBps(base?.avgMoveBps)}
-															</td>
-															<td className="py-2 pr-4">
-																{formatPercent(filt?.hitRate)}
-															</td>
-															<td className="py-2">
-																{formatBps(filt?.avgMoveBps)}
-															</td>
+															<td className="py-2 text-right">{count}</td>
 														</tr>
-													);
-												})}
-											</tbody>
-										</table>
+													))}
+												</tbody>
+											</table>
+										</div>
+										<div className="space-y-4">
+											{cohortReturnedSections.map((section) => (
+												<div
+													key={section.title}
+													className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+												>
+													<h3 className="text-sm font-semibold text-slate-100">
+														{section.title}
+													</h3>
+													<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+														<tbody>
+															{section.rows.length > 0 ? (
+																section.rows.map(([key, count]) => (
+																	<tr
+																		key={key}
+																		className="border-t border-slate-800/80"
+																	>
+																		<td className="py-2 pr-4 text-slate-200">
+																			{key}
+																		</td>
+																		<td className="py-2 text-right">{count}</td>
+																	</tr>
+																))
+															) : (
+																<tr className="border-t border-slate-800/80">
+																	<td
+																		className="py-2 text-slate-500"
+																		colSpan={2}
+																	>
+																		No returned candidates
+																	</td>
+																</tr>
+															)}
+														</tbody>
+													</table>
+												</div>
+											))}
+										</div>
 									</div>
+									{cohortSummary && (
+										<div className="grid gap-4 lg:grid-cols-2">
+											<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+												<h3 className="text-sm font-semibold text-slate-100">
+													Trend top exclusions
+												</h3>
+												<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+													<tbody>
+														{topEntries(
+															cohortSummary.aggregatedExcluded,
+															8,
+														).map(([key, count]) => (
+															<tr
+																key={key}
+																className="border-t border-slate-800/80"
+															>
+																<td className="py-2 pr-4 text-slate-200">
+																	{key}
+																</td>
+																<td className="py-2 text-right">{count}</td>
+															</tr>
+														))}
+													</tbody>
+												</table>
+											</div>
+											<div className="space-y-4">
+												{cohortTrendSections.map((section) => (
+													<div
+														key={section.title}
+														className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+													>
+														<h3 className="text-sm font-semibold text-slate-100">
+															{section.title}
+														</h3>
+														<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+															<tbody>
+																{section.rows.length > 0 ? (
+																	section.rows.map(([key, count]) => (
+																		<tr
+																			key={key}
+																			className="border-t border-slate-800/80"
+																		>
+																			<td className="py-2 pr-4 text-slate-200">
+																				{key}
+																			</td>
+																			<td className="py-2 text-right">
+																				{count}
+																			</td>
+																		</tr>
+																	))
+																) : (
+																	<tr className="border-t border-slate-800/80">
+																		<td
+																			className="py-2 text-slate-500"
+																			colSpan={2}
+																		>
+																			No returned candidates
+																		</td>
+																	</tr>
+																)}
+															</tbody>
+														</table>
+													</div>
+												))}
+											</div>
+										</div>
+									)}
 									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<p className="text-sm font-semibold text-slate-100">
-											Threshold sweep
-										</p>
-										<table className="mt-3 min-w-full text-left text-sm text-slate-200">
-											<thead>
-												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-													<th className="pb-2">Threshold</th>
-													<th className="pb-2">Retained</th>
-													<th className="pb-2">Hit Rate</th>
-													<th className="pb-2">Avg Move</th>
-													<th className="pb-2">Delta vs Base</th>
+										<h3 className="text-sm font-semibold text-slate-100">
+											Recent scans
+										</h3>
+										<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+											<thead className="text-xs uppercase tracking-wide text-slate-500">
+												<tr>
+													<th className="pb-2 pr-4">When</th>
+													<th className="pb-2 pr-4">Config</th>
+													<th className="pb-2 pr-4">Returned</th>
+													<th className="pb-2 pr-4">Upcoming</th>
+													<th className="pb-2">Top exclusion</th>
 												</tr>
 											</thead>
 											<tbody>
-												{evalResult.thresholdSweep.map((row) => (
+												{candidateCohorts.map((snapshot) => (
 													<tr
-														key={row.threshold}
-														className="border-t border-slate-800"
+														key={snapshot.id}
+														className="border-t border-slate-800/80"
 													>
-														<td className="py-2 pr-4 font-semibold text-slate-100">
-															{row.threshold.toFixed(2)}
+														<td className="py-2 pr-4 text-slate-200">
+															{formatRelativeTime(snapshot.createdAt)}
 														</td>
 														<td className="py-2 pr-4">
-															{formatPercent(row.retainedRate)}
+															{snapshot.minGrade} • {snapshot.minMinutesToStart}
+															-{snapshot.maxMinutesToStart}m • q
+															{snapshot.marketQualityThreshold.toFixed(2)}
 														</td>
 														<td className="py-2 pr-4">
-															{formatPercent(row.hitRate)}
+															{snapshot.returnedAfterDedup}
 														</td>
 														<td className="py-2 pr-4">
-															{formatBps(row.avgMoveBps)}
+															{snapshot.upcomingEntries}
 														</td>
 														<td className="py-2">
-															{row.avgMoveDeltaBps === null ||
-															!Number.isFinite(row.avgMoveDeltaBps)
-																? "—"
-																: `${row.avgMoveDeltaBps >= 0 ? "+" : ""}${row.avgMoveDeltaBps.toFixed(1)} bps`}
+															{topEntries(snapshot.excluded, 1)[0]?.join(
+																" = ",
+															) ?? "—"}
 														</td>
 													</tr>
 												))}
@@ -2505,7 +2946,9 @@ function RuntimePage() {
 										<option value="3">Last 3d</option>
 										<option value="7">Last 7d</option>
 										<option value="14">Last 14d</option>
-										<option value="@1774480000">Since L2 removal (Mar 25)</option>
+										<option value="@1774480000">
+											Since L2 removal (Mar 25)
+										</option>
 										<option value="30">Last 30d</option>
 									</select>
 									{sinceFilter !== "" && (
@@ -2568,12 +3011,21 @@ function RuntimePage() {
 							)}
 							{calibrationResult ? (
 								<div className="space-y-5">
-									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
-										Total picks: {calibrationResult.totalPicks} • Settled:{" "}
-										{calibrationResult.settledPicks} • Signal scored:{" "}
-										{calibrationResult.withSignalScore} • Quality scored:{" "}
-										{calibrationResult.withQualityScore} • With event time:{" "}
-										{calibrationResult.withEventTime}
+									<div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<span>
+											Total picks: {calibrationResult.totalPicks} • Settled:{" "}
+											{calibrationResult.settledPicks} • Signal scored:{" "}
+											{calibrationResult.withSignalScore} • Quality scored:{" "}
+											{calibrationResult.withQualityScore} • With event time:{" "}
+											{calibrationResult.withEventTime}
+										</span>
+										<button
+											type="button"
+											onClick={copyCalibration}
+											className="ml-3 shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+										>
+											{calibrationCopyStatus ?? "Copy TSV"}
+										</button>
 									</div>
 									{[
 										{
@@ -2587,6 +3039,22 @@ function RuntimePage() {
 										{
 											title: "By time to start",
 											rows: calibrationResult.byTimeToStart,
+										},
+										{
+											title: "By edge rating",
+											rows: calibrationResult.byEdgeRating,
+										},
+										{
+											title: "By score differential",
+											rows: calibrationResult.byScoreDifferential,
+										},
+										{
+											title: "By price edge",
+											rows: calibrationResult.byPriceEdge,
+										},
+										{
+											title: "By price edge ratio (edge/minEdge)",
+											rows: calibrationResult.byPriceEdgeRatio,
 										},
 									].map((table) => (
 										<div
@@ -2640,13 +3108,24 @@ function RuntimePage() {
 									))}
 									{gradeRecalibrationResult ? (
 										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<p className="text-sm font-semibold text-slate-100">
-												Grade Recalibration
-											</p>
-											<p className="mt-1 text-xs text-slate-400">
-												Current grade performance and the score ranges feeding
-												those grades.
-											</p>
+											<div className="flex items-center justify-between">
+												<div>
+													<p className="text-sm font-semibold text-slate-100">
+														Grade Recalibration
+													</p>
+													<p className="mt-1 text-xs text-slate-400">
+														Current grade performance and the score ranges
+														feeding those grades.
+													</p>
+												</div>
+												<button
+													type="button"
+													onClick={copyGradeRecal}
+													className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+												>
+													{gradeRecalCopyStatus ?? "Copy TSV"}
+												</button>
+											</div>
 											<div className="mt-3 flex flex-wrap gap-2">
 												{gradeRecalibrationResult.observations.map(
 													(observation) => (
@@ -2669,6 +3148,9 @@ function RuntimePage() {
 														<th className="pb-2">Avg CLV</th>
 														<th className="pb-2">Avg Score</th>
 														<th className="pb-2">Score Range</th>
+														<th className="pb-2">Avg Edge</th>
+														<th className="pb-2">Avg PriceEdge</th>
+														<th className="pb-2">Avg PE Ratio</th>
 													</tr>
 												</thead>
 												<tbody>
@@ -2702,10 +3184,25 @@ function RuntimePage() {
 																	? row.avgSignalScore.toFixed(1)
 																	: "—"}
 															</td>
-															<td className="py-2">
+															<td className="py-2 pr-4">
 																{row.minSignalScore !== null &&
 																row.maxSignalScore !== null
 																	? `${row.minSignalScore.toFixed(1)}-${row.maxSignalScore.toFixed(1)}`
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{row.avgEdgeRating !== null
+																	? row.avgEdgeRating.toFixed(1)
+																	: "—"}
+															</td>
+															<td className="py-2 pr-4">
+																{row.avgPriceEdge !== null
+																	? row.avgPriceEdge.toFixed(4)
+																	: "—"}
+															</td>
+															<td className="py-2">
+																{row.avgPriceEdgeRatio !== null
+																	? row.avgPriceEdgeRatio.toFixed(2)
 																	: "—"}
 															</td>
 														</tr>

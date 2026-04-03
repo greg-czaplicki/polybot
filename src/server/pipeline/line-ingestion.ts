@@ -63,6 +63,14 @@ export interface LineIngestionResult {
  * The caller must assign home/away perspective based on team position.
  */
 export function extractSpreadFromTitle(title: string): number | null {
+	const explicitSpreadMatch = title.match(
+		/(?:^|:\s*)spread:\s*.+?\(\s*([-+]\d+(?:\.\d+)?)\s*\)/i,
+	);
+	if (explicitSpreadMatch) {
+		const value = Number.parseFloat(explicitSpreadMatch[1]);
+		if (Number.isFinite(value)) return value;
+	}
+
 	// Match patterns like "Team -3.5" or "Team +7" or "Team -3"
 	const spreadMatch = title.match(
 		/\b([A-Za-z]+(?:\s+[A-Za-z]+)*)\s+([-+]\d+(?:\.\d+)?)\b/,
@@ -115,6 +123,23 @@ export function identifySpreadTeamPosition(
 	// Split on vs/at/@
 	const parts = title.split(/\s+(?:vs\.?|at|@)\s+/i);
 	if (parts.length !== 2) return null;
+
+	const explicitSpreadLabel = title.match(
+		/(?:^|:\s*)spread:\s*(.+?)\s*\([-+]\d+(?:\.\d+)?\)/i,
+	)?.[1];
+	if (explicitSpreadLabel) {
+		const normalizedLabel = explicitSpreadLabel.trim().toLowerCase();
+		const firstTeam = parts[0].split(":")[0]?.trim().toLowerCase() ?? "";
+		const secondTeam = parts[1].split(":")[0]?.trim().toLowerCase() ?? "";
+		const matchesFirst =
+			firstTeam.includes(normalizedLabel) ||
+			normalizedLabel.includes(firstTeam);
+		const matchesSecond =
+			secondTeam.includes(normalizedLabel) ||
+			normalizedLabel.includes(secondTeam);
+		if (matchesFirst && !matchesSecond) return "first";
+		if (matchesSecond && !matchesFirst) return "second";
+	}
 
 	const firstHasSpread = /[-+]\d+(?:\.\d+)?/.test(parts[0]);
 	const secondHasSpread = /[-+]\d+(?:\.\d+)?/.test(parts[1]);

@@ -27,12 +27,6 @@ function getAuthToken(): string | null {
 	return localStorage.getItem("polywhaler_auth_token")
 }
 
-function useAuthHeaders(): Record<string, string> | null {
-	const token = getAuthToken()
-	if (!token) return null
-	return { Authorization: `Bearer ${token}` }
-}
-
 function BotPage() {
 	const [status, setStatus] = useState<BotStatus | null>(null)
 	const [statusError, setStatusError] = useState<string | null>(null)
@@ -48,18 +42,31 @@ function BotPage() {
 	const [envLoading, setEnvLoading] = useState(false)
 	const [envSaving, setEnvSaving] = useState(false)
 	const streamAbortRef = useRef<AbortController | null>(null)
+	const initialLoadTokenRef = useRef<string | null>(null)
 
-	const authHeaders = useAuthHeaders()
+	const authToken = getAuthToken()
+	const authHeaderValue = useMemo(() => (authToken ? `Bearer ${authToken}` : null), [authToken])
 
-	const canAuthed = useMemo(() => Boolean(authHeaders), [authHeaders])
+	const canAuthed = useMemo(() => Boolean(authHeaderValue), [authHeaderValue])
+
+	const getRequestHeaders = useCallback(
+		(extra?: HeadersInit) => {
+			if (!authHeaderValue) return extra
+			return {
+				Authorization: authHeaderValue,
+				...(extra ?? {}),
+			}
+		},
+		[authHeaderValue],
+	)
 
 	const loadStatus = useCallback(async () => {
-		if (!authHeaders) return
+		if (!authHeaderValue) return
 		setStatusLoading(true)
 		setStatusError(null)
 		try {
 			const response = await fetch("/api/bot-control/status", {
-				headers: authHeaders ?? undefined,
+				headers: getRequestHeaders(),
 			})
 			if (!response.ok) {
 				throw new Error(`Status failed (${response.status})`)
@@ -71,7 +78,7 @@ function BotPage() {
 		} finally {
 			setStatusLoading(false)
 		}
-	}, [authHeaders])
+	}, [authHeaderValue, getRequestHeaders])
 
 	const runAction = useCallback(
 		async (action: "start" | "stop" | "restart") => {
@@ -80,7 +87,7 @@ function BotPage() {
 			try {
 				const response = await fetch(`/api/bot-control/${action}`, {
 					method: "POST",
-					headers: authHeaders ?? undefined,
+					headers: getRequestHeaders(),
 				})
 				if (!response.ok) {
 					throw new Error(`Action failed (${response.status})`)
@@ -93,16 +100,16 @@ function BotPage() {
 				setActionLoading(null)
 			}
 		},
-		[authHeaders],
+		[getRequestHeaders],
 	)
 
 	const loadLogs = useCallback(async () => {
-		if (!authHeaders) return
+		if (!authHeaderValue) return
 		setLogsLoading(true)
 		setLogsError(null)
 		try {
 			const response = await fetch("/api/bot-control/logs?lines=200", {
-				headers: authHeaders ?? undefined,
+				headers: getRequestHeaders(),
 			})
 			if (!response.ok) {
 				throw new Error(`Logs failed (${response.status})`)
@@ -114,7 +121,7 @@ function BotPage() {
 		} finally {
 			setLogsLoading(false)
 		}
-	}, [authHeaders])
+	}, [authHeaderValue, getRequestHeaders])
 
 	const stopStream = useCallback(() => {
 		if (streamAbortRef.current) {
@@ -125,7 +132,7 @@ function BotPage() {
 	}, [])
 
 	const startStream = useCallback(async () => {
-		if (!authHeaders) {
+		if (!authHeaderValue) {
 			setStreamError("Missing auth token. Please log in again.")
 			return
 		}
@@ -138,7 +145,7 @@ function BotPage() {
 
 		try {
 			const response = await fetch("/api/bot-control/logs/stream?lines=200", {
-				headers: authHeaders,
+				headers: getRequestHeaders(),
 				signal: controller.signal,
 			})
 			if (!response.ok || !response.body) {
@@ -182,14 +189,14 @@ function BotPage() {
 		} finally {
 			setIsStreaming(false)
 		}
-	}, [authHeaders, stopStream])
+	}, [authHeaderValue, getRequestHeaders, stopStream])
 
 	const loadEnv = useCallback(async () => {
-		if (!authHeaders) return
+		if (!authHeaderValue) return
 		setEnvLoading(true)
 		try {
 			const response = await fetch("/api/bot-control/env", {
-				headers: authHeaders ?? undefined,
+				headers: getRequestHeaders(),
 			})
 			if (!response.ok) {
 				throw new Error(`Env failed (${response.status})`)
@@ -202,7 +209,7 @@ function BotPage() {
 		} finally {
 			setEnvLoading(false)
 		}
-	}, [authHeaders])
+	}, [authHeaderValue, getRequestHeaders])
 
 	const saveEnv = useCallback(async () => {
 		if (!envPayload) return
@@ -220,10 +227,9 @@ function BotPage() {
 			}
 			const response = await fetch("/api/bot-control/env", {
 				method: "POST",
-				headers: {
+				headers: getRequestHeaders({
 					"Content-Type": "application/json",
-					...(authHeaders ?? {}),
-				},
+				}),
 				body: JSON.stringify({ updates }),
 			})
 			if (!response.ok) {
@@ -237,16 +243,19 @@ function BotPage() {
 		} finally {
 			setEnvSaving(false)
 		}
-	}, [authHeaders, envEdits, envPayload])
+	}, [envEdits, envPayload, getRequestHeaders])
 
 	useEffect(() => {
+		if (!authToken) return
+		if (initialLoadTokenRef.current === authToken) return
+		initialLoadTokenRef.current = authToken
 		void loadStatus()
 		void loadLogs()
 		void loadEnv()
 		return () => {
 			stopStream()
 		}
-	}, [loadStatus, loadLogs, loadEnv, stopStream])
+	}, [authToken, loadStatus, loadLogs, loadEnv, stopStream])
 
 	return (
 		<AuthGate>

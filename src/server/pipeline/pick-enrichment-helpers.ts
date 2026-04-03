@@ -134,7 +134,7 @@ export async function getFactValues(
 
 /**
  * Gets side_a_label and side_b_label from sharp_money_cache for a condition.
- * These labels (e.g., "Chiefs", "Lions") let us map the picked side to a team.
+ * These labels (e.g., "Hornets", "76ers") let us map the picked side to a team.
  */
 export async function getSideLabels(
 	db: Db,
@@ -174,17 +174,40 @@ export function deriveFavDogRole(
 }
 
 /**
+ * Extract the named side from spread titles like:
+ * - "PHI vs CHA: Spread: Hornets (-6.5)"
+ * - "OAK vs TOR: Spread: Toronto Blue Jays (-1.5)"
+ *
+ * Returns the team label portion only, or null if not present.
+ */
+export function extractSpreadPickedLabel(
+	marketTitle: string | null,
+): string | null {
+	if (!marketTitle) return null;
+
+	const match = marketTitle.match(
+		/(?:^|:\s*)spread:\s*(.+?)\s*\([-+]?\d+(?:\.\d+)?\)/i,
+	);
+	if (!match) return null;
+
+	const label = match[1]?.trim();
+	return label ? label : null;
+}
+
+/**
  * Resolves which team was picked based on the sharp_side label.
  *
  * Strategy:
- * 1. Match picked label against side labels from cache
- *    (side_a = away, side_b = home — Polymarket convention)
+ * 1. Match picked side / label against side labels from cache
+ *    (for these sports markets, side_a tracks the named market side and maps to
+ *    the home team in our "Away vs Home" title convention)
  * 2. Substring match against team names (only if unambiguous)
  *
  * Returns null when confidence is insufficient rather than guessing.
  */
 export function resolvePickedSide(opts: {
 	pickedLabel: string | null;
+	marketTitle?: string | null;
 	sideALabel: string | null;
 	sideBLabel: string | null;
 	homeTeamName: string;
@@ -199,19 +222,22 @@ export function resolvePickedSide(opts: {
 } | null {
 	const { pickedLabel, sideALabel, sideBLabel } = opts;
 
-	if (!pickedLabel) return null;
+	const parsedSpreadLabel = extractSpreadPickedLabel(opts.marketTitle ?? null);
+	const candidateLabels = [parsedSpreadLabel, pickedLabel]
+		.map((label) => label?.trim().toLowerCase() ?? "")
+		.filter(
+			(label, index, all) => label.length > 0 && all.indexOf(label) === index,
+		);
+	if (candidateLabels.length === 0) return null;
 
-	const normalizedPick = pickedLabel.trim().toLowerCase();
-	if (!normalizedPick) return null;
+	const normHome = opts.homeTeamName.trim().toLowerCase();
+	const normAway = opts.awayTeamName.trim().toLowerCase();
+	const normA = sideALabel?.trim().toLowerCase() ?? null;
+	const normB = sideBLabel?.trim().toLowerCase() ?? null;
 
-	// Strategy 1: Match picked label against side labels from cache,
-	// then map side_a → away, side_b → home (Polymarket convention).
-	if (sideALabel && sideBLabel) {
-		const normA = sideALabel.trim().toLowerCase();
-		const normB = sideBLabel.trim().toLowerCase();
-
-		if (normalizedPick === normA) {
-			// Picked side A = away team
+	for (const normalizedPick of candidateLabels) {
+		// Strategy 1: Directly interpret stored sharp sides.
+		if (normalizedPick === "a") {
 			return {
 				teamId: opts.awayTeamId,
 				opponentId: opts.homeTeamId,
@@ -219,8 +245,7 @@ export function resolvePickedSide(opts: {
 				isHomeTeam: false,
 			};
 		}
-		if (normalizedPick === normB) {
-			// Picked side B = home team
+		if (normalizedPick === "b") {
 			return {
 				teamId: opts.homeTeamId,
 				opponentId: opts.awayTeamId,
@@ -228,19 +253,71 @@ export function resolvePickedSide(opts: {
 				isHomeTeam: true,
 			};
 		}
+
+		// Strategy 2: Match picked label against side labels from cache.
+		if (normA && normB) {
+			if (normalizedPick === normA) {
+				return {
+					teamId: opts.awayTeamId,
+					opponentId: opts.homeTeamId,
+					venueRole: "away",
+					isHomeTeam: false,
+				};
+			}
+			if (normalizedPick === normB) {
+				return {
+					teamId: opts.homeTeamId,
+					opponentId: opts.awayTeamId,
+					venueRole: "home",
+					isHomeTeam: true,
+				};
+			}
+		}
+
+		// Strategy 3: Direct substring match of picked label against team names.
+		// Only assign if exactly one team matches (avoid ambiguity).
+		const matchesHome =
+			normHome.includes(normalizedPick) || normalizedPick.includes(normHome);
+		const matchesAway =
+			normAway.includes(normalizedPick) || normalizedPick.includes(normAway);
+
+		if (matchesHome && !matchesAway) {
+			return {
+				teamId: opts.homeTeamId,
+				opponentId: opts.awayTeamId,
+				venueRole: "home",
+				isHomeTeam: true,
+			};
+		}
+		if (matchesAway && !matchesHome) {
+			return {
+				teamId: opts.awayTeamId,
+				opponentId: opts.homeTeamId,
+				venueRole: "away",
+				isHomeTeam: false,
+			};
+		}
 	}
 
-	// Strategy 2: Direct substring match of picked label against team names.
-	// Only assign if exactly one team matches (avoid ambiguity).
-	const normHome = opts.homeTeamName.trim().toLowerCase();
-	const normAway = opts.awayTeamName.trim().toLowerCase();
+	// Ambiguous or no match → skip to avoid poisoning data
+	return null;
+}
 
-	const matchesHome =
-		normHome.includes(normalizedPick) || normalizedPick.includes(normHome);
-	const matchesAway =
-		normAway.includes(normalizedPick) || normalizedPick.includes(normAway);
-
-	if (matchesHome && !matchesAway) {
+/**
+ * Maps a resolved picked team ID back to the home/away side of a known matchup.
+ */
+export function mapPickedTeamToSide(opts: {
+	pickedTeamId: string | null;
+	homeTeamId: string;
+	awayTeamId: string;
+}): {
+	teamId: string;
+	opponentId: string;
+	venueRole: VenueRole;
+	isHomeTeam: boolean;
+} | null {
+	if (!opts.pickedTeamId) return null;
+	if (opts.pickedTeamId === opts.homeTeamId) {
 		return {
 			teamId: opts.homeTeamId,
 			opponentId: opts.awayTeamId,
@@ -248,7 +325,7 @@ export function resolvePickedSide(opts: {
 			isHomeTeam: true,
 		};
 	}
-	if (matchesAway && !matchesHome) {
+	if (opts.pickedTeamId === opts.awayTeamId) {
 		return {
 			teamId: opts.awayTeamId,
 			opponentId: opts.homeTeamId,
@@ -256,7 +333,5 @@ export function resolvePickedSide(opts: {
 			isHomeTeam: false,
 		};
 	}
-
-	// Ambiguous or no match → skip to avoid poisoning data
 	return null;
 }
