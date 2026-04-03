@@ -39,10 +39,6 @@ class BotConfig:
 	poly_usdc_token: str
 	poly_conditional_token: str
 	low_roi_threshold: float
-	require_l2_alpha: bool
-	skip_if_l2_missing: bool
-	l2_imbalance_near_mid_threshold: float
-	fallback_no_l2_stake_multiplier: float
 	stop_on_403: bool
 	poll_jitter_ratio: float
 	poll_backoff_base: float
@@ -165,14 +161,6 @@ def load_config() -> BotConfig:
 		poly_usdc_token=poly_usdc_token,
 		poly_conditional_token=poly_conditional_token,
 		low_roi_threshold=low_roi_threshold,
-		require_l2_alpha=env_flag("BOT_REQUIRE_L2_ALPHA", True),
-		skip_if_l2_missing=env_flag("BOT_SKIP_IF_L2_MISSING", False),
-		l2_imbalance_near_mid_threshold=float(
-			os.getenv("BOT_L2_IMBALANCE_NEAR_MID_THRESHOLD", "-0.10")
-		),
-		fallback_no_l2_stake_multiplier=float(
-			os.getenv("BOT_FALLBACK_NO_L2_STAKE_MULTIPLIER", "0.5")
-		),
 		stop_on_403=stop_on_403,
 		poll_jitter_ratio=poll_jitter_ratio,
 		poll_backoff_base=poll_backoff_base,
@@ -261,18 +249,40 @@ def parse_float(value: Any) -> float | None:
 	return None
 
 
-def evaluate_l2_alpha(
-	entry: Dict[str, Any], threshold: float
-) -> tuple[bool, bool]:
-	imbalance_near_mid = parse_float(entry.get("l2ImbalanceNearMid"))
-	disagreement = entry.get("l2Disagreement")
-	has_disagreement = isinstance(disagreement, bool)
-	has_l2 = imbalance_near_mid is not None or has_disagreement
-	meets_alpha = (
-		(imbalance_near_mid is not None and imbalance_near_mid <= threshold)
-		or disagreement is True
-	)
-	return has_l2, meets_alpha
+GAME_PROP_KEYWORDS = [
+	"nrfi", "yrfi", "btts", "both teams to score",
+	"draw no bet", "first goal", "clean sheet", "double result",
+]
+
+def get_market_type_label(market_title: str) -> str:
+	lower = market_title.lower()
+	plain_matchup = ":" not in market_title and re.search(r"\bvs\.?\b", market_title, re.I)
+	if "o/u" in lower or "over/under" in lower or "total" in lower:
+		return "total"
+	if "spread" in lower:
+		return "spread"
+	if plain_matchup:
+		return "moneyline"
+	if "moneyline" in lower or "ml" in lower:
+		return "moneyline"
+	if any(kw in lower for kw in GAME_PROP_KEYWORDS):
+		return "prop"
+	return "other"
+
+
+def normalize_matchup_title(market_title: str) -> str:
+	matchup = market_title.split(":", 1)[0]
+	return matchup.strip().lower()
+
+
+def get_market_group_key(entry: Dict[str, Any]) -> str | None:
+	market_title_raw = entry.get("marketTitle")
+	if not isinstance(market_title_raw, str) or not market_title_raw.strip():
+		return None
+	base = entry.get("eventSlug") or normalize_matchup_title(market_title_raw)
+	sport = entry.get("sportSeriesId") or "na"
+	market_type = get_market_type_label(market_title_raw)
+	return f"{sport}|{base}|{market_type}"
 
 
 def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[str, Any]]:
@@ -303,6 +313,30 @@ def normalize_placed_meta(state: Dict[str, Any], now_ts: int) -> Dict[str, Dict[
 	return meta
 
 
+def normalize_placed_group_meta(
+	state: Dict[str, Any], now_ts: int
+) -> Dict[str, Dict[str, Any]]:
+	meta_raw = state.get("placedGroupMeta")
+	meta: Dict[str, Dict[str, Any]] = {}
+	if not isinstance(meta_raw, dict):
+		return meta
+	for group_key, value in meta_raw.items():
+		if not isinstance(group_key, str) or not group_key:
+			continue
+		row = value if isinstance(value, dict) else {}
+		placed_at_raw = row.get("placedAt")
+		try:
+			placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+		except Exception:
+			placed_at = now_ts
+		meta[group_key] = {
+			"placedAt": placed_at,
+			"eventTime": row.get("eventTime"),
+			"conditionId": row.get("conditionId"),
+		}
+	return meta
+
+
 def prune_placed_meta(
 	meta: Dict[str, Dict[str, Any]],
 	now_ts: int,
@@ -324,6 +358,30 @@ def prune_placed_meta(
 			placed_at = now_ts
 		if now_ts - placed_at <= ttl_seconds:
 			pruned[condition_id] = row
+	return pruned
+
+
+def prune_placed_group_meta(
+	meta: Dict[str, Dict[str, Any]],
+	now_ts: int,
+	ttl_seconds: int,
+	event_grace_seconds: int,
+) -> Dict[str, Dict[str, Any]]:
+	pruned: Dict[str, Dict[str, Any]] = {}
+	for group_key, row in meta.items():
+		event_ts = parse_event_time_seconds(row.get("eventTime"))
+		if event_ts is not None:
+			if now_ts <= event_ts + event_grace_seconds:
+				pruned[group_key] = row
+			continue
+
+		placed_at_raw = row.get("placedAt")
+		try:
+			placed_at = int(placed_at_raw) if placed_at_raw is not None else now_ts
+		except Exception:
+			placed_at = now_ts
+		if now_ts - placed_at <= ttl_seconds:
+			pruned[group_key] = row
 	return pruned
 
 
@@ -398,10 +456,6 @@ def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str,
 			"includeStarted": "true" if config.include_started else "false",
 			"requireMicrostructure": "true" if config.require_microstructure else "false",
 			"marketQualityThreshold": str(config.market_quality_threshold),
-			"includeL2Signals": "true",
-			"requireL2Alpha": "true" if config.require_l2_alpha else "false",
-			"skipMissingL2": "true" if config.skip_if_l2_missing else "false",
-			"l2ImbalanceNearMidThreshold": str(config.l2_imbalance_near_mid_threshold),
 			"debug": "true",
 		}
 	)
@@ -429,11 +483,9 @@ def log_event(event_name: str, **fields: Any) -> None:
 
 def candidate_context(
 	candidate: Dict[str, Any],
-	l2_threshold: float = -0.10,
 ) -> Dict[str, Any]:
 	entry = candidate.get("entry") or {}
 	grade = candidate.get("grade") or {}
-	has_l2, meets_l2_alpha = evaluate_l2_alpha(entry, l2_threshold)
 	event_label = (
 		entry.get("eventTitle")
 		or entry.get("eventSlug")
@@ -442,6 +494,7 @@ def candidate_context(
 	)
 	return {
 		"conditionId": entry.get("conditionId"),
+		"marketGroupKey": get_market_group_key(entry),
 		"event": event_label,
 		"eventTime": entry.get("eventTime"),
 		"minutesToStart": minutes_to_start(entry.get("eventTime")),
@@ -451,10 +504,6 @@ def candidate_context(
 		"signalScore": grade.get("signalScore"),
 		"edgeRating": grade.get("edgeRating"),
 		"microstructureScore": grade.get("microstructureScore"),
-		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
-		"l2Disagreement": entry.get("l2Disagreement"),
-		"hasL2Signal": has_l2,
-		"meetsL2Alpha": meets_l2_alpha,
 		"warnings": grade.get("warnings"),
 	}
 
@@ -818,31 +867,11 @@ def place_bet(
 			price,
 		)
 		return False
-	has_l2_signal, meets_l2_alpha = evaluate_l2_alpha(
-		entry,
-		config.l2_imbalance_near_mid_threshold,
-	)
-	if config.require_l2_alpha and has_l2_signal and not meets_l2_alpha:
-		print(
-			"[bot] skip l2 alpha not met",
-			entry.get("marketTitle"),
-			"imbalanceNearMid",
-			entry.get("l2ImbalanceNearMid"),
-			"disagreement",
-			entry.get("l2Disagreement"),
-		)
-		return False
-	if config.require_l2_alpha and not has_l2_signal and config.skip_if_l2_missing:
-		print("[bot] skip missing L2 signal", entry.get("marketTitle"))
-		return False
-
 	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
 	kelly = kelly_fraction(prob, float(price))
 	stake = state.get("bankroll", config.paper_bankroll) * kelly * config.kelly_fraction
 	if config.fixed_stake > 0:
 		stake = config.fixed_stake
-	if config.require_l2_alpha and not has_l2_signal:
-		stake *= max(0.0, config.fallback_no_l2_stake_multiplier)
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
@@ -858,7 +887,6 @@ def place_bet(
 		"signalScore": grade.get("signalScore"),
 		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
 		"l2Disagreement": entry.get("l2Disagreement"),
-		"l2AlphaQualified": meets_l2_alpha if has_l2_signal else None,
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
@@ -977,7 +1005,15 @@ def run_loop() -> None:
 		config.placed_ttl_seconds,
 		config.placed_event_grace_seconds,
 	)
+	placed_group_meta = normalize_placed_group_meta(state, now_init)
+	placed_group_meta = prune_placed_group_meta(
+		placed_group_meta,
+		now_init,
+		config.placed_ttl_seconds,
+		config.placed_event_grace_seconds,
+	)
 	placed = set(placed_meta.keys())
+	placed_groups = set(placed_group_meta.keys())
 	if "bankroll" not in state:
 		state["bankroll"] = config.paper_bankroll
 
@@ -1009,7 +1045,14 @@ def run_loop() -> None:
 				config.placed_ttl_seconds,
 				config.placed_event_grace_seconds,
 			)
+			placed_group_meta = prune_placed_group_meta(
+				placed_group_meta,
+				int(time.time()),
+				config.placed_ttl_seconds,
+				config.placed_event_grace_seconds,
+			)
 			placed = set(placed_meta.keys())
+			placed_groups = set(placed_group_meta.keys())
 			call_timestamps = [t for t in call_timestamps if now - t < 3600]
 			if config.max_calls_per_hour > 0 and len(call_timestamps) >= config.max_calls_per_hour:
 				sleep_seconds = apply_jitter(config.poll_seconds, config.poll_jitter_ratio)
@@ -1036,8 +1079,6 @@ def run_loop() -> None:
 				config.min_grade,
 				"includeStarted",
 				config.include_started,
-				"requireL2Alpha",
-				config.require_l2_alpha,
 			)
 			call_timestamps.append(time.time())
 			candidates, candidate_debug = fetch_candidates(config)
@@ -1064,14 +1105,14 @@ def run_loop() -> None:
 				log_event(
 					"candidate",
 					idx=idx,
-					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					**candidate_context(candidate),
 				)
 				if not condition_id:
 					skipped_missing_condition += 1
 					log_event(
 						"candidate_skip_missing_condition_id",
 						idx=idx,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				if condition_id in placed:
@@ -1082,7 +1123,20 @@ def run_loop() -> None:
 						idx=idx,
 						placedAt=placed_row.get("placedAt"),
 						placedEventTime=placed_row.get("eventTime"),
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
+					)
+					continue
+				market_group_key = get_market_group_key(entry)
+				if market_group_key and market_group_key in placed_groups:
+					skipped_already_placed += 1
+					placed_group_row = placed_group_meta.get(market_group_key) or {}
+					log_event(
+						"candidate_skip_already_placed_group",
+						idx=idx,
+						placedAt=placed_group_row.get("placedAt"),
+						placedEventTime=placed_group_row.get("eventTime"),
+						placedConditionId=placed_group_row.get("conditionId"),
+						**candidate_context(candidate),
 					)
 					continue
 				minutes_until_start = minutes_to_start(entry.get("eventTime"))
@@ -1091,7 +1145,7 @@ def run_loop() -> None:
 					log_event(
 						"candidate_skip_missing_event_time",
 						idx=idx,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				if (
@@ -1105,13 +1159,13 @@ def run_loop() -> None:
 						minMinutes=config.min_minutes_to_start,
 						maxMinutes=config.max_minutes_to_start,
 						minutesToStart=minutes_until_start,
-						**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+						**candidate_context(candidate),
 					)
 					continue
 				log_event(
 					"candidate_considering",
 					idx=idx,
-					**candidate_context(candidate, config.l2_imbalance_near_mid_threshold),
+					**candidate_context(candidate),
 				)
 				did_place = place_bet(candidate, config, state)
 				if did_place:
@@ -1120,6 +1174,13 @@ def run_loop() -> None:
 						"placedAt": int(time.time()),
 						"eventTime": entry.get("eventTime"),
 					}
+					if market_group_key:
+						placed_groups.add(market_group_key)
+						placed_group_meta[market_group_key] = {
+							"placedAt": int(time.time()),
+							"eventTime": entry.get("eventTime"),
+							"conditionId": condition_id,
+						}
 					new_bets += 1
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
@@ -1134,6 +1195,8 @@ def run_loop() -> None:
 			)
 			state["placed"] = sorted(placed)
 			state["placedMeta"] = placed_meta
+			state["placedGroups"] = sorted(placed_groups)
+			state["placedGroupMeta"] = placed_group_meta
 			save_state(config.state_path, state)
 		except Exception as exc:
 			print("[bot] error:", exc)
