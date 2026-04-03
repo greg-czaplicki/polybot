@@ -1897,12 +1897,12 @@ function determineConfidence(
 /**
  * Calculate Edge Rating (0-100) for ranking bets
  * Primary factor: Sharp score differential (logarithmic curve - diminishing returns)
- * Secondary: Holder quality based on recent + long-term PnL performance
- * Minimal: Volume (small bonus, mainly used for filtering - volume already indicates big holders)
+ * Secondary: Minimal volume bonus
+ * Holder-quality heuristics remain visible in debug output, but are not
+ * currently used in the ranking score until they are revalidated.
  */
 function calculateEdgeRatingBreakdown(
 	scoreDifferential: number,
-	sharpSideTopHolders: TopHolderPnlData[],
 	totalVolume: number,
 ): {
 	diffScore: number;
@@ -1910,81 +1910,22 @@ function calculateEdgeRatingBreakdown(
 	qualityBonus: number;
 	total: number;
 } {
-	// Base rating from score differential using logarithmic curve (max 70 points)
+	// Base rating from score differential using logarithmic curve (max 95 points)
 	// Logarithmic scaling: early diffs matter more, higher diffs have diminishing returns
-	// Formula: 70 * (1 - e^(-diff/25)) gives us:
-	// - diff 10 → ~24 points
-	// - diff 20 → ~42 points
-	// - diff 30 → ~55 points
-	// - diff 40 → ~64 points
-	// - diff 50+ → ~70 points (approaching max)
-	const diffScore = 70 * (1 - Math.exp(-scoreDifferential / 25));
+	// Formula: 95 * (1 - e^(-diff/25)) gives us:
+	// - diff 10 → ~31 points
+	// - diff 20 → ~52 points
+	// - diff 30 → ~66 points
+	// - diff 40 → ~76 points
+	// - diff 50+ → ~82+ points
+	const diffScore = 95 * (1 - Math.exp(-scoreDifferential / 25));
 
 	// Volume bonus (max 5 points) - minimal weight, mainly for filtering
 	// Just a small bonus to slightly prefer higher volume events
 	// $200K+ volume = max bonus, logarithmic scale
 	const volumeBonus = 5 * (1 - Math.exp(-totalVolume / 100_000));
 
-	// Holder quality bonus/penalty (-15 to +20 points)
-	// Combines recent momentum (day/week/month) AND all-time performance, unit-normalized
-	// Position-weighted: larger positions from better traders matter more
-	let qualityBonus = 0;
-	if (sharpSideTopHolders.length > 0) {
-		// Calculate total position value for weighting
-		const totalPositionValue = sharpSideTopHolders.reduce(
-			(sum, h) => sum + h.amount * (h.stakeUnitWeight ?? 1),
-			0,
-		);
-
-		if (totalPositionValue > 0) {
-			let weightedQualitySum = 0;
-
-			for (const holder of sharpSideTopHolders) {
-				// Time-weighted recent performance: day 30%, week 40%, month 30%
-				// Week is most reliable (less noisy than day, more current than month)
-				// Day still matters but less weight since it's noisy
-				const dayPnL =
-					normalizePnl(holder.pnlDay ?? null, holder.unitSize) ?? 0;
-				const weekPnL =
-					normalizePnl(holder.pnlWeek ?? null, holder.unitSize) ?? 0;
-				const monthPnL =
-					normalizePnl(holder.pnlMonth ?? null, holder.unitSize) ?? 0;
-
-				// Weighted recent PnL: day 30%, week 40%, month 30%
-				const recentPnL = dayPnL * 0.3 + weekPnL * 0.4 + monthPnL * 0.3;
-
-				// Long-term performance weight (60%): all-time PnL
-				const longTermPnL =
-					holder.pnlAllUnits ??
-					normalizePnl(holder.pnlAll ?? null, holder.unitSize) ??
-					0;
-
-				// Combined quality score: 40% recent, 60% long-term
-				const holderQuality = recentPnL * 0.4 + longTermPnL * 0.6;
-
-				// Weight by position size (larger positions = more influence)
-				const positionWeight =
-					(holder.amount * (holder.stakeUnitWeight ?? 1)) / totalPositionValue;
-				weightedQualitySum += holderQuality * positionWeight;
-			}
-
-			// Only apply quality bonus if average quality exceeds threshold (units)
-			// This avoids rewarding marginal quality
-			const QUALITY_THRESHOLD = 3;
-
-			if (weightedQualitySum >= QUALITY_THRESHOLD) {
-				// Positive avg: bonus up to 20 points (30+ units avg = max)
-				// Logarithmic curve for diminishing returns
-				qualityBonus =
-					20 * (1 - Math.exp(-Math.min(weightedQualitySum, 30) / 15));
-			} else if (weightedQualitySum < 0) {
-				// Negative avg: penalty up to -15 points (-15 units or worse = max penalty)
-				// Linear penalty for negative performance
-				qualityBonus = Math.max(weightedQualitySum, -15);
-			}
-			// If between 0 and threshold, no bonus/penalty (neutral)
-		}
-	}
+	const qualityBonus = 0;
 
 	const total = diffScore + volumeBonus + qualityBonus;
 	return { diffScore, volumeBonus, qualityBonus, total };
@@ -2740,11 +2681,9 @@ export async function analyzeMarketSharpness(
 
 		if (sharpSideValueRatio < 0.25) {
 			adjustedConfidence = "LOW";
-			edgePenalty *= 0.85;
 			warnings.push("low_conviction");
 		} else if (sharpSideValueRatio < 0.35) {
 			adjustedConfidence = downgradeConfidence(adjustedConfidence);
-			edgePenalty *= 0.9;
 			warnings.push("low_conviction");
 		}
 
@@ -2765,7 +2704,6 @@ export async function analyzeMarketSharpness(
 			);
 			if (concentration.top1Share >= 0.6 || concentration.top3Share >= 0.8) {
 				adjustedConfidence = downgradeConfidence(adjustedConfidence);
-				edgePenalty *= 0.85;
 				warnings.push("high_concentration");
 			}
 		}
@@ -2778,11 +2716,7 @@ export async function analyzeMarketSharpness(
 		}
 
 		const edgeBreakdown = hasEdge
-			? calculateEdgeRatingBreakdown(
-					scoreDifferential,
-					sharpSide === "A" ? sideATopHolders : sideBTopHolders,
-					marketVolumeForBonus,
-				)
+			? calculateEdgeRatingBreakdown(scoreDifferential, marketVolumeForBonus)
 			: { diffScore: 0, volumeBonus: 0, qualityBonus: 0, total: 0 };
 
 		// Calculate Edge Rating for ranking

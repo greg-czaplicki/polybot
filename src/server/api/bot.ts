@@ -35,7 +35,6 @@ import {
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
 import { getLatestTeamTrendSnapshot } from "../repositories/team-trend-snapshots";
-import { computeBotEval } from "./bot-eval";
 import {
 	computePriceEdgeFromEntry,
 	computeSharpMoneyGrades,
@@ -47,12 +46,12 @@ const DEFAULT_CACHE_WINDOW_HOURS = 24;
 const DEFAULT_CANDIDATE_WINDOW_MINUTES = 60;
 const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_MIN_MINUTES_TO_START = 15;
-const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.7;
+const DEFAULT_MARKET_QUALITY_THRESHOLD = 0.9;
 const DEFAULT_BOT_MIN_GRADE: GradeLabel = "A";
 const DEFAULT_BOT_REQUIRE_READY = true;
 const DEFAULT_BOT_INCLUDE_STARTED = false;
 const DEFAULT_BOT_REQUIRE_MICROSTRUCTURE = true;
-const DEFAULT_BOT_MARKET_QUALITY_THRESHOLD = 0.72;
+const DEFAULT_BOT_MARKET_QUALITY_THRESHOLD = 0.9;
 const NBA_SPORT_SERIES_ID = 10345;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
@@ -777,7 +776,7 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
-	if (timingBucket === "15-60m" && input.marketType === "spread") {
+	if (input.marketType === "spread") {
 		return buildPolicy(
 			{
 				...input,
@@ -786,11 +785,11 @@ export function getBotCandidatePolicy(input: {
 			{
 				minGrade: "A",
 				marketQualityThreshold: 1,
-				segmentLabel: "15-60m spread excluded",
+				segmentLabel: "Spread excluded",
 				rankingAdjustment: -100,
-				notes: ["late_spread_excluded"],
+				notes: ["spread_excluded"],
 				reject: true,
-				rejectReason: "15-60m_spread_excluded",
+				rejectReason: "spread_market_excluded",
 			},
 		);
 	}
@@ -804,19 +803,9 @@ export function getBotCandidatePolicy(input: {
 		policy = {
 			...policy,
 			minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.74),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 			rankingAdjustment: policy.rankingAdjustment + 6,
 			notes: [...policy.notes, "moneyline_bias"],
-		};
-	}
-
-	if (input.marketType === "spread") {
-		policy = {
-			...policy,
-			minGrade: stricterGrade(policy.minGrade, "A"),
-			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.74),
-			rankingAdjustment: policy.rankingAdjustment - 14,
-			notes: [...policy.notes, "spread_penalty"],
 		};
 	}
 
@@ -824,7 +813,7 @@ export function getBotCandidatePolicy(input: {
 		policy = {
 			...policy,
 			minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.7),
+			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 			rankingAdjustment: policy.rankingAdjustment + 4,
 			notes: [...policy.notes, "total_bias"],
 		};
@@ -863,7 +852,7 @@ export function getBotCandidatePolicy(input: {
 			policy = {
 				...policy,
 				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.68),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 				rankingAdjustment: policy.rankingAdjustment + 22,
 				notes: [...policy.notes, "nba_moneyline_core"],
 			};
@@ -872,16 +861,9 @@ export function getBotCandidatePolicy(input: {
 			policy = {
 				...policy,
 				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.66),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 				rankingAdjustment: policy.rankingAdjustment + 18,
 				notes: [...policy.notes, "nba_total_core"],
-			};
-		}
-		if (input.marketType === "spread") {
-			policy = {
-				...policy,
-				rankingAdjustment: policy.rankingAdjustment - 8,
-				notes: [...policy.notes, "nba_spread_penalty"],
 			};
 		}
 	}
@@ -891,7 +873,7 @@ export function getBotCandidatePolicy(input: {
 			policy = {
 				...policy,
 				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.68),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 				rankingAdjustment: policy.rankingAdjustment + 14,
 				notes: [...policy.notes, "mlb_moneyline_preferred"],
 			};
@@ -900,7 +882,7 @@ export function getBotCandidatePolicy(input: {
 			policy = {
 				...policy,
 				minGrade: looserGrade(stricterGrade(policy.minGrade, "B"), "B"),
-				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.66),
+				marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.9),
 				rankingAdjustment: policy.rankingAdjustment + 10,
 				notes: [...policy.notes, "mlb_total_preferred"],
 			};
@@ -936,7 +918,7 @@ export function getBotCandidatePolicy(input: {
 	return {
 		...policy,
 		minGrade: policy.minGrade === "A+" ? "A" : policy.minGrade,
-		marketQualityThreshold: Math.min(0.9, policy.marketQualityThreshold),
+		marketQualityThreshold: Math.min(0.95, policy.marketQualityThreshold),
 		notes: Array.from(new Set(policy.notes)),
 	};
 }
@@ -1273,6 +1255,31 @@ function buildDecisionSnapshot(input: {
 	l2Spread?: number;
 	l2Disagreement?: boolean;
 }): Record<string, unknown> {
+	const sharpSideTopHolders =
+		input.sharpSide === "A"
+			? (input.cacheEntry?.sideA.topHolders ?? [])
+			: input.sharpSide === "B"
+				? (input.cacheEntry?.sideB.topHolders ?? [])
+				: [];
+	const sharpSideTotalValue =
+		input.sharpSide === "A"
+			? (input.cacheEntry?.sideA.totalValue ?? 0)
+			: input.sharpSide === "B"
+				? (input.cacheEntry?.sideB.totalValue ?? 0)
+				: 0;
+	const sortedSharpSideHolders = sharpSideTopHolders
+		.slice()
+		.sort((left, right) => right.amount - left.amount);
+	const top1Share =
+		sharpSideTotalValue > 0
+			? (sortedSharpSideHolders[0]?.amount ?? 0) / sharpSideTotalValue
+			: null;
+	const top3Share =
+		sharpSideTotalValue > 0
+			? sortedSharpSideHolders
+					.slice(0, 3)
+					.reduce((sum, holder) => sum + holder.amount, 0) / sharpSideTotalValue
+			: null;
 	const marketTitle = input.marketTitle || input.cacheEntry?.marketTitle || "";
 	const eventTime = input.eventTime ?? input.cacheEntry?.eventTime;
 	const eventTimeMs = eventTime ? new Date(eventTime).getTime() : Number.NaN;
@@ -1297,6 +1304,14 @@ function buildDecisionSnapshot(input: {
 		marketQualityScore: input.marketQualityScore ?? null,
 		thresholdUsed: input.thresholdUsed ?? null,
 		warnings: input.warnings ?? [],
+		sharpSideValueRatio: input.cacheEntry?.sharpSideValueRatio ?? null,
+		pnlCoverage: input.cacheEntry?.pnlCoverage ?? null,
+		sideASharpScore: input.cacheEntry?.sideA.sharpScore ?? null,
+		sideBSharpScore: input.cacheEntry?.sideB.sharpScore ?? null,
+		sideAHolderCount: input.cacheEntry?.sideA.holderCount ?? null,
+		sideBHolderCount: input.cacheEntry?.sideB.holderCount ?? null,
+		top1Share,
+		top3Share,
 		candidateComputedAt: input.candidateComputedAt ?? null,
 		l2Imbalance: input.l2Imbalance ?? null,
 		l2ImbalanceNearMid: input.l2ImbalanceNearMid ?? null,
@@ -1346,7 +1361,10 @@ async function listBotCandidates(
 		options.maxMinutesToStart > 0
 			? options.maxMinutesToStart
 			: windowMinutes;
-	const windowHours = Math.max(1, Math.ceil(Math.max(windowMinutes, maxMinutesToStart) / 60));
+	const windowHours = Math.max(
+		1,
+		Math.ceil(Math.max(windowMinutes, maxMinutesToStart) / 60),
+	);
 	const now = Date.now();
 	const maxMinutesWindow = Math.max(maxMinutesToStart, minMinutesToStart);
 	const cutoffMs = maxMinutesWindow * 60 * 1000;
@@ -1610,37 +1628,6 @@ async function listBotCandidates(
 							foundInEntries: true,
 							stage: "filtered_grade",
 							reason: "below_policy_grade",
-						};
-					}
-					return null;
-				}
-				if ((grade.warnings ?? []).includes("no_price_edge")) {
-					incrementCounter(debug.excluded, "no_price_edge");
-					pushNearMiss(debug, {
-						reason: "no_price_edge",
-						conditionId: entry.conditionId,
-						marketTitle: entry.marketTitle,
-						sportSeriesId: entry.sportSeriesId,
-						marketType: getMarketTypeLabel(entry.marketTitle),
-						sharpSide: entry.sharpSide,
-						sharpSidePrice:
-							entry.sharpSide === "A"
-								? (entry.sideA.price ?? null)
-								: entry.sharpSide === "B"
-									? (entry.sideB.price ?? null)
-									: null,
-						grade: grade.grade,
-						policyMinGrade: policy.minGrade,
-						signalScore: grade.signalScore,
-						marketQualityScore: grade.microstructureScore,
-						minutesToStart: policyMinutesToStart,
-					});
-					if (inspectConditionId && entry.conditionId === inspectConditionId) {
-						debug.inspect = {
-							conditionId: inspectConditionId,
-							foundInEntries: true,
-							stage: "filtered_grade",
-							reason: "no_price_edge",
 						};
 					}
 					return null;
@@ -2121,31 +2108,6 @@ export async function handleBotRequest(
 				{ status: 400 },
 			);
 		}
-	}
-
-	if (url.pathname === "/api/bot/eval") {
-		if (request.method !== "POST") {
-			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
-		}
-		const payload = await parseJson<{
-			windowHours?: number;
-			horizonMinutes?: number;
-			historyWindowMinutes?: number;
-			minGrade?: string;
-			includeStarted?: boolean;
-			limit?: number;
-			filteredQualityThreshold?: number;
-			sweepThresholds?: number[];
-		}>(request);
-		const minGrade = parseMinGrade(payload?.minGrade ?? null);
-		if (!minGrade) {
-			return jsonResponse({ error: "invalid_minGrade" }, { status: 400 });
-		}
-		const result = await computeBotEval(env.POLYWHALER_DB, {
-			...(payload ?? {}),
-			minGrade,
-		});
-		return jsonResponse(result);
 	}
 
 	if (url.pathname === "/api/bot/cohorts") {
