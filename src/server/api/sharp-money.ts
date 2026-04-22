@@ -855,6 +855,70 @@ export function computePriceEdgeFromEntry(entry: {
 }
 
 /**
+ * Detect hedged wallets — addresses that appear in BOTH side A and side B
+ * top-holder lists. A fully hedged whale inflates both sharpScores and can make
+ * a market look like strong two-way conviction when it's really one entity
+ * spreading risk. Pure diagnostic; does not alter scoring.
+ *
+ * `hedgeRatio` per wallet = min(a, b) / max(a, b). 1.0 = perfectly hedged,
+ * 0.0 = unhedged. Returned `maxHedgeRatio` is the worst (most hedged) wallet.
+ *
+ * `hedgedValueShareA` / `hedgedValueShareB` = fraction of each side's top-holder
+ * amount contributed by wallets that also hold the other side.
+ */
+export function computeHedgingMetrics(
+	sideATopHolders: Array<{ proxyWallet: string; amount: number }>,
+	sideBTopHolders: Array<{ proxyWallet: string; amount: number }>,
+): {
+	hedgedWalletCount: number;
+	maxHedgeRatio: number;
+	hedgedValueShareA: number;
+	hedgedValueShareB: number;
+	totalHedgedFraction: number;
+} {
+	const sideBByWallet = new Map<string, number>();
+	for (const h of sideBTopHolders) {
+		if (!h.proxyWallet) continue;
+		sideBByWallet.set(h.proxyWallet, (sideBByWallet.get(h.proxyWallet) ?? 0) + h.amount);
+	}
+
+	let hedgedWalletCount = 0;
+	let maxHedgeRatio = 0;
+	let hedgedValueA = 0;
+	let hedgedValueB = 0;
+
+	const seen = new Set<string>();
+	for (const a of sideATopHolders) {
+		if (!a.proxyWallet || seen.has(a.proxyWallet)) continue;
+		const bAmount = sideBByWallet.get(a.proxyWallet);
+		if (bAmount === undefined) continue;
+		seen.add(a.proxyWallet);
+		hedgedWalletCount += 1;
+		hedgedValueA += a.amount;
+		hedgedValueB += bAmount;
+		const ratio =
+			Math.min(a.amount, bAmount) / Math.max(a.amount, bAmount, 1e-9);
+		if (ratio > maxHedgeRatio) maxHedgeRatio = ratio;
+	}
+
+	const totalA = sideATopHolders.reduce((sum, h) => sum + h.amount, 0);
+	const totalB = sideBTopHolders.reduce((sum, h) => sum + h.amount, 0);
+	const total = totalA + totalB;
+	const hedgedValueShareA = totalA > 0 ? hedgedValueA / totalA : 0;
+	const hedgedValueShareB = totalB > 0 ? hedgedValueB / totalB : 0;
+	const totalHedgedFraction =
+		total > 0 ? (hedgedValueA + hedgedValueB) / total : 0;
+
+	return {
+		hedgedWalletCount,
+		maxHedgeRatio,
+		hedgedValueShareA,
+		hedgedValueShareB,
+		totalHedgedFraction,
+	};
+}
+
+/**
  * Fetch sports markets via Gamma API.
  */
 export async function fetchTrendingSportsMarkets(

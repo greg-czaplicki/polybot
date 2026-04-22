@@ -164,3 +164,29 @@ export async function listBotCandidateSnapshots(
 	);
 	return rows.map(parseRow);
 }
+
+export async function listBotCandidateSnapshotsInRange(
+	db: Db,
+	options: {
+		sinceCreatedAt: number;
+		untilCreatedAt: number;
+		limit?: number;
+	},
+): Promise<BotCandidateSnapshot[]> {
+	const limit =
+		typeof options.limit === "number" && options.limit > 0
+			? Math.min(options.limit, 5000)
+			: 1000;
+	const rows = await all<BotCandidateSnapshotRow>(
+		db,
+		`SELECT * FROM bot_candidate_snapshots
+		 WHERE created_at >= ?
+		   AND created_at < ?
+		 ORDER BY created_at DESC
+		 LIMIT ?`,
+		options.sinceCreatedAt,
+		options.untilCreatedAt,
+		limit,
+	);
+	return rows.map(parseRow);
+}

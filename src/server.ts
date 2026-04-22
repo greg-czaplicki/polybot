@@ -12,11 +12,13 @@ import {
 	runCanonicalSync,
 } from "./server/pipeline/canonical-sync";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
+import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
 import {
 	handleSharpQueue,
 	SharpPipeline,
 } from "./server/pipeline/sharp-pipeline";
 import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
+import { maybeRefreshDailyStatsSnapshot } from "./server/repositories/daily-stats-snapshots";
 
 const startFetch = createStartHandler(defaultStreamHandler);
 
@@ -123,6 +125,35 @@ const serverEntry = {
 			}
 		}
 
+		// Backfill missing team_trend_snapshots for teams that have facts
+		// but no snapshots. One-shot utility to close the gap where facts were
+		// computed via a path that didn't trigger snapshot compute.
+		if (
+			url.pathname === "/_canonical/backfill-snapshots" &&
+			request.method === "POST"
+		) {
+			try {
+				const sportTagParam = url.searchParams.get("sportTag") ?? undefined;
+				const limitParam = Number(url.searchParams.get("limit"));
+				const result = await backfillMissingSnapshots(env.POLYWHALER_DB, {
+					sportTag: sportTagParam,
+					limit: Number.isFinite(limitParam) ? limitParam : undefined,
+				});
+				return new Response(JSON.stringify({ success: true, result }), {
+					headers: { "Content-Type": "application/json" },
+				});
+			} catch (error) {
+				console.error("[canonical-sync] Backfill snapshots error:", error);
+				return new Response(
+					JSON.stringify({ success: false, error: String(error) }),
+					{
+						status: 500,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+		}
+
 		// Run manual pick backfill against remote D1
 		if (
 			url.pathname === "/_canonical/backfill-picks" &&
@@ -210,6 +241,19 @@ const serverEntry = {
 				})
 				.catch((error) => {
 					console.error("[canonical-sync] Scheduled sync failed", error);
+				}),
+		);
+		executionCtx.waitUntil(
+			maybeRefreshDailyStatsSnapshot(env.POLYWHALER_DB)
+				.then((snapshot) => {
+					if (snapshot) {
+						console.log(
+							`[daily-stats] Refreshed snapshot for ${snapshot.dayKey}`,
+						);
+					}
+				})
+				.catch((error) => {
+					console.error("[daily-stats] Scheduled snapshot failed", error);
 				}),
 		);
 	},

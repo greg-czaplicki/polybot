@@ -577,9 +577,10 @@ export async function listManualPicks(
 		status?: ManualPickStatus;
 		limit?: number;
 		sincePickedAt?: number;
+		untilPickedAt?: number;
 	},
 ): Promise<ManualPickEntry[]> {
-	const { status, limit = 25, sincePickedAt } = options ?? {};
+	const { status, limit = 25, sincePickedAt, untilPickedAt } = options ?? {};
 	const params: unknown[] = [];
 	const conditions: string[] = [];
 	if (status) {
@@ -589,6 +590,10 @@ export async function listManualPicks(
 	if (typeof sincePickedAt === "number" && Number.isFinite(sincePickedAt)) {
 		conditions.push(`picked_at >= ?`);
 		params.push(sincePickedAt);
+	}
+	if (typeof untilPickedAt === "number" && Number.isFinite(untilPickedAt)) {
+		conditions.push(`picked_at < ?`);
+		params.push(untilPickedAt);
 	}
 	let query = `SELECT * FROM manual_picks`;
 	if (conditions.length > 0) {
@@ -602,7 +607,29 @@ export async function listManualPicks(
 
 export async function getManualPicksSummary(
 	db: Db,
+	options?: {
+		sincePickedAt?: number;
+		untilPickedAt?: number;
+	},
 ): Promise<ManualPickSummary> {
+	const params: unknown[] = [];
+	const conditions: string[] = [];
+	if (
+		typeof options?.sincePickedAt === "number" &&
+		Number.isFinite(options.sincePickedAt)
+	) {
+		conditions.push("picked_at >= ?");
+		params.push(options.sincePickedAt);
+	}
+	if (
+		typeof options?.untilPickedAt === "number" &&
+		Number.isFinite(options.untilPickedAt)
+	) {
+		conditions.push("picked_at < ?");
+		params.push(options.untilPickedAt);
+	}
+	const whereClause =
+		conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 	const row = await first<{
 		total: number;
 		settled: number;
@@ -623,7 +650,9 @@ export async function getManualPicksSummary(
       AVG(roi) AS avg_roi,
       SUM(roi) AS total_roi,
       AVG(clv) AS avg_clv
-    FROM manual_picks`,
+    FROM manual_picks
+		${whereClause}`,
+		...params,
 	);
 	return {
 		total: row?.total ?? 0,
@@ -839,8 +868,14 @@ function bucketIndexFromRange(
 function computeMinPriceEdgeForPick(pick: ManualPickEntry): number | null {
 	const confidence = pick.confidence;
 	const edgeRating = pick.edgeRating;
-	if (!confidence || typeof edgeRating !== "number" || !Number.isFinite(edgeRating)) return null;
-	const base = confidence === "HIGH" ? 0.02 : confidence === "MEDIUM" ? 0.03 : 0.04;
+	if (
+		!confidence ||
+		typeof edgeRating !== "number" ||
+		!Number.isFinite(edgeRating)
+	)
+		return null;
+	const base =
+		confidence === "HIGH" ? 0.02 : confidence === "MEDIUM" ? 0.03 : 0.04;
 	const edgeBoost = Math.max(0, Math.min((edgeRating - 70) / 30, 1)) * 0.01;
 	return Math.max(0.01, base - edgeBoost);
 }
@@ -1187,12 +1222,13 @@ function bucketToShadowWindowRow(
 
 export async function getManualPicksCalibrationSummary(
 	db: Db,
-	options?: { limit?: number; sincePickedAt?: number },
+	options?: { limit?: number; sincePickedAt?: number; untilPickedAt?: number },
 ): Promise<ManualPickCalibrationSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const signalBuckets = createMutableBuckets(
@@ -1334,12 +1370,13 @@ export async function getManualPicksCalibrationSummary(
 
 export async function getManualPicksBucketPerformanceSummary(
 	db: Db,
-	options?: { limit?: number; sincePickedAt?: number },
+	options?: { limit?: number; sincePickedAt?: number; untilPickedAt?: number },
 ): Promise<ManualPickBucketPerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const timeBuckets = createMutableBuckets(
@@ -1426,6 +1463,7 @@ export async function getManualPicksClvTimingSummary(
 		limit?: number;
 		qualityThreshold?: number;
 		sincePickedAt?: number;
+		untilPickedAt?: number;
 	},
 ): Promise<ManualPickClvTimingSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
@@ -1437,6 +1475,7 @@ export async function getManualPicksClvTimingSummary(
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const segments = [
@@ -1497,6 +1536,7 @@ export async function getManualPicksShadowWindowSummary(
 		limit?: number;
 		qualityThreshold?: number;
 		sincePickedAt?: number;
+		untilPickedAt?: number;
 	},
 ): Promise<ManualPickShadowWindowSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
@@ -1508,6 +1548,7 @@ export async function getManualPicksShadowWindowSummary(
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter(
 		(pick) =>
@@ -1692,6 +1733,7 @@ export async function getManualPicksSportPerformanceSummary(
 		limit?: number;
 		qualityThreshold?: number;
 		sincePickedAt?: number;
+		untilPickedAt?: number;
 	},
 ): Promise<ManualPickSportPerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
@@ -1703,6 +1745,7 @@ export async function getManualPicksSportPerformanceSummary(
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const conditionIds = Array.from(
@@ -1811,6 +1854,7 @@ export async function getManualPicksMarketTypePerformanceSummary(
 		limit?: number;
 		qualityThreshold?: number;
 		sincePickedAt?: number;
+		untilPickedAt?: number;
 	},
 ): Promise<ManualPickMarketTypePerformanceSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
@@ -1822,6 +1866,7 @@ export async function getManualPicksMarketTypePerformanceSummary(
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 
@@ -1894,12 +1939,13 @@ export async function getManualPicksMarketTypePerformanceSummary(
 
 export async function getManualPicksGradeRecalibrationSummary(
 	db: Db,
-	options?: { limit?: number; sincePickedAt?: number },
+	options?: { limit?: number; sincePickedAt?: number; untilPickedAt?: number },
 ): Promise<ManualPickGradeRecalibrationSummary> {
 	const limit = options?.limit && options.limit > 0 ? options.limit : 2000;
 	const picks = await listManualPicks(db, {
 		limit,
 		sincePickedAt: options?.sincePickedAt,
+		untilPickedAt: options?.untilPickedAt,
 	});
 	const settled = picks.filter((pick) => pick.status !== "pending");
 	const gradeOrder = ["A+", "A", "B", "C", "D", "Unknown"];

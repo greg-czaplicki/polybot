@@ -7,87 +7,126 @@
 body {
   @apply m-0;
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
-    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
+    sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #111827;
+  background-color: var(--ink-00);
+  color: var(--ink-85);
 }
 
-code {
+html {
+  background-color: var(--ink-00);
+}
+
+code,
+kbd,
+samp,
+pre {
   font-family:
-    source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+    'Red Hat Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
+  font-feature-settings: 'tnum', 'zero';
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.871 0.006 286.286);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.871 0.006 286.286);
+  /* Whale palette — all neutrals tinted toward brand navy (h=255) */
+  --ink-00: oklch(0.148 0.022 255);
+  --ink-05: oklch(0.188 0.026 255);
+  --ink-10: oklch(0.226 0.028 255);
+  --ink-15: oklch(0.280 0.030 255);
+  --ink-25: oklch(0.360 0.028 255);
+  --ink-40: oklch(0.502 0.022 255);
+  --ink-55: oklch(0.640 0.018 255);
+  --ink-70: oklch(0.760 0.015 255);
+  --ink-85: oklch(0.895 0.012 255);
+  --ink-95: oklch(0.968 0.008 255);
+
+  /* Brand (derived from logo) */
+  --brand-navy: oklch(0.30 0.10 258);
+  --brand-blue: oklch(0.60 0.17 248);
+  --brand-cyan: oklch(0.81 0.11 215);
+
+  /* Semantic signal — all sit on a quieter hue axis than raw Tailwind */
+  --signal-pos: oklch(0.72 0.13 180);
+  --signal-pos-dim: oklch(0.56 0.10 180);
+  --signal-warn: oklch(0.74 0.13 75);
+  --signal-warn-dim: oklch(0.56 0.11 75);
+  --signal-bad: oklch(0.66 0.17 25);
+  --signal-bad-dim: oklch(0.51 0.14 25);
+
+  /* shadcn-compatible tokens (default = dark, since app is dark-only) */
+  --background: var(--ink-00);
+  --foreground: var(--ink-95);
+  --card: var(--ink-05);
+  --card-foreground: var(--ink-95);
+  --popover: var(--ink-05);
+  --popover-foreground: var(--ink-95);
+  --primary: var(--brand-blue);
+  --primary-foreground: var(--ink-00);
+  --secondary: var(--ink-10);
+  --secondary-foreground: var(--ink-95);
+  --muted: var(--ink-10);
+  --muted-foreground: var(--ink-55);
+  --accent: var(--ink-15);
+  --accent-foreground: var(--ink-95);
+  --destructive: var(--signal-bad-dim);
+  --destructive-foreground: var(--ink-95);
+  --border: var(--ink-15);
+  --input: var(--ink-15);
+  --ring: var(--brand-blue);
+  --chart-1: var(--brand-blue);
+  --chart-2: var(--signal-pos);
+  --chart-3: var(--brand-cyan);
+  --chart-4: var(--signal-warn);
+  --chart-5: var(--signal-bad);
+  --radius: 0.5rem;
+  --sidebar: var(--ink-05);
+  --sidebar-foreground: var(--ink-95);
+  --sidebar-primary: var(--brand-blue);
+  --sidebar-primary-foreground: var(--ink-95);
+  --sidebar-accent: var(--ink-15);
+  --sidebar-accent-foreground: var(--ink-95);
+  --sidebar-border: var(--ink-15);
+  --sidebar-ring: var(--brand-blue);
 }
 
+/* The app never toggles .dark — dark is the default. Kept for shadcn
+   compatibility with the same values as :root. */
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.141 0.005 285.823);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.141 0.005 285.823);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.274 0.006 286.033);
-  --input: oklch(0.274 0.006 286.033);
-  --ring: oklch(0.442 0.017 285.786);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.274 0.006 286.033);
-  --sidebar-ring: oklch(0.442 0.017 285.786);
+  --background: var(--ink-00);
+  --foreground: var(--ink-95);
+  --card: var(--ink-05);
+  --card-foreground: var(--ink-95);
+  --popover: var(--ink-05);
+  --popover-foreground: var(--ink-95);
+  --primary: var(--brand-blue);
+  --primary-foreground: var(--ink-00);
+  --secondary: var(--ink-10);
+  --secondary-foreground: var(--ink-95);
+  --muted: var(--ink-10);
+  --muted-foreground: var(--ink-55);
+  --accent: var(--ink-15);
+  --accent-foreground: var(--ink-95);
+  --destructive: var(--signal-bad-dim);
+  --destructive-foreground: var(--ink-95);
+  --border: var(--ink-15);
+  --input: var(--ink-15);
+  --ring: var(--brand-blue);
+  --chart-1: var(--brand-blue);
+  --chart-2: var(--signal-pos);
+  --chart-3: var(--brand-cyan);
+  --chart-4: var(--signal-warn);
+  --chart-5: var(--signal-bad);
+  --sidebar: var(--ink-05);
+  --sidebar-foreground: var(--ink-95);
+  --sidebar-primary: var(--brand-blue);
+  --sidebar-primary-foreground: var(--ink-95);
+  --sidebar-accent: var(--ink-15);
+  --sidebar-accent-foreground: var(--ink-95);
+  --sidebar-border: var(--ink-15);
+  --sidebar-ring: var(--brand-blue);
 }
 
 @theme inline {
@@ -127,6 +166,53 @@ code {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Whale tokens surfaced as Tailwind utilities */
+  --color-ink-00: var(--ink-00);
+  --color-ink-05: var(--ink-05);
+  --color-ink-10: var(--ink-10);
+  --color-ink-15: var(--ink-15);
+  --color-ink-25: var(--ink-25);
+  --color-ink-40: var(--ink-40);
+  --color-ink-55: var(--ink-55);
+  --color-ink-70: var(--ink-70);
+  --color-ink-85: var(--ink-85);
+  --color-ink-95: var(--ink-95);
+  --color-brand-navy: var(--brand-navy);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-signal-pos: var(--signal-pos);
+  --color-signal-pos-dim: var(--signal-pos-dim);
+  --color-signal-warn: var(--signal-warn);
+  --color-signal-warn-dim: var(--signal-warn-dim);
+  --color-signal-bad: var(--signal-bad);
+  --color-signal-bad-dim: var(--signal-bad-dim);
+
+  --font-sans:
+    'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
+    sans-serif;
+  --font-mono:
+    'Red Hat Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
+
+  /* Type scale — 6 steps.
+     xxs → uppercase captions and small tabular labels only.
+     xs / sm → secondary body, chips, metrics supporting text.
+     base → primary body + market titles.
+     lg → primary metric numbers.
+     2xl → grade letter (hero numeric). */
+  --text-xxs: 0.625rem;
+  --text-xxs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.125rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.35rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.25rem;
+  --text-2xl: 1.625rem;
+  --text-2xl--line-height: 1;
 }
 
 @layer base {
@@ -134,6 +220,6 @@ code {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-ink-00 text-ink-85;
   }
 }

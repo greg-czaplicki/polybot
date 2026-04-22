@@ -13,6 +13,7 @@
  */
 
 import type { Db } from "../db/client";
+import { all } from "../db/client";
 import { listTeamGameFacts } from "../repositories/team-game-facts";
 import {
 	deleteTeamTrendSnapshots,
@@ -163,6 +164,80 @@ export async function recomputeAllSnapshotsForTeam(
 		mostRecent.gameTime,
 		{ windowSize },
 	);
+}
+
+export interface BackfillSnapshotsResult {
+	processedTeams: number;
+	totalSnapshotsComputed: number;
+	perSport: Record<string, { teams: number; snapshots: number }>;
+	errors: Array<{ teamId: string; sportTag: string; error: string }>;
+}
+
+/**
+ * Find every (team_id, sport_tag) pair that has team_game_facts but no
+ * team_trend_snapshots, and recompute snapshots for each. Covers the gap
+ * where facts were computed via a path that did not trigger snapshot compute
+ * (or earlier code versions that only computed facts).
+ *
+ * Idempotent: safe to re-run. Each team's snapshots are deleted and rebuilt.
+ */
+export async function backfillMissingSnapshots(
+	db: Db,
+	options?: { sportTag?: string; windowSize?: number; limit?: number },
+): Promise<BackfillSnapshotsResult> {
+	const { sportTag, windowSize, limit = 500 } = options ?? {};
+
+	const params: unknown[] = [];
+	let sportFilter = "";
+	if (sportTag) {
+		sportFilter = "AND tgf.sport_tag = ?";
+		params.push(sportTag);
+	}
+	params.push(limit);
+
+	const rows = await all<{ team_id: string; sport_tag: string }>(
+		db,
+		`SELECT DISTINCT tgf.team_id, tgf.sport_tag
+		FROM team_game_facts tgf
+		LEFT JOIN team_trend_snapshots tts
+			ON tts.team_id = tgf.team_id AND tts.sport_tag = tgf.sport_tag
+		WHERE tts.id IS NULL ${sportFilter}
+		LIMIT ?`,
+		...params,
+	);
+
+	const result: BackfillSnapshotsResult = {
+		processedTeams: 0,
+		totalSnapshotsComputed: 0,
+		perSport: {},
+		errors: [],
+	};
+
+	for (const row of rows) {
+		try {
+			const recompute = await recomputeAllSnapshotsForTeam(
+				db,
+				row.team_id,
+				row.sport_tag,
+				{ windowSize },
+			);
+			result.processedTeams += 1;
+			result.totalSnapshotsComputed += recompute.snapshotsComputed;
+			const bucket =
+				result.perSport[row.sport_tag] ??
+				(result.perSport[row.sport_tag] = { teams: 0, snapshots: 0 });
+			bucket.teams += 1;
+			bucket.snapshots += recompute.snapshotsComputed;
+		} catch (err) {
+			result.errors.push({
+				teamId: row.team_id,
+				sportTag: row.sport_tag,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	return result;
 }
 
 // ---------------------------------------------------------------------------

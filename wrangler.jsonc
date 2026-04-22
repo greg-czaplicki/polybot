@@ -9,9 +9,9 @@
 	"d1_databases": [
 		{
 			"binding": "POLYWHALER_DB",
-			"database_name": "polywhaler",
-			"database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7",
-			"preview_database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7"
+			"database_name": "polywhaler-db",
+			"database_id": "5c45f749-3557-4307-8384-c499fe2f5359",
+			"preview_database_id": "5c45f749-3557-4307-8384-c499fe2f5359"
 		}
 	],
 	"durable_objects": {
@@ -48,9 +48,9 @@
 			"d1_databases": [
 				{
 					"binding": "POLYWHALER_DB",
-					"database_name": "polywhaler",
-					"database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7",
-					"preview_database_id": "3e9ae8e9-b5c2-4c8b-8976-d7c4b6f510e7",
+					"database_name": "polywhaler-db",
+					"database_id": "5c45f749-3557-4307-8384-c499fe2f5359",
+					"preview_database_id": "5c45f749-3557-4307-8384-c499fe2f5359",
 					"remote": true
 				}
 			],

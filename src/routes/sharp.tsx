@@ -1,15 +1,11 @@
 import { createFileRoute, Outlet, useMatchRoute } from "@tanstack/react-router";
 import {
-	CheckCircle2,
-	ChevronDown,
-	ChevronUp,
 	ExternalLink,
 	Eye,
 	EyeOff,
 	Loader2,
 	RefreshCw,
 	Target,
-	Trash2,
 	User,
 	Zap,
 } from "lucide-react";
@@ -23,15 +19,14 @@ import {
 	MIN_EDGE_RATING,
 	signalScoreToGradeLabel,
 } from "@/lib/sharp-grade";
+import type { BotInspectDefaults } from "../server/api/bot";
 import {
 	getBotCandidateInspectFn,
 	getBotCandidatesFn,
 	getBotInspectDefaultsFn,
 } from "../server/api/bot";
-import type { BotInspectDefaults } from "../server/api/bot";
 import { listManualPicksFn } from "../server/api/manual-picks";
 import {
-	clearSharpMoneyCacheFn,
 	fetchTrendingSportsMarketsFn,
 	getRuntimeMarketStatsFn,
 	getSharpMoneyCacheFn,
@@ -51,17 +46,12 @@ export const Route = createFileRoute("/sharp")({
 	component: SharpMoneyPage,
 });
 
-// Sport filter options
-const SPORT_FILTERS = [
-	{ value: "all", label: "All Sports" },
-	{ value: "10187", label: "NFL" },
-	{ value: "10345", label: "NBA" },
-	{ value: "10210", label: "College Football" },
-	{ value: "10470", label: "College Basketball" },
-	{ value: "3", label: "MLB" },
-	{ value: "10346", label: "NHL" },
-	{ value: "10188", label: "Premier League" },
-];
+// Sport and A+ filters were removed from the UI — the bot-aligned pipeline
+// already surfaces exactly the markets worth looking at. Constants kept at
+// module scope so the downstream filter/fetch logic continues to work with
+// stable identities (no stale-closure / re-render churn).
+const selectedSeriesId = "all" as const;
+const showAPlusOnly = false;
 
 const SERIES_LABELS: Record<number, string> = {
 	10187: "NFL",
@@ -97,11 +87,6 @@ const EDGE_TARGETS = {
 	minEdge: { min: 0.45, max: 0.6 },
 };
 
-const VOLUME_COLOR_ANCHORS = {
-	low: 15_000,
-	mid: 650_000,
-};
-
 function formatUsdCompact(value: number | null | undefined): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) {
 		return "$0";
@@ -133,24 +118,6 @@ function getVolumePercentLogScaled(volume: number, maxVolume: number): number {
 	return Math.min((numerator / denominator) * 100, 100);
 }
 
-function getVolumeColorPercent(volume: number, maxVolume: number): number {
-	if (!Number.isFinite(volume) || volume <= 0) return 0;
-	const low = VOLUME_COLOR_ANCHORS.low;
-	const mid = VOLUME_COLOR_ANCHORS.mid;
-	if (volume <= low) {
-		const base = Math.log10(volume + 1) / Math.log10(low + 1);
-		return Math.min(base * 75, 75);
-	}
-	if (volume <= mid) {
-		const base = Math.log10(volume / low) / Math.log10(mid / low);
-		return 75 + Math.min(Math.max(base, 0), 1) * 15;
-	}
-	const safeMax = Math.max(mid, maxVolume);
-	if (safeMax === mid) return 90;
-	const base = Math.log10(volume / mid) / Math.log10(safeMax / mid);
-	return Math.min(90 + Math.min(Math.max(base, 0), 1) * 10, 100);
-}
-
 function formatUnits(value: number | null | undefined): string | null {
 	if (value === null || value === undefined || !Number.isFinite(value)) {
 		return null;
@@ -179,9 +146,9 @@ function getTargetToneClass(
 	target: { min: number; max: number },
 ): string {
 	const tone = getTargetTone(value, target);
-	if (tone === "ok") return "text-emerald-300";
-	if (tone === "low") return "text-amber-300";
-	return "text-rose-300";
+	if (tone === "ok") return "text-signal-pos";
+	if (tone === "low") return "text-signal-warn";
+	return "text-signal-bad";
 }
 
 function buildGradeMix(
@@ -568,13 +535,11 @@ function SharpMoneyPage() {
 		totalQueued?: number;
 		processed?: number;
 	} | null>(null);
-	const [selectedSeriesId, setSelectedSeriesId] = useState("all");
 	const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(
 		new Set(),
 	);
 	const [showAllEntries, setShowAllEntries] = useState(false);
 	const [showEdgeStats, setShowEdgeStats] = useState(true);
-	const [showAPlusOnly, setShowAPlusOnly] = useState(false);
 	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<
 		string[]
 	>([]);
@@ -614,12 +579,6 @@ function SharpMoneyPage() {
 			}
 		>
 	>({});
-	const [gradeStatus, setGradeStatus] = useState<{
-		updatedAt?: number;
-		total?: number;
-		withWarnings?: number;
-		warningCounts?: Record<string, number>;
-	}>({});
 	const [healthStatus, setHealthStatus] = useState<{
 		label: "Good" | "Warn" | "Unknown";
 		detail?: string;
@@ -645,7 +604,9 @@ function SharpMoneyPage() {
 		totalEntries: number;
 		newestEntry?: number;
 	} | null>(null);
-	const [botDefaults, setBotDefaults] = useState<BotInspectDefaults | null>(null);
+	const [botDefaults, setBotDefaults] = useState<BotInspectDefaults | null>(
+		null,
+	);
 	const PULL_THRESHOLD = 80;
 	const PULL_MAX = 120;
 	const CACHE_FETCH_LIMIT = 200;
@@ -663,48 +624,43 @@ function SharpMoneyPage() {
 	}, [setPullDistanceSafe]);
 
 	// Load cached data
-	const loadCache = useCallback(
-		async (options?: { silent?: boolean }) => {
-			let result: {
-				entries: SharpMoneyCacheEntry[];
-				stats: { totalEntries: number; newestEntry?: number } | null;
-			} | null = null;
-			if (!options?.silent) {
-				setIsLoading(true);
-				setIsInitialSortReady(false);
-			}
-			try {
-				const [cacheResult, statsResult] = await Promise.all([
-					getSharpMoneyCacheFn({
-						data: {
-							sportSeriesId:
-								selectedSeriesId === "all"
-									? undefined
-									: Number(selectedSeriesId),
-							limit: CACHE_FETCH_LIMIT,
-							windowHours: UPCOMING_WINDOW_HOURS,
-						},
-					}),
-					getSharpMoneyCacheStatsFn({ data: {} }),
-				]);
+	const loadCache = useCallback(async (options?: { silent?: boolean }) => {
+		let result: {
+			entries: SharpMoneyCacheEntry[];
+			stats: { totalEntries: number; newestEntry?: number } | null;
+		} | null = null;
+		if (!options?.silent) {
+			setIsLoading(true);
+			setIsInitialSortReady(false);
+		}
+		try {
+			const [cacheResult, statsResult] = await Promise.all([
+				getSharpMoneyCacheFn({
+					data: {
+						sportSeriesId:
+							selectedSeriesId === "all" ? undefined : Number(selectedSeriesId),
+						limit: CACHE_FETCH_LIMIT,
+						windowHours: UPCOMING_WINDOW_HOURS,
+					},
+				}),
+				getSharpMoneyCacheStatsFn({ data: {} }),
+			]);
 
-				const nextEntries = cacheResult.entries ?? [];
-				const nextStats = statsResult.stats ?? null;
-				setEntries(nextEntries);
-				setCacheStats(nextStats);
-				result = { entries: nextEntries, stats: nextStats };
-			} catch (error) {
-				console.error("Failed to load sharp money cache:", error);
-			} finally {
-				if (!options?.silent) {
-					setIsLoading(false);
-				}
-				setLastCacheFetchAt(Date.now());
+			const nextEntries = cacheResult.entries ?? [];
+			const nextStats = statsResult.stats ?? null;
+			setEntries(nextEntries);
+			setCacheStats(nextStats);
+			result = { entries: nextEntries, stats: nextStats };
+		} catch (error) {
+			console.error("Failed to load sharp money cache:", error);
+		} finally {
+			if (!options?.silent) {
+				setIsLoading(false);
 			}
-			return result;
-		},
-		[selectedSeriesId],
-	);
+			setLastCacheFetchAt(Date.now());
+		}
+		return result;
+	}, []);
 
 	const loadPipelineStatus = useCallback(async () => {
 		try {
@@ -777,7 +733,7 @@ function SharpMoneyPage() {
 		} finally {
 			setEdgeStatsGradeMixLoading(false);
 		}
-	}, [selectedSeriesId, showAllEntries, showAPlusOnly]);
+	}, [showAllEntries]);
 
 	useEffect(() => {
 		if (!showEdgeStats) return;
@@ -1012,19 +968,6 @@ function SharpMoneyPage() {
 		return () => clearInterval(interval);
 	}, [pipelineStatus?.inProgress, loadPipelineStatus, loadCache]);
 
-	// Clear cache handler
-	const handleClearCache = async () => {
-		if (!confirm("Reset all stored sharp data?")) return;
-		try {
-			await clearSharpMoneyCacheFn({ data: {} });
-			setEntries([]);
-			setCacheStats(null);
-			await handleRefresh();
-		} catch (error) {
-			console.error("Failed to clear cache:", error);
-		}
-	};
-
 	// Toggle market expansion
 	const loadHistory = useCallback(
 		async (entry: SharpMoneyCacheEntry) => {
@@ -1195,8 +1138,7 @@ function SharpMoneyPage() {
 						scoreDifferential: e.scoreDifferential,
 					});
 				if (
-					gradeWeight(signalGrade) <
-					gradeWeight(botDefaults?.minGrade ?? "A")
+					gradeWeight(signalGrade) < gradeWeight(botDefaults?.minGrade ?? "A")
 				) {
 					return false;
 				}
@@ -1285,12 +1227,12 @@ function SharpMoneyPage() {
 		return [...deduped.values()];
 	}, [
 		baseEntries,
-		selectedSeriesId,
 		showAllEntries,
-		showAPlusOnly,
 		botAlignedConditionOrder,
 		signalScoreByConditionId,
 		gradesByConditionId,
+		botDefaults?.maxMinutesToStart,
+		botDefaults?.minGrade,
 	]);
 
 	const debugInfoById = useMemo(() => {
@@ -1491,8 +1433,6 @@ function SharpMoneyPage() {
 					historyUpdatedAt?: number;
 				}
 			> = {};
-			let warningsCount = 0;
-			const warningCounts: Record<string, number> = {};
 			for (const gradeResult of result.results ?? []) {
 				if (gradeResult.error || !gradeResult.grade) continue;
 				next[gradeResult.conditionId] = {
@@ -1501,20 +1441,8 @@ function SharpMoneyPage() {
 					warnings: gradeResult.warnings ?? [],
 					historyUpdatedAt: gradeResult.historyUpdatedAt,
 				};
-				if ((gradeResult.warnings ?? []).length > 0) {
-					warningsCount += 1;
-					for (const warning of gradeResult.warnings ?? []) {
-						warningCounts[warning] = (warningCounts[warning] ?? 0) + 1;
-					}
-				}
 			}
 			setGradesByConditionId(next);
-			setGradeStatus({
-				updatedAt: Date.now(),
-				total: Object.keys(next).length,
-				withWarnings: warningsCount,
-				warningCounts,
-			});
 		} catch (error) {
 			console.error("Failed to refresh grades:", error);
 		}
@@ -1632,11 +1560,13 @@ function SharpMoneyPage() {
 		(pipelineStatus?.inProgress ||
 			(entries.length > 0 && readyEntries.length === 0));
 
-	// Calculate max volume for scale
+	// Volume bar denominator — use the full cache, not the filtered list.
+	// Using `displayEntries` would make a single-shown card peg to 100% since
+	// it becomes its own "max"; toggling Show All then jitters every bar.
 	const maxVolume = useMemo(() => {
-		if (displayEntries.length === 0) return 1;
-		return Math.max(...displayEntries.map((e) => getEntryMarketVolume(e)), 1);
-	}, [displayEntries]);
+		if (entries.length === 0) return 1;
+		return Math.max(...entries.map((e) => getEntryMarketVolume(e)), 1);
+	}, [entries]);
 	const pullReady = pullDistance >= PULL_THRESHOLD;
 	const pullIndicatorOffset = Math.min(pullDistance, PULL_MAX);
 	const showPullIndicator = pullIndicatorOffset > 0 || isRefreshing;
@@ -1647,7 +1577,7 @@ function SharpMoneyPage() {
 
 	return (
 		<AuthGate>
-			<div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+			<div className="min-h-screen bg-ink-00">
 				{showPullIndicator && (
 					<div
 						className="pointer-events-none fixed left-0 right-0 top-0 z-[60] flex justify-center"
@@ -1660,89 +1590,67 @@ function SharpMoneyPage() {
 							paddingTop: "calc(env(safe-area-inset-top, 0px) + 0.5rem)",
 						}}
 					>
-						<div className="flex items-center gap-2 rounded-full border border-slate-700/70 bg-slate-950/90 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-200 shadow">
+						<div className="flex items-center gap-2 rounded-full bg-ink-10 ring-1 ring-inset ring-ink-25 px-3 py-1 font-mono text-xxs font-medium uppercase tracking-wider text-ink-85">
 							<RefreshCw
 								className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : pullReady ? "rotate-180 transition-transform" : ""}`}
 							/>
 							<span>
 								{isRefreshing
-									? "Refreshing..."
+									? "refreshing…"
 									: pullReady
-										? "Release to reload"
-										: "Pull to reload"}
+										? "release to reload"
+										: "pull to reload"}
 							</span>
 						</div>
 					</div>
 				)}
 				{/* Header */}
 				<header
-					className="sticky top-0 z-50 w-full border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-sm"
+					className="sticky top-0 z-50 w-full border-b border-ink-15 bg-ink-05"
 					style={{
 						paddingTop: "max(1rem, env(safe-area-inset-top, 0px) + 1rem)",
 					}}
 				>
 					<div className="mx-auto max-w-7xl px-4 py-4">
 						<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-							<div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-								<div className="flex flex-col gap-1 min-w-0">
-									<div className="flex items-center gap-3 min-w-0">
+							<div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+								<div className="flex min-w-0 flex-col gap-1">
+									<div className="flex min-w-0 items-center gap-3">
 										<img
 											src="/logo-trans.png"
-											alt="Polywhaler"
+											alt=""
 											className="h-10 w-auto flex-shrink-0 sm:h-18"
 										/>
-										<h1 className="text-2xl sm:text-4xl font-bold text-white uppercase tracking-wider whitespace-normal sm:whitespace-nowrap leading-tight">
-											Poly<span className="text-cyan-400">whaler</span>
+										<h1 className="font-sans text-2xl font-bold uppercase leading-tight tracking-wider text-ink-95 sm:whitespace-nowrap sm:text-4xl">
+											Polywhaler
 										</h1>
 										<span
-											className={`rounded-full px-2 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.2em] ${
+											className={`rounded-full px-2 py-0.5 font-mono text-xxs font-semibold uppercase tracking-[0.2em] ${
 												healthStatus.label === "Good"
-													? "bg-emerald-500/15 text-emerald-200"
+													? "bg-signal-pos/10 text-signal-pos"
 													: healthStatus.label === "Warn"
-														? "bg-amber-500/15 text-amber-200"
-														: "bg-slate-800/60 text-slate-300"
+														? "bg-signal-warn/10 text-signal-warn"
+														: "bg-ink-15 text-ink-70"
 											}`}
 											title={healthStatus.detail ?? ""}
 										>
 											{healthStatus.label}
 										</span>
 									</div>
-									<div className="hidden text-[0.55rem] text-gray-500">
-										Updated{" "}
-										{cacheStats?.newestEntry
-											? formatRelativeTime(cacheStats.newestEntry)
-											: "—"}
-									</div>
 								</div>
 							</div>
-							<div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-end sm:gap-2 flex-shrink-0">
-								<div className="sm:hidden text-[0.6rem] text-gray-500">
-									Updated{" "}
+							<div className="flex w-full flex-shrink-0 items-center justify-between gap-1.5 sm:w-auto sm:justify-end sm:gap-2">
+								<span className="font-mono text-xxs tabular-nums text-ink-55 sm:text-xs">
+									updated{" "}
 									{cacheStats?.newestEntry
 										? formatRelativeTime(cacheStats.newestEntry)
 										: "—"}
-								</div>
-								<div className="hidden sm:flex items-center text-xs text-gray-500">
-									Updated{" "}
-									{cacheStats?.newestEntry
-										? formatRelativeTime(cacheStats.newestEntry)
-										: "—"}
-								</div>
-								<button
-									type="button"
-									onClick={handleClearCache}
-									className="flex items-center gap-1 sm:gap-2 rounded-lg bg-red-500/10 px-2 py-2 sm:px-3 text-sm font-medium text-red-400 hover:bg-red-500/20 transition-colors"
-									title="Reset stored data"
-								>
-									<Trash2 className="h-4 w-4" />
-									<span className="hidden sm:inline">Reset Data</span>
-								</button>
+								</span>
 								<a
 									href="/stats"
-									className="flex items-center gap-1 sm:gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-2 sm:px-3 text-sm font-medium text-slate-200 hover:bg-slate-800/60 transition-colors"
+									className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 								>
-									<span className="hidden sm:inline">Stats</span>
-									<span className="sm:hidden">Stats</span>
+									stats
 								</a>
 							</div>
 						</div>
@@ -1752,304 +1660,110 @@ function SharpMoneyPage() {
 				{/* Main Content */}
 				<main className="mx-auto max-w-7xl px-4 py-6">
 					{isLoading && entries.length === 0 && (
-						<div className="mb-6 flex items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-6 text-sm text-slate-200">
-							<Loader2 className="h-4 w-4 animate-spin text-cyan-300" />
-							Loading sharp data...
+						<div className="mb-6 flex items-center justify-center gap-2 rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15 font-mono text-sm text-ink-70">
+							<Loader2 className="h-4 w-4 animate-spin text-brand-blue" />
+							loading sharp data…
 						</div>
 					)}
 					{showSortingState && (
-						<div className="mb-6 flex items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-6 text-sm text-slate-200">
-							<Loader2 className="h-4 w-4 animate-spin text-cyan-300" />
-							Preparing rankings...
+						<div className="mb-6 flex items-center justify-center gap-2 rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15 font-mono text-sm text-ink-70">
+							<Loader2 className="h-4 w-4 animate-spin text-brand-blue" />
+							preparing rankings…
 						</div>
 					)}
-					{/* Sport Filter */}
-					<div className="mb-6">
-						<div className="sm:hidden">
-							<label
-								htmlFor="sharp-sport-filter"
-								className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500"
-							>
-								Sport filter
-							</label>
-							<select
-								id="sharp-sport-filter"
-								value={selectedSeriesId}
-								onChange={(event) => setSelectedSeriesId(event.target.value)}
-								className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-							>
-								{SPORT_FILTERS.map((filter) => (
-									<option key={filter.value} value={filter.value}>
-										{filter.label}
-									</option>
-								))}
-							</select>
-							<button
-								type="button"
-								onClick={() => setShowAPlusOnly((prev) => !prev)}
-								className={`mt-3 w-full rounded-lg px-3 py-2 text-sm font-semibold uppercase tracking-wide transition-colors ${
-									showAPlusOnly
-										? "bg-emerald-500 text-white"
-										: "bg-slate-800/60 text-slate-200 hover:bg-slate-800"
-								}`}
-							>
-								A+ only {showAPlusOnly ? "on" : "off"}
-							</button>
-						</div>
-						<div className="hidden flex-wrap gap-2 sm:flex">
-							{SPORT_FILTERS.map((filter) => (
-								<button
-									type="button"
-									key={filter.value}
-									onClick={() => setSelectedSeriesId(filter.value)}
-									className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-										selectedSeriesId === filter.value
-											? "bg-cyan-500 text-white"
-											: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
-									}`}
-								>
-									{filter.label}
-								</button>
-							))}
-							<button
-								type="button"
-								onClick={() => setShowAPlusOnly((prev) => !prev)}
-								className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-									showAPlusOnly
-										? "bg-emerald-500 text-white"
-										: "bg-slate-800/50 text-gray-400 hover:bg-slate-800 hover:text-white"
-								}`}
-							>
-								A+ only
-							</button>
-						</div>
-					</div>
-
 					{!showAllEntries && botAlignedError && (
-						<div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+						<div className="mb-6 rounded-md bg-signal-warn/10 px-4 py-3 text-sm text-signal-warn ring-1 ring-inset ring-signal-warn/30">
 							Bot-aligned candidate sync failed: {botAlignedError}
 						</div>
 					)}
 
 					{showEdgeStats && edgeStats && (
-						<div className="mb-6 rounded-xl border border-slate-800/70 bg-slate-900/40 px-4 py-3">
-							<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-								<div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+						<section
+							aria-labelledby="edge-stats-heading"
+							className="mb-6 rounded-md bg-ink-05 px-4 py-3 ring-1 ring-inset ring-ink-15"
+						>
+							<div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+								<h2
+									id="edge-stats-heading"
+									className="font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
+								>
 									Edge Stats
-								</div>
-								<div className="text-[0.65rem] text-slate-500">
+								</h2>
+								<div className="font-mono text-xxs text-ink-55">
 									{showAllEntries
-										? "All ready markets"
+										? "all ready markets"
 										: formatBotPolicySummary(botDefaults)}
 								</div>
 							</div>
-							<div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-6">
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										Markets
-									</div>
-									<div className="text-base font-semibold text-slate-100">
-										{edgeStats.total}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										≥ {MIN_EDGE_RATING}
-									</div>
-									<div className="text-base font-semibold text-cyan-300">
-										{edgeStats.passing}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										Avg
-									</div>
-									<div className="text-base font-semibold text-slate-100">
-										{edgeStats.average}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										P50
-									</div>
-									<div className="text-base font-semibold text-slate-100">
-										{edgeStats.p50}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										P75
-									</div>
-									<div className="text-base font-semibold text-slate-100">
-										{edgeStats.p75}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="text-[0.65rem] uppercase text-slate-500">
-										P90/Max
-									</div>
-									<div className="text-base font-semibold text-slate-100">
-										{edgeStats.p90}/{edgeStats.max}
-									</div>
-								</div>
+
+							{/* Top metric strip — flattened (no nested cards), tab-num so columns align */}
+							<div className="grid grid-cols-3 gap-x-4 gap-y-2 sm:grid-cols-6">
+								<EdgeStatCell label="Markets" value={edgeStats.total} />
+								<EdgeStatCell
+									label={`≥ ${MIN_EDGE_RATING}`}
+									value={edgeStats.passing}
+									tone="brand"
+								/>
+								<EdgeStatCell label="Avg" value={edgeStats.average} />
+								<EdgeStatCell label="P50" value={edgeStats.p50} />
+								<EdgeStatCell label="P75" value={edgeStats.p75} />
+								<EdgeStatCell
+									label="P90/Max"
+									value={`${edgeStats.p90}/${edgeStats.max}`}
+								/>
 							</div>
-							<div className="mt-3 grid gap-2 text-[0.65rem] sm:grid-cols-3">
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="uppercase text-slate-500">A+ share</div>
-									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
-										<span>Current</span>
-										<span>7d</span>
-									</div>
-									<div className="mt-1 flex items-center justify-between">
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsCurrentMix
-													? getTargetToneClass(
-															edgeStatsCurrentMix.aPlusRate,
-															EDGE_TARGETS.aPlus,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsCurrentMix
-												? formatPercent(edgeStatsCurrentMix.aPlusRate)
-												: "—"}
-										</span>
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsGradeMix
-													? getTargetToneClass(
-															edgeStatsGradeMix.aPlusRate,
-															EDGE_TARGETS.aPlus,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
-												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
-											) : edgeStatsGradeMix ? (
-												formatPercent(edgeStatsGradeMix.aPlusRate)
-											) : (
-												"—"
-											)}
-										</span>
-									</div>
-									<div className="mt-1 text-[0.6rem] text-slate-500">
-										Target {formatPercent(EDGE_TARGETS.aPlus.min)}–
-										{formatPercent(EDGE_TARGETS.aPlus.max)}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="uppercase text-slate-500">A/A+ share</div>
-									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
-										<span>Current</span>
-										<span>7d</span>
-									</div>
-									<div className="mt-1 flex items-center justify-between">
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsCurrentMix
-													? getTargetToneClass(
-															edgeStatsCurrentMix.aPlusOrARate,
-															EDGE_TARGETS.aPlusOrA,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsCurrentMix
-												? formatPercent(edgeStatsCurrentMix.aPlusOrARate)
-												: "—"}
-										</span>
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsGradeMix
-													? getTargetToneClass(
-															edgeStatsGradeMix.aPlusOrARate,
-															EDGE_TARGETS.aPlusOrA,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
-												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
-											) : edgeStatsGradeMix ? (
-												formatPercent(edgeStatsGradeMix.aPlusOrARate)
-											) : (
-												"—"
-											)}
-										</span>
-									</div>
-									<div className="mt-1 text-[0.6rem] text-slate-500">
-										Target {formatPercent(EDGE_TARGETS.aPlusOrA.min)}–
-										{formatPercent(EDGE_TARGETS.aPlusOrA.max)}
-									</div>
-								</div>
-								<div className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">
-									<div className="uppercase text-slate-500">
-										≥ {MIN_EDGE_RATING}
-									</div>
-									<div className="mt-1 flex items-center justify-between text-[0.6rem] uppercase text-slate-500">
-										<span>Current</span>
-										<span>7d</span>
-									</div>
-									<div className="mt-1 flex items-center justify-between">
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsCurrentMix
-													? getTargetToneClass(
-															edgeStatsCurrentMix.passingRate,
-															EDGE_TARGETS.minEdge,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsCurrentMix
-												? formatPercent(edgeStatsCurrentMix.passingRate)
-												: "—"}
-										</span>
-										<span
-											className={`text-sm font-semibold ${
-												edgeStatsGradeMix
-													? getTargetToneClass(
-															edgeStatsGradeMix.passingRate,
-															EDGE_TARGETS.minEdge,
-														)
-													: "text-slate-500"
-											}`}
-										>
-											{edgeStatsGradeMixLoading && !edgeStatsGradeMix ? (
-												<Loader2 className="h-3 w-3 animate-spin text-slate-500" />
-											) : edgeStatsGradeMix ? (
-												formatPercent(edgeStatsGradeMix.passingRate)
-											) : (
-												"—"
-											)}
-										</span>
-									</div>
-									<div className="mt-1 text-[0.6rem] text-slate-500">
-										Target {formatPercent(EDGE_TARGETS.minEdge.min)}–
-										{formatPercent(EDGE_TARGETS.minEdge.max)}
-									</div>
-								</div>
+
+							{/* Share block — flat, no card-in-card. 3 stacked rows, grid on wide */}
+							<div className="mt-4 grid gap-x-6 gap-y-2 border-t border-ink-15 pt-3 sm:grid-cols-3">
+								<EdgeShareRow
+									label="A+ share"
+									current={edgeStatsCurrentMix?.aPlusRate}
+									sevenDay={edgeStatsGradeMix?.aPlusRate}
+									sevenDayLoading={
+										edgeStatsGradeMixLoading && !edgeStatsGradeMix
+									}
+									target={EDGE_TARGETS.aPlus}
+								/>
+								<EdgeShareRow
+									label="A/A+ share"
+									current={edgeStatsCurrentMix?.aPlusOrARate}
+									sevenDay={edgeStatsGradeMix?.aPlusOrARate}
+									sevenDayLoading={
+										edgeStatsGradeMixLoading && !edgeStatsGradeMix
+									}
+									target={EDGE_TARGETS.aPlusOrA}
+								/>
+								<EdgeShareRow
+									label={`≥ ${MIN_EDGE_RATING}`}
+									current={edgeStatsCurrentMix?.passingRate}
+									sevenDay={edgeStatsGradeMix?.passingRate}
+									sevenDayLoading={
+										edgeStatsGradeMixLoading && !edgeStatsGradeMix
+									}
+									target={EDGE_TARGETS.minEdge}
+								/>
 							</div>
-							<div className="mt-4 border-t border-slate-800/60 pt-3">
-								<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
-									<span>
+
+							{/* Edge distribution table */}
+							<div className="mt-4 border-t border-ink-15 pt-3">
+								<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+									<h3 className="font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55">
 										Edge Distribution (
 										{edgeStatsWindowHours === 24
 											? "24h"
 											: `${Math.round(edgeStatsWindowHours / 24)}d`}
 										)
-									</span>
+									</h3>
 									<div className="flex items-center gap-2">
-										<div className="flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-900 px-1 py-0.5">
+										<div className="flex items-center gap-0.5 rounded-md bg-ink-10 p-0.5 ring-1 ring-inset ring-ink-15">
 											<button
 												type="button"
 												onClick={() => setEdgeStatsWindowHours(24)}
-												className={`rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider ${
+												aria-pressed={edgeStatsWindowHours === 24}
+												className={`inline-flex h-7 items-center rounded px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
 													edgeStatsWindowHours === 24
-														? "bg-cyan-500 text-white"
-														: "text-slate-400 hover:text-white"
+														? "bg-brand-blue text-ink-00"
+														: "text-ink-70 hover:text-ink-95"
 												}`}
 											>
 												24h
@@ -2057,87 +1771,115 @@ function SharpMoneyPage() {
 											<button
 												type="button"
 												onClick={() => setEdgeStatsWindowHours(24 * 7)}
-												className={`rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider ${
+												aria-pressed={edgeStatsWindowHours === 24 * 7}
+												className={`inline-flex h-7 items-center rounded px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
 													edgeStatsWindowHours === 24 * 7
-														? "bg-cyan-500 text-white"
-														: "text-slate-400 hover:text-white"
+														? "bg-brand-blue text-ink-00"
+														: "text-ink-70 hover:text-ink-95"
 												}`}
 											>
 												7d
 											</button>
 										</div>
 										{edgeStatsHistoryLoading && (
-											<span className="flex items-center gap-2 text-[0.6rem] text-slate-500">
+											<span className="flex items-center gap-1.5 font-mono text-xxs text-ink-55">
 												<Loader2 className="h-3 w-3 animate-spin" />
-												Loading
+												loading
 											</span>
 										)}
 									</div>
 								</div>
 								{edgeStatsHistory.length === 0 && !edgeStatsHistoryLoading ? (
-									<div className="text-xs text-slate-500">
-										No history snapshots yet.
+									<div className="font-mono text-xs text-ink-55">
+										no history snapshots yet.
 									</div>
 								) : (
-									<div className="overflow-x-auto">
-										<table className="w-full min-w-[520px] text-left text-xs text-slate-300">
-											<thead className="text-[0.6rem] uppercase tracking-wider text-slate-500">
+									<div
+										className="overflow-x-auto"
+										style={{
+											maskImage:
+												"linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%)",
+											WebkitMaskImage:
+												"linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%)",
+										}}
+									>
+										<table className="w-full min-w-[520px] text-left text-xs">
+											<thead className="font-mono text-xxs uppercase tracking-wider text-ink-55">
 												<tr>
-													<th className="py-2 pr-3">
-														{isEdgeStatsDaily ? "Day" : "Hour"}
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														{isEdgeStatsDaily ? "day" : "hour"}
 													</th>
-													<th className="py-2 pr-3">Count</th>
-													<th className="py-2 pr-3">Avg</th>
-													<th className="py-2 pr-3">P50</th>
-													<th className="py-2 pr-3">P75</th>
-													<th className="py-2">P90</th>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														count
+													</th>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														avg
+													</th>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														p50
+													</th>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														p75
+													</th>
+													<th scope="col" className="py-1.5 font-normal">
+														p90
+													</th>
 												</tr>
 											</thead>
-											<tbody>
-												{edgeStatsHistoryView.map((bucket) => (
+											<tbody className="font-mono tabular-nums text-ink-70">
+												{edgeStatsHistoryView.map((bucket, idx) => (
 													<tr
 														key={bucket.start}
-														className="border-t border-slate-800/60"
+														className={idx % 2 === 1 ? "bg-ink-10/50" : ""}
 													>
-														<td className="py-2 pr-3 text-slate-400">
+														<td className="py-1.5 pr-3 text-ink-55">
 															{isEdgeStatsDaily
 																? formatDayLabel(bucket.start)
 																: formatHourLabel(bucket.start)}
 														</td>
-														<td className="py-2 pr-3">{bucket.count}</td>
-														<td className="py-2 pr-3">{bucket.average}</td>
-														<td className="py-2 pr-3">{bucket.p50}</td>
-														<td className="py-2 pr-3">{bucket.p75}</td>
-														<td className="py-2">{bucket.p90}</td>
+														<td className="py-1.5 pr-3 text-ink-85">
+															{bucket.count}
+														</td>
+														<td className="py-1.5 pr-3 text-ink-85">
+															{bucket.average}
+														</td>
+														<td className="py-1.5 pr-3 text-ink-85">
+															{bucket.p50}
+														</td>
+														<td className="py-1.5 pr-3 text-ink-85">
+															{bucket.p75}
+														</td>
+														<td className="py-1.5 text-ink-85">{bucket.p90}</td>
 													</tr>
 												))}
 											</tbody>
 										</table>
 										{edgeStatsHistory.length > edgeStatsHistoryView.length && (
-											<div className="mt-2 text-[0.65rem] text-slate-500">
-												Showing last {edgeStatsHistoryView.length}{" "}
+											<div className="mt-2 font-mono text-xxs text-ink-55">
+												last {edgeStatsHistoryView.length}{" "}
 												{isEdgeStatsDaily ? "days" : "hours"} of{" "}
-												{edgeStatsWindowHours === 24 ? "24h" : "7d"} history.
+												{edgeStatsWindowHours === 24 ? "24h" : "7d"} history
 											</div>
 										)}
 									</div>
 								)}
 							</div>
-						</div>
+						</section>
 					)}
 					{edgeStats && (
 						<div className="mb-6 flex justify-end">
 							<button
 								type="button"
 								onClick={() => setShowEdgeStats((prev) => !prev)}
-								className="flex items-center gap-2 rounded-md border border-slate-700/60 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800/60"
+								aria-pressed={showEdgeStats}
+								className="inline-flex h-8 items-center gap-2 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 							>
 								{showEdgeStats ? (
-									<EyeOff className="h-3 w-3" />
+									<EyeOff className="h-3.5 w-3.5" />
 								) : (
-									<Eye className="h-3 w-3" />
+									<Eye className="h-3.5 w-3.5" />
 								)}
-								{showEdgeStats ? "Hide Edge Stats" : "Show Edge Stats"}
+								{showEdgeStats ? "hide edge stats" : "show edge stats"}
 							</button>
 						</div>
 					)}
@@ -2145,47 +1887,25 @@ function SharpMoneyPage() {
 					{/* Loading State */}
 					{isLoading && (
 						<div className="flex items-center justify-center py-20">
-							<Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
+							<Loader2 className="h-8 w-8 animate-spin text-brand-blue" />
 						</div>
 					)}
 
 					{pipelineStatus?.inProgress && !isLoading && (
-						<div className="mb-4 flex items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
-							<Loader2 className="h-3 w-3 animate-spin text-cyan-200" />
+						<div className="mb-4 flex items-center gap-2 rounded-md bg-ink-10 px-3 py-2 ring-1 ring-inset ring-brand-blue/30 font-mono text-xs text-ink-85">
+							<Loader2 className="h-3 w-3 animate-spin text-brand-blue" />
 							<span>
-								Analyzing markets
+								analyzing markets
 								{pipelineStatus.totalQueued
 									? ` (${pipelineStatus.processed ?? 0}/${pipelineStatus.totalQueued})`
 									: ""}
-								. This can take a few minutes on first run.
-							</span>
-						</div>
-					)}
-					{gradeStatus.updatedAt && (
-						<div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.65rem] text-slate-300">
-							<span className="uppercase tracking-[0.2em] text-slate-400">
-								Grades
-							</span>
-							<span>{gradeStatus.total ?? 0} loaded</span>
-							{typeof gradeStatus.withWarnings === "number" && (
-								<span>{gradeStatus.withWarnings} with warnings</span>
-							)}
-							{gradeStatus.warningCounts && (
-								<span className="text-slate-400">
-									{Object.entries(gradeStatus.warningCounts)
-										.map(([key, value]) => `${key}:${value}`)
-										.join(" ")}
-								</span>
-							)}
-							<span>
-								Updated{" "}
-								{formatRelativeTime(Math.floor(gradeStatus.updatedAt / 1000))}
+								. this can take a few minutes on first run.
 							</span>
 						</div>
 					)}
 					{showRefreshDebug && (
-						<div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.65rem] text-slate-300">
-							<div>refreshDebug=1</div>
+						<div className="mb-4 rounded-md bg-ink-05 px-3 py-2 ring-1 ring-inset ring-ink-15 font-mono text-xxs tabular-nums text-ink-70">
+							<div className="text-ink-55">refreshDebug=1</div>
 							<div>isLoading: {String(isLoading)}</div>
 							<div>isRefreshing: {String(isRefreshing)}</div>
 							<div>
@@ -2216,12 +1936,12 @@ function SharpMoneyPage() {
 						</div>
 					)}
 					{showRefreshDebug && entries.length > 0 && (
-						<div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-[0.7rem] text-slate-300">
-							<div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+						<div className="mb-4 rounded-md bg-ink-05 px-3 py-2 ring-1 ring-inset ring-ink-15 font-mono text-xs text-ink-70">
+							<h3 className="mb-2 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55">
 								Not Ready Diagnostics
-							</div>
+							</h3>
 							{entries.filter((entry) => !isEntryReady(entry)).length === 0 ? (
-								<div>All entries are ready.</div>
+								<div className="text-ink-55">all entries are ready.</div>
 							) : (
 								entries
 									.filter((entry) => !isEntryReady(entry))
@@ -2247,11 +1967,9 @@ function SharpMoneyPage() {
 										}
 										return (
 											<div key={entry.id} className="mb-2">
-												<div className="text-slate-100">
-													{entry.marketTitle}
-												</div>
-												<div className="text-slate-500">
-													Not ready: {reasons.join(" • ")}
+												<div className="text-ink-85">{entry.marketTitle}</div>
+												<div className="text-ink-55">
+													not ready: {reasons.join(" • ")}
 												</div>
 											</div>
 										);
@@ -2260,20 +1978,21 @@ function SharpMoneyPage() {
 						</div>
 					)}
 
-					{/* Empty State */}
+					{/* Empty state — text-forward, no large decorative icon */}
 					{!showProcessingState &&
 						!showSortingState &&
 						!isLoading &&
 						displayEntries.length === 0 && (
-							<div className="flex flex-col items-center justify-center py-20 text-center">
-								<Target className="h-12 w-12 text-gray-600 mb-4" />
-								<h2 className="text-lg font-semibold text-white mb-2">
-									No Sharp Money Data
-								</h2>
-								<p className="text-gray-400 mb-4 max-w-md">
+							<div className="rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15">
+								<h2 className="font-sans text-base font-semibold text-ink-95">
 									{entries.length > 0
-										? "No bets with Signal Grade ≥ B. Lower quality signals are hidden."
-										: "Click the Refresh button to analyze top sports markets and identify where the sharp money is flowing."}
+										? "No ready markets match the current filter"
+										: "No sharp money data yet"}
+								</h2>
+								<p className="mt-1.5 max-w-prose font-sans text-sm text-ink-70">
+									{entries.length > 0
+										? "All ready markets are below the B-grade floor. Weaker signals are hidden by default."
+										: "Run a refresh to scan top sports markets and surface where sharp money is flowing."}
 								</p>
 								{!pipelineStatus?.inProgress &&
 									entries.length > 0 &&
@@ -2281,29 +2000,32 @@ function SharpMoneyPage() {
 										<button
 											type="button"
 											onClick={() => setShowAllEntries(true)}
-											className="mb-4 flex items-center gap-2 rounded-lg border border-slate-700/60 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800/60"
+											className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 										>
-											<Eye className="h-4 w-4" />
-											Show all {entries.length} markets (including filtered)
+											<Eye className="h-3.5 w-3.5" />
+											show all {entries.length} markets
 										</button>
 									)}
 							</div>
 						)}
 
+					{/* Processing state — text-forward with inline spinner, no 48×48 hero icon */}
 					{showProcessingState && (
-						<div className="flex flex-col items-center justify-center py-20 text-center">
-							<Loader2 className="h-10 w-10 animate-spin text-cyan-400 mb-4" />
-							<h2 className="text-lg font-semibold text-white mb-2">
-								Warming Up Sharp Grades
-							</h2>
-							<p className="text-gray-400 mb-4 max-w-md">
-								We are fetching top holders and PnL. This usually takes a few
-								refresh cycles after a reset. Results will appear once all
-								markets have full PnL coverage.
+						<div className="rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15">
+							<div className="flex items-center gap-2">
+								<Loader2 className="h-4 w-4 animate-spin text-brand-blue" />
+								<h2 className="font-sans text-base font-semibold text-ink-95">
+									Warming up sharp grades
+								</h2>
+							</div>
+							<p className="mt-1.5 max-w-prose font-sans text-sm text-ink-70">
+								Fetching top holders and PnL. This usually takes a few refresh
+								cycles after a reset. Results will appear once all markets have
+								full PnL coverage.
 							</p>
 							{entries.length > 0 && (
-								<div className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-									Ready {readyEntries.length} / {entries.length}
+								<div className="mt-3 font-mono text-xxs uppercase tracking-[0.2em] tabular-nums text-ink-55">
+									ready {readyEntries.length} / {entries.length}
 								</div>
 							)}
 							{!pipelineStatus?.inProgress && (
@@ -2311,12 +2033,12 @@ function SharpMoneyPage() {
 									type="button"
 									onClick={handleRefresh}
 									disabled={isRefreshing}
-									className="flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50 transition-colors"
+									className="mt-3 inline-flex h-9 items-center gap-2 rounded-md bg-brand-blue px-4 font-mono text-xs font-semibold uppercase tracking-wider text-ink-00 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-50"
 								>
 									<RefreshCw
 										className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
 									/>
-									Refresh Cache
+									Refresh cache
 								</button>
 							)}
 						</div>
@@ -2330,15 +2052,16 @@ function SharpMoneyPage() {
 							<div className="space-y-4">
 								{/* Show count of hidden entries */}
 								{(entries.length > displayEntries.length || showAllEntries) && (
-									<div className="flex items-center justify-end gap-2 text-xs text-gray-500">
+									<div className="flex items-center justify-end gap-2 font-mono text-xxs tabular-nums text-ink-55">
 										<span>
-											{displayEntries.length}/{entries.length} shown •{" "}
+											{displayEntries.length}/{entries.length} shown ·{" "}
 											{entries.length - displayEntries.length} filtered
 										</span>
 										<button
 											type="button"
 											onClick={() => setShowAllEntries((prev) => !prev)}
-											className="flex items-center gap-1 rounded-md border border-slate-700/60 px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800/60"
+											aria-pressed={showAllEntries}
+											className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 											title={
 												showAllEntries
 													? "Hide filtered entries"
@@ -2346,11 +2069,11 @@ function SharpMoneyPage() {
 											}
 										>
 											{showAllEntries ? (
-												<EyeOff className="h-3 w-3" />
+												<EyeOff className="h-3.5 w-3.5" />
 											) : (
-												<Eye className="h-3 w-3" />
+												<Eye className="h-3.5 w-3.5" />
 											)}
-											{showAllEntries ? "Filtered" : "Show All"}
+											{showAllEntries ? "filtered" : "show all"}
 										</button>
 									</div>
 								)}
@@ -2379,6 +2102,58 @@ function SharpMoneyPage() {
 			</div>
 		</AuthGate>
 	);
+}
+
+const CAVEAT_LABELS: Record<string, string> = {
+	low_holders: "low holders",
+	low_pnl_coverage: "low pnl coverage",
+	not_ready: "not ready",
+	no_edge: "no edge",
+	low_conviction: "low conviction",
+	high_concentration: "high concentration",
+	stale_data: "stale data",
+	low_roi: "low roi",
+};
+
+type GradeTone = {
+	text: string;
+	surface: string;
+	ring: string;
+};
+
+function toneForGrade(grade: string): GradeTone {
+	switch (grade) {
+		case "A+":
+			return {
+				text: "text-brand-cyan",
+				surface: "bg-brand-cyan/10",
+				ring: "ring-brand-cyan/35",
+			};
+		case "A":
+			return {
+				text: "text-signal-pos",
+				surface: "bg-signal-pos/10",
+				ring: "ring-signal-pos/30",
+			};
+		case "B":
+			return {
+				text: "text-ink-85",
+				surface: "bg-ink-15",
+				ring: "ring-ink-25",
+			};
+		case "C":
+			return {
+				text: "text-signal-warn",
+				surface: "bg-signal-warn/10",
+				ring: "ring-signal-warn/25",
+			};
+		default:
+			return {
+				text: "text-ink-55",
+				surface: "bg-ink-10",
+				ring: "ring-ink-25",
+			};
+	}
 }
 
 function SharpMoneyCard({
@@ -2436,7 +2211,6 @@ function SharpMoneyCard({
 	const polymarketUrl = buildPolymarketUrl(entry.eventSlug, entry.marketSlug);
 	const sideAOdds = formatAmericanOdds(entry.sideA.price);
 	const sideBOdds = formatAmericanOdds(entry.sideB.price);
-	// Determine which side is "sharp"
 	const sharpSideData = entry.sharpSide === "A" ? entry.sideA : entry.sideB;
 	const historyUpdatedAt =
 		gradeData?.historyUpdatedAt ?? entry.historyUpdatedAt ?? entry.updatedAt;
@@ -2458,70 +2232,19 @@ function SharpMoneyCard({
 					: pickMeta?.status === "push"
 						? "push"
 						: null;
-	const pickStatusClass =
+	const pickPillTone =
 		pickMeta?.status === "pending"
-			? "text-emerald-200 bg-emerald-500/15 border-emerald-500/40"
+			? "text-signal-pos border-signal-pos/35"
 			: pickMeta?.status === "win"
-				? "text-emerald-200 bg-emerald-500/15 border-emerald-500/40"
+				? "text-signal-pos border-signal-pos/45 bg-signal-pos/8"
 				: pickMeta?.status === "loss"
-					? "text-rose-200 bg-rose-500/15 border-rose-500/40"
+					? "text-signal-bad border-signal-bad/45 bg-signal-bad/8"
 					: pickMeta?.status === "push"
-						? "text-slate-200 bg-slate-500/15 border-slate-500/40"
+						? "text-ink-55 border-ink-25"
 						: "";
 
-	// Calculate volume percentage and get heat map color
 	const marketVolume = getEntryMarketVolume(entry);
 	const volumePercent = getVolumePercentLogScaled(marketVolume, maxVolume);
-	const volumeColorPercent = getVolumeColorPercent(marketVolume, maxVolume);
-	const getVolumeColor = (percent: number) => {
-		if (percent >= 80) return "bg-gradient-to-r from-red-500 to-orange-500"; // Hot - high volume
-		if (percent >= 60) return "bg-gradient-to-r from-orange-500 to-amber-500"; // Warm - medium-high
-		if (percent >= 40) return "bg-gradient-to-r from-amber-500 to-yellow-500"; // Medium
-		if (percent >= 20) return "bg-gradient-to-r from-cyan-500 to-blue-500"; // Cool - medium-low
-		return "bg-gradient-to-r from-blue-500 to-indigo-500"; // Cold - low volume
-	};
-
-	const getBetGrade = (
-		grade: "A+" | "A" | "B" | "C" | "D",
-	): { grade: string; color: string; bgColor: string; borderColor: string } => {
-		switch (grade) {
-			case "A+":
-				return {
-					grade: "A+",
-					color: "text-emerald-400",
-					bgColor: "bg-emerald-500/20",
-					borderColor: "border-emerald-500/50",
-				};
-			case "A":
-				return {
-					grade: "A",
-					color: "text-emerald-400",
-					bgColor: "bg-emerald-500/15",
-					borderColor: "border-emerald-500/40",
-				};
-			case "B":
-				return {
-					grade: "B",
-					color: "text-cyan-400",
-					bgColor: "bg-cyan-500/15",
-					borderColor: "border-cyan-500/40",
-				};
-			case "C":
-				return {
-					grade: "C",
-					color: "text-amber-400",
-					bgColor: "bg-amber-500/15",
-					borderColor: "border-amber-500/40",
-				};
-			default:
-				return {
-					grade: "D",
-					color: "text-gray-400",
-					bgColor: "bg-slate-800/50",
-					borderColor: "border-slate-700",
-				};
-		}
-	};
 
 	const scoreForGrade = signalScore ?? entry.edgeRating;
 	const betGradeLabel =
@@ -2530,10 +2253,16 @@ function SharpMoneyCard({
 			edgeRating: entry.edgeRating,
 			scoreDifferential: entry.scoreDifferential,
 		});
-	const betGrade = getBetGrade(betGradeLabel);
+	const gradeTone = toneForGrade(betGradeLabel);
 	const compositeScoreDisplay = (
 		gradeWeight(betGradeLabel) + scoreForGrade
 	).toFixed(1);
+	const activeCaveats = gradeWarnings
+		.map((key) => ({ key, label: CAVEAT_LABELS[key] }))
+		.filter(
+			(c): c is { key: string; label: string } => typeof c.label === "string",
+		);
+
 	const historyEntries = history ?? [];
 	const historyFirst = historyEntries[0];
 	const historyLast = historyEntries[historyEntries.length - 1];
@@ -2552,6 +2281,39 @@ function SharpMoneyCard({
 		minutesToStart !== null &&
 		minutesToStart >= -START_TIME_BUFFER_MINUTES &&
 		minutesToStart <= STARTING_SOON_MINUTES;
+
+	const edgeTickPercent = Math.max(0, Math.min(100, entry.edgeRating));
+	const diffTickPercent = Math.max(
+		0,
+		Math.min(100, (entry.scoreDifferential / 60) * 100),
+	);
+
+	const historyWindows = useMemo(() => {
+		const map = new Map<number, SharpMoneyHistoryEntry[]>();
+		for (const snapshot of historySlice) {
+			const windowStart = snapshot.recordedAt - 60 * 60;
+			map.set(
+				snapshot.recordedAt,
+				historyEntries.filter(
+					(e) =>
+						e.recordedAt >= windowStart && e.recordedAt <= snapshot.recordedAt,
+				),
+			);
+		}
+		return map;
+	}, [historyEntries, historySlice]);
+
+	const stopPropagation = useCallback((e: React.MouseEvent) => {
+		e.stopPropagation();
+	}, []);
+
+	const handleRefreshClick = useCallback(
+		(e: React.MouseEvent) => {
+			e.stopPropagation();
+			onRefresh();
+		},
+		[onRefresh],
+	);
 
 	const inspectBotDecision = useCallback(async () => {
 		setBotInspectTouched(true);
@@ -2593,625 +2355,286 @@ function SharpMoneyCard({
 	const botInspectStatus = formatBotInspectStatus(botInspectResult);
 	const botInspectToneClass =
 		botInspectStatus.tone === "good"
-			? "text-emerald-300"
+			? "text-signal-pos"
 			: botInspectStatus.tone === "bad"
-				? "text-rose-300"
-				: "text-amber-200";
+				? "text-signal-bad"
+				: "text-signal-warn";
+
+	const panelId = `sharp-card-panel-${entry.id}`;
 
 	return (
-		<div className="rounded-xl border border-slate-800/60 bg-slate-900/50 overflow-hidden">
+		<article className="@container overflow-hidden rounded-lg bg-ink-05 ring-1 ring-inset ring-ink-15">
 			{showDebug && debugInfo && (
-				<div className="border-b border-slate-800/60 bg-slate-950/70 px-3 py-2 text-[0.6rem] uppercase tracking-wide text-slate-400">
-					<span className="mr-2">debug</span>
-					<span className="mr-2">ready:{debugInfo.ready ? "y" : "n"}</span>
-					<span className="mr-2">grade:{debugInfo.grade}</span>
-					<span className="mr-2">score:{Math.round(debugInfo.score)}</span>
-					<span className="mr-2">edge:{debugInfo.edge}</span>
-					<span className="mr-2">diff:{debugInfo.diff ?? "—"}</span>
-					<span className="mr-2">time:{debugInfo.timeOk ? "ok" : "bad"}</span>
-					<span>even:{debugInfo.even ? "y" : "n"}</span>
+				<div className="flex flex-wrap gap-x-3 gap-y-0.5 bg-ink-10 px-3 py-1.5 font-mono text-xxs uppercase tracking-wider tabular-nums text-ink-55">
+					<span className="text-ink-55">debug</span>
+					<span>ready {debugInfo.ready ? "y" : "n"}</span>
+					<span>grade {debugInfo.grade}</span>
+					<span>score {Math.round(debugInfo.score)}</span>
+					<span>edge {debugInfo.edge}</span>
+					<span>diff {debugInfo.diff ?? "—"}</span>
+					<span>time {debugInfo.timeOk ? "ok" : "bad"}</span>
+					<span>even {debugInfo.even ? "y" : "n"}</span>
 				</div>
 			)}
-			{/* Card Header */}
-			{/* biome-ignore lint/a11y/useSemanticElements: The header includes nested actionable controls, so wrapping as a button is invalid. */}
-			<div
-				className="w-full text-left cursor-pointer hover:bg-slate-800/30 transition-colors"
-				role="button"
-				tabIndex={0}
-				onClick={onToggle}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" || event.key === " ") {
-						event.preventDefault();
-						onToggle();
-					}
-				}}
-			>
-				{/* Mobile: Stacked layout */}
-				<div className="block sm:hidden">
-					{/* Top Row - League, Time, Actions */}
-					<div className="flex items-center justify-between p-3 pb-2">
-						<div className="flex items-center gap-1.5 flex-wrap">
-							{entry.sportSeriesId && (
-								<span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-1.5 py-0.5 rounded">
-									{getSeriesLabel(entry.sportSeriesId)}
-								</span>
-							)}
-							{entry.eventTime && (
-								<>
-									<span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-1.5 py-0.5 rounded">
-										{formatEventTime(entry.eventTime)}
-									</span>
-									{isStartingSoon && (
-										<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1.5 py-0.5 rounded">
-											Starting soon
-										</span>
-									)}
-								</>
-							)}
-						</div>
-						<div className="flex items-center gap-1">
-							<span className="text-[0.6rem] text-gray-500">
-								History {formatRelativeTime(historyUpdatedAt)}
+
+			{/* Header row — non-interactive container, holds meta + action icons.
+			    Not wrapped in the expand button so its nested links/buttons stay semantically valid. */}
+			<div className="flex items-center justify-between gap-2 px-3 pt-2.5 @[480px]:px-4 @[480px]:pt-3">
+				<div className="flex min-w-0 flex-1 items-baseline gap-1.5 text-xs">
+					{entry.sportSeriesId && (
+						<span className="font-mono text-xxs font-medium uppercase tracking-wider text-ink-70">
+							{getSeriesLabel(entry.sportSeriesId)}
+						</span>
+					)}
+					{entry.eventTime && (
+						<>
+							<span className="text-ink-40" aria-hidden>
+								·
 							</span>
-							{pickMeta && pickStatusLabel && (
+							<span className="truncate font-mono tabular-nums text-ink-85">
+								{formatEventTime(entry.eventTime)}
+							</span>
+						</>
+					)}
+					{isStartingSoon && (
+						<span className="shrink-0 rounded bg-signal-bad/10 px-1.5 py-0.5 font-mono text-xxs font-medium uppercase tracking-wider text-signal-bad">
+							starting
+						</span>
+					)}
+					{isHistoryStale && (
+						<span className="shrink-0 rounded bg-signal-bad/10 px-1.5 py-0.5 font-mono text-xxs font-medium uppercase tracking-wider text-signal-bad">
+							stale
+						</span>
+					)}
+				</div>
+
+				<div className="flex shrink-0 items-center gap-1 text-ink-55">
+					<a
+						href={`/sharp/market/${entry.conditionId}`}
+						onClick={stopPropagation}
+						aria-label="Open market depth view"
+						className="inline-flex h-8 w-8 items-center justify-center rounded text-ink-55 transition-colors hover:bg-ink-15 hover:text-brand-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+					>
+						<Target className="h-4 w-4" />
+					</a>
+					{polymarketUrl && (
+						<a
+							href={polymarketUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							onClick={stopPropagation}
+							aria-label="Open on Polymarket"
+							className="inline-flex h-8 w-8 items-center justify-center rounded text-ink-55 transition-colors hover:bg-ink-15 hover:text-brand-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+						>
+							<ExternalLink className="h-4 w-4" />
+						</a>
+					)}
+					{!disableRefresh && (
+						<button
+							type="button"
+							onClick={handleRefreshClick}
+							aria-label="Refresh this market"
+							className="inline-flex h-8 w-8 items-center justify-center rounded text-ink-55 transition-colors hover:bg-ink-15 hover:text-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
+							disabled={isRefreshing}
+						>
+							<RefreshCw
+								className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
+							/>
+						</button>
+					)}
+				</div>
+			</div>
+
+			{/* Main expand trigger — contains only non-interactive content.
+			    Valid <button> semantics, keyboard-accessible, screen-reader-friendly. */}
+			<button
+				type="button"
+				onClick={onToggle}
+				aria-expanded={isExpanded}
+				aria-controls={panelId}
+				className="block w-full cursor-pointer text-left transition-colors hover:bg-ink-10/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-blue"
+			>
+				{/* Title + grade */}
+				<div className="grid grid-cols-[1fr_auto] items-start gap-3 px-3 pt-2 pb-2.5 @[480px]:px-4 @[480px]:pb-3">
+					<div className="min-w-0">
+						<h3 className="font-sans text-base font-semibold leading-tight tracking-[-0.01em] text-ink-95 @[480px]:text-lg">
+							{entry.marketTitle}
+						</h3>
+						<div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0 font-mono text-xxs tabular-nums text-ink-55">
+							<span>
+								<span className="text-ink-55">updated</span>{" "}
+								<span className="text-ink-70">
+									{formatRelativeTime(historyUpdatedAt)}
+								</span>
+							</span>
+							{pickMeta && pickStatusLabel && pickPillTone && (
 								<span
-									className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
+									className={`rounded border px-1.5 py-0 uppercase tracking-wider ${pickPillTone}`}
 									title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
 								>
 									{pickStatusLabel}
 								</span>
 							)}
-							<button
-								type="button"
-								onClick={(e) => {
-									e.stopPropagation();
-									void inspectBotDecision();
-								}}
-								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
-								disabled={botInspectLoading}
-								title="Inspect why this market is included/excluded by bot candidate logic"
-							>
-								{botInspectLoading ? "Checking..." : "Bot check"}
-							</button>
-							<a
-								href={`/sharp/market/${entry.conditionId}`}
-								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
-								onClick={(e) => e.stopPropagation()}
-							>
-								Depth
-							</a>
-							{isHistoryStale && (
-								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-									Stale
-								</span>
-							)}
-							{polymarketUrl && (
-								<a
-									href={polymarketUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
-									onClick={(e) => e.stopPropagation()}
-								>
-									<ExternalLink className="h-4 w-4" />
-								</a>
-							)}
-							{!disableRefresh && (
-								<button
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										onRefresh();
-									}}
-									className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0 disabled:opacity-50"
-									disabled={isRefreshing}
-									title="Refresh this market"
-								>
-									<RefreshCw
-										className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
-									/>
-								</button>
-							)}
-							{isExpanded ? (
-								<ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
-							) : (
-								<ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
-							)}
-						</div>
-					</div>
-
-					{/* Title and Sharp Indicator */}
-					<div className="px-3 pb-2">
-						{(botInspectTouched || botInspectError || botInspectResult) && (
-							<div className="mb-2">
-								<div
-									className={`text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
-								>
-									{botInspectError
-										? `Bot check failed: ${botInspectError}`
-										: botInspectStatus.message}
-								</div>
-								{!botInspectError && botInspectStatus.detail && (
-									<div className="mt-0.5 text-[0.6rem] text-slate-400">
-										{botInspectStatus.detail}
-									</div>
-								)}
-							</div>
-						)}
-						<div className="flex items-start justify-between gap-3 mb-1">
-							<div className="flex-1 min-w-0">
-								<h3 className="text-base font-semibold text-white leading-tight pb-2">
-									{entry.marketTitle}
-								</h3>
-								{entry.sharpSide !== "EVEN" && (
-									<div className="flex items-center gap-2 mt-1 flex-wrap">
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40">
-											<CheckCircle2 className="h-4 w-4 text-emerald-400" />
-											<span className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
-												Bet: {sharpSideData.label}
-											</span>
-										</div>
-										{gradeWarnings.includes("low_holders") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Low holders
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("low_pnl_coverage") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Low PnL coverage
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("not_ready") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Not ready
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("no_edge") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-600/60">
-												<span className="text-[0.65rem] font-semibold text-slate-300 uppercase tracking-wide">
-													No edge
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("low_conviction") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Low conviction
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("high_concentration") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													High concentration
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("stale_data") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-red-500/15 border border-red-500/40">
-												<span className="text-[0.65rem] font-semibold text-red-200 uppercase tracking-wide">
-													Stale data
-												</span>
-											</div>
-										)}
-										{gradeWarnings.includes("low_roi") && (
-											<div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-												<span className="text-[0.65rem] font-semibold text-amber-300 uppercase tracking-wide">
-													Low ROI
-												</span>
-											</div>
-										)}
-									</div>
-								)}
-							</div>
-							{/* Bet Grade - Right of event name and bet side */}
-							<div
-								className={`flex flex-col items-center justify-center gap-0.5 px-2.5 py-1.5 rounded-lg border-2 ${betGrade.bgColor} ${betGrade.borderColor} flex-shrink-0 h-[56px] w-[50px]`}
-							>
-								<span className={`text-xl font-black ${betGrade.color}`}>
-									{betGrade.grade}
-								</span>
-								<span className="text-[0.5rem] font-semibold text-slate-400 leading-none">
-									{compositeScoreDisplay}
-								</span>
-							</div>
-						</div>
-					</div>
-
-					{/* Metrics Row - Mobile */}
-					<div className="px-3 pb-3 flex items-center justify-between">
-						{/* Edge Rating - PRIMARY */}
-						<div className="flex flex-col items-center justify-center flex-1 h-[56px]">
-							<span
-								className={`text-lg font-bold ${
-									entry.edgeRating >= 80
-										? "text-emerald-400"
-										: entry.edgeRating >= 75
-											? "text-emerald-400"
-											: entry.edgeRating >= 66
-												? "text-cyan-400"
-												: entry.edgeRating >= 60
-													? "text-amber-400"
-													: entry.edgeRating >= 50
-														? "text-gray-300"
-														: "text-gray-500"
-								}`}
-							>
-								{entry.edgeRating}
-							</span>
-							<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-								Edge
-							</span>
 						</div>
 						{entry.sharpSide !== "EVEN" && (
-							<>
-								{/* Diff - Secondary */}
-								<div className="flex flex-col items-center justify-center flex-1 h-[56px]">
-									<span
-										className={`text-lg font-bold ${
-											entry.scoreDifferential >= 40
-												? "text-emerald-400"
-												: entry.scoreDifferential >= 30
-													? "text-emerald-400"
-													: entry.scoreDifferential >= 20
-														? "text-amber-400"
-														: "text-gray-400"
-										}`}
-									>
-										{entry.scoreDifferential.toFixed(0)}
+							<div className="mt-1.5 flex items-baseline gap-2 text-sm">
+								<span className="font-mono text-xxs font-medium uppercase tracking-[0.2em] text-ink-55">
+									bet
+								</span>
+								<span className="font-sans font-semibold text-ink-95">
+									{sharpSideData.label}
+								</span>
+							</div>
+						)}
+						{activeCaveats.length > 0 && (
+							<div className="mt-1.5 flex flex-wrap items-baseline gap-x-1 gap-y-0.5 font-mono text-xxs tracking-wide">
+								<span className="uppercase tracking-wider text-ink-55">
+									caveats
+								</span>
+								{activeCaveats.map((c) => (
+									<span key={c.key} className="flex items-baseline gap-1">
+										<span className="text-ink-40" aria-hidden>
+											·
+										</span>
+										<span
+											className={
+												c.key === "stale_data"
+													? "text-signal-bad"
+													: "text-signal-warn"
+											}
+										>
+											{c.label}
+										</span>
 									</span>
-									<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-										Diff
-									</span>
-								</div>
-								{/* Volume - Tertiary */}
-								<div className="flex flex-col items-center justify-center flex-1 h-[56px]">
-									<span className="text-lg font-bold text-gray-400 mb-1">
-										{formatUsdCompact(marketVolume)}
-									</span>
-									<div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mb-0.5">
-										<div
-											className={`h-full ${getVolumeColor(volumeColorPercent)} rounded-full transition-all`}
-											style={{
-												width: `${volumePercent}%`,
-												minWidth: marketVolume > 0 ? "6px" : "0",
-											}}
-										/>
-									</div>
-									<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-										Volume
-									</span>
-								</div>
-							</>
+								))}
+							</div>
 						)}
 					</div>
-				</div>
 
-				{/* Desktop: Horizontal layout */}
-				<div className="hidden sm:block">
-					{/* Top Row - League, Time, Actions */}
-					<div className="flex items-center justify-between p-4 pb-2">
-						<div className="flex items-center gap-2 flex-wrap">
-							{entry.sportSeriesId && (
-								<span className="text-[0.65rem] font-semibold uppercase tracking-wider text-gray-500 bg-slate-800/50 px-2 py-0.5 rounded">
-									{getSeriesLabel(entry.sportSeriesId)}
-								</span>
-							)}
-							{entry.eventTime && (
-								<>
-									<span className="text-[0.65rem] font-medium text-cyan-400/80 bg-cyan-900/30 px-2 py-0.5 rounded">
-										{formatEventTime(entry.eventTime)}
-									</span>
-									{isStartingSoon && (
-										<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-2 py-0.5 rounded">
-											Starting soon
-										</span>
-									)}
-								</>
-							)}
-						</div>
-						<div className="flex items-center gap-1">
-							<span className="text-[0.6rem] text-gray-500">
-								History {formatRelativeTime(historyUpdatedAt)}
-							</span>
-							{pickMeta && pickStatusLabel && (
-								<span
-									className={`text-[0.6rem] font-semibold uppercase tracking-wide border px-1.5 py-0.5 rounded ${pickStatusClass}`}
-									title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
-								>
-									{pickStatusLabel}
-								</span>
-							)}
-							<button
-								type="button"
-								onClick={(e) => {
-									e.stopPropagation();
-									void inspectBotDecision();
-								}}
-								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded hover:bg-amber-500/25 transition-colors disabled:opacity-60"
-								disabled={botInspectLoading}
-								title="Inspect why this market is included/excluded by bot candidate logic"
-							>
-								{botInspectLoading ? "Checking..." : "Bot check"}
-							</button>
-							<a
-								href={`/sharp/market/${entry.conditionId}`}
-								className="px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 rounded hover:bg-cyan-500/25 transition-colors"
-								onClick={(e) => e.stopPropagation()}
-							>
-								Depth
-							</a>
-							{isHistoryStale && (
-								<span className="text-[0.6rem] font-semibold uppercase tracking-wide text-red-200 bg-red-500/15 border border-red-500/40 px-1 py-0.5 rounded">
-									Stale
-								</span>
-							)}
-							{polymarketUrl && (
-								<a
-									href={polymarketUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0"
-									onClick={(e) => e.stopPropagation()}
-								>
-									<ExternalLink className="h-4 w-4" />
-								</a>
-							)}
-							{!disableRefresh && (
-								<button
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										onRefresh();
-									}}
-									className="p-1.5 text-gray-400 hover:text-cyan-400 transition-colors flex-shrink-0 disabled:opacity-50"
-									disabled={isRefreshing}
-									title="Refresh this market"
-								>
-									<RefreshCw
-										className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
-									/>
-								</button>
-							)}
-							{isExpanded ? (
-								<ChevronUp className="h-5 w-5 text-gray-400 flex-shrink-0" />
-							) : (
-								<ChevronDown className="h-5 w-5 text-gray-400 flex-shrink-0" />
-							)}
-						</div>
-					</div>
-
-					{/* Content Row - Title, Bet Side, and Metrics */}
-					<div className="grid grid-cols-[1fr_auto] items-start gap-4 px-4 pb-4">
-						<div className="flex-1 min-w-0">
-							{(botInspectTouched || botInspectError || botInspectResult) && (
-								<div className="mb-2">
-									<div
-										className={`text-[0.65rem] font-semibold tracking-wide ${botInspectError ? "text-rose-300" : botInspectLoading ? "text-cyan-200" : botInspectToneClass}`}
-									>
-										{botInspectError
-											? `Bot check failed: ${botInspectError}`
-											: botInspectStatus.message}
-									</div>
-									{!botInspectError && botInspectStatus.detail && (
-										<div className="mt-0.5 text-[0.6rem] text-slate-400">
-											{botInspectStatus.detail}
-										</div>
-									)}
-								</div>
-							)}
-							<h3 className="text-base font-semibold text-white truncate pr-4">
-								{entry.marketTitle}
-							</h3>
-							{entry.sharpSide !== "EVEN" && (
-								<div className="flex items-center gap-2 mt-2">
-									<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40">
-										<CheckCircle2 className="h-4 w-4 text-emerald-400" />
-										<span className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
-											Bet: {sharpSideData.label}
-										</span>
-									</div>
-									{gradeWarnings.includes("low_holders") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Low holders
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("low_pnl_coverage") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Low PnL coverage
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("not_ready") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Not ready
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("no_edge") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-600/60">
-											<span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">
-												No edge
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("low_conviction") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Low conviction
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("high_concentration") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												High concentration
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("stale_data") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-500/40">
-											<span className="text-xs font-semibold text-red-200 uppercase tracking-wide">
-												Stale data
-											</span>
-										</div>
-									)}
-									{gradeWarnings.includes("low_roi") && (
-										<div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
-											<span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-												Low ROI
-											</span>
-										</div>
-									)}
-								</div>
-							)}
-						</div>
-						<div className="flex items-center gap-2.5">
-							{/* Bet Grade - Single value indicator (most prominent) */}
-							<div
-								className={`flex flex-col items-center justify-center gap-0.5 px-3 py-2 rounded-xl border-2 ${betGrade.bgColor} ${betGrade.borderColor} flex-shrink-0 h-[60px] w-[56px]`}
-							>
-								<span className={`text-2xl font-black ${betGrade.color}`}>
-									{betGrade.grade}
-								</span>
-								<span className="text-[0.5rem] font-semibold text-slate-400 leading-none">
-									{compositeScoreDisplay}
-								</span>
-							</div>
-
-							{/* Edge Rating - PRIMARY ranking indicator */}
-							<div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[48px]">
-								<span
-									className={`text-xl font-bold ${
-										entry.edgeRating >= 80
-											? "text-emerald-400"
-											: entry.edgeRating >= 75
-												? "text-emerald-400"
-												: entry.edgeRating >= 66
-													? "text-cyan-400"
-													: entry.edgeRating >= 60
-														? "text-amber-400"
-														: entry.edgeRating >= 50
-															? "text-gray-300"
-															: "text-gray-500"
-									}`}
-								>
-									{entry.edgeRating}
-								</span>
-								<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-									Edge
-								</span>
-							</div>
-
-							{/* Score Differential - Secondary context (signal strength) */}
-							{entry.sharpSide !== "EVEN" ? (
-								<div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[48px]">
-									<span
-										className={`text-xl font-bold ${
-											entry.scoreDifferential >= 40
-												? "text-emerald-400"
-												: entry.scoreDifferential >= 30
-													? "text-emerald-400"
-													: entry.scoreDifferential >= 20
-														? "text-amber-400"
-														: "text-gray-400"
-										}`}
-									>
-										{entry.scoreDifferential.toFixed(0)}
-									</span>
-									<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-										Diff
-									</span>
-								</div>
-							) : (
-								<div className="w-[48px] flex-shrink-0" /> // Spacer to maintain alignment
-							)}
-
-							{/* Volume indicator - Tertiary (validation) */}
-							{entry.sharpSide !== "EVEN" ? (
-								<div className="flex flex-col items-center justify-center flex-shrink-0 h-[60px] w-[60px]">
-									<span className="text-xl font-bold text-gray-400 mb-1">
-										{formatUsdCompact(marketVolume)}
-									</span>
-									<div
-										className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-0.5 flex-shrink-0"
-										style={{ height: "6px", minHeight: "6px" }}
-									>
-										<div
-											className={`h-full ${getVolumeColor(volumeColorPercent)} rounded-full transition-all`}
-											style={{
-												width: `${volumePercent}%`,
-												minWidth: marketVolume > 0 ? "6px" : "0",
-											}}
-										/>
-									</div>
-									<span className="text-[0.6rem] text-gray-500 uppercase tracking-wider">
-										Volume
-									</span>
-								</div>
-							) : (
-								<div className="w-[60px] flex-shrink-0" /> // Spacer to maintain alignment
-							)}
-						</div>
+					<div
+						className={`flex min-w-[3.25rem] shrink-0 flex-col items-center justify-center rounded-md px-2.5 py-1.5 ring-1 ring-inset ${gradeTone.surface} ${gradeTone.ring}`}
+					>
+						<span
+							className={`font-sans text-2xl font-bold leading-none tabular-nums ${gradeTone.text}`}
+						>
+							{betGradeLabel}
+						</span>
+						<span className="mt-1 font-mono text-xxs tabular-nums tracking-wider text-ink-55">
+							{compositeScoreDisplay}
+						</span>
 					</div>
 				</div>
-			</div>
 
-			{/* Unified Edge Bar with Odds */}
+				{/* Metrics row */}
+				{entry.sharpSide !== "EVEN" && (
+					<div className="px-3 pb-3 @[480px]:px-4">
+						<div className="grid grid-cols-3 gap-4 @[480px]:gap-6">
+							<Metric
+								label="edge"
+								value={String(entry.edgeRating)}
+								tickPercent={edgeTickPercent}
+							/>
+							<Metric
+								label="diff"
+								value={String(Math.round(entry.scoreDifferential))}
+								tickPercent={diffTickPercent}
+							/>
+							<Metric
+								label="volume"
+								value={formatUsdCompact(marketVolume)}
+								tickPercent={volumePercent}
+							/>
+						</div>
+					</div>
+				)}
 
-			<div className="px-4 pb-4">
-				<UnifiedEdgeBar
-					sideA={entry.sideA}
-					sideB={entry.sideB}
-					sharpSide={entry.sharpSide}
-					sideAOdds={sideAOdds}
-					sideBOdds={sideBOdds}
-				/>
-			</div>
+				{/* Edge bar */}
+				<div className="px-3 pb-3 @[480px]:px-4 @[480px]:pb-4">
+					<UnifiedEdgeBar
+						sideA={entry.sideA}
+						sideB={entry.sideB}
+						sharpSide={entry.sharpSide}
+						sideAOdds={sideAOdds}
+						sideBOdds={sideBOdds}
+					/>
+				</div>
+			</button>
 
-			{/* Expanded Content */}
+			{/* Expanded body */}
 			{isExpanded && (
-				<div className="border-t border-slate-800/60 p-4">
-					<div className="grid gap-4 md:grid-cols-2">
-						{/* Side A */}
-						<SideDetails side={entry.sideA} isSharp={entry.sharpSide === "A"} />
-						{/* Side B */}
-						<SideDetails side={entry.sideB} isSharp={entry.sharpSide === "B"} />
+				<div id={panelId} className="border-t border-ink-15 bg-ink-00/60">
+					<div className="flex items-center justify-between gap-3 px-3 pt-3 pb-1.5 @[480px]:px-4">
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								void inspectBotDecision();
+							}}
+							className="font-mono text-xxs font-medium uppercase tracking-wider text-ink-55 transition-colors hover:text-brand-blue disabled:opacity-40"
+							disabled={botInspectLoading}
+							title="Inspect bot candidate logic for this market"
+						>
+							{botInspectLoading ? "checking bot…" : "check bot decision"}
+						</button>
+						{(botInspectTouched || botInspectError || botInspectResult) && (
+							<span
+								className={`text-right font-mono text-xxs uppercase tracking-wider ${
+									botInspectError
+										? "text-signal-bad"
+										: botInspectLoading
+											? "text-brand-blue"
+											: botInspectToneClass
+								}`}
+							>
+								{botInspectError
+									? `failed: ${botInspectError}`
+									: botInspectStatus.message}
+							</span>
+						)}
 					</div>
-					<div className="mt-4 rounded-lg border border-slate-800/70 bg-slate-950/30 p-4">
-						<div className="flex items-center justify-between gap-2">
-							<div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-								History (24h)
+					{!botInspectError && botInspectStatus.detail && (
+						<div className="px-3 pb-2 font-mono text-xxs text-ink-55 @[480px]:px-4">
+							{botInspectStatus.detail}
+						</div>
+					)}
+
+					<div className="px-3 pb-4 @[480px]:px-4">
+						<div className="grid gap-3 @[600px]:grid-cols-2">
+							<SideDetails
+								side={entry.sideA}
+								isSharp={entry.sharpSide === "A"}
+							/>
+							<SideDetails
+								side={entry.sideB}
+								isSharp={entry.sharpSide === "B"}
+							/>
+						</div>
+
+						<div className="mt-4 rounded-md bg-ink-05 ring-1 ring-inset ring-ink-15">
+							<div className="flex items-center justify-between px-3 pt-3 @[480px]:px-4">
+								<div className="font-mono text-xxs uppercase tracking-wider text-ink-55">
+									history · 24h
+								</div>
+								{isHistoryLoading && (
+									<div className="flex items-center gap-1.5 font-mono text-xxs text-ink-55">
+										<Loader2 className="h-3 w-3 animate-spin" />
+										loading
+									</div>
+								)}
 							</div>
-							{isHistoryLoading && (
-								<div className="flex items-center gap-2 text-xs text-slate-400">
-									<Loader2 className="h-3 w-3 animate-spin" />
-									Loading
+
+							{!isHistoryLoading && historyEntries.length === 0 && (
+								<div className="px-3 py-4 font-mono text-xs text-ink-55 @[480px]:px-4">
+									no history recorded yet.
 								</div>
 							)}
-						</div>
-						{!isHistoryLoading && historyEntries.length === 0 && (
-							<div className="mt-3 text-xs text-slate-400">
-								No history recorded yet.
-							</div>
-						)}
-						{historyFirst && historyLast && (
-							<>
-								<div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
-									<div>
-										Grade:{" "}
-										<span className="font-semibold text-slate-100">
-											{signalScoreToGradeLabel(
+
+							{historyFirst && historyLast && (
+								<>
+									<div className="grid gap-x-6 gap-y-1 px-3 pt-2 pb-3 text-xs @[480px]:grid-cols-2 @[480px]:px-4">
+										<HistoryDelta
+											label="grade"
+											from={signalScoreToGradeLabel(
 												computeSignalScoreFromWindow(
 													historyFirst,
 													[historyFirst],
@@ -3222,10 +2645,7 @@ function SharpMoneyCard({
 													scoreDifferential: historyFirst.scoreDifferential,
 												},
 											)}
-										</span>{" "}
-										→{" "}
-										<span className="font-semibold text-slate-100">
-											{signalScoreToGradeLabel(
+											to={signalScoreToGradeLabel(
 												computeSignalScoreFromWindow(
 													historyLast,
 													historyEntries,
@@ -3236,124 +2656,274 @@ function SharpMoneyCard({
 													scoreDifferential: historyLast.scoreDifferential,
 												},
 											)}
-										</span>
-									</div>
-									<div>
-										Edge:{" "}
-										<span className="font-semibold text-slate-100">
-											{historyFirst.edgeRating}
-										</span>{" "}
-										→{" "}
-										<span className="font-semibold text-slate-100">
-											{historyLast.edgeRating}
-										</span>
-									</div>
-									<div>
-										Diff:{" "}
-										<span className="font-semibold text-slate-100">
-											{Math.round(historyFirst.scoreDifferential)}
-										</span>{" "}
-										→{" "}
-										<span className="font-semibold text-slate-100">
-											{Math.round(historyLast.scoreDifferential)}
-										</span>
-									</div>
-									<div>
-										Holder value:{" "}
-										<span className="font-semibold text-slate-100">
-											{formatUsdCompact(
+										/>
+										<HistoryDelta
+											label="edge"
+											from={String(historyFirst.edgeRating)}
+											to={String(historyLast.edgeRating)}
+										/>
+										<HistoryDelta
+											label="diff"
+											from={String(Math.round(historyFirst.scoreDifferential))}
+											to={String(Math.round(historyLast.scoreDifferential))}
+										/>
+										<HistoryDelta
+											label="holder"
+											from={formatUsdCompact(
 												historyFirst.sideA.totalValue +
 													historyFirst.sideB.totalValue,
 											)}
-										</span>{" "}
-										→{" "}
-										<span className="font-semibold text-slate-100">
-											{formatUsdCompact(
+											to={formatUsdCompact(
 												historyLast.sideA.totalValue +
 													historyLast.sideB.totalValue,
 											)}
-										</span>
+										/>
+										<div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono tabular-nums @[480px]:col-span-2">
+											<span className="text-xxs uppercase tracking-wider text-ink-55">
+												odds
+											</span>
+											<span className="text-ink-70">
+												{formatOddsLine(historyFirst)}
+											</span>
+											<span className="text-ink-40">→</span>
+											<span className="text-ink-85">
+												{formatOddsLine(historyLast)}
+											</span>
+										</div>
 									</div>
-									<div className="sm:col-span-2">
-										Odds:{" "}
-										<span className="font-semibold text-slate-100">
-											{formatOddsLine(historyFirst)}
-										</span>{" "}
-										→{" "}
-										<span className="font-semibold text-slate-100">
-											{formatOddsLine(historyLast)}
-										</span>
-									</div>
-								</div>
-								<div className="mt-3 overflow-x-auto">
-									<table className="w-full min-w-[480px] text-left text-xs text-slate-300">
-										<thead className="text-[0.65rem] uppercase tracking-wider text-slate-500">
-											<tr>
-												<th className="py-2 pr-3">Time</th>
-												<th className="py-2 pr-3">Grade</th>
-												<th className="py-2 pr-3">Edge</th>
-												<th className="py-2 pr-3">Diff</th>
-												<th className="py-2 pr-3">Holder value</th>
-												<th className="py-2">Odds</th>
-											</tr>
-										</thead>
-										<tbody>
-											{historySlice.map((snapshot) => {
-												const windowStart = snapshot.recordedAt - 60 * 60;
-												const window = historyEntries.filter(
-													(entry) =>
-														entry.recordedAt >= windowStart &&
-														entry.recordedAt <= snapshot.recordedAt,
-												);
-												return (
-													<tr
-														key={snapshot.recordedAt}
-														className="border-t border-slate-800/60"
+									<div
+										className="relative overflow-x-auto px-3 pb-3 @[480px]:px-4"
+										style={{
+											maskImage:
+												"linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%)",
+											WebkitMaskImage:
+												"linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%)",
+										}}
+									>
+										<table className="w-full min-w-[460px] text-left text-xs">
+											<thead className="font-mono text-xxs uppercase tracking-wider text-ink-55">
+												<tr>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														time
+													</th>
+													<th scope="col" className="py-1.5 pr-3 font-normal">
+														grade
+													</th>
+													<th
+														scope="col"
+														className="py-1.5 pr-3 text-right font-normal"
 													>
-														<td className="py-2 pr-3 text-slate-400">
-															{formatRelativeTime(snapshot.recordedAt)}
-														</td>
-														<td className="py-2 pr-3 font-semibold text-slate-100">
-															{signalScoreToGradeLabel(
-																computeSignalScoreFromWindow(
-																	snapshot,
-																	window,
-																	MIN_EDGE_RATING,
-																),
-																{
-																	edgeRating: snapshot.edgeRating,
-																	scoreDifferential: snapshot.scoreDifferential,
-																},
-															)}
-														</td>
-														<td className="py-2 pr-3">{snapshot.edgeRating}</td>
-														<td className="py-2 pr-3">
-															{Math.round(snapshot.scoreDifferential)}
-														</td>
-														<td className="py-2 pr-3">
-															{formatUsdCompact(
-																snapshot.sideA.totalValue +
-																	snapshot.sideB.totalValue,
-															)}
-														</td>
-														<td className="py-2">{formatOddsLine(snapshot)}</td>
-													</tr>
-												);
-											})}
-										</tbody>
-									</table>
-								</div>
-								{historyEntries.length > historySlice.length && (
-									<div className="mt-2 text-[0.65rem] text-slate-500">
-										Showing last {historySlice.length} of{" "}
-										{historyEntries.length} snapshots.
+														edge
+													</th>
+													<th
+														scope="col"
+														className="py-1.5 pr-3 text-right font-normal"
+													>
+														diff
+													</th>
+													<th
+														scope="col"
+														className="py-1.5 pr-3 text-right font-normal"
+													>
+														holder
+													</th>
+													<th scope="col" className="py-1.5 font-normal">
+														odds
+													</th>
+												</tr>
+											</thead>
+											<tbody className="font-mono tabular-nums text-ink-70">
+												{historySlice.map((snapshot, idx) => {
+													const window =
+														historyWindows.get(snapshot.recordedAt) ?? [];
+													const grade = signalScoreToGradeLabel(
+														computeSignalScoreFromWindow(
+															snapshot,
+															window,
+															MIN_EDGE_RATING,
+														),
+														{
+															edgeRating: snapshot.edgeRating,
+															scoreDifferential: snapshot.scoreDifferential,
+														},
+													);
+													return (
+														<tr
+															key={snapshot.recordedAt}
+															className={idx % 2 === 1 ? "bg-ink-10/50" : ""}
+														>
+															<td className="py-1.5 pr-3 text-ink-55">
+																{formatRelativeTime(snapshot.recordedAt)}
+															</td>
+															<td className="py-1.5 pr-3 text-ink-85">
+																{grade}
+															</td>
+															<td className="py-1.5 pr-3 text-right text-ink-85">
+																{snapshot.edgeRating}
+															</td>
+															<td className="py-1.5 pr-3 text-right text-ink-85">
+																{Math.round(snapshot.scoreDifferential)}
+															</td>
+															<td className="py-1.5 pr-3 text-right text-ink-85">
+																{formatUsdCompact(
+																	snapshot.sideA.totalValue +
+																		snapshot.sideB.totalValue,
+																)}
+															</td>
+															<td className="py-1.5 text-ink-70">
+																{formatOddsLine(snapshot)}
+															</td>
+														</tr>
+													);
+												})}
+											</tbody>
+										</table>
 									</div>
-								)}
-							</>
-						)}
+									{historyEntries.length > historySlice.length && (
+										<div className="px-3 pb-3 font-mono text-xxs uppercase tracking-wider tabular-nums text-ink-55 @[480px]:px-4">
+											last {historySlice.length} of {historyEntries.length}{" "}
+											snapshots
+										</div>
+									)}
+								</>
+							)}
+						</div>
 					</div>
 				</div>
 			)}
+		</article>
+	);
+}
+
+function Metric({
+	label,
+	value,
+	tickPercent,
+}: {
+	label: string;
+	value: string;
+	tickPercent: number;
+}) {
+	const ratio = Math.max(0, Math.min(100, tickPercent)) / 100;
+	return (
+		<div className="min-w-0">
+			<div className="font-sans text-lg font-semibold leading-none tabular-nums text-ink-95">
+				{value}
+			</div>
+			<div className="mt-1.5 h-[2px] w-full overflow-hidden rounded-full bg-ink-15">
+				<div
+					className="h-full w-full origin-left bg-brand-blue/70 transition-transform duration-500 ease-out"
+					style={{ transform: `scaleX(${ratio})` }}
+				/>
+			</div>
+			<div className="mt-1 font-mono text-xxs uppercase tracking-wider text-ink-55">
+				{label}
+			</div>
+		</div>
+	);
+}
+
+function HistoryDelta({
+	label,
+	from,
+	to,
+}: {
+	label: string;
+	from: string;
+	to: string;
+}) {
+	return (
+		<div className="flex items-baseline gap-2 font-mono tabular-nums">
+			<span className="text-xxs uppercase tracking-wider text-ink-55">
+				{label}
+			</span>
+			<span className="text-ink-70">{from}</span>
+			<span className="text-ink-40">→</span>
+			<span className="text-ink-85">{to}</span>
+		</div>
+	);
+}
+
+function EdgeStatCell({
+	label,
+	value,
+	tone = "default",
+}: {
+	label: string;
+	value: string | number;
+	tone?: "default" | "brand";
+}) {
+	return (
+		<div className="min-w-0">
+			<div className="font-mono text-xxs uppercase tracking-wider text-ink-55">
+				{label}
+			</div>
+			<div
+				className={`mt-0.5 font-mono text-base font-semibold tabular-nums ${
+					tone === "brand" ? "text-brand-blue" : "text-ink-95"
+				}`}
+			>
+				{value}
+			</div>
+		</div>
+	);
+}
+
+function EdgeShareRow({
+	label,
+	current,
+	sevenDay,
+	sevenDayLoading,
+	target,
+}: {
+	label: string;
+	current: number | null | undefined;
+	sevenDay: number | null | undefined;
+	sevenDayLoading: boolean;
+	target: { min: number; max: number };
+}) {
+	const currentTone =
+		typeof current === "number"
+			? getTargetToneClass(current, target)
+			: "text-ink-40";
+	const sevenDayTone =
+		typeof sevenDay === "number"
+			? getTargetToneClass(sevenDay, target)
+			: "text-ink-40";
+	return (
+		<div className="min-w-0">
+			<div className="flex items-baseline justify-between gap-2">
+				<span className="font-mono text-xxs uppercase tracking-wider text-ink-55">
+					{label}
+				</span>
+				<span className="font-mono text-xxs tabular-nums text-ink-40">
+					{formatPercent(target.min)}–{formatPercent(target.max)}
+				</span>
+			</div>
+			<div className="mt-1 flex items-baseline justify-between gap-2 font-mono tabular-nums">
+				<span className="flex items-baseline gap-1.5">
+					<span className="text-xxs uppercase tracking-wider text-ink-40">
+						now
+					</span>
+					<span className={`text-sm font-semibold ${currentTone}`}>
+						{typeof current === "number" ? formatPercent(current) : "—"}
+					</span>
+				</span>
+				<span className="flex items-baseline gap-1.5">
+					<span className="text-xxs uppercase tracking-wider text-ink-40">
+						7d
+					</span>
+					<span className={`text-sm font-semibold ${sevenDayTone}`}>
+						{sevenDayLoading ? (
+							<Loader2 className="inline h-3 w-3 animate-spin text-ink-55" />
+						) : typeof sevenDay === "number" ? (
+							formatPercent(sevenDay)
+						) : (
+							"—"
+						)}
+					</span>
+				</span>
+			</div>
 		</div>
 	);
 }
@@ -3371,36 +2941,37 @@ function UnifiedEdgeBar({
 	sideAOdds?: string | null;
 	sideBOdds?: string | null;
 }) {
-	// Calculate money split (what % of total dollars is on each side)
 	const totalValue = sideA.totalValue + sideB.totalValue;
 	const sideAMoneyPercent =
 		totalValue > 0 ? (sideA.totalValue / totalValue) * 100 : 50;
 	const sideBMoneyPercent = 100 - sideAMoneyPercent;
-
 	const isSharpA = sharpSide === "A";
-	// For EVEN, show balanced bar
+	const sharpPct = isSharpA ? sideAMoneyPercent : sideBMoneyPercent;
+
 	if (sharpSide === "EVEN") {
 		return (
-			<div className="space-y-2">
-				<div className="flex items-center justify-between text-xs">
-					<div>
-						<span className="font-semibold text-gray-400">{sideA.label}</span>
-						<span className="text-gray-600 ml-2">
-							({Math.round(sideA.sharpScore)})
+			<div className="space-y-1.5">
+				<div className="flex items-center justify-between text-sm">
+					<div className="flex items-baseline gap-1.5">
+						<span className="font-sans font-medium text-ink-55">
+							{sideA.label}
+						</span>
+						<span className="font-mono text-xxs tabular-nums text-ink-55">
+							{Math.round(sideA.sharpScore)}
 						</span>
 					</div>
-					<div>
-						<span className="text-gray-600 mr-2">
-							({Math.round(sideB.sharpScore)})
+					<div className="flex items-baseline gap-1.5">
+						<span className="font-mono text-xxs tabular-nums text-ink-55">
+							{Math.round(sideB.sharpScore)}
 						</span>
-						<span className="font-semibold text-gray-400">{sideB.label}</span>
+						<span className="font-sans font-medium text-ink-55">
+							{sideB.label}
+						</span>
 					</div>
 				</div>
-				<div className="h-7 bg-slate-800 rounded-lg overflow-hidden relative">
-					<div className="absolute inset-0 flex items-center justify-center">
-						<span className="text-xs font-medium text-gray-500">
-							No clear edge - money split evenly
-						</span>
+				<div className="relative h-7 overflow-hidden rounded-md bg-ink-10 ring-1 ring-inset ring-ink-15">
+					<div className="absolute inset-0 flex items-center justify-center font-mono text-xxs uppercase tracking-wider text-ink-55">
+						no clear edge · split
 					</div>
 				</div>
 			</div>
@@ -3408,114 +2979,84 @@ function UnifiedEdgeBar({
 	}
 
 	return (
-		<div className="space-y-2">
-			{/* Labels row - sharp side highlighted with checkmark, showing scores and odds */}
-			<div className="flex items-center justify-between text-sm">
-				<div className="flex items-center gap-1.5">
-					{isSharpA && (
-						<CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-					)}
+		<div className="space-y-1.5">
+			<div className="flex items-center justify-between gap-2 text-sm">
+				<div className="flex min-w-0 items-center gap-1.5">
 					<span
-						className={`font-semibold ${isSharpA ? "text-emerald-400" : "text-gray-500"}`}
+						className={`font-sans font-semibold ${isSharpA ? "text-ink-95" : "text-ink-55"}`}
 					>
 						{sideA.label}
 					</span>
 					<span
-						className={`${isSharpA ? "text-emerald-400/70" : "text-gray-600"}`}
+						className={`font-mono text-xxs tabular-nums ${isSharpA ? "text-ink-70" : "text-ink-55"}`}
 					>
-						({Math.round(sideA.sharpScore)})
+						{Math.round(sideA.sharpScore)}
 					</span>
 					{sideAOdds && (
 						<span
-							className={`rounded-md px-2 py-0.5 text-sm font-semibold ${isSharpA ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-900/60 text-gray-200"}`}
+							className={`rounded px-1 py-0.5 font-mono text-xs tabular-nums ${isSharpA ? "bg-ink-15 text-ink-95" : "bg-ink-10 text-ink-55"}`}
 						>
 							{sideAOdds}
 						</span>
 					)}
 				</div>
-				<div className="flex items-center gap-1.5">
+				<div className="flex min-w-0 items-center gap-1.5">
 					{sideBOdds && (
 						<span
-							className={`rounded-md px-2 py-0.5 text-sm font-semibold ${!isSharpA ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-900/60 text-gray-200"}`}
+							className={`rounded px-1 py-0.5 font-mono text-xs tabular-nums ${!isSharpA ? "bg-ink-15 text-ink-95" : "bg-ink-10 text-ink-55"}`}
 						>
 							{sideBOdds}
 						</span>
 					)}
 					<span
-						className={`${!isSharpA ? "text-emerald-400/70" : "text-gray-600"}`}
+						className={`font-mono text-xxs tabular-nums ${!isSharpA ? "text-ink-70" : "text-ink-55"}`}
 					>
-						({Math.round(sideB.sharpScore)})
+						{Math.round(sideB.sharpScore)}
 					</span>
 					<span
-						className={`font-semibold ${!isSharpA ? "text-emerald-400" : "text-gray-500"}`}
+						className={`font-sans font-semibold ${!isSharpA ? "text-ink-95" : "text-ink-55"}`}
 					>
 						{sideB.label}
 					</span>
-					{!isSharpA && (
-						<CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-					)}
 				</div>
 			</div>
 
-			{/* Money split bar - shows where the actual dollars are */}
-			<div className="h-7 rounded-lg overflow-hidden relative flex border-2 border-slate-800">
-				{/* Side A money bar */}
+			<div className="relative flex h-7 overflow-hidden rounded-md bg-ink-10 ring-1 ring-inset ring-ink-15">
 				<div
-					className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] relative ${
-						isSharpA
-							? "bg-gradient-to-r from-emerald-600 to-emerald-500 ring-2 ring-emerald-400 ring-offset-0"
-							: "bg-slate-700"
+					className={`flex h-full min-w-[60px] items-center justify-center ${
+						isSharpA ? "bg-brand-blue/85 text-ink-00" : "bg-ink-15 text-ink-70"
 					}`}
 					style={{ width: `${Math.max(sideAMoneyPercent, 15)}%` }}
 				>
-					{isSharpA && (
-						<div className="absolute inset-0 border-2 border-emerald-300/50 rounded-l-lg pointer-events-none" />
-					)}
-					<span
-						className={`text-xs font-bold ${isSharpA ? "text-white drop-shadow-sm" : "text-gray-400"}`}
-					>
+					<span className="font-mono text-xs font-semibold tabular-nums">
 						{formatUsdCompact(sideA.totalValue)}
 					</span>
 				</div>
-
-				{/* Divider */}
-				<div className="w-0.5 bg-slate-900" />
-
-				{/* Side B money bar */}
+				<div className="w-px bg-ink-00" />
 				<div
-					className={`h-full transition-all duration-500 flex items-center justify-center min-w-[60px] relative ${
-						!isSharpA
-							? "bg-gradient-to-l from-emerald-600 to-emerald-500 ring-2 ring-emerald-400 ring-offset-0"
-							: "bg-slate-700"
+					className={`flex h-full min-w-[60px] items-center justify-center ${
+						!isSharpA ? "bg-brand-blue/85 text-ink-00" : "bg-ink-15 text-ink-70"
 					}`}
 					style={{ width: `${Math.max(sideBMoneyPercent, 15)}%` }}
 				>
-					{!isSharpA && (
-						<div className="absolute inset-0 border-2 border-emerald-300/50 rounded-r-lg pointer-events-none" />
-					)}
-					<span
-						className={`text-xs font-bold ${!isSharpA ? "text-white drop-shadow-sm" : "text-gray-400"}`}
-					>
+					<span className="font-mono text-xs font-semibold tabular-nums">
 						{formatUsdCompact(sideB.totalValue)}
 					</span>
 				</div>
 			</div>
 
-			{/* Summary line - Conviction */}
-			<div className="flex items-center justify-center gap-2">
-				<span className="text-xs text-gray-500">Conviction:</span>
+			<div className="flex items-center justify-center gap-2 font-mono text-xxs uppercase tracking-wider">
+				<span className="text-ink-55">conviction</span>
 				<span
-					className={`text-sm font-bold ${
-						(isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 40 &&
-						(isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 60
-							? "text-emerald-400"
-							: (isSharpA ? sideAMoneyPercent : sideBMoneyPercent) >= 30 &&
-									(isSharpA ? sideAMoneyPercent : sideBMoneyPercent) <= 70
-								? "text-amber-400"
-								: "text-gray-400"
+					className={`tabular-nums ${
+						sharpPct >= 40 && sharpPct <= 60
+							? "text-signal-pos"
+							: sharpPct >= 30 && sharpPct <= 70
+								? "text-signal-warn"
+								: "text-ink-70"
 					}`}
 				>
-					{Math.round(isSharpA ? sideAMoneyPercent : sideBMoneyPercent)}%
+					{Math.round(sharpPct)}%
 				</span>
 			</div>
 		</div>
@@ -3531,100 +3072,90 @@ function SideDetails({
 }) {
 	return (
 		<div
-			className={`rounded-lg p-4 ${
+			className={`@container rounded-md p-3 ring-1 ring-inset @[480px]:p-4 ${
 				isSharp
-					? "bg-emerald-500/10 border border-emerald-500/30"
-					: "bg-slate-800/30"
+					? "bg-brand-blue/10 ring-brand-blue/30"
+					: "bg-ink-05 ring-ink-15"
 			}`}
 		>
-			<div className="flex items-center justify-between mb-3">
-				<div className="flex items-center gap-2">
+			<div className="mb-3 flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-2">
 					<h4
-						className={`font-semibold ${isSharp ? "text-emerald-400" : "text-white"}`}
+						className={`truncate font-sans font-semibold ${isSharp ? "text-ink-95" : "text-ink-85"}`}
 					>
 						{side.label}
 					</h4>
 					{isSharp && (
-						<span className="flex items-center gap-1 text-[0.65rem] font-semibold uppercase text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded">
-							<Zap className="h-3 w-3" /> Sharp
+						<span className="flex items-center gap-1 font-mono text-xxs font-medium uppercase tracking-wider text-brand-cyan">
+							<Zap className="h-3 w-3" /> sharp
 						</span>
 					)}
 				</div>
 				<span
-					className={`text-lg font-bold ${isSharp ? "text-emerald-400" : "text-cyan-400"}`}
+					className={`font-mono text-lg font-semibold tabular-nums ${isSharp ? "text-ink-95" : "text-ink-70"}`}
 				>
 					{Math.round(side.sharpScore)}
 				</span>
 			</div>
 
-			<div className="grid grid-cols-2 gap-2 text-sm mb-4">
-				<div>
-					<span className="text-gray-500">Holder Value</span>
-					<p className="font-semibold text-white">
-						{formatUsdCompact(side.totalValue)}
-					</p>
-				</div>
+			<div className="mb-3 flex items-baseline gap-2 font-mono tabular-nums">
+				<span className="text-xxs uppercase tracking-wider text-ink-55">
+					holder value
+				</span>
+				<span className="font-semibold text-ink-85">
+					{formatUsdCompact(side.totalValue)}
+				</span>
 			</div>
 
-			{/* Top Holders */}
 			<div>
-				<h5 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
-					Top Holders
+				<h5 className="mb-2 font-mono text-xxs uppercase tracking-wider text-ink-55">
+					top holders
 				</h5>
-				<div className="grid grid-cols-[20px_26px_minmax(0,1fr)_52px_40px_40px_44px] sm:grid-cols-[22px_28px_minmax(0,1fr)_64px_48px_48px_64px] items-center gap-1 sm:gap-0.5 text-[0.5rem] sm:text-[0.6rem] uppercase tracking-wider text-gray-500 mb-1">
+				<div className="mb-1 grid grid-cols-[18px_20px_minmax(0,1fr)_46px_36px_36px_46px] items-center gap-1 font-mono text-xxs uppercase tracking-wider text-ink-55 @[340px]:grid-cols-[20px_24px_minmax(0,1fr)_58px_42px_42px_58px]">
 					<span />
 					<span />
-					<span>Holder</span>
-					<span className="text-right">
-						<span className="sm:hidden">PnL$</span>
-						<span className="hidden sm:inline">PnL $</span>
-					</span>
-					<span className="text-right">
-						<span className="sm:hidden">PnLu</span>
-						<span className="hidden sm:inline">PnL u</span>
-					</span>
-					<span className="text-right">
-						<span className="sm:hidden">StkU</span>
-						<span className="hidden sm:inline">Stake u</span>
-					</span>
-					<span className="text-right">
-						<span className="sm:hidden">Stk$</span>
-						<span className="hidden sm:inline">Stake $</span>
-					</span>
+					<span>holder</span>
+					<span className="text-right">pnl $</span>
+					<span className="text-right">pnl u</span>
+					<span className="text-right">stk u</span>
+					<span className="text-right">stk $</span>
 				</div>
-				<ul className="space-y-1.5">
+				<ul className="space-y-1">
 					{side.topHolders.map((holder, idx) => (
 						<li
 							key={holder.proxyWallet}
-							className="grid grid-cols-[20px_26px_minmax(0,1fr)_52px_40px_40px_44px] sm:grid-cols-[22px_28px_minmax(0,1fr)_64px_48px_48px_64px] items-center gap-1 sm:gap-0.5 text-[0.7rem] sm:text-sm"
+							className="grid grid-cols-[18px_20px_minmax(0,1fr)_46px_36px_36px_46px] items-center gap-1 text-xs @[340px]:grid-cols-[20px_24px_minmax(0,1fr)_58px_42px_42px_58px]"
 						>
-							<span className="text-gray-500 pr-1 text-right">{idx + 1}.</span>
+							<span className="pr-1 text-right font-mono tabular-nums text-ink-55">
+								{idx + 1}.
+							</span>
 							{holder.profileImage ? (
 								<img
 									src={holder.profileImage}
 									alt=""
-									className="h-4 w-4 sm:h-5 sm:w-5 rounded-full object-cover ml-0.5"
+									loading="lazy"
+									width={20}
+									height={20}
+									className="h-4 w-4 rounded-full object-cover @[340px]:h-5 @[340px]:w-5"
 								/>
 							) : (
-								<div className="h-4 w-4 sm:h-5 sm:w-5 rounded-full bg-slate-700 flex items-center justify-center ml-0.5">
-									<User className="h-2.5 w-2.5 sm:h-3 sm:w-3 text-gray-400" />
+								<div className="flex h-4 w-4 items-center justify-center rounded-full bg-ink-15 @[340px]:h-5 @[340px]:w-5">
+									<User className="h-2.5 w-2.5 text-ink-55 @[340px]:h-3 @[340px]:w-3" />
 								</div>
 							)}
 							<a
 								href={buildPolymarketProfileUrl(holder.proxyWallet)}
 								target="_blank"
 								rel="noopener noreferrer"
-								className="flex-1 truncate text-gray-300 hover:text-emerald-400 transition-colors cursor-pointer"
+								className="truncate text-ink-70 transition-colors hover:text-brand-blue"
 								onClick={(e) => e.stopPropagation()}
 							>
 								{truncateWalletName(holder.name || holder.pseudonym) ||
-									`${holder.proxyWallet.slice(0, 6)}...${holder.proxyWallet.slice(-4)}`}
+									`${holder.proxyWallet.slice(0, 6)}…${holder.proxyWallet.slice(-4)}`}
 							</a>
 							<div className="flex justify-end">
 								{holder.pnlAll === null || holder.pnlAll === undefined ? (
-									<span className="text-gray-600 text-[0.55rem] sm:text-xs">
-										—
-									</span>
+									<span className="font-mono text-xxs text-ink-40">—</span>
 								) : (
 									<PnlBadge pnlAll={holder.pnlAll} />
 								)}
@@ -3632,9 +3163,7 @@ function SideDetails({
 							<div className="flex justify-end">
 								{holder.pnlAllUnits === null ||
 								holder.pnlAllUnits === undefined ? (
-									<span className="text-gray-600 text-[0.55rem] sm:text-xs">
-										—
-									</span>
+									<span className="font-mono text-xxs text-ink-40">—</span>
 								) : (
 									<UnitBadge
 										pnlUnits={holder.pnlAllUnits}
@@ -3646,9 +3175,7 @@ function SideDetails({
 								{holder.unitSize === null ||
 								holder.unitSize === undefined ||
 								holder.unitSize <= 0 ? (
-									<span className="text-gray-600 text-[0.55rem] sm:text-xs">
-										—
-									</span>
+									<span className="font-mono text-xxs text-ink-40">—</span>
 								) : (
 									<StakeUnitBadge
 										stakeUsd={holder.amount}
@@ -3656,7 +3183,7 @@ function SideDetails({
 									/>
 								)}
 							</div>
-							<span className="text-gray-400 text-[0.55rem] sm:text-xs text-right">
+							<span className="text-right font-mono text-xxs tabular-nums text-ink-70">
 								{formatUsdCompact(holder.amount)}
 							</span>
 						</li>
@@ -3671,15 +3198,13 @@ function PnlBadge({ pnlAll }: { pnlAll?: number | null }) {
 	if (pnlAll === null || pnlAll === undefined) {
 		return null;
 	}
-
 	const isPositive = pnlAll >= 0;
-
 	return (
 		<span
-			className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${
+			className={`inline-flex rounded px-1 py-0.5 font-mono text-xxs font-medium tabular-nums ${
 				isPositive
-					? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-					: "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+					? "bg-signal-pos/10 text-signal-pos"
+					: "bg-signal-bad/15 text-signal-bad"
 			}`}
 		>
 			{formatUsdCompact(Math.abs(pnlAll))}
@@ -3700,20 +3225,18 @@ function UnitBadge({
 	if (!formatted) {
 		return null;
 	}
-
 	const isPositive = (pnlUnits ?? 0) >= 0;
 	const title =
 		unitSize && Number.isFinite(unitSize)
 			? `${formatted}u • unit size ${formatUsdCompact(unitSize)}`
 			: `${formatted}u`;
-
 	return (
 		<span
 			title={title}
-			className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${
+			className={`inline-flex rounded px-1 py-0.5 font-mono text-xxs font-medium tabular-nums ${
 				isPositive
-					? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
-					: "bg-rose-500/10 text-rose-300 border border-rose-500/20"
+					? "bg-signal-pos/10 text-signal-pos"
+					: "bg-signal-bad/10 text-signal-bad"
 			}`}
 		>
 			{formatted}u
@@ -3731,30 +3254,25 @@ function StakeUnitBadge({
 	if (!unitSize || unitSize <= 0) {
 		return null;
 	}
-
 	const stakeUnits = stakeUsd / unitSize;
 	if (!Number.isFinite(stakeUnits)) {
 		return null;
 	}
-
 	const formatted = formatUnits(Math.abs(stakeUnits));
 	if (!formatted) {
 		return null;
 	}
-
 	const title = `${formatted}x typical stake • unit size ${formatUsdCompact(unitSize)}`;
-
 	const tone =
 		stakeUnits < 0.5
-			? "bg-slate-500/10 text-slate-300 border border-slate-500/20"
+			? "bg-ink-10 text-ink-55"
 			: stakeUnits <= 2
-				? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
-				: "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20";
-
+				? "bg-signal-warn/10 text-signal-warn"
+				: "bg-signal-pos/10 text-signal-pos";
 	return (
 		<span
 			title={title}
-			className={`inline-flex items-center gap-0.5 text-[0.55rem] sm:text-[0.6rem] font-semibold px-1 sm:px-1.5 py-0.5 rounded ${tone}`}
+			className={`inline-flex rounded px-1 py-0.5 font-mono text-xxs font-medium tabular-nums ${tone}`}
 		>
 			{formatted}x
 		</span>

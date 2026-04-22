@@ -7,6 +7,7 @@ import {
 	getBotCohortsFn,
 	getBotInspectDefaultsFn,
 } from "../server/api/bot";
+import { getDailyStatsSnapshotsFn } from "../server/api/daily-stats";
 import {
 	getManualPicksBucketPerformanceFn,
 	getManualPicksCalibrationFn,
@@ -81,24 +82,24 @@ function getCanonicalScoreBand(score: number | null | undefined): {
 	if (score === null || score === undefined || !Number.isFinite(score)) {
 		return {
 			label: "no context",
-			className: "border-slate-700 bg-slate-900/60 text-slate-400",
+			className: "border-ink-25 bg-ink-05 text-ink-55",
 		};
 	}
 	if (score >= 70) {
 		return {
 			label: "strong",
-			className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+			className: "border-signal-pos/30 bg-signal-pos/10 text-signal-pos",
 		};
 	}
 	if (score >= 45) {
 		return {
 			label: "mixed",
-			className: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+			className: "border-signal-warn/30 bg-signal-warn/10 text-signal-warn",
 		};
 	}
 	return {
 		label: "weak",
-		className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+		className: "border-signal-bad/35 bg-signal-bad/10 text-signal-bad",
 	};
 }
 
@@ -117,7 +118,7 @@ function coverageStatus(
 	if (total <= 0) {
 		return {
 			label: "low",
-			className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+			className: "border-signal-bad/35 bg-signal-bad/10 text-signal-bad",
 			ratio: 0,
 		};
 	}
@@ -125,27 +126,27 @@ function coverageStatus(
 	if (ratio >= 0.8) {
 		return {
 			label: "good",
-			className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+			className: "border-signal-pos/30 bg-signal-pos/10 text-signal-pos",
 			ratio,
 		};
 	}
 	if (ratio >= 0.4) {
 		return {
 			label: "ok",
-			className: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+			className: "border-signal-warn/30 bg-signal-warn/10 text-signal-warn",
 			ratio,
 		};
 	}
 	return {
 		label: "low",
-		className: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+		className: "border-signal-bad/35 bg-signal-bad/10 text-signal-bad",
 		ratio,
 	};
 }
 
 function sampleClassName(count: number): string {
-	if (count < 20) return "bg-rose-950/20";
-	if (count < 50) return "bg-amber-950/20";
+	if (count < 20) return "bg-signal-bad/10";
+	if (count < 50) return "bg-signal-warn/10";
 	return "";
 }
 
@@ -571,6 +572,81 @@ type BotInspectDefaults = {
 	marketQualityThreshold: number;
 };
 
+type DailyStatsPerformanceBucket = {
+	bucket: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	hitRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+};
+
+type DailyStatsCalibrationBucket = {
+	label: string;
+	count: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	winRate: number | null;
+	avgRoi: number | null;
+	avgClvBps: number | null;
+};
+
+type DailyStatsSnapshot = {
+	dayKey: string;
+	windowStartAt: number;
+	windowEndAt: number;
+	snapshotCreatedAt: number;
+	manualPicks: {
+		total: number;
+		settled: number;
+		wins: number;
+		losses: number;
+		pushes: number;
+		avgRoi: number | null;
+		totalRoi: number | null;
+		avgClv: number | null;
+		byTimeToStart: DailyStatsPerformanceBucket[];
+		byMarketType: MarketTypePerformanceRow[];
+		bySport: SportPerformanceRow[];
+		byScoreDifferential: DailyStatsCalibrationBucket[];
+		byEdgeRating: DailyStatsCalibrationBucket[];
+		byQualityScore: DailyStatsCalibrationBucket[];
+	};
+	candidateFunnel: {
+		runCount: number;
+		totalRequested: number;
+		totalReturned: number;
+		totalEntries: number;
+		totalUpcomingEntries: number;
+		totalCandidatesBeforeDedup: number;
+		totalDedupDropped: number;
+		avgReturnedPerRun: number | null;
+		avgReturnRate: number | null;
+		topExclusions: Array<[string, number]>;
+		topPolicyMatched: Array<[string, number]>;
+		returnedByMarketType: Record<string, number>;
+		returnedByTimingBucket: Record<string, number>;
+		returnedBySportSeries: Record<string, number>;
+	};
+	drift: {
+		trailingDays: number;
+		baselineDays: number;
+		picks: {
+			settledDelta: number | null;
+			avgRoiDelta: number | null;
+			avgClvDelta: number | null;
+		};
+		candidates: {
+			runCountDelta: number | null;
+			avgReturnedPerRunDelta: number | null;
+			avgReturnRateDelta: number | null;
+		};
+	};
+};
+
 const FALLBACK_BOT_DEFAULTS: BotInspectDefaults = {
 	minGrade: "B",
 	windowMinutes: 90,
@@ -677,6 +753,13 @@ function RuntimePage() {
 	const [isCopyingSnapshot, setIsCopyingSnapshot] = useState(false);
 	const [sinceFilter, setSinceFilter] = useState<string>("");
 	const sincePickedAtRef = useRef<number | undefined>(undefined);
+	const [dailySnapshots, setDailySnapshots] = useState<DailyStatsSnapshot[]>(
+		[],
+	);
+	const [isDailySnapshotsLoading, setIsDailySnapshotsLoading] = useState(false);
+	const [dailySnapshotsError, setDailySnapshotsError] = useState<string | null>(
+		null,
+	);
 
 	const filteredTotalMarkets = stats?.filteredTagStats
 		? stats.filteredTagStats.reduce((sum, entry) => sum + entry.count, 0)
@@ -882,6 +965,49 @@ function RuntimePage() {
 				: [],
 		[cohortSummary],
 	);
+	const latestDailySnapshot = dailySnapshots[0] ?? null;
+	const dailyBestTimingBucket = useMemo(() => {
+		if (!latestDailySnapshot) return null;
+		return (
+			[...latestDailySnapshot.manualPicks.byTimeToStart]
+				.filter((row) => row.count > 0)
+				.sort((left, right) => {
+					const roiDelta =
+						(right.avgRoi ?? Number.NEGATIVE_INFINITY) -
+						(left.avgRoi ?? Number.NEGATIVE_INFINITY);
+					if (roiDelta !== 0) return roiDelta;
+					return (
+						(right.avgClvBps ?? Number.NEGATIVE_INFINITY) -
+						(left.avgClvBps ?? Number.NEGATIVE_INFINITY)
+					);
+				})[0] ?? null
+		);
+	}, [latestDailySnapshot]);
+	const dailyWorstTimingBucket = useMemo(() => {
+		if (!latestDailySnapshot) return null;
+		return (
+			[...latestDailySnapshot.manualPicks.byTimeToStart]
+				.filter((row) => row.count > 0)
+				.sort((left, right) => {
+					const roiDelta =
+						(left.avgRoi ?? Number.POSITIVE_INFINITY) -
+						(right.avgRoi ?? Number.POSITIVE_INFINITY);
+					if (roiDelta !== 0) return roiDelta;
+					return (
+						(left.avgClvBps ?? Number.POSITIVE_INFINITY) -
+						(right.avgClvBps ?? Number.POSITIVE_INFINITY)
+					);
+				})[0] ?? null
+		);
+	}, [latestDailySnapshot]);
+	const dailyTopMarketTypes = useMemo(
+		() => latestDailySnapshot?.manualPicks.byMarketType.slice(0, 3) ?? [],
+		[latestDailySnapshot],
+	);
+	const dailyRecentRows = useMemo(
+		() => dailySnapshots.slice(0, 7),
+		[dailySnapshots],
+	);
 
 	const loadStats = useCallback(async () => {
 		setError(null);
@@ -964,6 +1090,22 @@ function RuntimePage() {
 			setCandidateCohortsError("Failed to load candidate cohorts");
 		} finally {
 			setIsCandidateCohortsLoading(false);
+		}
+	}, []);
+
+	const loadDailySnapshots = useCallback(async () => {
+		setIsDailySnapshotsLoading(true);
+		setDailySnapshotsError(null);
+		try {
+			const result = await getDailyStatsSnapshotsFn({
+				data: { limit: 14 },
+			});
+			setDailySnapshots((result.snapshots ?? []) as DailyStatsSnapshot[]);
+		} catch (err) {
+			console.error("Failed to load daily stats snapshots", err);
+			setDailySnapshotsError("Failed to load daily stats snapshots");
+		} finally {
+			setIsDailySnapshotsLoading(false);
 		}
 	}, []);
 
@@ -1202,13 +1344,14 @@ function RuntimePage() {
 			await loadStats();
 			await loadCandidateDebug();
 			await loadCandidateCohorts();
+			await loadDailySnapshots();
 		} catch (err) {
 			console.error("Failed to refresh runtime stats", err);
 			setError("Failed to refresh runtime stats");
 		} finally {
 			setIsLoading(false);
 		}
-	}, [loadStats, loadCandidateDebug, loadCandidateCohorts]);
+	}, [loadStats, loadCandidateDebug, loadCandidateCohorts, loadDailySnapshots]);
 
 	const copySnapshot = useCallback(async () => {
 		setCopySnapshotStatus(null);
@@ -1241,6 +1384,9 @@ function RuntimePage() {
 			applyBotDefaults(activeDefaults);
 			const refreshedCandidateCohorts = await getBotCohortsFn({
 				data: { limit: 24 },
+			});
+			const refreshedDailySnapshots = await getDailyStatsSnapshotsFn({
+				data: { limit: 14 },
 			});
 			const [
 				refreshedCalibration,
@@ -1328,6 +1474,9 @@ function RuntimePage() {
 			setCandidateCohorts(
 				(refreshedCandidateCohorts.snapshots ??
 					[]) as BotCandidateCohortSnapshot[],
+			);
+			setDailySnapshots(
+				(refreshedDailySnapshots.snapshots ?? []) as DailyStatsSnapshot[],
 			);
 			setCalibrationResult(
 				(refreshedCalibration.calibration ?? null) as CalibrationResult | null,
@@ -1471,11 +1620,7 @@ function RuntimePage() {
 		} finally {
 			setIsCopyingSnapshot(false);
 		}
-	}, [
-		calibrationLimit,
-		clvQualityThreshold,
-		applyBotDefaults,
-	]);
+	}, [calibrationLimit, clvQualityThreshold, applyBotDefaults]);
 
 	const handleBackfill = useCallback(async () => {
 		if (isBackfilling) return;
@@ -1585,7 +1730,8 @@ function RuntimePage() {
 
 	const copyGradeRecal = useCallback(async () => {
 		if (!gradeRecalibrationResult) return;
-		const header = "grade\tcount\twins\tlosses\tpushes\twinRate\tavgRoi\tavgClvBps\tavgSignalScore\tavgEdgeRating\tavgScoreDiff\tavgPriceEdge\tavgPriceEdgeRatio";
+		const header =
+			"grade\tcount\twins\tlosses\tpushes\twinRate\tavgRoi\tavgClvBps\tavgSignalScore\tavgEdgeRating\tavgScoreDiff\tavgPriceEdge\tavgPriceEdgeRatio";
 		const lines = gradeRecalibrationResult.rows.map((r) =>
 			[
 				r.grade,
@@ -1598,7 +1744,9 @@ function RuntimePage() {
 				r.avgClvBps !== null ? r.avgClvBps.toFixed(1) : "—",
 				r.avgSignalScore !== null ? r.avgSignalScore.toFixed(1) : "—",
 				r.avgEdgeRating !== null ? r.avgEdgeRating.toFixed(1) : "—",
-				r.avgScoreDifferential !== null ? r.avgScoreDifferential.toFixed(1) : "—",
+				r.avgScoreDifferential !== null
+					? r.avgScoreDifferential.toFixed(1)
+					: "—",
 				r.avgPriceEdge !== null ? r.avgPriceEdge.toFixed(4) : "—",
 				r.avgPriceEdgeRatio !== null ? r.avgPriceEdgeRatio.toFixed(2) : "—",
 			].join("\t"),
@@ -1621,11 +1769,15 @@ function RuntimePage() {
 			{ title: "Quality Score", rows: calibrationResult.byQualityScore },
 			{ title: "Time to Start", rows: calibrationResult.byTimeToStart },
 			{ title: "Edge Rating", rows: calibrationResult.byEdgeRating },
-			{ title: "Score Differential", rows: calibrationResult.byScoreDifferential },
+			{
+				title: "Score Differential",
+				rows: calibrationResult.byScoreDifferential,
+			},
 			{ title: "Price Edge", rows: calibrationResult.byPriceEdge },
 			{ title: "Price Edge Ratio", rows: calibrationResult.byPriceEdgeRatio },
 		];
-		const header = "dimension\tbucket\tcount\twins\tlosses\twinRate\tavgRoi\tavgClvBps";
+		const header =
+			"dimension\tbucket\tcount\twins\tlosses\twinRate\tavgRoi\tavgClvBps";
 		const lines: string[] = [];
 		for (const table of allTables) {
 			for (const row of table.rows) {
@@ -1659,6 +1811,7 @@ function RuntimePage() {
 		void loadBotDefaults();
 		void loadCandidateDebug();
 		void loadCandidateCohorts();
+		void loadDailySnapshots();
 		void loadCalibration(2000);
 		void loadBucketPerformance(2000);
 		void loadClvTiming(2000, 0.66);
@@ -1671,6 +1824,7 @@ function RuntimePage() {
 		loadBotDefaults,
 		loadCandidateDebug,
 		loadCandidateCohorts,
+		loadDailySnapshots,
 		loadCalibration,
 		loadBucketPerformance,
 		loadClvTiming,
@@ -1682,115 +1836,386 @@ function RuntimePage() {
 
 	return (
 		<AuthGate>
-			<div className="min-h-screen bg-slate-950 text-slate-100">
+			<div className="min-h-screen bg-ink-00 text-ink-85">
 				<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
 					<header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 						<div>
-							<p className="text-xs uppercase tracking-[0.3em] text-slate-400">
+							<p className="text-xs uppercase tracking-[0.3em] text-ink-55">
 								Runtime
 							</p>
-							<h1 className="text-3xl font-semibold text-slate-50">
+							<h1 className="text-3xl font-semibold text-ink-95">
 								Market Fetch Stats
 							</h1>
-							<p className="mt-2 text-sm text-slate-400">
+							<p className="mt-2 text-sm text-ink-55">
 								Verify how many markets we pull per sport tag and which ones
 								dominate by volume.
 							</p>
 						</div>
 						<a
 							href="/sharp"
-							className="inline-flex items-center justify-center rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition-colors hover:bg-slate-800/60"
+							className="inline-flex h-8 items-center justify-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 						>
 							Back to Sharp
 						</a>
 					</header>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 							<div>
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									Last fetched: {formatRelativeTime(stats?.fetchedAt)}
 								</p>
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									Filtered markets (window): {filteredTotalMarkets}
 								</p>
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									Expanded events: {stats?.expandedEventCount ?? 0} • Expanded
 									markets: {stats?.expandedMarketCount ?? 0}
 								</p>
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									Retries: {stats?.retryCount ?? 0} • Failures:{" "}
 									{stats?.failureCount ?? 0} • Pagination caps:{" "}
 									{stats?.paginationCapHits?.length ?? 0}
 								</p>
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									Totals: {stats?.totalRuns ?? 0} runs •{" "}
 									{stats?.totalRetries ?? 0} retries •{" "}
 									{stats?.totalFailures ?? 0} failures
 								</p>
 								{stats?.cacheFreshness && (
-									<p className="text-sm text-slate-400">
+									<p className="text-sm text-ink-55">
 										Cache freshness: {stats.cacheFreshness.total} total •{" "}
 										{stats.cacheFreshness.staleHistory} stale •{" "}
 										{stats.cacheFreshness.missingHistory} missing history
 									</p>
 								)}
 							</div>
-							<div className="flex flex-wrap items-center gap-3">
-								<button
-									type="button"
-									onClick={() => void copySnapshot()}
-									disabled={isCopyingSnapshot}
-									className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
-								>
-									{isCopyingSnapshot
-										? "Refreshing..."
-										: "Refresh + Copy Snapshot"}
-								</button>
+							{/* Action hierarchy: primary (Refresh Stats), secondary (Copy Snapshot),
+							    tertiary destructive-ish (Backfill, with confirm). */}
+							<div className="flex flex-wrap items-center gap-2">
 								<button
 									type="button"
 									onClick={refreshStats}
 									disabled={isLoading}
-									className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+									className="inline-flex h-9 items-center rounded-md bg-brand-blue px-4 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-00 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 								>
-									{isLoading ? "Refreshing..." : "Refresh Stats"}
+									{isLoading ? "refreshing…" : "refresh stats"}
 								</button>
 								<button
 									type="button"
-									onClick={handleBackfill}
-									disabled={isBackfilling}
-									className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-60"
+									onClick={() => void copySnapshot()}
+									disabled={isCopyingSnapshot}
+									className="inline-flex h-9 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 								>
-									{isBackfilling ? "Backfilling..." : "Backfill History"}
+									{isCopyingSnapshot ? "copying…" : "copy snapshot"}
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										if (
+											!confirm(
+												"Backfill historical market data? This may consume API quota.",
+											)
+										)
+											return;
+										handleBackfill();
+									}}
+									disabled={isBackfilling}
+									className="inline-flex h-9 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-55 transition-colors hover:bg-signal-warn/10 hover:text-signal-warn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
+								>
+									{isBackfilling ? "backfilling…" : "backfill history"}
 								</button>
 							</div>
 						</div>
 
 						{error && (
-							<div className="mt-4 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+							<div className="mt-4 rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 								{error}
 							</div>
 						)}
 						{backfillResult && (
-							<div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+							<div className="mt-4 rounded-md bg-signal-pos/10 px-4 py-2 text-sm text-signal-pos ring-1 ring-inset ring-signal-pos/30">
 								{backfillResult}
 							</div>
 						)}
 						{copySnapshotStatus && (
-							<div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+							<div className="mt-4 rounded-md bg-signal-pos/10 px-4 py-2 text-sm text-signal-pos ring-1 ring-inset ring-signal-pos/30">
 								{copySnapshotStatus}
 							</div>
 						)}
 					</section>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+						<div className="flex items-start justify-between gap-4">
+							<div>
+								<p className="text-xs uppercase tracking-[0.3em] text-ink-950">
+									Daily Snapshots
+								</p>
+								<h2 className="mt-2 text-xl font-semibold text-ink-95">
+									Automatic Daily Collection
+								</h2>
+								<p className="mt-2 max-w-2xl text-sm text-ink-55">
+									Each UTC day stores a compact pick-performance and
+									candidate-funnel snapshot. Use this to spot drift without
+									exporting ad hoc tables.
+								</p>
+							</div>
+							<div className="rounded-lg border border-ink-15 bg-ink-10 px-3 py-2 text-right text-xs text-ink-55">
+								<div>Rows loaded: {dailySnapshots.length}</div>
+								<div>
+									Latest refresh:{" "}
+									{latestDailySnapshot
+										? formatRelativeTime(latestDailySnapshot.snapshotCreatedAt)
+										: "Never"}
+								</div>
+							</div>
+						</div>
+
+						{dailySnapshotsError && (
+							<div className="mt-4 rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
+								{dailySnapshotsError}
+							</div>
+						)}
+
+						{latestDailySnapshot ? (
+							<div className="mt-5 space-y-5">
+								<div className="grid gap-3 md:grid-cols-4">
+									<div className="rounded-md bg-ink-10 p-4">
+										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
+											Latest Day
+										</p>
+										<p className="mt-2 text-lg font-semibold text-ink-95">
+											{latestDailySnapshot.dayKey}
+										</p>
+										<p className="mt-1 text-sm text-ink-55">
+											Settled: {latestDailySnapshot.manualPicks.settled} • Wins:{" "}
+											{latestDailySnapshot.manualPicks.wins} • Losses:{" "}
+											{latestDailySnapshot.manualPicks.losses}
+										</p>
+									</div>
+									<div className="rounded-md bg-ink-10 p-4">
+										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
+											Daily ROI
+										</p>
+										<p className="mt-2 text-lg font-semibold text-ink-95">
+											{formatSignedPercent(
+												latestDailySnapshot.manualPicks.avgRoi,
+											)}
+										</p>
+										<p className="mt-1 text-sm text-ink-55">
+											vs trailing {latestDailySnapshot.drift.trailingDays}d:{" "}
+											{formatSignedPercent(
+												latestDailySnapshot.drift.picks.avgRoiDelta,
+											)}
+										</p>
+									</div>
+									<div className="rounded-md bg-ink-10 p-4">
+										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
+											Daily CLV
+										</p>
+										<p className="mt-2 text-lg font-semibold text-ink-95">
+											{latestDailySnapshot.manualPicks.avgClv !== null
+												? formatBps(
+														latestDailySnapshot.manualPicks.avgClv * 10000,
+													)
+												: "—"}
+										</p>
+										<p className="mt-1 text-sm text-ink-55">
+											vs trailing {latestDailySnapshot.drift.trailingDays}d:{" "}
+											{latestDailySnapshot.drift.picks.avgClvDelta !== null
+												? formatBps(
+														latestDailySnapshot.drift.picks.avgClvDelta * 10000,
+													)
+												: "—"}
+										</p>
+									</div>
+									<div className="rounded-md bg-ink-10 p-4">
+										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
+											Candidate Funnel
+										</p>
+										<p className="mt-2 text-lg font-semibold text-ink-95">
+											{latestDailySnapshot.candidateFunnel.totalReturned}{" "}
+											returned
+										</p>
+										<p className="mt-1 text-sm text-ink-55">
+											{latestDailySnapshot.candidateFunnel.runCount} runs •{" "}
+											{formatPercent(
+												latestDailySnapshot.candidateFunnel.avgReturnRate,
+											)}{" "}
+											return rate
+										</p>
+									</div>
+								</div>
+
+								<div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+									<div className="rounded-md bg-ink-00 p-4">
+										<div className="flex items-center justify-between">
+											<p className="text-sm font-semibold text-ink-95">
+												Recent Daily Trend
+											</p>
+											{isDailySnapshotsLoading ? (
+												<span className="text-xs text-ink-950">
+													Refreshing…
+												</span>
+											) : null}
+										</div>
+										<table className="mt-3 min-w-full text-left text-sm text-ink-85">
+											<thead>
+												<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+													<th scope="col" className="pb-2">
+														Day
+													</th>
+													<th scope="col" className="pb-2">
+														Settled
+													</th>
+													<th scope="col" className="pb-2">
+														Avg ROI
+													</th>
+													<th scope="col" className="pb-2">
+														Avg CLV
+													</th>
+													<th scope="col" className="pb-2">
+														Runs
+													</th>
+													<th scope="col" className="pb-2">
+														Return Rate
+													</th>
+												</tr>
+											</thead>
+											<tbody>
+												{dailyRecentRows.map((snapshot) => (
+													<tr
+														key={snapshot.dayKey}
+														className={`border-t border-ink-15 ${sampleClassName(
+															snapshot.manualPicks.settled,
+														)}`}
+													>
+														<td className="py-2 pr-4 font-semibold text-ink-95">
+															{snapshot.dayKey}
+														</td>
+														<td className="py-2 pr-4">
+															{snapshot.manualPicks.settled}
+														</td>
+														<td className="py-2 pr-4">
+															{formatSignedPercent(snapshot.manualPicks.avgRoi)}
+														</td>
+														<td className="py-2 pr-4">
+															{snapshot.manualPicks.avgClv !== null
+																? formatBps(snapshot.manualPicks.avgClv * 10000)
+																: "—"}
+														</td>
+														<td className="py-2 pr-4">
+															{snapshot.candidateFunnel.runCount}
+														</td>
+														<td className="py-2">
+															{formatPercent(
+																snapshot.candidateFunnel.avgReturnRate,
+															)}
+														</td>
+													</tr>
+												))}
+											</tbody>
+										</table>
+									</div>
+
+									<div className="space-y-4">
+										<div className="rounded-md bg-ink-00 p-4">
+											<p className="text-sm font-semibold text-ink-95">
+												Latest Read
+											</p>
+											<div className="mt-3 space-y-3 text-sm text-ink-70">
+												<div>
+													<span className="text-ink-950">
+														Best timing bucket:
+													</span>{" "}
+													{dailyBestTimingBucket
+														? `${dailyBestTimingBucket.bucket} • ${formatSignedPercent(
+																dailyBestTimingBucket.avgRoi,
+															)} • ${formatBps(dailyBestTimingBucket.avgClvBps)}`
+														: "—"}
+												</div>
+												<div>
+													<span className="text-ink-950">
+														Worst timing bucket:
+													</span>{" "}
+													{dailyWorstTimingBucket
+														? `${dailyWorstTimingBucket.bucket} • ${formatSignedPercent(
+																dailyWorstTimingBucket.avgRoi,
+															)} • ${formatBps(dailyWorstTimingBucket.avgClvBps)}`
+														: "—"}
+												</div>
+												<div>
+													<span className="text-ink-950">Top exclusions:</span>{" "}
+													{latestDailySnapshot.candidateFunnel.topExclusions
+														.slice(0, 3)
+														.map(([reason, count]) => `${reason} (${count})`)
+														.join(", ") || "none"}
+												</div>
+												<div>
+													<span className="text-ink-950">
+														Top policy buckets:
+													</span>{" "}
+													{latestDailySnapshot.candidateFunnel.topPolicyMatched
+														.slice(0, 3)
+														.map(([bucket, count]) => `${bucket} (${count})`)
+														.join(", ") || "none"}
+												</div>
+											</div>
+										</div>
+
+										<div className="rounded-md bg-ink-00 p-4">
+											<p className="text-sm font-semibold text-ink-95">
+												Top Market Types
+											</p>
+											<div className="mt-3 space-y-2">
+												{dailyTopMarketTypes.length > 0 ? (
+													dailyTopMarketTypes.map((row) => (
+														<div
+															key={row.marketType}
+															className="flex items-center justify-between rounded-lg border border-ink-15 bg-ink-10 px-3 py-2 text-sm text-ink-85"
+														>
+															<div>
+																<div className="font-semibold text-ink-95">
+																	{row.label}
+																</div>
+																<div className="text-xs text-ink-950">
+																	{row.totalCount} picks
+																</div>
+															</div>
+															<div className="text-right">
+																<div>{formatSignedPercent(row.avgRoi)}</div>
+																<div className="text-xs text-ink-950">
+																	{formatBps(row.avgClvBps)}
+																</div>
+															</div>
+														</div>
+													))
+												) : (
+													<p className="text-sm text-ink-55">
+														No market-type rollup yet.
+													</p>
+												)}
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						) : (
+							<p className="mt-4 text-sm text-ink-55">
+								No daily snapshots yet. The scheduled worker will populate this
+								section automatically after the first refresh window.
+							</p>
+						)}
+					</section>
+
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						<div className="flex flex-col gap-4">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
 								<div>
-									<h2 className="text-lg font-semibold text-slate-50">
+									<h2 className="text-lg font-semibold text-ink-95">
 										Candidate Policy
 									</h2>
-									<p className="mt-1 text-sm text-slate-400">
+									<p className="mt-1 text-sm text-ink-55">
 										Live candidate debug using the current API-side policy
 										ranking and filtering defaults.
 									</p>
@@ -1799,7 +2224,7 @@ function RuntimePage() {
 									type="button"
 									onClick={() => void loadCandidateDebug()}
 									disabled={isCandidateDebugLoading}
-									className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800/60 disabled:opacity-60"
+									className="rounded-md bg-ink-00 px-3 py-2 text-sm font-semibold text-ink-85 ring-1 ring-inset ring-ink-25 hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 								>
 									{isCandidateDebugLoading
 										? "Refreshing..."
@@ -1809,44 +2234,44 @@ function RuntimePage() {
 									type="button"
 									onClick={() => void copyCandidatePolicySummary()}
 									disabled={!candidateDebugResult}
-									className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-100 hover:bg-sky-500/20 disabled:opacity-60"
+									className="rounded-md bg-ink-10 px-3 py-2 text-sm font-semibold text-ink-85 ring-1 ring-inset ring-ink-25 hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 								>
 									Copy Candidate Policy
 								</button>
 							</div>
 							{candidateDebugError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{candidateDebugError}
 								</div>
 							)}
 							{copyCandidateStatus && (
-								<div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm text-sky-100">
+								<div className="rounded-md bg-ink-10 px-4 py-2 text-sm text-ink-85 ring-1 ring-inset ring-brand-blue/30">
 									{copyCandidateStatus}
 								</div>
 							)}
 							{candidateDebugResult && (
 								<div className="space-y-5">
 									<div className="grid gap-3 md:grid-cols-4">
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>Entries: {candidateDebugResult.debug.totalEntries}</p>
 											<p>
 												Upcoming: {candidateDebugResult.debug.upcomingEntries}
 											</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Before dedup:{" "}
 												{candidateDebugResult.debug.candidatesBeforeDedup}
 											</p>
 											<p>Returned: {candidateDebugResult.returned}</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Dedup dropped: {candidateDebugResult.debug.dedupDropped}
 											</p>
 											<p>Requested grades: {candidateDebugResult.requested}</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Top exclusion:{" "}
 												{Object.entries(candidateDebugResult.debug.excluded)
@@ -1862,26 +2287,28 @@ function RuntimePage() {
 										</div>
 									</div>
 									<div className="grid gap-4 lg:grid-cols-2">
-										<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<h3 className="text-sm font-semibold text-slate-100">
+										<div className="overflow-auto rounded-md bg-ink-00 p-4">
+											<h3 className="text-sm font-semibold text-ink-95">
 												Top policy buckets
 											</h3>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
-												<thead className="text-xs uppercase tracking-wide text-slate-500">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-70">
+												<thead className="text-xs uppercase tracking-wide text-ink-950">
 													<tr>
-														<th className="pb-2 pr-4">Policy</th>
-														<th className="pb-2 text-right">Count</th>
+														<th scope="col" className="pb-2 pr-4">
+															Policy
+														</th>
+														<th scope="col" className="pb-2 text-right">
+															Count
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{candidatePolicyRows.map(([key, count]) => (
 														<tr
 															key={key}
-															className="border-t border-slate-800/80 align-top"
+															className="border-t border-ink-15 align-top"
 														>
-															<td className="py-2 pr-4 text-slate-200">
-																{key}
-															</td>
+															<td className="py-2 pr-4 text-ink-85">{key}</td>
 															<td className="py-2 text-right">{count}</td>
 														</tr>
 													))}
@@ -1892,19 +2319,19 @@ function RuntimePage() {
 											{candidateReturnedBreakdowns.map((section) => (
 												<div
 													key={section.title}
-													className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+													className="overflow-auto rounded-md bg-ink-00 p-4"
 												>
-													<h3 className="text-sm font-semibold text-slate-100">
+													<h3 className="text-sm font-semibold text-ink-95">
 														{section.title}
 													</h3>
-													<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+													<table className="mt-3 min-w-full text-left text-sm text-ink-70">
 														<tbody>
 															{section.rows.map(([key, count]) => (
 																<tr
 																	key={key}
-																	className="border-t border-slate-800/80"
+																	className="border-t border-ink-15"
 																>
-																	<td className="py-2 pr-4 text-slate-200">
+																	<td className="py-2 pr-4 text-ink-85">
 																		{key}
 																	</td>
 																	<td className="py-2 text-right">{count}</td>
@@ -1916,25 +2343,47 @@ function RuntimePage() {
 											))}
 										</div>
 									</div>
-									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<h3 className="text-sm font-semibold text-slate-100">
+									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+										<h3 className="text-sm font-semibold text-ink-95">
 											Top returned candidates
 										</h3>
 										{returnedCandidates.length > 0 ? (
-											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
-												<thead className="text-xs uppercase tracking-wide text-slate-500">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-70">
+												<thead className="text-xs uppercase tracking-wide text-ink-950">
 													<tr>
-														<th className="pb-2 pr-4">Market</th>
-														<th className="pb-2 pr-4">Type</th>
-														<th className="pb-2 pr-4">Side</th>
-														<th className="pb-2 pr-4">Grade</th>
-														<th className="pb-2 pr-4">Segment</th>
-														<th className="pb-2 pr-4">Quality</th>
-														<th className="pb-2 pr-4">Canonical</th>
-														<th className="pb-2 pr-4">Why</th>
-														<th className="pb-2 pr-4">Score</th>
-														<th className="pb-2 pr-4">Price</th>
-														<th className="pb-2">Start</th>
+														<th scope="col" className="pb-2 pr-4">
+															Market
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Type
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Side
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Grade
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Segment
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Quality
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Canonical
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Why
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Score
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Price
+														</th>
+														<th scope="col" className="pb-2">
+															Start
+														</th>
 													</tr>
 												</thead>
 												<tbody>
@@ -1945,13 +2394,13 @@ function RuntimePage() {
 														return (
 															<tr
 																key={candidate.entry.conditionId}
-																className="border-t border-slate-800/80 align-top"
+																className="border-t border-ink-15 align-top"
 															>
-																<td className="py-2 pr-4 text-slate-200">
-																	<div className="font-semibold text-slate-100">
+																<td className="py-2 pr-4 text-ink-85">
+																	<div className="font-semibold text-ink-95">
 																		{candidate.entry.marketTitle}
 																	</div>
-																	<div className="text-xs text-slate-500">
+																	<div className="text-xs text-ink-950">
 																		Series:{" "}
 																		{candidate.entry.sportSeriesId ?? "unknown"}
 																	</div>
@@ -1974,7 +2423,7 @@ function RuntimePage() {
 																			: "—"}
 																	</div>
 																	{candidate.grade.segmentLabel && (
-																		<div className="text-xs text-slate-500">
+																		<div className="text-xs text-ink-950">
 																			{candidate.grade.segmentLabel}
 																		</div>
 																	)}
@@ -1996,7 +2445,7 @@ function RuntimePage() {
 																			: "—"}
 																	</div>
 																	{candidate.grade.canonicalSnapshotType && (
-																		<div className="text-xs text-slate-500">
+																		<div className="text-xs text-ink-950">
 																			{candidate.grade.canonicalSnapshotType}
 																		</div>
 																	)}
@@ -2015,7 +2464,7 @@ function RuntimePage() {
 																				.map((note) => (
 																					<span
 																						key={note}
-																						className="rounded-full border border-sky-900/70 bg-sky-950/40 px-2 py-0.5 text-[11px] text-sky-200"
+																						className="rounded-full border ring-brand-blue/30 bg-ink-10 px-2 py-0.5 text-[11px] text-brand-blue"
 																					>
 																						{formatSegmentNote(note)}
 																					</span>
@@ -2030,7 +2479,7 @@ function RuntimePage() {
 																				.map((warning) => (
 																					<span
 																						key={warning}
-																						className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[11px] text-slate-300"
+																						className="rounded-full border border-ink-25 bg-ink-10 px-2 py-0.5 text-[11px] text-ink-70"
 																					>
 																						{formatCanonicalWarningLabel(
 																							warning,
@@ -2061,40 +2510,56 @@ function RuntimePage() {
 												</tbody>
 											</table>
 										) : (
-											<p className="mt-3 text-sm text-slate-400">
+											<p className="mt-3 text-sm text-ink-55">
 												No returned candidates in the current snapshot.
 											</p>
 										)}
 									</div>
-									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<h3 className="text-sm font-semibold text-slate-100">
+									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+										<h3 className="text-sm font-semibold text-ink-95">
 											Top near misses
 										</h3>
 										{nearMissCandidates.length > 0 ? (
-											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
-												<thead className="text-xs uppercase tracking-wide text-slate-500">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-70">
+												<thead className="text-xs uppercase tracking-wide text-ink-950">
 													<tr>
-														<th className="pb-2 pr-4">Market</th>
-														<th className="pb-2 pr-4">Reason</th>
-														<th className="pb-2 pr-4">Grade</th>
-														<th className="pb-2 pr-4">Target</th>
-														<th className="pb-2 pr-4">Quality</th>
-														<th className="pb-2 pr-4">Score</th>
-														<th className="pb-2 pr-4">Price</th>
-														<th className="pb-2">Start</th>
+														<th scope="col" className="pb-2 pr-4">
+															Market
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Reason
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Grade
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Target
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Quality
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Score
+														</th>
+														<th scope="col" className="pb-2 pr-4">
+															Price
+														</th>
+														<th scope="col" className="pb-2">
+															Start
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{nearMissCandidates.map((candidate) => (
 														<tr
 															key={`${candidate.reason}-${candidate.conditionId}`}
-															className="border-t border-slate-800/80 align-top"
+															className="border-t border-ink-15 align-top"
 														>
-															<td className="py-2 pr-4 text-slate-200">
-																<div className="font-semibold text-slate-100">
+															<td className="py-2 pr-4 text-ink-85">
+																<div className="font-semibold text-ink-95">
 																	{candidate.marketTitle}
 																</div>
-																<div className="text-xs text-slate-500">
+																<div className="text-xs text-ink-950">
 																	Series: {candidate.sportSeriesId ?? "unknown"}{" "}
 																	• {candidate.marketType}
 																</div>
@@ -2132,7 +2597,7 @@ function RuntimePage() {
 												</tbody>
 											</table>
 										) : (
-											<p className="mt-3 text-sm text-slate-400">
+											<p className="mt-3 text-sm text-ink-55">
 												No near misses captured in the current snapshot.
 											</p>
 										)}
@@ -2142,14 +2607,14 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						<div className="flex flex-col gap-4">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
 								<div>
-									<h2 className="text-lg font-semibold text-slate-50">
+									<h2 className="text-lg font-semibold text-ink-95">
 										Candidate Cohorts
 									</h2>
-									<p className="mt-1 text-sm text-slate-400">
+									<p className="mt-1 text-sm text-ink-55">
 										Recent production candidate scans persisted by the bot API.
 									</p>
 								</div>
@@ -2158,7 +2623,7 @@ function RuntimePage() {
 										type="button"
 										onClick={() => void loadCandidateCohorts()}
 										disabled={isCandidateCohortsLoading}
-										className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800/60 disabled:opacity-60"
+										className="rounded-md bg-ink-00 px-3 py-2 text-sm font-semibold text-ink-85 ring-1 ring-inset ring-ink-25 hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 									>
 										{isCandidateCohortsLoading
 											? "Refreshing..."
@@ -2168,36 +2633,36 @@ function RuntimePage() {
 										type="button"
 										onClick={() => void copyCandidateCohortsSummary()}
 										disabled={!cohortLatest || !cohortSummary}
-										className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-100 hover:bg-sky-500/20 disabled:opacity-60"
+										className="rounded-md bg-ink-10 px-3 py-2 text-sm font-semibold text-ink-85 ring-1 ring-inset ring-ink-25 hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 									>
 										Copy Candidate Cohorts
 									</button>
 								</div>
 							</div>
 							{candidateCohortsError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{candidateCohortsError}
 								</div>
 							)}
 							{copyCohortStatus && (
-								<div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm text-sky-100">
+								<div className="rounded-md bg-ink-10 px-4 py-2 text-sm text-ink-85 ring-1 ring-inset ring-brand-blue/30">
 									{copyCohortStatus}
 								</div>
 							)}
 							{cohortLatest && (
 								<div className="space-y-5">
 									<div className="grid gap-3 md:grid-cols-4">
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Latest: {formatRelativeTime(cohortLatest.createdAt)}
 											</p>
 											<p>Returned: {cohortLatest.returned}</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>Upcoming: {cohortLatest.upcomingEntries}</p>
 											<p>Before dedup: {cohortLatest.candidatesBeforeDedup}</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Config: {cohortLatest.minGrade} •{" "}
 												{cohortLatest.minMinutesToStart}-
@@ -2208,7 +2673,7 @@ function RuntimePage() {
 												{cohortLatest.marketQualityThreshold.toFixed(2)}
 											</p>
 										</div>
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											<p>
 												Started:{" "}
 												{cohortLatest.includeStarted ? "included" : "excluded"}
@@ -2221,28 +2686,33 @@ function RuntimePage() {
 									</div>
 									{cohortSummary && (
 										<div className="grid gap-3 md:grid-cols-4">
-											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 												<p>Recent scans: {cohortSummary.scans}</p>
 												<p>
 													Returned scans: {cohortSummary.returnedScans} (
 													{formatPercent(cohortSummary.hitRate)})
 												</p>
 											</div>
-											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 												<p>Total returned: {cohortSummary.totalReturned}</p>
 												<p>
 													Avg returned/scan:{" "}
 													{cohortSummary.avgReturned.toFixed(2)}
 												</p>
 											</div>
-											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 												<p>Total upcoming: {cohortSummary.totalUpcoming}</p>
 												<p>
-													Avg upcoming/scan: (cohortSummary.totalUpcoming /
-													cohortSummary.scans).toFixed(1)
+													Avg upcoming/scan:{" "}
+													{cohortSummary.scans > 0
+														? (
+																cohortSummary.totalUpcoming /
+																cohortSummary.scans
+															).toFixed(1)
+														: "—"}
 												</p>
 											</div>
-											<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 												<p>
 													Trend top exclusion:{" "}
 													{topEntries(
@@ -2257,20 +2727,15 @@ function RuntimePage() {
 										</div>
 									)}
 									<div className="grid gap-4 lg:grid-cols-2">
-										<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-											<h3 className="text-sm font-semibold text-slate-100">
+										<div className="overflow-auto rounded-md bg-ink-00 p-4">
+											<h3 className="text-sm font-semibold text-ink-95">
 												Top exclusions
 											</h3>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-70">
 												<tbody>
 													{cohortExclusionRows.map(([key, count]) => (
-														<tr
-															key={key}
-															className="border-t border-slate-800/80"
-														>
-															<td className="py-2 pr-4 text-slate-200">
-																{key}
-															</td>
+														<tr key={key} className="border-t border-ink-15">
+															<td className="py-2 pr-4 text-ink-85">{key}</td>
 															<td className="py-2 text-right">{count}</td>
 														</tr>
 													))}
@@ -2281,31 +2746,28 @@ function RuntimePage() {
 											{cohortReturnedSections.map((section) => (
 												<div
 													key={section.title}
-													className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+													className="overflow-auto rounded-md bg-ink-00 p-4"
 												>
-													<h3 className="text-sm font-semibold text-slate-100">
+													<h3 className="text-sm font-semibold text-ink-95">
 														{section.title}
 													</h3>
-													<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+													<table className="mt-3 min-w-full text-left text-sm text-ink-70">
 														<tbody>
 															{section.rows.length > 0 ? (
 																section.rows.map(([key, count]) => (
 																	<tr
 																		key={key}
-																		className="border-t border-slate-800/80"
+																		className="border-t border-ink-15"
 																	>
-																		<td className="py-2 pr-4 text-slate-200">
+																		<td className="py-2 pr-4 text-ink-85">
 																			{key}
 																		</td>
 																		<td className="py-2 text-right">{count}</td>
 																	</tr>
 																))
 															) : (
-																<tr className="border-t border-slate-800/80">
-																	<td
-																		className="py-2 text-slate-500"
-																		colSpan={2}
-																	>
+																<tr className="border-t border-ink-15">
+																	<td className="py-2 text-ink-950" colSpan={2}>
 																		No returned candidates
 																	</td>
 																</tr>
@@ -2318,23 +2780,18 @@ function RuntimePage() {
 									</div>
 									{cohortSummary && (
 										<div className="grid gap-4 lg:grid-cols-2">
-											<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-												<h3 className="text-sm font-semibold text-slate-100">
+											<div className="overflow-auto rounded-md bg-ink-00 p-4">
+												<h3 className="text-sm font-semibold text-ink-95">
 													Trend top exclusions
 												</h3>
-												<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+												<table className="mt-3 min-w-full text-left text-sm text-ink-70">
 													<tbody>
 														{topEntries(
 															cohortSummary.aggregatedExcluded,
 															8,
 														).map(([key, count]) => (
-															<tr
-																key={key}
-																className="border-t border-slate-800/80"
-															>
-																<td className="py-2 pr-4 text-slate-200">
-																	{key}
-																</td>
+															<tr key={key} className="border-t border-ink-15">
+																<td className="py-2 pr-4 text-ink-85">{key}</td>
 																<td className="py-2 text-right">{count}</td>
 															</tr>
 														))}
@@ -2345,20 +2802,20 @@ function RuntimePage() {
 												{cohortTrendSections.map((section) => (
 													<div
 														key={section.title}
-														className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+														className="overflow-auto rounded-md bg-ink-00 p-4"
 													>
-														<h3 className="text-sm font-semibold text-slate-100">
+														<h3 className="text-sm font-semibold text-ink-95">
 															{section.title}
 														</h3>
-														<table className="mt-3 min-w-full text-left text-sm text-slate-300">
+														<table className="mt-3 min-w-full text-left text-sm text-ink-70">
 															<tbody>
 																{section.rows.length > 0 ? (
 																	section.rows.map(([key, count]) => (
 																		<tr
 																			key={key}
-																			className="border-t border-slate-800/80"
+																			className="border-t border-ink-15"
 																		>
-																			<td className="py-2 pr-4 text-slate-200">
+																			<td className="py-2 pr-4 text-ink-85">
 																				{key}
 																			</td>
 																			<td className="py-2 text-right">
@@ -2367,9 +2824,9 @@ function RuntimePage() {
 																		</tr>
 																	))
 																) : (
-																	<tr className="border-t border-slate-800/80">
+																	<tr className="border-t border-ink-15">
 																		<td
-																			className="py-2 text-slate-500"
+																			className="py-2 text-ink-950"
 																			colSpan={2}
 																		>
 																			No returned candidates
@@ -2383,27 +2840,37 @@ function RuntimePage() {
 											</div>
 										</div>
 									)}
-									<div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-										<h3 className="text-sm font-semibold text-slate-100">
+									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+										<h3 className="text-sm font-semibold text-ink-95">
 											Recent scans
 										</h3>
-										<table className="mt-3 min-w-full text-left text-sm text-slate-300">
-											<thead className="text-xs uppercase tracking-wide text-slate-500">
+										<table className="mt-3 min-w-full text-left text-sm text-ink-70">
+											<thead className="text-xs uppercase tracking-wide text-ink-950">
 												<tr>
-													<th className="pb-2 pr-4">When</th>
-													<th className="pb-2 pr-4">Config</th>
-													<th className="pb-2 pr-4">Returned</th>
-													<th className="pb-2 pr-4">Upcoming</th>
-													<th className="pb-2">Top exclusion</th>
+													<th scope="col" className="pb-2 pr-4">
+														When
+													</th>
+													<th scope="col" className="pb-2 pr-4">
+														Config
+													</th>
+													<th scope="col" className="pb-2 pr-4">
+														Returned
+													</th>
+													<th scope="col" className="pb-2 pr-4">
+														Upcoming
+													</th>
+													<th scope="col" className="pb-2">
+														Top exclusion
+													</th>
 												</tr>
 											</thead>
 											<tbody>
 												{candidateCohorts.map((snapshot) => (
 													<tr
 														key={snapshot.id}
-														className="border-t border-slate-800/80"
+														className="border-t border-ink-15"
 													>
-														<td className="py-2 pr-4 text-slate-200">
+														<td className="py-2 pr-4 text-ink-85">
 															{formatRelativeTime(snapshot.createdAt)}
 														</td>
 														<td className="py-2 pr-4">
@@ -2432,13 +2899,13 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						<div className="flex flex-col gap-4">
 							<div>
-								<h2 className="text-lg font-semibold text-slate-50">
+								<h2 className="text-lg font-semibold text-ink-95">
 									CLV Timing Dashboard
 								</h2>
-								<p className="mt-1 text-sm text-slate-400">
+								<p className="mt-1 text-sm text-ink-55">
 									Compare CLV and ROI by entry timing, split by grade and
 									quality threshold.
 								</p>
@@ -2447,7 +2914,7 @@ function RuntimePage() {
 								<div>
 									<label
 										htmlFor="clv-quality-threshold"
-										className="block text-xs text-slate-400"
+										className="block text-xs text-ink-55"
 									>
 										Quality threshold
 									</label>
@@ -2457,7 +2924,7 @@ function RuntimePage() {
 										onChange={(event) =>
 											setClvQualityThreshold(event.target.value)
 										}
-										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+										className="mt-1 w-40 rounded-md border border-ink-25 bg-ink-00 px-2 py-1 text-sm text-ink-95"
 									/>
 								</div>
 								<button
@@ -2469,57 +2936,67 @@ function RuntimePage() {
 										)
 									}
 									disabled={isClvTimingLoading}
-									className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+									className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-ink-00 hover:brightness-110 disabled:opacity-60"
 								>
 									{isClvTimingLoading ? "Refreshing..." : "Refresh CLV Timing"}
 								</button>
 							</div>
 							{clvTimingError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{clvTimingError}
 								</div>
 							)}
 							{clvTimingResult ? (
 								<div className="space-y-5">
-									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+									<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 										Settled picks: {clvTimingResult.settledPicks} • Quality
 										threshold: {clvTimingResult.qualityThreshold.toFixed(2)}
 									</div>
 									{clvTimingResult.segments.map((segment) => (
 										<div
 											key={segment.key}
-											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+											className="overflow-auto rounded-md bg-ink-00 p-4"
 										>
-											<p className="text-sm font-semibold text-slate-100">
+											<p className="text-sm font-semibold text-ink-95">
 												{segment.label}
 											</p>
-											<p className="mt-1 text-xs text-slate-400">
+											<p className="mt-1 text-xs text-ink-55">
 												Matched: {segment.matchedPicks} • With event time:{" "}
 												{segment.withEventTime}
 											</p>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 												<thead>
-													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-														<th className="pb-2">Time Bucket</th>
-														<th className="pb-2">Count</th>
-														<th className="pb-2">Hit Rate</th>
-														<th className="pb-2">Avg ROI</th>
-														<th className="pb-2">Avg CLV</th>
+													<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+														<th scope="col" className="pb-2">
+															Time Bucket
+														</th>
+														<th scope="col" className="pb-2">
+															Count
+														</th>
+														<th scope="col" className="pb-2">
+															Hit Rate
+														</th>
+														<th scope="col" className="pb-2">
+															Avg ROI
+														</th>
+														<th scope="col" className="pb-2">
+															Avg CLV
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{segment.byTimeToStart.map((row) => (
 														<tr
 															key={`${segment.key}-${row.bucket}`}
-															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+															className={`border-t border-ink-15 ${sampleClassName(row.count)}`}
 														>
-															<td className="py-2 pr-4 font-semibold text-slate-100">
+															<td className="py-2 pr-4 font-semibold text-ink-95">
 																{row.bucket}
 															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
-																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																		{sampleBadge(row.count)}
 																	</span>
 																) : null}
@@ -2541,13 +3018,11 @@ function RuntimePage() {
 									))}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">
-									No CLV timing data yet.
-								</p>
+								<p className="text-sm text-ink-55">No CLV timing data yet.</p>
 							)}
 							<div className="mt-6">
 								<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-									<p className="text-sm font-semibold text-slate-100">
+									<p className="text-sm font-semibold text-ink-95">
 										Shadow Entry Windows
 									</p>
 									<button
@@ -2559,25 +3034,25 @@ function RuntimePage() {
 											)
 										}
 										disabled={isShadowWindowLoading}
-										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+										className="rounded-lg border ring-brand-blue/30 bg-brand-blue/10 px-3 py-2 text-sm font-semibold text-brand-blue hover:bg-brand-blue/15 disabled:opacity-60"
 									>
 										{isShadowWindowLoading
 											? "Refreshing..."
 											: "Refresh Shadow Windows"}
 									</button>
 								</div>
-								<p className="text-xs text-slate-400">
+								<p className="text-xs text-ink-55">
 									Hypothetical windows use historical snapshots
 									(T-120/T-60/T-30/T-15/T-5/T-2) without placing real bets.
 								</p>
 								{shadowWindowError && (
-									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									<div className="mt-3 rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 										{shadowWindowError}
 									</div>
 								)}
 								{shadowWindowResult ? (
 									<div className="mt-4 space-y-5">
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 											Settled picks: {shadowWindowResult.settledPicks} • Quality
 											threshold:{" "}
 											{shadowWindowResult.qualityThreshold.toFixed(2)}
@@ -2585,37 +3060,47 @@ function RuntimePage() {
 										{shadowWindowResult.segments.map((segment) => (
 											<div
 												key={segment.key}
-												className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+												className="overflow-auto rounded-md bg-ink-00 p-4"
 											>
-												<p className="text-sm font-semibold text-slate-100">
+												<p className="text-sm font-semibold text-ink-95">
 													{segment.label}
 												</p>
-												<p className="mt-1 text-xs text-slate-400">
+												<p className="mt-1 text-xs text-ink-55">
 													Matched picks: {segment.matchedPicks}
 												</p>
-												<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+												<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 													<thead>
-														<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-															<th className="pb-2">Window</th>
-															<th className="pb-2">Count</th>
-															<th className="pb-2">Hit Rate</th>
-															<th className="pb-2">Avg ROI</th>
-															<th className="pb-2">Avg CLV</th>
+														<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+															<th scope="col" className="pb-2">
+																Window
+															</th>
+															<th scope="col" className="pb-2">
+																Count
+															</th>
+															<th scope="col" className="pb-2">
+																Hit Rate
+															</th>
+															<th scope="col" className="pb-2">
+																Avg ROI
+															</th>
+															<th scope="col" className="pb-2">
+																Avg CLV
+															</th>
 														</tr>
 													</thead>
 													<tbody>
 														{segment.rows.map((row) => (
 															<tr
 																key={`${segment.key}-${row.windowKey}`}
-																className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+																className={`border-t border-ink-15 ${sampleClassName(row.count)}`}
 															>
-																<td className="py-2 pr-4 font-semibold text-slate-100">
+																<td className="py-2 pr-4 font-semibold text-ink-95">
 																	{row.windowLabel}
 																</td>
 																<td className="py-2 pr-4">
 																	{row.count}
 																	{sampleBadge(row.count) ? (
-																		<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																		<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																			{sampleBadge(row.count)}
 																		</span>
 																	) : null}
@@ -2637,16 +3122,16 @@ function RuntimePage() {
 										))}
 									</div>
 								) : (
-									<p className="mt-3 text-sm text-slate-400">
+									<p className="mt-3 text-sm text-ink-55">
 										No shadow window data yet.
 									</p>
 								)}
 							</div>
-							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-								<summary className="cursor-pointer text-sm font-semibold text-slate-100">
+							<details className="mt-6 rounded-md bg-ink-00 p-4">
+								<summary className="cursor-pointer text-sm font-semibold text-ink-95">
 									Performance by Market Type
 								</summary>
-								<p className="mt-2 text-xs text-slate-400">
+								<p className="mt-2 text-xs text-ink-55">
 									Shows totals, spreads, moneylines, and other market classes
 									across all settled picks and the quality-threshold subset.
 								</p>
@@ -2660,7 +3145,7 @@ function RuntimePage() {
 											)
 										}
 										disabled={isMarketTypePerformanceLoading}
-										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+										className="rounded-lg border ring-brand-blue/30 bg-brand-blue/10 px-3 py-2 text-sm font-semibold text-brand-blue hover:bg-brand-blue/15 disabled:opacity-60"
 									>
 										{isMarketTypePerformanceLoading
 											? "Refreshing..."
@@ -2668,44 +3153,62 @@ function RuntimePage() {
 									</button>
 								</div>
 								{marketTypePerformanceError && (
-									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									<div className="mt-3 rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 										{marketTypePerformanceError}
 									</div>
 								)}
 								{marketTypePerformanceResult ? (
 									<div className="mt-4 overflow-auto">
-										<div className="mb-2 text-xs text-slate-400">
+										<div className="mb-2 text-xs text-ink-55">
 											Settled picks: {marketTypePerformanceResult.settledPicks}{" "}
 											• Quality threshold:{" "}
 											{marketTypePerformanceResult.qualityThreshold.toFixed(2)}
 										</div>
-										<table className="min-w-full text-left text-sm text-slate-200">
+										<table className="min-w-full text-left text-sm text-ink-85">
 											<thead>
-												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-													<th className="pb-2">Market Type</th>
-													<th className="pb-2">All Count</th>
-													<th className="pb-2">All Hit</th>
-													<th className="pb-2">All ROI</th>
-													<th className="pb-2">All CLV</th>
-													<th className="pb-2">Q Count</th>
-													<th className="pb-2">Q Hit</th>
-													<th className="pb-2">Q ROI</th>
-													<th className="pb-2">Q CLV</th>
+												<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+													<th scope="col" className="pb-2">
+														Market Type
+													</th>
+													<th scope="col" className="pb-2">
+														All Count
+													</th>
+													<th scope="col" className="pb-2">
+														All Hit
+													</th>
+													<th scope="col" className="pb-2">
+														All ROI
+													</th>
+													<th scope="col" className="pb-2">
+														All CLV
+													</th>
+													<th scope="col" className="pb-2">
+														Q Count
+													</th>
+													<th scope="col" className="pb-2">
+														Q Hit
+													</th>
+													<th scope="col" className="pb-2">
+														Q ROI
+													</th>
+													<th scope="col" className="pb-2">
+														Q CLV
+													</th>
 												</tr>
 											</thead>
 											<tbody>
 												{marketTypePerformanceResult.rows.map((row) => (
 													<tr
 														key={row.marketType}
-														className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}
+														className={`border-t border-ink-15 ${sampleClassName(row.totalCount)}`}
 													>
-														<td className="py-2 pr-4 font-semibold text-slate-100">
+														<td className="py-2 pr-4 font-semibold text-ink-95">
 															{row.label}
 														</td>
 														<td className="py-2 pr-4">
 															{row.totalCount}
 															{sampleBadge(row.totalCount) ? (
-																<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																	{sampleBadge(row.totalCount)}
 																</span>
 															) : null}
@@ -2735,37 +3238,37 @@ function RuntimePage() {
 										</table>
 									</div>
 								) : (
-									<p className="mt-3 text-sm text-slate-400">
+									<p className="mt-3 text-sm text-ink-55">
 										No market-type performance data yet.
 									</p>
 								)}
 							</details>
-							<details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-								<summary className="cursor-pointer text-sm font-semibold text-slate-100">
+							<details className="mt-6 rounded-md bg-ink-00 p-4">
+								<summary className="cursor-pointer text-sm font-semibold text-ink-95">
 									Performance by Sport
 								</summary>
-								<p className="mt-2 text-xs text-slate-400">
+								<p className="mt-2 text-xs text-ink-55">
 									Shows sport-level hit/ROI/CLV across all settled picks and the
 									quality-threshold subset.
 								</p>
 								{ncaabSportRow ? (
 									<div className="mt-3 grid gap-3 md:grid-cols-2">
-										<div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
-											<p className="text-xs uppercase tracking-[0.2em] text-amber-200">
+										<div className="rounded-xl border border-signal-warn/30 bg-signal-warn/10 p-4">
+											<p className="text-xs uppercase tracking-[0.2em] text-signal-warn">
 												NCAAB All
 											</p>
-											<p className="mt-2 text-sm text-slate-200">
+											<p className="mt-2 text-sm text-ink-85">
 												{ncaabSportRow.totalCount} picks •{" "}
 												{formatPercent(ncaabSportRow.winRate)} hit •{" "}
 												{formatSignedPercent(ncaabSportRow.avgRoi)} ROI •{" "}
 												{formatBps(ncaabSportRow.avgClvBps)} CLV
 											</p>
 										</div>
-										<div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4">
-											<p className="text-xs uppercase tracking-[0.2em] text-cyan-200">
+										<div className="rounded-xl border ring-brand-blue/25 bg-brand-blue/10 p-4">
+											<p className="text-xs uppercase tracking-[0.2em] text-brand-blue">
 												NCAAB Quality
 											</p>
-											<p className="mt-2 text-sm text-slate-200">
+											<p className="mt-2 text-sm text-ink-85">
 												{ncaabSportRow.qualityCount} picks •{" "}
 												{formatPercent(ncaabSportRow.qualityWinRate)} hit •{" "}
 												{formatSignedPercent(ncaabSportRow.qualityAvgRoi)} ROI •{" "}
@@ -2784,7 +3287,7 @@ function RuntimePage() {
 											)
 										}
 										disabled={isSportPerformanceLoading}
-										className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+										className="rounded-lg border ring-brand-blue/30 bg-brand-blue/10 px-3 py-2 text-sm font-semibold text-brand-blue hover:bg-brand-blue/15 disabled:opacity-60"
 									>
 										{isSportPerformanceLoading
 											? "Refreshing..."
@@ -2792,44 +3295,62 @@ function RuntimePage() {
 									</button>
 								</div>
 								{sportPerformanceError && (
-									<div className="mt-3 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+									<div className="mt-3 rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 										{sportPerformanceError}
 									</div>
 								)}
 								{sportPerformanceResult ? (
 									<div className="mt-4 overflow-auto">
-										<div className="mb-2 text-xs text-slate-400">
+										<div className="mb-2 text-xs text-ink-55">
 											Settled picks: {sportPerformanceResult.settledPicks} •
 											Quality threshold:{" "}
 											{sportPerformanceResult.qualityThreshold.toFixed(2)}
 										</div>
-										<table className="min-w-full text-left text-sm text-slate-200">
+										<table className="min-w-full text-left text-sm text-ink-85">
 											<thead>
-												<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-													<th className="pb-2">Sport</th>
-													<th className="pb-2">All Count</th>
-													<th className="pb-2">All Hit</th>
-													<th className="pb-2">All ROI</th>
-													<th className="pb-2">All CLV</th>
-													<th className="pb-2">Q Count</th>
-													<th className="pb-2">Q Hit</th>
-													<th className="pb-2">Q ROI</th>
-													<th className="pb-2">Q CLV</th>
+												<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+													<th scope="col" className="pb-2">
+														Sport
+													</th>
+													<th scope="col" className="pb-2">
+														All Count
+													</th>
+													<th scope="col" className="pb-2">
+														All Hit
+													</th>
+													<th scope="col" className="pb-2">
+														All ROI
+													</th>
+													<th scope="col" className="pb-2">
+														All CLV
+													</th>
+													<th scope="col" className="pb-2">
+														Q Count
+													</th>
+													<th scope="col" className="pb-2">
+														Q Hit
+													</th>
+													<th scope="col" className="pb-2">
+														Q ROI
+													</th>
+													<th scope="col" className="pb-2">
+														Q CLV
+													</th>
 												</tr>
 											</thead>
 											<tbody>
 												{sportPerformanceResult.rows.map((row) => (
 													<tr
 														key={row.sportTag}
-														className={`border-t border-slate-800 ${sampleClassName(row.totalCount)}`}
+														className={`border-t border-ink-15 ${sampleClassName(row.totalCount)}`}
 													>
-														<td className="py-2 pr-4 font-semibold text-slate-100">
+														<td className="py-2 pr-4 font-semibold text-ink-95">
 															{row.label}
 														</td>
 														<td className="py-2 pr-4">
 															{row.totalCount}
 															{sampleBadge(row.totalCount) ? (
-																<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																	{sampleBadge(row.totalCount)}
 																</span>
 															) : null}
@@ -2859,7 +3380,7 @@ function RuntimePage() {
 										</table>
 									</div>
 								) : (
-									<p className="mt-3 text-sm text-slate-400">
+									<p className="mt-3 text-sm text-ink-55">
 										No sport performance data yet.
 									</p>
 								)}
@@ -2867,22 +3388,22 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						<div className="flex flex-col gap-4">
 							<div>
-								<h2 className="text-lg font-semibold text-slate-50">
+								<h2 className="text-lg font-semibold text-ink-95">
 									Pick Calibration
 								</h2>
-								<p className="mt-1 text-sm text-slate-400">
+								<p className="mt-1 text-sm text-ink-55">
 									Where picks are actually performing: by score and by
 									time-to-start.
 								</p>
 							</div>
-							<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-								<p className="text-sm font-semibold text-slate-100">
+							<div className="rounded-md bg-ink-00 p-4">
+								<p className="text-sm font-semibold text-ink-95">
 									Coverage Health
 								</p>
-								<p className="mt-1 text-xs text-slate-400">
+								<p className="mt-1 text-xs text-ink-55">
 									Checks whether new pick records are storing fields needed for
 									calibration and filtering.
 								</p>
@@ -2903,7 +3424,7 @@ function RuntimePage() {
 								<div>
 									<label
 										htmlFor="calibration-limit"
-										className="block text-xs text-slate-400"
+										className="block text-xs text-ink-55"
 									>
 										Pick sample limit
 									</label>
@@ -2913,13 +3434,13 @@ function RuntimePage() {
 										onChange={(event) =>
 											setCalibrationLimit(event.target.value)
 										}
-										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+										className="mt-1 w-40 rounded-md border border-ink-25 bg-ink-00 px-2 py-1 text-sm text-ink-95"
 									/>
 								</div>
 								<div>
 									<label
 										htmlFor="since-filter"
-										className="block text-xs text-slate-400"
+										className="block text-xs text-ink-55"
 									>
 										Since
 									</label>
@@ -2939,7 +3460,7 @@ function RuntimePage() {
 													nowSec - Number(value) * 86400;
 											}
 										}}
-										className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-sm text-white"
+										className="mt-1 w-40 rounded-md border border-ink-25 bg-ink-00 px-2 py-1 text-sm text-ink-95"
 									>
 										<option value="">All time</option>
 										<option value="1">Last 24h</option>
@@ -2952,7 +3473,7 @@ function RuntimePage() {
 										<option value="30">Last 30d</option>
 									</select>
 									{sinceFilter !== "" && (
-										<p className="mt-1 text-xs text-slate-400">
+										<p className="mt-1 text-xs text-ink-55">
 											{sinceFilter.startsWith("@")
 												? `Showing picks since Mar 25 (L2 removal)`
 												: `Showing picks since ${new Date(Date.now() - Number(sinceFilter) * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${sinceFilter}d)`}
@@ -2963,7 +3484,7 @@ function RuntimePage() {
 									type="button"
 									onClick={() => void loadCalibration(Number(calibrationLimit))}
 									disabled={isCalibrationLoading}
-									className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+									className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-ink-00 hover:brightness-110 disabled:opacity-60"
 								>
 									{isCalibrationLoading
 										? "Refreshing..."
@@ -2975,7 +3496,7 @@ function RuntimePage() {
 										void loadBucketPerformance(Number(calibrationLimit))
 									}
 									disabled={isBucketPerformanceLoading}
-									className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+									className="rounded-lg border ring-brand-blue/30 bg-brand-blue/10 px-3 py-2 text-sm font-semibold text-brand-blue hover:bg-brand-blue/15 disabled:opacity-60"
 								>
 									{isBucketPerformanceLoading
 										? "Refreshing..."
@@ -2987,7 +3508,7 @@ function RuntimePage() {
 										void loadGradeRecalibration(Number(calibrationLimit))
 									}
 									disabled={isGradeRecalibrationLoading}
-									className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-60"
+									className="rounded-lg border ring-brand-blue/30 bg-brand-blue/10 px-3 py-2 text-sm font-semibold text-brand-blue hover:bg-brand-blue/15 disabled:opacity-60"
 								>
 									{isGradeRecalibrationLoading
 										? "Refreshing..."
@@ -2995,23 +3516,23 @@ function RuntimePage() {
 								</button>
 							</div>
 							{calibrationError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{calibrationError}
 								</div>
 							)}
 							{bucketPerformanceError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{bucketPerformanceError}
 								</div>
 							)}
 							{gradeRecalibrationError && (
-								<div className="rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-2 text-sm text-red-200">
+								<div className="rounded-md bg-signal-bad/10 px-4 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35">
 									{gradeRecalibrationError}
 								</div>
 							)}
 							{calibrationResult ? (
 								<div className="space-y-5">
-									<div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+									<div className="flex items-center justify-between rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 										<span>
 											Total picks: {calibrationResult.totalPicks} • Settled:{" "}
 											{calibrationResult.settledPicks} • Signal scored:{" "}
@@ -3022,7 +3543,7 @@ function RuntimePage() {
 										<button
 											type="button"
 											onClick={copyCalibration}
-											className="ml-3 shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+											className="ml-3 shrink-0 rounded-lg border border-ink-25 px-3 py-1.5 text-xs text-ink-70 hover:bg-ink-15"
 										>
 											{calibrationCopyStatus ?? "Copy TSV"}
 										</button>
@@ -3059,34 +3580,44 @@ function RuntimePage() {
 									].map((table) => (
 										<div
 											key={table.title}
-											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+											className="overflow-auto rounded-md bg-ink-00 p-4"
 										>
-											<p className="text-sm font-semibold text-slate-100">
+											<p className="text-sm font-semibold text-ink-95">
 												{table.title}
 											</p>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 												<thead>
-													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-														<th className="pb-2">Bucket</th>
-														<th className="pb-2">Count</th>
-														<th className="pb-2">Win Rate</th>
-														<th className="pb-2">Avg ROI</th>
-														<th className="pb-2">Avg CLV</th>
+													<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+														<th scope="col" className="pb-2">
+															Bucket
+														</th>
+														<th scope="col" className="pb-2">
+															Count
+														</th>
+														<th scope="col" className="pb-2">
+															Win Rate
+														</th>
+														<th scope="col" className="pb-2">
+															Avg ROI
+														</th>
+														<th scope="col" className="pb-2">
+															Avg CLV
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{table.rows.map((row) => (
 														<tr
 															key={`${table.title}-${row.label}`}
-															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+															className={`border-t border-ink-15 ${sampleClassName(row.count)}`}
 														>
-															<td className="py-2 pr-4 font-semibold text-slate-100">
+															<td className="py-2 pr-4 font-semibold text-ink-95">
 																{row.label}
 															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
-																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																		{sampleBadge(row.count)}
 																	</span>
 																) : null}
@@ -3107,13 +3638,13 @@ function RuntimePage() {
 										</div>
 									))}
 									{gradeRecalibrationResult ? (
-										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+										<div className="rounded-md bg-ink-00 p-4">
 											<div className="flex items-center justify-between">
 												<div>
-													<p className="text-sm font-semibold text-slate-100">
+													<p className="text-sm font-semibold text-ink-95">
 														Grade Recalibration
 													</p>
-													<p className="mt-1 text-xs text-slate-400">
+													<p className="mt-1 text-xs text-ink-55">
 														Current grade performance and the score ranges
 														feeding those grades.
 													</p>
@@ -3121,7 +3652,7 @@ function RuntimePage() {
 												<button
 													type="button"
 													onClick={copyGradeRecal}
-													className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+													className="rounded-lg border border-ink-25 px-3 py-1.5 text-xs text-ink-70 hover:bg-ink-15"
 												>
 													{gradeRecalCopyStatus ?? "Copy TSV"}
 												</button>
@@ -3131,41 +3662,61 @@ function RuntimePage() {
 													(observation) => (
 														<div
 															key={observation}
-															className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100"
+															className="rounded-lg border border-signal-warn/30 bg-signal-warn/10 px-3 py-2 text-xs text-signal-warn"
 														>
 															{observation}
 														</div>
 													),
 												)}
 											</div>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 												<thead>
-													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-														<th className="pb-2">Grade</th>
-														<th className="pb-2">Count</th>
-														<th className="pb-2">Hit Rate</th>
-														<th className="pb-2">Avg ROI</th>
-														<th className="pb-2">Avg CLV</th>
-														<th className="pb-2">Avg Score</th>
-														<th className="pb-2">Score Range</th>
-														<th className="pb-2">Avg Edge</th>
-														<th className="pb-2">Avg PriceEdge</th>
-														<th className="pb-2">Avg PE Ratio</th>
+													<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+														<th scope="col" className="pb-2">
+															Grade
+														</th>
+														<th scope="col" className="pb-2">
+															Count
+														</th>
+														<th scope="col" className="pb-2">
+															Hit Rate
+														</th>
+														<th scope="col" className="pb-2">
+															Avg ROI
+														</th>
+														<th scope="col" className="pb-2">
+															Avg CLV
+														</th>
+														<th scope="col" className="pb-2">
+															Avg Score
+														</th>
+														<th scope="col" className="pb-2">
+															Score Range
+														</th>
+														<th scope="col" className="pb-2">
+															Avg Edge
+														</th>
+														<th scope="col" className="pb-2">
+															Avg PriceEdge
+														</th>
+														<th scope="col" className="pb-2">
+															Avg PE Ratio
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{gradeRecalibrationResult.rows.map((row) => (
 														<tr
 															key={row.grade}
-															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+															className={`border-t border-ink-15 ${sampleClassName(row.count)}`}
 														>
-															<td className="py-2 pr-4 font-semibold text-slate-100">
+															<td className="py-2 pr-4 font-semibold text-ink-95">
 																{row.grade}
 															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
-																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																		{sampleBadge(row.count)}
 																	</span>
 																) : null}
@@ -3213,14 +3764,14 @@ function RuntimePage() {
 									) : null}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									No calibration data yet. Place bets and settle outcomes, then
 									refresh.
 								</p>
 							)}
 							{bucketPerformanceResult ? (
 								<div className="space-y-5">
-									<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+									<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
 										Settled picks in bucket analysis:{" "}
 										{bucketPerformanceResult.settledPicks}
 									</div>
@@ -3244,34 +3795,44 @@ function RuntimePage() {
 									].map((table) => (
 										<div
 											key={table.title}
-											className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+											className="overflow-auto rounded-md bg-ink-00 p-4"
 										>
-											<p className="text-sm font-semibold text-slate-100">
+											<p className="text-sm font-semibold text-ink-95">
 												{table.title}
 											</p>
-											<table className="mt-3 min-w-full text-left text-sm text-slate-200">
+											<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 												<thead>
-													<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-														<th className="pb-2">Bucket</th>
-														<th className="pb-2">Count</th>
-														<th className="pb-2">Hit Rate</th>
-														<th className="pb-2">Avg ROI</th>
-														<th className="pb-2">Avg CLV</th>
+													<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+														<th scope="col" className="pb-2">
+															Bucket
+														</th>
+														<th scope="col" className="pb-2">
+															Count
+														</th>
+														<th scope="col" className="pb-2">
+															Hit Rate
+														</th>
+														<th scope="col" className="pb-2">
+															Avg ROI
+														</th>
+														<th scope="col" className="pb-2">
+															Avg CLV
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{table.rows.map((row) => (
 														<tr
 															key={`${table.title}-${row.bucket}`}
-															className={`border-t border-slate-800 ${sampleClassName(row.count)}`}
+															className={`border-t border-ink-15 ${sampleClassName(row.count)}`}
 														>
-															<td className="py-2 pr-4 font-semibold text-slate-100">
+															<td className="py-2 pr-4 font-semibold text-ink-95">
 																{row.bucket}
 															</td>
 															<td className="py-2 pr-4">
 																{row.count}
 																{sampleBadge(row.count) ? (
-																	<span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+																	<span className="ml-2 rounded border border-signal-warn/30 bg-signal-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal-warn">
 																		{sampleBadge(row.count)}
 																	</span>
 																) : null}
@@ -3293,40 +3854,46 @@ function RuntimePage() {
 									))}
 								</div>
 							) : (
-								<p className="text-sm text-slate-400">
+								<p className="text-sm text-ink-55">
 									No bucket performance data yet.
 								</p>
 							)}
 						</div>
 					</section>
 
-					<section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-6">
+					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
 						{stats?.filteredTagStats ? (
 							<div className="overflow-auto">
-								<table className="min-w-full text-left text-sm text-slate-200">
+								<table className="min-w-full text-left text-sm text-ink-85">
 									<thead>
-										<tr className="text-xs uppercase tracking-[0.2em] text-slate-500">
-											<th className="pb-3">Tag</th>
-											<th className="pb-3">Count</th>
-											<th className="pb-3">Markets (today)</th>
+										<tr className="text-xs uppercase tracking-[0.2em] text-ink-950">
+											<th scope="col" className="pb-3">
+												Tag
+											</th>
+											<th scope="col" className="pb-3">
+												Count
+											</th>
+											<th scope="col" className="pb-3">
+												Markets (today)
+											</th>
 										</tr>
 									</thead>
 									<tbody>
 										{stats.filteredTagStats.map((entry) => (
 											<tr
 												key={`${entry.seriesId}-${entry.tag}`}
-												className="border-t border-slate-800"
+												className="border-t border-ink-15"
 											>
-												<td className="py-3 pr-4 font-semibold text-slate-100">
+												<td className="py-3 pr-4 font-semibold text-ink-95">
 													{entry.tag}{" "}
-													<span className="text-xs text-slate-500">
+													<span className="text-xs text-ink-950">
 														(series {entry.seriesId})
 													</span>
 												</td>
 												<td className="py-3 pr-4">{entry.count}</td>
-												<td className="py-3 text-slate-300">
+												<td className="py-3 text-ink-70">
 													{entry.markets.length === 0 ? (
-														<span className="text-slate-500">
+														<span className="text-ink-950">
 															No markets returned
 														</span>
 													) : (
@@ -3352,7 +3919,7 @@ function RuntimePage() {
 								</table>
 							</div>
 						) : (
-							<p className="text-sm text-slate-400">
+							<p className="text-sm text-ink-55">
 								No runtime stats yet. Click "Refresh Stats" to capture the
 								latest fetch results.
 							</p>

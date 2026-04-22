@@ -21,25 +21,25 @@ function RecordCell({
 }) {
 	return (
 		<div className="flex flex-col gap-0.5">
-			<span className="text-[0.6rem] font-semibold uppercase tracking-[0.15em] text-slate-500">
+			<span className="font-mono text-xxs font-semibold uppercase tracking-[0.15em] text-ink-55">
 				{label}
 			</span>
-			<span className="text-sm font-semibold text-slate-100">
+			<span className="font-sans text-sm font-semibold text-ink-95">
 				{record.display}
 			</span>
-			<div className="flex items-center gap-2 text-[0.65rem] text-slate-400">
+			<div className="flex items-baseline gap-2 font-mono text-xxs tabular-nums text-ink-70">
 				<span>{formatPercent(record.winPct)}</span>
 				{streak && (
 					<span
 						className={
-							streak.type === "W" ? "text-emerald-400" : "text-red-400"
+							streak.type === "W" ? "text-signal-pos" : "text-signal-bad"
 						}
 					>
 						{streak.display}
 					</span>
 				)}
 				{avgMargin != null && (
-					<span className="text-slate-500">{formatMargin(avgMargin)}</span>
+					<span className="text-ink-55">{formatMargin(avgMargin)}</span>
 				)}
 			</div>
 		</div>
@@ -149,55 +149,79 @@ export function TeamTrendCard() {
 	);
 
 	return (
-		<div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-			<div className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+		<section
+			aria-labelledby="team-trend-heading"
+			className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
+		>
+			<h2
+				id="team-trend-heading"
+				className="mb-3 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
+			>
 				Team Trends
-			</div>
+			</h2>
 
 			{/* Search controls */}
-			<div className="mb-3 flex flex-wrap items-center gap-2">
-				<input
-					type="text"
-					value={teamName}
-					onChange={(e) => setTeamName(e.target.value)}
-					onKeyDown={(e) => e.key === "Enter" && lookup()}
-					placeholder="Team name..."
-					className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-cyan-500/50"
-				/>
-				<select
-					value={sportTag}
-					onChange={(e) => setSportTag(e.target.value)}
-					className="rounded-lg border border-slate-700/60 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
-				>
-					<option value="ncaab">NCAAB</option>
-					<option value="ncaaf">NCAAF</option>
-					<option value="nba">NBA</option>
-					<option value="nfl">NFL</option>
-					<option value="mlb">MLB</option>
-					<option value="nhl">NHL</option>
-				</select>
+			<form
+				onSubmit={(e) => {
+					e.preventDefault();
+					void lookup();
+				}}
+				className="mb-3 flex flex-wrap items-center gap-2"
+			>
+				<label className="flex-1 min-w-[10rem]">
+					<span className="sr-only">Team name</span>
+					<input
+						type="text"
+						value={teamName}
+						onChange={(e) => setTeamName(e.target.value)}
+						placeholder="Team name…"
+						aria-label="Team name"
+						className="w-full rounded-md bg-ink-00 px-3 py-1.5 text-sm text-ink-95 placeholder:text-ink-55 ring-1 ring-inset ring-ink-25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+					/>
+				</label>
+				<label>
+					<span className="sr-only">Sport</span>
+					<select
+						value={sportTag}
+						onChange={(e) => setSportTag(e.target.value)}
+						aria-label="Sport"
+						className="rounded-md bg-ink-00 px-2 py-1.5 text-sm text-ink-95 ring-1 ring-inset ring-ink-25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+					>
+						<option value="ncaab">NCAAB</option>
+						<option value="ncaaf">NCAAF</option>
+						<option value="nba">NBA</option>
+						<option value="nfl">NFL</option>
+						<option value="mlb">MLB</option>
+						<option value="nhl">NHL</option>
+					</select>
+				</label>
 				<button
-					type="button"
-					onClick={lookup}
+					type="submit"
 					disabled={loading || !teamName.trim()}
-					className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:opacity-50"
+					className="inline-flex h-9 items-center rounded-md bg-brand-blue px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-00 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
 				>
-					{loading ? "..." : "Look Up"}
+					{loading ? "…" : "Look up"}
 				</button>
-			</div>
+			</form>
 
 			{/* Split tabs */}
 			{summary && (
-				<div className="mb-3 flex flex-wrap items-center gap-1.5">
+				<div
+					className="mb-3 flex flex-wrap items-center gap-1.5"
+					role="tablist"
+					aria-label="Trend split"
+				>
 					{SPLIT_TABS.map((tab) => (
 						<button
 							type="button"
 							key={tab.key}
 							onClick={() => switchSplit(tab.key)}
-							className={`rounded-full px-2.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.15em] transition-colors ${
+							aria-pressed={activeSplit === tab.key}
+							role="tab"
+							className={`inline-flex h-7 items-center rounded-full px-3 font-mono text-xxs font-semibold uppercase tracking-[0.15em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
 								activeSplit === tab.key
-									? "bg-cyan-500 text-white"
-									: "bg-slate-800/60 text-slate-400 hover:bg-slate-800"
+									? "bg-brand-blue text-ink-00"
+									: "bg-ink-10 text-ink-70 hover:bg-ink-15 hover:text-ink-95"
 							}`}
 						>
 							{tab.label}
@@ -207,26 +231,28 @@ export function TeamTrendCard() {
 			)}
 
 			{/* Results */}
-			{error && <div className="text-[0.65rem] text-red-400">{error}</div>}
+			{error && (
+				<div className="font-mono text-xxs text-signal-bad">{error}</div>
+			)}
 			{!error && !summary && !loading && (
-				<div className="text-[0.65rem] text-slate-500">
+				<div className="font-mono text-xxs text-ink-55">
 					Enter a team name and sport to view trends.
 				</div>
 			)}
 			{summary && (
 				<div>
-					<div className="mb-2 flex items-center gap-2">
-						<span className="text-sm font-semibold text-slate-100">
+					<div className="mb-2 flex items-baseline gap-2">
+						<span className="font-sans text-sm font-semibold text-ink-95">
 							{summary.team.name}
 						</span>
-						<span className="text-[0.6rem] uppercase tracking-wide text-slate-500">
+						<span className="font-mono text-xxs uppercase tracking-wider text-ink-55">
 							{summary.split.label} · L{summary.window}
 						</span>
 					</div>
 					<TrendSummaryRow summary={summary} />
 				</div>
 			)}
-		</div>
+		</section>
 	);
 }
 
@@ -236,35 +262,33 @@ export function TeamTrendCard() {
 
 export function InlineTrendSummary({ summary }: { summary: TeamTrendSummary }) {
 	return (
-		<div className="flex flex-wrap items-center gap-3 text-[0.65rem] text-slate-400">
-			<span className="font-semibold text-slate-300">
-				{summary.split.label}
-			</span>
+		<div className="flex flex-wrap items-baseline gap-3 font-mono text-xxs tabular-nums text-ink-70">
+			<span className="font-semibold text-ink-85">{summary.split.label}</span>
 			<span>
-				SU {summary.su.record.display}
+				<span className="text-ink-55">SU</span> {summary.su.record.display}
 				{summary.su.streak && (
 					<span
-						className={`ml-1 ${summary.su.streak.type === "W" ? "text-emerald-400" : "text-red-400"}`}
+						className={`ml-1 ${summary.su.streak.type === "W" ? "text-signal-pos" : "text-signal-bad"}`}
 					>
 						{summary.su.streak.display}
 					</span>
 				)}
 			</span>
 			<span>
-				ATS {summary.ats.record.display}
+				<span className="text-ink-55">ATS</span> {summary.ats.record.display}
 				{summary.ats.streak && (
 					<span
-						className={`ml-1 ${summary.ats.streak.type === "W" ? "text-emerald-400" : "text-red-400"}`}
+						className={`ml-1 ${summary.ats.streak.type === "W" ? "text-signal-pos" : "text-signal-bad"}`}
 					>
 						{summary.ats.streak.display}
 					</span>
 				)}
 			</span>
 			<span>
-				O/U {summary.ou.record.display}
+				<span className="text-ink-55">O/U</span> {summary.ou.record.display}
 				{summary.ou.streak && (
 					<span
-						className={`ml-1 ${summary.ou.streak.type === "W" ? "text-emerald-400" : "text-red-400"}`}
+						className={`ml-1 ${summary.ou.streak.type === "W" ? "text-signal-pos" : "text-signal-bad"}`}
 					>
 						{summary.ou.streak.display}
 					</span>

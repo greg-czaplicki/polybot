@@ -10,10 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StrategyRouteImport } from './routes/strategy'
-import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as RuntimeRouteImport } from './routes/runtime'
+import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DebugRouteImport } from './routes/debug'
 import { Route as CanonicalRouteImport } from './routes/canonical'
@@ -41,6 +41,11 @@ const RuntimeRoute = RuntimeRouteImport.update({
   path: '/runtime',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OpportunitiesRoute = OpportunitiesRouteImport.update({
+  id: '/opportunities',
+  path: '/opportunities',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -49,11 +54,6 @@ const LoginRoute = LoginRouteImport.update({
 const DebugRoute = DebugRouteImport.update({
   id: '/debug',
   path: '/debug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OpportunitiesRoute = OpportunitiesRouteImport.update({
-  id: '/opportunities',
-  path: '/opportunities',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CanonicalRoute = CanonicalRouteImport.update({
@@ -202,6 +202,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RuntimeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/opportunities': {
+      id: '/opportunities'
+      path: '/opportunities'
+      fullPath: '/opportunities'
+      preLoaderRoute: typeof OpportunitiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -221,13 +228,6 @@ declare module '@tanstack/react-router' {
       path: '/canonical'
       fullPath: '/canonical'
       preLoaderRoute: typeof CanonicalRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/opportunities': {
-      id: '/opportunities'
-      path: '/opportunities'
-      fullPath: '/opportunities'
-      preLoaderRoute: typeof OpportunitiesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bot': {

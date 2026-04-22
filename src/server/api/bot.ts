@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { GradeLabel } from "@/lib/sharp-grade";
+import { detectSportTagFromSeriesId } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import type { Db } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
@@ -8,6 +9,7 @@ import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
 import {
 	extractSpreadFromTitle,
+	extractTotalFromTitle,
 	identifySpreadTeamPosition,
 } from "../pipeline/line-ingestion";
 import {
@@ -23,6 +25,7 @@ import {
 	insertBotCandidateSnapshot,
 	listBotCandidateSnapshots,
 } from "../repositories/bot-candidate-snapshots";
+import { listDailyStatsSnapshots } from "../repositories/daily-stats-snapshots";
 import {
 	createManualPick,
 	type ManualPickStatus,
@@ -36,6 +39,7 @@ import {
 } from "../repositories/sharp-money";
 import { getLatestTeamTrendSnapshot } from "../repositories/team-trend-snapshots";
 import {
+	computeHedgingMetrics,
 	computePriceEdgeFromEntry,
 	computeSharpMoneyGrades,
 	type SharpGradePayload,
@@ -137,6 +141,13 @@ type BotCandidatesResult = {
 			canonicalScore?: number | null;
 			canonicalSnapshotType?: string | null;
 			canonicalWarnings?: string[];
+			priceEdge?: number | null;
+			fairPrice?: number | null;
+			minPriceEdge?: number | null;
+			hedgedWalletCount?: number | null;
+			maxHedgeRatio?: number | null;
+			hedgedValueShareSharpSide?: number | null;
+			totalHedgedFraction?: number | null;
 			isReady?: boolean;
 			warnings?: string[];
 			computedAt?: number;
@@ -974,9 +985,16 @@ async function computeCanonicalBotCandidateScore(
 	snapshotType: string;
 	warnings: string[];
 } | null> {
-	if (entry.sportSeriesId !== NBA_SPORT_SERIES_ID) return null;
+	const sportTag = detectSportTagFromSeriesId(entry.sportSeriesId);
+	if (!sportTag) return null;
 	const marketType = getMarketTypeLabel(entry.marketTitle);
-	if (marketType !== "spread" && marketType !== "moneyline") return null;
+	if (
+		marketType !== "spread" &&
+		marketType !== "moneyline" &&
+		marketType !== "total"
+	) {
+		return null;
+	}
 	if (entry.sharpSide !== "A" && entry.sharpSide !== "B") return null;
 
 	const matchupTitle = entry.marketTitle.split(":", 1)[0]?.trim() ?? "";
@@ -984,10 +1002,10 @@ async function computeCanonicalBotCandidateScore(
 	if (!parsedTeams) return null;
 
 	const getCachedTeam = (alias: string) => {
-		const cacheKey = `nba:${alias.trim().toLowerCase()}`;
+		const cacheKey = `${sportTag}:${alias.trim().toLowerCase()}`;
 		const existing = cache.teamByAlias.get(cacheKey);
 		if (existing) return existing;
-		const pending = resolveSingleTeam(db, "nba", alias);
+		const pending = resolveSingleTeam(db, sportTag, alias);
 		cache.teamByAlias.set(cacheKey, pending);
 		return pending;
 	};
@@ -996,6 +1014,63 @@ async function computeCanonicalBotCandidateScore(
 		getCachedTeam(parsedTeams.away),
 	]);
 	if (!homeTeam || !awayTeam) return null;
+
+	const getCachedSnapshot = (teamId: string, candidateSnapshotType: string) => {
+		const cacheKey = `${teamId}:${candidateSnapshotType}`;
+		const existing = cache.snapshotByKey.get(cacheKey);
+		if (existing) return existing;
+		const pending = getLatestTeamTrendSnapshot(db, {
+			teamId,
+			snapshotType: candidateSnapshotType,
+		});
+		cache.snapshotByKey.set(cacheKey, pending);
+		return pending;
+	};
+
+	if (marketType === "total") {
+		const totalLine = extractTotalFromTitle(entry.marketTitle);
+		const [homeOverall, homeVenue, awayOverall, awayVenue] = await Promise.all(
+			[
+				getCachedSnapshot(homeTeam.id, "overall"),
+				getCachedSnapshot(homeTeam.id, "home"),
+				getCachedSnapshot(awayTeam.id, "overall"),
+				getCachedSnapshot(awayTeam.id, "away"),
+			],
+		);
+
+		const team = extractSideFeatures(homeOverall, homeVenue);
+		const opponent = extractSideFeatures(awayOverall, awayVenue);
+		const score = scoreOpportunity({
+			sportTag,
+			betType: "total",
+			venueRole: "home",
+			favDogRole: null,
+			spreadLine: null,
+			totalLine,
+			team,
+			opponent,
+			matchupAtsDelta:
+				team.atsWinPct != null && opponent.atsWinPct != null
+					? team.atsWinPct - opponent.atsWinPct
+					: null,
+			matchupOuDelta:
+				team.ouOverPct != null && opponent.ouOverPct != null
+					? team.ouOverPct - opponent.ouOverPct
+					: null,
+			matchupCoverMarginDelta:
+				team.avgCoverMargin != null && opponent.avgCoverMargin != null
+					? team.avgCoverMargin - opponent.avgCoverMargin
+					: null,
+			teamSnapshotFound: homeOverall !== null,
+			opponentSnapshotFound: awayOverall !== null,
+		});
+
+		return {
+			totalScore: score.totalScore,
+			snapshotType: "home",
+			warnings: score.warnings,
+		};
+	}
 
 	const pickedLabel =
 		extractSpreadPickedLabel(entry.marketTitle) ?? entry.sharpSide;
@@ -1039,17 +1114,6 @@ async function computeCanonicalBotCandidateScore(
 		mirroredFavDog,
 	);
 
-	const getCachedSnapshot = (teamId: string, candidateSnapshotType: string) => {
-		const cacheKey = `${teamId}:${candidateSnapshotType}`;
-		const existing = cache.snapshotByKey.get(cacheKey);
-		if (existing) return existing;
-		const pending = getLatestTeamTrendSnapshot(db, {
-			teamId,
-			snapshotType: candidateSnapshotType,
-		});
-		cache.snapshotByKey.set(cacheKey, pending);
-		return pending;
-	};
 	const [teamOverall, teamSplit, opponentOverall, opponentSplit] =
 		await Promise.all([
 			getCachedSnapshot(pickedSide.teamId, "overall"),
@@ -1065,7 +1129,7 @@ async function computeCanonicalBotCandidateScore(
 	const team = extractSideFeatures(teamOverall, teamSplit);
 	const opponent = extractSideFeatures(opponentOverall, opponentSplit);
 	const score = scoreOpportunity({
-		sportTag: "nba",
+		sportTag,
 		betType: marketType,
 		venueRole,
 		favDogRole,
@@ -1108,6 +1172,11 @@ function compareBotCandidates(left: BotCandidate, right: BotCandidate): number {
 	const rightSegment = right.grade.segmentScore ?? 0;
 	if (leftSegment !== rightSegment) return rightSegment - leftSegment;
 	if (leftQuality !== rightQuality) return rightQuality - leftQuality;
+
+	const leftPriceEdge = left.grade.priceEdge ?? 0;
+	const rightPriceEdge = right.grade.priceEdge ?? 0;
+	if (leftPriceEdge !== rightPriceEdge)
+		return rightPriceEdge - leftPriceEdge;
 
 	const leftCanonical = left.grade.canonicalScore ?? 0;
 	const rightCanonical = right.grade.canonicalScore ?? 0;
@@ -1254,6 +1323,13 @@ function buildDecisionSnapshot(input: {
 	l2ImbalanceNearMid?: number;
 	l2Spread?: number;
 	l2Disagreement?: boolean;
+	canonicalScore?: number | null;
+	canonicalSnapshotType?: string | null;
+	canonicalWarnings?: string[];
+	hedgedWalletCount?: number | null;
+	maxHedgeRatio?: number | null;
+	hedgedValueShareSharpSide?: number | null;
+	totalHedgedFraction?: number | null;
 }): Record<string, unknown> {
 	const sharpSideTopHolders =
 		input.sharpSide === "A"
@@ -1317,6 +1393,13 @@ function buildDecisionSnapshot(input: {
 		l2ImbalanceNearMid: input.l2ImbalanceNearMid ?? null,
 		l2Spread: input.l2Spread ?? null,
 		l2Disagreement: input.l2Disagreement ?? null,
+		canonicalScore: input.canonicalScore ?? null,
+		canonicalSnapshotType: input.canonicalSnapshotType ?? null,
+		canonicalWarnings: input.canonicalWarnings ?? [],
+		hedgedWalletCount: input.hedgedWalletCount ?? null,
+		maxHedgeRatio: input.maxHedgeRatio ?? null,
+		hedgedValueShareSharpSide: input.hedgedValueShareSharpSide ?? null,
+		totalHedgedFraction: input.totalHedgedFraction ?? null,
 	};
 	if (!isPlainObject(input.payloadSnapshot)) {
 		return defaultSnapshot;
@@ -1677,6 +1760,32 @@ async function listBotCandidates(
 						sideB: entry.sideB,
 					},
 				);
+				const priceEdgeResult =
+					entry.sharpSide === "A" || entry.sharpSide === "B"
+						? computePriceEdgeFromEntry({
+								sharpSide: entry.sharpSide,
+								confidence: entry.confidence,
+								edgeRating: entry.edgeRating,
+								sideA: {
+									sharpScore: entry.sideA.sharpScore,
+									price: entry.sideA.price ?? null,
+								},
+								sideB: {
+									sharpScore: entry.sideB.sharpScore,
+									price: entry.sideB.price ?? null,
+								},
+							})
+						: null;
+				const hedgingMetrics = computeHedgingMetrics(
+					entry.sideA.topHolders ?? [],
+					entry.sideB.topHolders ?? [],
+				);
+				const hedgedValueShareSharpSide =
+					entry.sharpSide === "A"
+						? hedgingMetrics.hedgedValueShareA
+						: entry.sharpSide === "B"
+							? hedgingMetrics.hedgedValueShareB
+							: null;
 				return {
 					entry: toSlimCandidate(entry),
 					grade: {
@@ -1692,6 +1801,13 @@ async function listBotCandidates(
 						canonicalScore: canonicalScore?.totalScore ?? null,
 						canonicalSnapshotType: canonicalScore?.snapshotType ?? null,
 						canonicalWarnings: canonicalScore?.warnings ?? [],
+						priceEdge: priceEdgeResult?.priceEdge ?? null,
+						fairPrice: priceEdgeResult?.fairPrice ?? null,
+						minPriceEdge: priceEdgeResult?.minPriceEdge ?? null,
+						hedgedWalletCount: hedgingMetrics.hedgedWalletCount,
+						maxHedgeRatio: hedgingMetrics.maxHedgeRatio,
+						hedgedValueShareSharpSide,
+						totalHedgedFraction: hedgingMetrics.totalHedgedFraction,
 						isReady: grade.isReady,
 						warnings: grade.warnings,
 						computedAt: grade.computedAt,
@@ -2123,6 +2239,19 @@ export async function handleBotRequest(
 		return jsonResponse({ snapshots });
 	}
 
+	if (url.pathname === "/api/bot/daily-stats") {
+		if (request.method !== "GET") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const limitParam = Number(url.searchParams.get("limit"));
+		const limit =
+			Number.isFinite(limitParam) && limitParam > 0
+				? Math.min(limitParam, 30)
+				: 14;
+		const snapshots = await listDailyStatsSnapshots(env.POLYWHALER_DB, limit);
+		return jsonResponse({ snapshots });
+	}
+
 	if (url.pathname === "/api/bot/grades") {
 		if (request.method !== "POST") {
 			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
@@ -2276,6 +2405,44 @@ export async function handleBotRequest(
 						},
 					})
 				: null;
+		const hedgingMetrics = cacheEntry
+			? computeHedgingMetrics(
+					cacheEntry.sideA.topHolders ?? [],
+					cacheEntry.sideB.topHolders ?? [],
+				)
+			: null;
+		const hedgedValueShareSharpSide =
+			hedgingMetrics == null
+				? null
+				: sharpSide === "A"
+					? hedgingMetrics.hedgedValueShareA
+					: sharpSide === "B"
+						? hedgingMetrics.hedgedValueShareB
+						: null;
+		const canonicalResult =
+			cacheEntry && (sharpSide === "A" || sharpSide === "B")
+				? await computeCanonicalBotCandidateScore(
+						env.POLYWHALER_DB,
+						{ teamByAlias: new Map(), snapshotByKey: new Map() },
+						{
+							marketTitle: cacheEntry.marketTitle,
+							sportSeriesId: cacheEntry.sportSeriesId ?? undefined,
+							sharpSide,
+							sideA: {
+								label: cacheEntry.sideA.label,
+								price: cacheEntry.sideA.price ?? null,
+							},
+							sideB: {
+								label: cacheEntry.sideB.label,
+								price: cacheEntry.sideB.price ?? null,
+							},
+						},
+					).catch((error) => {
+						console.error("[bot] canonical score compute failed", error);
+						return null;
+					})
+				: null;
+
 		const decisionSnapshot = buildDecisionSnapshot({
 			payloadSnapshot: payload.decisionSnapshot,
 			cacheEntry,
@@ -2296,6 +2463,13 @@ export async function handleBotRequest(
 			l2ImbalanceNearMid: finalL2ImbalanceNearMid,
 			l2Spread: finalL2Spread,
 			l2Disagreement: finalL2Disagreement,
+			canonicalScore: canonicalResult?.totalScore ?? null,
+			canonicalSnapshotType: canonicalResult?.snapshotType ?? null,
+			canonicalWarnings: canonicalResult?.warnings ?? [],
+			hedgedWalletCount: hedgingMetrics?.hedgedWalletCount ?? null,
+			maxHedgeRatio: hedgingMetrics?.maxHedgeRatio ?? null,
+			hedgedValueShareSharpSide,
+			totalHedgedFraction: hedgingMetrics?.totalHedgedFraction ?? null,
 		});
 		const pick = await createManualPick(env.POLYWHALER_DB, {
 			clientPickId: payload.clientPickId,
