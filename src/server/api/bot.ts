@@ -819,6 +819,31 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
+	// NBA: our 1-3h sharp signal is anti-correlated with outcome — 27 of 33
+	// historical NBA picks landed in the 90+min window with -22% to -100% ROI.
+	// The 60-90min slice was roughly break-even. Tighten NBA to <=90 min only.
+	if (
+		input.sportSeriesId === 10345 &&
+		input.minutesToStart !== null &&
+		input.minutesToStart > 90
+	) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NBA >90m excluded",
+				rankingAdjustment: -100,
+				notes: ["nba_timing_excluded"],
+				reject: true,
+				rejectReason: "nba_timing_excluded",
+			},
+		);
+	}
+
 	if (input.sportSeriesId === 10470 && input.marketType === "spread") {
 		return buildPolicy(
 			{
