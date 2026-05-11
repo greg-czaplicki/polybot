@@ -327,13 +327,15 @@ const SIGNAL_SCORE_BUCKETS = [
 	{ label: "80+", min: 80, max: Number.POSITIVE_INFINITY },
 ] as const;
 
+// Rebucketed 2026-05-11: all 160 settled picks were piling into the old 0.72+
+// bin because policy already gates at 0.72+. New buckets target the actual
+// population range above the gate (typical microstructureScore ~0.85-0.95).
 const QUALITY_SCORE_BUCKETS = [
-	{ label: "<0.58", min: Number.NEGATIVE_INFINITY, max: 0.58 },
-	{ label: "0.58-0.62", min: 0.58, max: 0.62 },
-	{ label: "0.62-0.66", min: 0.62, max: 0.66 },
-	{ label: "0.66-0.70", min: 0.66, max: 0.7 },
-	{ label: "0.70-0.72", min: 0.7, max: 0.72 },
-	{ label: "0.72+", min: 0.72, max: Number.POSITIVE_INFINITY },
+	{ label: "<0.85", min: Number.NEGATIVE_INFINITY, max: 0.85 },
+	{ label: "0.85-0.90", min: 0.85, max: 0.9 },
+	{ label: "0.90-0.92", min: 0.9, max: 0.92 },
+	{ label: "0.92-0.95", min: 0.92, max: 0.95 },
+	{ label: "0.95+", min: 0.95, max: Number.POSITIVE_INFINITY },
 ] as const;
 
 const TIME_TO_START_BUCKETS = [
@@ -372,20 +374,25 @@ const SCORE_DIFFERENTIAL_BUCKETS = [
 	{ label: "45+", min: 45, max: Number.POSITIVE_INFINITY },
 ] as const;
 
+// Rebucketed 2026-05-11: 151/160 picks were in the old 0.08+ bin (avg priceEdge
+// at A+/A/B is ~0.19-0.28). New buckets split the populated range so we can see
+// whether higher priceEdge actually pays.
 const PRICE_EDGE_BUCKETS = [
-	{ label: "<0 (negative)", min: Number.NEGATIVE_INFINITY, max: 0 },
-	{ label: "0-0.02", min: 0, max: 0.02 },
-	{ label: "0.02-0.04", min: 0.02, max: 0.04 },
-	{ label: "0.04-0.08", min: 0.04, max: 0.08 },
-	{ label: "0.08+", min: 0.08, max: Number.POSITIVE_INFINITY },
+	{ label: "<0.10", min: Number.NEGATIVE_INFINITY, max: 0.1 },
+	{ label: "0.10-0.15", min: 0.1, max: 0.15 },
+	{ label: "0.15-0.20", min: 0.15, max: 0.2 },
+	{ label: "0.20-0.30", min: 0.2, max: 0.3 },
+	{ label: "0.30+", min: 0.3, max: Number.POSITIVE_INFINITY },
 ] as const;
 
+// Rebucketed 2026-05-11: 155/160 picks were in the old 3.0+ bin (avg ratio at
+// A+/A/B is ~10-18). New buckets split the populated range.
 const PRICE_EDGE_RATIO_BUCKETS = [
-	{ label: "<1.0", min: Number.NEGATIVE_INFINITY, max: 1.0 },
-	{ label: "1.0-1.5", min: 1.0, max: 1.5 },
-	{ label: "1.5-2.0", min: 1.5, max: 2.0 },
-	{ label: "2.0-3.0", min: 2.0, max: 3.0 },
-	{ label: "3.0+", min: 3.0, max: Number.POSITIVE_INFINITY },
+	{ label: "<5", min: Number.NEGATIVE_INFINITY, max: 5 },
+	{ label: "5-10", min: 5, max: 10 },
+	{ label: "10-15", min: 10, max: 15 },
+	{ label: "15-25", min: 15, max: 25 },
+	{ label: "25+", min: 25, max: Number.POSITIVE_INFINITY },
 ] as const;
 
 const GRADE_TO_SIGNAL_SCORE: Record<string, number> = {

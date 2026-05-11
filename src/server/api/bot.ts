@@ -1,5 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { GradeLabel } from "@/lib/sharp-grade";
+import {
+	EDGE_RATING_DEAD_ZONE_MAX,
+	EDGE_RATING_DEAD_ZONE_MIN,
+	EDGE_RATING_SATURATION_FLOOR,
+	MIN_SCORE_DIFFERENTIAL,
+	isAcceptableEdgeRating,
+} from "@/lib/sharp-grade";
 import { detectSportTagFromSeriesId } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import type { Db } from "../db/client";
@@ -406,13 +413,23 @@ async function fetchL2SignalsForPick(input: {
 		!input.sharpSide ||
 		(input.sharpSide !== "A" && input.sharpSide !== "B")
 	) {
+		console.warn("[l2] skipped: invalid sharpSide", {
+			conditionId: input.conditionId,
+			sharpSide: input.sharpSide,
+		});
 		return {};
 	}
 	try {
 		const marketResponse = await fetch(
 			`https://clob.polymarket.com/markets/${input.conditionId}`,
 		);
-		if (!marketResponse.ok) return {};
+		if (!marketResponse.ok) {
+			console.warn("[l2] market fetch not ok", {
+				conditionId: input.conditionId,
+				status: marketResponse.status,
+			});
+			return {};
+		}
 		const market = (await marketResponse.json()) as {
 			tokens?: Array<{
 				token_id?: string;
@@ -434,7 +451,13 @@ async function fetchL2SignalsForPick(input: {
 				(token): token is { tokenId: string; outcome: string; index: number } =>
 					Boolean(token),
 			);
-		if (tokens.length === 0) return {};
+		if (tokens.length === 0) {
+			console.warn("[l2] no tokens after filter", {
+				conditionId: input.conditionId,
+				rawTokenCount: market.tokens?.length ?? 0,
+			});
+			return {};
+		}
 		const targetLabel =
 			input.sharpSide === "A"
 				? (input.sideALabel ?? "")
@@ -450,12 +473,27 @@ async function fetchL2SignalsForPick(input: {
 			input.sharpSide === "A" ? token.index === 0 : token.index === 1,
 		);
 		const targetToken = targetByLabel ?? targetByIndex ?? null;
-		if (!targetToken) return {};
+		if (!targetToken) {
+			console.warn("[l2] no target token", {
+				conditionId: input.conditionId,
+				sharpSide: input.sharpSide,
+				targetLabel,
+				tokenOutcomes: tokens.map((t) => t.outcome),
+			});
+			return {};
+		}
 
 		const bookUrl = new URL("https://clob.polymarket.com/book");
 		bookUrl.searchParams.set("token_id", targetToken.tokenId);
 		const bookResponse = await fetch(bookUrl.toString());
-		if (!bookResponse.ok) return {};
+		if (!bookResponse.ok) {
+			console.warn("[l2] book fetch not ok", {
+				conditionId: input.conditionId,
+				tokenId: targetToken.tokenId,
+				status: bookResponse.status,
+			});
+			return {};
+		}
 		const rawBook = (await bookResponse.json()) as {
 			bids?: Array<{ price?: string | number; size?: string | number }>;
 			asks?: Array<{ price?: string | number; size?: string | number }>;
@@ -536,13 +574,25 @@ async function fetchL2SignalsForPick(input: {
 				: null;
 		const l2Disagreement =
 			imbalanceNearMid === null ? undefined : imbalanceNearMid < -0.05;
-		return {
+		const result = {
 			l2Imbalance: imbalance ?? undefined,
 			l2ImbalanceNearMid: imbalanceNearMid ?? undefined,
 			l2Spread: spread ?? undefined,
 			l2Disagreement,
 		};
-	} catch {
+		console.log("[l2] computed", {
+			conditionId: input.conditionId,
+			tokenId: targetToken.tokenId,
+			bidLevels: bids.length,
+			askLevels: asks.length,
+			...result,
+		});
+		return result;
+	} catch (error) {
+		console.error("[l2] threw", {
+			conditionId: input.conditionId,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return {};
 	}
 }
@@ -1040,6 +1090,13 @@ async function computeCanonicalBotCandidateScore(
 
 		const team = extractSideFeatures(homeOverall, homeVenue);
 		const opponent = extractSideFeatures(awayOverall, awayVenue);
+		// O/U markets: sharp-money.ts sets sideA="Over", sideB="Under".
+		const pickedDirection: "over" | "under" | null =
+			entry.sharpSide === "A"
+				? "over"
+				: entry.sharpSide === "B"
+					? "under"
+					: null;
 		const score = scoreOpportunity({
 			sportTag,
 			betType: "total",
@@ -1047,6 +1104,7 @@ async function computeCanonicalBotCandidateScore(
 			favDogRole: null,
 			spreadLine: null,
 			totalLine,
+			pickedDirection,
 			team,
 			opponent,
 			matchupAtsDelta:
@@ -1140,6 +1198,7 @@ async function computeCanonicalBotCandidateScore(
 					? homeSpread
 					: -homeSpread,
 		totalLine: null,
+		pickedDirection: null,
 		team,
 		opponent,
 		matchupAtsDelta:
@@ -1404,9 +1463,13 @@ function buildDecisionSnapshot(input: {
 	if (!isPlainObject(input.payloadSnapshot)) {
 		return defaultSnapshot;
 	}
+	// Server-computed fields win over the bot's payloadSnapshot so that fresh
+	// L2 / canonical / hedging values aren't clobbered by stale or null entries
+	// the bot included from its local view. Extra keys the server doesn't know
+	// about still flow through from payloadSnapshot.
 	return {
-		...defaultSnapshot,
 		...input.payloadSnapshot,
+		...defaultSnapshot,
 	};
 }
 
@@ -1711,6 +1774,81 @@ async function listBotCandidates(
 							foundInEntries: true,
 							stage: "filtered_grade",
 							reason: "below_policy_grade",
+						};
+					}
+					return null;
+				}
+				if (
+					typeof entry.scoreDifferential === "number" &&
+					entry.scoreDifferential < MIN_SCORE_DIFFERENTIAL
+				) {
+					incrementCounter(debug.excluded, "low_score_differential");
+					pushNearMiss(debug, {
+						reason: "low_score_differential",
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "low_score_differential",
+						};
+					}
+					return null;
+				}
+				if (
+					typeof entry.edgeRating === "number" &&
+					!isAcceptableEdgeRating(entry.edgeRating)
+				) {
+					const reason =
+						entry.edgeRating >= EDGE_RATING_SATURATION_FLOOR
+							? "edge_rating_saturation"
+							: entry.edgeRating >= EDGE_RATING_DEAD_ZONE_MIN &&
+								  entry.edgeRating < EDGE_RATING_DEAD_ZONE_MAX
+								? "edge_rating_dead_zone"
+								: "edge_rating_below_floor";
+					incrementCounter(debug.excluded, reason);
+					pushNearMiss(debug, {
+						reason,
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason,
 						};
 					}
 					return null;
@@ -2374,6 +2512,14 @@ export async function handleBotRequest(
 			l2ImbalanceNearMid === undefined ||
 			l2Spread === undefined ||
 			l2Disagreement === undefined;
+		console.log("[l2] picks handler", {
+			conditionId: payload.conditionId,
+			sharpSide,
+			needsL2Signals,
+			hasCacheEntry: Boolean(cacheEntry),
+			sideALabel: cacheEntry?.sideA.label,
+			sideBLabel: cacheEntry?.sideB.label,
+		});
 		const l2Fallback = needsL2Signals
 			? await fetchL2SignalsForPick({
 					conditionId: payload.conditionId,

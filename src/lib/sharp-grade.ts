@@ -27,6 +27,37 @@ export const A_PLUS_DIFF_FLOOR = 30;
 export const A_EDGE_FLOOR = 72;
 export const A_DIFF_FLOOR = 20;
 
+/**
+ * Score differential below 20 has historically returned -77% ROI / 11% WR
+ * (n=9 settled picks, 2026-05-11 calibration). Cheap hard floor.
+ */
+export const MIN_SCORE_DIFFERENTIAL = 20;
+
+/**
+ * Edge rating ≥ 90 saturates and inverts: -16% ROI / 40% WR (n=15) while the
+ * 80-90 band returns +25% ROI / 63% WR. Treat as an overconfidence cliff.
+ */
+export const EDGE_RATING_SATURATION_FLOOR = 90;
+
+/**
+ * Edge rating in [72, 80) is a "dead zone" between the two profitable bands:
+ * 66-72 returns +4.5% ROI (n=23), 80-90 returns +25% ROI (n=49), but 72-80
+ * returns -7.5% ROI (n=43). Accepted bands: [MIN_EDGE_RATING, 72) ∪ [80, SATURATION).
+ */
+export const EDGE_RATING_DEAD_ZONE_MIN = 72;
+export const EDGE_RATING_DEAD_ZONE_MAX = 80;
+
+export function isAcceptableEdgeRating(rating: number): boolean {
+	if (rating < MIN_EDGE_RATING) return false;
+	if (rating >= EDGE_RATING_SATURATION_FLOOR) return false;
+	if (
+		rating >= EDGE_RATING_DEAD_ZONE_MIN &&
+		rating < EDGE_RATING_DEAD_ZONE_MAX
+	)
+		return false;
+	return true;
+}
+
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
@@ -66,7 +97,7 @@ export function computeSignalScoreFromHistory(
 		(clamp(volumeDelta, VOLUME_DELTA_MIN, VOLUME_DELTA_MAX) /
 			VOLUME_DELTA_MAX) *
 		15;
-	const stabilityScore = Math.min(stabilityCount, 5) * 2;
+	const noveltyScore = computeNoveltyScore(stabilityCount);
 
 	const total =
 		edgeScore * 0.7 +
@@ -74,9 +105,27 @@ export function computeSignalScoreFromHistory(
 		trendScore +
 		diffTrendScore +
 		volumeScore +
-		stabilityScore;
+		noveltyScore;
 
 	return clamp(total, 0, 100);
+}
+
+/**
+ * Rewards signals that have just confirmed (1-3 stable snapshots) and
+ * penalizes signals that have been stable for 5+ snapshots — by which point
+ * the market has typically adjusted and the whale edge is priced in. Replaces
+ * the old stabilityScore (+0 to +10), which reliably pushed stale high-edge
+ * picks into the saturated 95-100 band. Historical data: picks with
+ * signal_score ≥ 95 had avg ROI -12%; picks with 75-80 had avg ROI +34%.
+ */
+function computeNoveltyScore(stabilityCount: number): number {
+	if (stabilityCount === 0) return 0;
+	if (stabilityCount === 1) return 4;
+	if (stabilityCount === 2) return 6;
+	if (stabilityCount === 3) return 3;
+	if (stabilityCount === 4) return 0;
+	if (stabilityCount === 5) return -3;
+	return -5;
 }
 
 export function computeSignalScoreFromWindow(
@@ -111,14 +160,14 @@ export function computeSignalScoreFromWindow(
 		(clamp(volumeDelta, VOLUME_DELTA_MIN, VOLUME_DELTA_MAX) /
 			VOLUME_DELTA_MAX) *
 		15;
-	const stabilityScore = Math.min(stabilityCount, 5) * 2;
+	const noveltyScore = computeNoveltyScore(stabilityCount);
 	const total =
 		edgeScore * 0.7 +
 		diffScore * 0.2 +
 		trendScore +
 		diffTrendScore +
 		volumeScore +
-		stabilityScore;
+		noveltyScore;
 	return clamp(total, 0, 100);
 }
 
