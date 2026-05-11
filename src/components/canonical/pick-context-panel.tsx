@@ -73,10 +73,12 @@ function SnapshotBadge({ snapshot }: { snapshot: CompactSnapshot }) {
 }
 
 // ---------------------------------------------------------------------------
-// PickContextPanel — expandable per-pick canonical context
+// usePickContext — state hook that returns a button + body renderable in
+// different parents. This lets callers stack the expanded body full-width
+// below the row instead of inheriting the button's (often narrow) column.
 // ---------------------------------------------------------------------------
 
-export function PickContextPanel({ pickId }: { pickId: string }) {
+export function usePickContext(pickId: string) {
 	const [expanded, setExpanded] = useState(false);
 	const [context, setContext] = useState<PickContextData | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -109,37 +111,51 @@ export function PickContextPanel({ pickId }: { pickId: string }) {
 		}
 	}, [expanded, fetched, pickId]);
 
+	const button = (
+		<button
+			type="button"
+			onClick={toggle}
+			aria-expanded={expanded}
+			aria-controls={panelId}
+			className="inline-flex h-8 items-center rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+		>
+			{expanded ? "hide" : "context"}
+		</button>
+	);
+
+	const body = expanded ? (
+		<div
+			id={panelId}
+			className="mt-2 overflow-hidden rounded-md bg-ink-00/50 p-3 ring-1 ring-inset ring-ink-15"
+		>
+			{loading && (
+				<span className="font-mono text-xxs text-ink-55">loading…</span>
+			)}
+			{error && (
+				<span className="font-mono text-xxs text-signal-bad">{error}</span>
+			)}
+			{!loading && !error && !context && fetched && (
+				<span className="font-mono text-xxs text-ink-55">
+					No canonical context available for this pick.
+				</span>
+			)}
+			{context && <PickContextContent context={context} />}
+		</div>
+	) : null;
+
+	return { expanded, button, body };
+}
+
+// ---------------------------------------------------------------------------
+// PickContextPanel — default inline composition (button + body stacked).
+// ---------------------------------------------------------------------------
+
+export function PickContextPanel({ pickId }: { pickId: string }) {
+	const { button, body } = usePickContext(pickId);
 	return (
 		<div>
-			<button
-				type="button"
-				onClick={toggle}
-				aria-expanded={expanded}
-				aria-controls={panelId}
-				className="inline-flex h-8 items-center rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-			>
-				{expanded ? "hide" : "context"}
-			</button>
-
-			{expanded && (
-				<div
-					id={panelId}
-					className="mt-2 rounded-md bg-ink-00/50 p-3 ring-1 ring-inset ring-ink-15"
-				>
-					{loading && (
-						<span className="font-mono text-xxs text-ink-55">loading…</span>
-					)}
-					{error && (
-						<span className="font-mono text-xxs text-signal-bad">{error}</span>
-					)}
-					{!loading && !error && !context && fetched && (
-						<span className="font-mono text-xxs text-ink-55">
-							No canonical context available for this pick.
-						</span>
-					)}
-					{context && <PickContextContent context={context} />}
-				</div>
-			)}
+			{button}
+			{body}
 		</div>
 	);
 }

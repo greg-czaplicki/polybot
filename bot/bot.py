@@ -1,4 +1,3 @@
-import inspect
 import json
 import os
 import re
@@ -605,49 +604,26 @@ def resolve_token_id(entry: Dict[str, Any]) -> str:
 
 def build_clob_client(config: BotConfig):
 	try:
-		from py_clob_client.client import ClobClient
+		from py_clob_client_v2.client import ClobClient
+		from py_clob_client_v2.clob_types import ApiCreds
 	except Exception as exc:
-		raise RuntimeError("py-clob-client not installed") from exc
+		raise RuntimeError("py-clob-client-v2 not installed") from exc
 	client = ClobClient(
 		config.poly_clob_host,
-		key=config.poly_private_key,
 		chain_id=config.poly_chain_id,
+		key=config.poly_private_key,
 		signature_type=config.poly_signature_type,
 		funder=config.poly_funder or None,
 	)
 	if config.poly_api_key and config.poly_api_secret and config.poly_api_passphrase:
-		setter = getattr(client, "set_api_creds", None)
-		if setter:
-			try:
-				sig = inspect.signature(setter)
-				param_count = len(sig.parameters)
-			except Exception:
-				param_count = 2
-			try:
-				if param_count >= 3:
-					setter(
-						config.poly_api_key,
-						config.poly_api_secret,
-						config.poly_api_passphrase,
-					)
-				elif param_count == 2:
-					setter(
-						{
-							"apiKey": config.poly_api_key,
-							"apiSecret": config.poly_api_secret,
-							"apiPassphrase": config.poly_api_passphrase,
-						}
-					)
-				else:
-					setter()
-			except Exception:
-				client.set_api_creds(client.create_or_derive_api_creds())
-		else:
-			client.set_api_creds(client.create_or_derive_api_creds())
+		creds = ApiCreds(
+			api_key=config.poly_api_key,
+			api_secret=config.poly_api_secret,
+			api_passphrase=config.poly_api_passphrase,
+		)
 	else:
-		client.set_api_creds(client.create_or_derive_api_creds())
-	if getattr(client, "api_creds", None) is None:
-		client.set_api_creds(client.create_or_derive_api_creds())
+		creds = client.create_or_derive_api_key()
+	client.set_api_creds(creds)
 	return client
 
 def get_balance_allowance(
@@ -664,7 +640,7 @@ def get_balance_allowance(
 	try:
 		params = None
 		try:
-			from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+			from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
 
 			params = BalanceAllowanceParams(
 				asset_type=getattr(AssetType, asset_type, asset_type),
@@ -696,13 +672,12 @@ def execute_live_trade(
 	token_id = resolve_token_id(entry)
 	if not token_id:
 		raise RuntimeError("token_id not found for condition")
-	from py_clob_client.clob_types import MarketOrderArgs, OrderType
-	from py_clob_client.order_builder.constants import BUY
+	from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
 	client = build_clob_client(config)
 	order = MarketOrderArgs(
 		token_id=token_id,
 		amount=float(stake),
-		side=BUY,
+		side="BUY",
 		order_type=OrderType.FOK,
 	)
 	signed = client.create_market_order(order)

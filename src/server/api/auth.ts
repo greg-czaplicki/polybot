@@ -2,8 +2,9 @@ import { createServerFn } from '@tanstack/react-start'
 
 import { signAuthToken } from '../auth-token'
 
-export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
-  async ({ data, context }) => {
+export const verifyPasswordFn = createServerFn({ method: 'POST' })
+  .inputValidator((d: { password?: string }) => d)
+  .handler(async ({ data, context }) => {
     if (!context?.env) {
       throw new Error('Environment not available')
     }
@@ -20,7 +21,7 @@ export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
       return { success: true, token, expiresAt }
     }
 
-    const providedPassword = (data as { password?: string })?.password
+    const providedPassword = data?.password
     if (!providedPassword) {
       throw new Error('Password is required')
     }
@@ -35,5 +36,4 @@ export const verifyPasswordFn = createServerFn({ method: 'POST' }).handler(
     const token = await signAuthToken(authSecret, expiresAt)
 
     return { success: true, token, expiresAt }
-  },
-)
+  })

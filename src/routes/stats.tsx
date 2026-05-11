@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { MatchupCard } from "@/components/canonical/matchup-card";
-import { PickContextPanel } from "@/components/canonical/pick-context-panel";
+import { usePickContext } from "@/components/canonical/pick-context-panel";
 import { TeamTrendCard } from "@/components/canonical/team-trend-card";
 import {
 	clearManualPicksFn,
@@ -51,14 +51,23 @@ function StatsPage() {
 	const [settledPicks, setSettledPicks] = useState<ManualPickEntry[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [isClearing, setIsClearing] = useState(false);
+	const [confirmingClear, setConfirmingClear] = useState(false);
 	const [windowFilter, setWindowFilter] = useState<WindowKey>("week");
+
+	useEffect(() => {
+		if (!confirmingClear) return;
+		const t = setTimeout(() => setConfirmingClear(false), 3000);
+		return () => clearTimeout(t);
+	}, [confirmingClear]);
 
 	useEffect(() => {
 		let cancelled = false;
 		const load = async () => {
 			setIsLoading(true);
 			try {
-				const result = await listManualPicksFn({ data: { limit: 500 } });
+				const result = (await listManualPicksFn({
+					data: { limit: 500 },
+				})) as { picks?: ManualPickEntry[] };
 				if (cancelled) return;
 				setSettledPicks(result.picks ?? []);
 			} catch (error) {
@@ -77,7 +86,11 @@ function StatsPage() {
 
 	const handleClear = async () => {
 		if (isClearing) return;
-		if (!confirm("Clear all picks? This cannot be undone.")) return;
+		if (!confirmingClear) {
+			setConfirmingClear(true);
+			return;
+		}
+		setConfirmingClear(false);
 		setIsClearing(true);
 		try {
 			await clearManualPicksFn();
@@ -91,18 +104,14 @@ function StatsPage() {
 
 	const filteredPicks = useMemo(() => {
 		if (windowFilter === "all") return settledPicks;
-		const now = Date.now();
-		let cutoff = now;
-		if (windowFilter === "day") {
-			cutoff = now - 24 * 60 * 60 * 1000;
-		} else if (windowFilter === "week") {
-			cutoff = now - 7 * 24 * 60 * 60 * 1000;
+		const start = new Date();
+		start.setHours(0, 0, 0, 0);
+		if (windowFilter === "week") {
+			start.setDate(start.getDate() - start.getDay());
 		} else if (windowFilter === "month") {
-			const date = new Date(now);
-			date.setMonth(date.getMonth() - 1);
-			cutoff = date.getTime();
+			start.setDate(1);
 		}
-		const cutoffSeconds = Math.floor(cutoff / 1000);
+		const cutoffSeconds = Math.floor(start.getTime() / 1000);
 		return settledPicks.filter((pick) => pick.pickedAt >= cutoffSeconds);
 	}, [settledPicks, windowFilter]);
 
@@ -172,7 +181,7 @@ function StatsPage() {
 							<div className="flex items-center gap-2">
 								<a
 									href="/sharp"
-									className="inline-flex h-8 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+									className="inline-flex h-11 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
 								>
 									Back to Sharp
 								</a>
@@ -180,10 +189,22 @@ function StatsPage() {
 									type="button"
 									onClick={handleClear}
 									disabled={isClearing}
-									aria-label="Clear all picks"
-									className="inline-flex h-8 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-55 transition-colors hover:bg-signal-bad/10 hover:text-signal-bad focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
+									aria-label={
+										confirmingClear
+											? "Tap again to confirm clearing all picks"
+											: "Clear all picks"
+									}
+									className={`inline-flex h-11 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40 sm:h-8 ${
+										confirmingClear
+											? "bg-signal-bad/10 text-signal-bad ring-1 ring-inset ring-signal-bad/35"
+											: "text-ink-55 hover:bg-signal-bad/10 hover:text-signal-bad"
+									}`}
 								>
-									{isClearing ? "clearing…" : "clear picks"}
+									{isClearing
+										? "clearing…"
+										: confirmingClear
+											? "tap to confirm"
+											: "clear picks"}
 								</button>
 							</div>
 						</div>
@@ -206,25 +227,27 @@ function StatsPage() {
 					{/* Window filter pills */}
 					<div
 						className="mb-4 flex flex-wrap items-center gap-2"
-						role="tablist"
+						role="group"
 						aria-label="Time window"
 					>
-						{WINDOW_OPTIONS.map((option) => (
-							<button
-								type="button"
-								key={option.key}
-								onClick={() => setWindowFilter(option.key)}
-								aria-selected={windowFilter === option.key}
-								role="tab"
-								className={`inline-flex h-9 items-center rounded-full px-4 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
-									windowFilter === option.key
-										? "bg-brand-blue text-ink-00"
-										: "bg-ink-10 text-ink-70 hover:bg-ink-15 hover:text-ink-95"
-								}`}
-							>
-								{option.label}
-							</button>
-						))}
+						{WINDOW_OPTIONS.map((option) => {
+							const active = windowFilter === option.key;
+							return (
+								<button
+									type="button"
+									key={option.key}
+									onClick={() => setWindowFilter(option.key)}
+									aria-pressed={active}
+									className={`inline-flex h-11 items-center rounded-full px-4 font-mono text-xxs uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-9 ${
+										active
+											? "bg-brand-blue font-bold text-ink-00 ring-1 ring-inset ring-ink-00/20"
+											: "bg-ink-10 font-semibold text-ink-70 hover:bg-ink-15 hover:text-ink-95"
+									}`}
+								>
+									{option.label}
+								</button>
+							);
+						})}
 					</div>
 
 					{/* Pick list */}
@@ -241,7 +264,7 @@ function StatsPage() {
 						{!isLoading && filteredPicks.length === 0 && (
 							<div className="font-mono text-sm text-ink-55">no picks yet.</div>
 						)}
-						<ul className="space-y-2">
+						<ul className="divide-y divide-ink-15">
 							{filteredPicks.map((pick) => (
 								<PickRow key={pick.id} pick={pick} />
 							))}
@@ -282,7 +305,7 @@ function StatsPage() {
 										<span
 											className={`text-base font-semibold ${
 												row.win + row.loss === 0
-													? "text-ink-40"
+													? "text-ink-55"
 													: row.winRate >= 55
 														? "text-signal-pos"
 														: "text-ink-85"
@@ -336,8 +359,9 @@ function StatPair({
 }
 
 function PickRow({ pick }: { pick: ManualPickEntry }) {
+	const { button, body } = usePickContext(pick.id);
 	return (
-		<li className="rounded-md bg-ink-00/40 p-3 ring-1 ring-inset ring-ink-15">
+		<li className="overflow-hidden py-3 first:pt-0 last:pb-0">
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="truncate font-sans text-sm font-semibold text-ink-95">
@@ -352,7 +376,7 @@ function PickRow({ pick }: { pick: ManualPickEntry }) {
 						{pick.settledAt && (
 							<>
 								<span aria-hidden>·</span>
-								<span className="text-ink-40">
+								<span>
 									settled {formatRelativeTime(pick.settledAt)}
 								</span>
 							</>
@@ -365,9 +389,10 @@ function PickRow({ pick }: { pick: ManualPickEntry }) {
 					>
 						{pick.status}
 					</span>
-					<PickContextPanel pickId={pick.id} />
+					{button}
 				</div>
 			</div>
+			{body}
 		</li>
 	);
 }

@@ -96,12 +96,52 @@ export interface VenueRoleWeights {
 
 /** Weights for over/under trend signals (used for totals bets). */
 export interface OuTrendWeights {
-	/** Weight for strong OU trend alignment */
-	strongAlignmentBonus: number;
-	/** Threshold for "strong" OU over pct */
+	/** Bonus when team's OU trend aligns with pick direction */
+	alignedBonus: number;
+	/** Penalty when team's OU trend conflicts with pick direction */
+	misalignedPenalty: number;
+	/** Over pct at or above this = "strong over" lean */
 	overHotThreshold: number;
-	/** Threshold for "strong" OU under pct (i.e., low over pct) */
+	/** Over pct at or below this = "strong under" lean */
 	underHotThreshold: number;
+	maxContribution: number;
+}
+
+// ---------------------------------------------------------------------------
+// OU matchup delta scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Weights for combined team+opponent OU lean.
+ * Input: average of team.ouOverPct and opponent.ouOverPct, compared against 0.5.
+ */
+export interface OuMatchupWeights {
+	/** Multiplier on |combinedOverPct - 0.5| when aligned with pick direction */
+	alignedMultiplier: number;
+	/** Multiplier when misaligned (should be negative) */
+	misalignedMultiplier: number;
+	/** Threshold (absolute deviation from 0.5) above which the edge is "strong" */
+	strongEdgeThreshold: number;
+	/** Extra bonus when aligned and above strongEdgeThreshold */
+	strongAlignedBonus: number;
+	maxContribution: number;
+}
+
+// ---------------------------------------------------------------------------
+// OU streak scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Weights for OU streaks. A team on an "over" streak (W = went over) reinforces
+ * over picks and weakens under picks.
+ */
+export interface OuStreakWeights {
+	/** Points per streak game when streak direction matches pick direction */
+	alignedPerGame: number;
+	/** Points per streak game when streak direction opposes pick direction (negative) */
+	misalignedPerGame: number;
+	/** Streak lengths beyond this are capped */
+	maxStreakLength: number;
 	maxContribution: number;
 }
 
@@ -131,13 +171,20 @@ export interface ScoringConfig {
 	matchupDelta: MatchupDeltaWeights;
 	venueRole: VenueRoleWeights;
 	ouTrend: OuTrendWeights;
+	ouMatchup: OuMatchupWeights;
+	ouStreak: OuStreakWeights;
 	dataQuality: DataQualityWeights;
 	/**
-	 * Raw score normalization: scores are mapped to 0–100 using this
-	 * as the theoretical max raw score. Actual maxes may be lower
-	 * due to capping per-category.
+	 * Raw score normalization for ATS-style bets (spread, moneyline).
+	 * Sum of applicable maxContributions.
 	 */
 	maxRawScore: number;
+	/**
+	 * Raw score normalization for totals bets. ATS scorers are bypassed
+	 * for totals, so the effective max is the sum of OU + venue + data-quality
+	 * maxes.
+	 */
+	maxRawScoreTotals: number;
 }
 
 /**
@@ -185,10 +232,24 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 		maxContribution: 5,
 	},
 	ouTrend: {
-		strongAlignmentBonus: 10,
+		alignedBonus: 10,
+		misalignedPenalty: -10,
 		overHotThreshold: 0.6,
 		underHotThreshold: 0.4,
 		maxContribution: 10,
+	},
+	ouMatchup: {
+		alignedMultiplier: 80,
+		misalignedMultiplier: -80,
+		strongEdgeThreshold: 0.15,
+		strongAlignedBonus: 5,
+		maxContribution: 20,
+	},
+	ouStreak: {
+		alignedPerGame: 3,
+		misalignedPerGame: -2,
+		maxStreakLength: 5,
+		maxContribution: 12,
 	},
 	dataQuality: {
 		missingTeamSnapshotPenalty: -15,
@@ -196,4 +257,6 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 		noContextPenalty: -25,
 	},
 	maxRawScore: 82,
+	// Totals: ouTrend(10) + ouMatchup(20) + ouStreak(12) + venueRole(5) = 47
+	maxRawScoreTotals: 47,
 };

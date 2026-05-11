@@ -233,6 +233,7 @@ export async function buildPrePickFeatures(
 		favDogRole,
 		spreadLine,
 		totalLine,
+		pickedDirection: null,
 		team: teamFeatures,
 		opponent: opponentFeatures,
 		matchupAtsDelta,

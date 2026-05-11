@@ -48,6 +48,12 @@ export interface PrePickFeatures {
 	favDogRole: "favorite" | "dog" | "pickem" | null;
 	spreadLine: number | null;
 	totalLine: number | null;
+	/**
+	 * For totals bets: the direction the pick is on ("over" or "under").
+	 * Required for the scorer to evaluate OU-trend alignment. Null for
+	 * non-totals or when the direction cannot be inferred.
+	 */
+	pickedDirection: "over" | "under" | null;
 	team: SideFeatures;
 	opponent: SideFeatures;
 	matchupAtsDelta: number | null;
@@ -88,27 +94,25 @@ export function scoreOpportunity(
 ): OpportunityScore {
 	const factors: ScoringFactor[] = [];
 	const warnings: string[] = [];
+	const isTotals = features.betType === "total";
 
-	// --- Data quality checks ---
+	// --- Data quality checks (always) ---
 	scoreDataQuality(features, config, factors, warnings);
 
-	// --- ATS trend scoring ---
-	scoreAtsTrend(features, config, factors);
-
-	// --- ATS split scoring ---
-	scoreAtsSplit(features, config, factors);
-
-	// --- Streak scoring ---
-	scoreStreak(features, config, factors);
-
-	// --- Matchup delta scoring ---
-	scoreMatchupDelta(features, config, factors);
-
-	// --- Venue/role scoring ---
-	scoreVenueRole(features, config, factors);
-
-	// --- OU trend scoring (for totals bets) ---
-	scoreOuTrend(features, config, factors);
+	if (isTotals) {
+		// OU-specific scoring only — ATS signals don't apply to totals outcomes.
+		scoreOuTrend(features, config, factors, warnings);
+		scoreOuMatchupDelta(features, config, factors);
+		scoreOuStreak(features, config, factors);
+		scoreVenueRole(features, config, factors);
+	} else {
+		// ATS-style bets (spread, moneyline).
+		scoreAtsTrend(features, config, factors);
+		scoreAtsSplit(features, config, factors);
+		scoreStreak(features, config, factors);
+		scoreMatchupDelta(features, config, factors);
+		scoreVenueRole(features, config, factors);
+	}
 
 	// --- Check for conflicting signals ---
 	checkConflictingSignals(factors, warnings);
@@ -116,10 +120,11 @@ export function scoreOpportunity(
 	// Compute raw total
 	const rawScore = factors.reduce((sum, f) => sum + f.points, 0);
 
-	// Normalize to 0–100
+	// Normalize to 0–100 using bet-type-specific max.
+	const denom = isTotals ? config.maxRawScoreTotals : config.maxRawScore;
 	const totalScore = Math.max(
 		0,
-		Math.min(100, Math.round((rawScore / config.maxRawScore) * 100)),
+		Math.min(100, Math.round((rawScore / denom) * 100)),
 	);
 
 	// Sort factors by absolute contribution
@@ -348,39 +353,166 @@ function scoreVenueRole(
 	});
 }
 
+/**
+ * Score the OU trend signal per side (team + opponent). Rewards each side's
+ * directional OU lean when it aligns with the pick direction, penalizes when
+ * it opposes. Combined from both teams since a total is a joint outcome.
+ */
 function scoreOuTrend(
 	features: PrePickFeatures,
 	config: ScoringConfig,
 	factors: ScoringFactor[],
+	warnings: string[],
 ): void {
 	const { ouTrend } = config;
-	const ouOverPct = features.team.ouOverPct;
+	const pick = features.pickedDirection;
 
-	if (ouOverPct == null || features.betType !== "total") return;
-
-	if (ouOverPct >= ouTrend.overHotThreshold) {
-		const points = Math.min(
-			ouTrend.strongAlignmentBonus,
-			ouTrend.maxContribution,
-		);
-		factors.push({
-			name: "ou_trend",
-			label: `Strong over trend (${(ouOverPct * 100).toFixed(0)}%)`,
-			points,
-			detail: `Over pct: ${(ouOverPct * 100).toFixed(1)}%`,
-		});
-	} else if (ouOverPct <= ouTrend.underHotThreshold) {
-		const points = Math.min(
-			ouTrend.strongAlignmentBonus,
-			ouTrend.maxContribution,
-		);
-		factors.push({
-			name: "ou_trend",
-			label: `Strong under trend (${((1 - ouOverPct) * 100).toFixed(0)}%)`,
-			points,
-			detail: `Over pct: ${(ouOverPct * 100).toFixed(1)}% (under-leaning)`,
-		});
+	if (pick == null) {
+		if (
+			features.team.ouOverPct != null ||
+			features.opponent.ouOverPct != null
+		) {
+			warnings.push(
+				"Pick direction (over/under) unavailable; OU trend signal skipped.",
+			);
+		}
+		return;
 	}
+
+	let totalPoints = 0;
+	const labels: string[] = [];
+
+	for (const [sideLabel, side] of [
+		["team", features.team] as const,
+		["opp", features.opponent] as const,
+	]) {
+		const ouOverPct = side.ouOverPct;
+		if (ouOverPct == null) continue;
+
+		let leaning: "over" | "under" | null = null;
+		if (ouOverPct >= ouTrend.overHotThreshold) leaning = "over";
+		else if (ouOverPct <= ouTrend.underHotThreshold) leaning = "under";
+		if (leaning == null) continue;
+
+		const aligned = leaning === pick;
+		const raw = aligned ? ouTrend.alignedBonus : ouTrend.misalignedPenalty;
+		// Each side contributes half to keep category within maxContribution.
+		totalPoints += raw / 2;
+		const pct = leaning === "over" ? ouOverPct : 1 - ouOverPct;
+		labels.push(
+			`${sideLabel} ${leaning} ${(pct * 100).toFixed(0)}%${aligned ? "" : " (vs pick)"}`,
+		);
+	}
+
+	if (labels.length === 0) return;
+
+	const capped = Math.max(
+		-ouTrend.maxContribution,
+		Math.min(ouTrend.maxContribution, totalPoints),
+	);
+	factors.push({
+		name: "ou_trend",
+		label: `OU trend: ${labels.join(", ")}`,
+		points: Math.round(capped * 10) / 10,
+		detail: `pick=${pick}`,
+	});
+}
+
+/**
+ * Score the combined OU lean of team + opponent vs the pick direction.
+ * Uses the average of both sides' ouOverPct as the combined signal and
+ * rewards/penalizes based on how strongly it leans with/against the pick.
+ */
+function scoreOuMatchupDelta(
+	features: PrePickFeatures,
+	config: ScoringConfig,
+	factors: ScoringFactor[],
+): void {
+	const { ouMatchup } = config;
+	const pick = features.pickedDirection;
+	if (pick == null) return;
+
+	const teamPct = features.team.ouOverPct;
+	const oppPct = features.opponent.ouOverPct;
+	if (teamPct == null || oppPct == null) return;
+
+	const combined = (teamPct + oppPct) / 2;
+	const signedDeviation = pick === "over" ? combined - 0.5 : 0.5 - combined;
+	// signedDeviation is positive when the combined lean matches the pick.
+
+	const aligned = signedDeviation >= 0;
+	let points = aligned
+		? signedDeviation * ouMatchup.alignedMultiplier
+		: signedDeviation * -ouMatchup.misalignedMultiplier;
+	// (misalignedMultiplier is negative; -(-80)*negDev = positive penalty applied
+	// via negDev sign, giving a negative score.)
+
+	if (aligned && signedDeviation >= ouMatchup.strongEdgeThreshold) {
+		points += ouMatchup.strongAlignedBonus;
+	}
+
+	points = Math.max(
+		-ouMatchup.maxContribution,
+		Math.min(ouMatchup.maxContribution, points),
+	);
+
+	const sign = signedDeviation >= 0 ? "+" : "";
+	factors.push({
+		name: "ou_matchup",
+		label: `OU matchup lean ${sign}${(signedDeviation * 100).toFixed(0)}pp ${aligned ? "with" : "vs"} pick`,
+		points: Math.round(points * 10) / 10,
+		detail: `team ${(teamPct * 100).toFixed(0)}% / opp ${(oppPct * 100).toFixed(0)}% → combined ${(combined * 100).toFixed(0)}% over`,
+	});
+}
+
+/**
+ * Score OU streak alignment. A team currently going over (W = went over) lends
+ * support to Over picks and detracts from Under picks, and vice versa.
+ */
+function scoreOuStreak(
+	features: PrePickFeatures,
+	config: ScoringConfig,
+	factors: ScoringFactor[],
+): void {
+	const { ouStreak } = config;
+	const pick = features.pickedDirection;
+	if (pick == null) return;
+
+	let totalPoints = 0;
+	const labels: string[] = [];
+
+	for (const [sideLabel, side] of [
+		["team", features.team] as const,
+		["opp", features.opponent] as const,
+	]) {
+		const { ouStreakType, ouStreakLength } = side;
+		if (ouStreakType == null || ouStreakLength == null || ouStreakLength === 0)
+			continue;
+
+		// W = went over, L = went under (per snapshot convention).
+		const streakDirection: "over" | "under" = ouStreakType === "W" ? "over" : "under";
+		const aligned = streakDirection === pick;
+		const capped = Math.min(ouStreakLength, ouStreak.maxStreakLength);
+		const perGame = aligned ? ouStreak.alignedPerGame : ouStreak.misalignedPerGame;
+		const contribution = (capped * perGame) / 2; // half per side
+		totalPoints += contribution;
+		labels.push(
+			`${sideLabel} ${ouStreakLength}${streakDirection === "over" ? "O" : "U"}${aligned ? "" : "↯"}`,
+		);
+	}
+
+	if (labels.length === 0) return;
+
+	const capped = Math.max(
+		-ouStreak.maxContribution,
+		Math.min(ouStreak.maxContribution, totalPoints),
+	);
+	factors.push({
+		name: "ou_streak",
+		label: `OU streak: ${labels.join(", ")}`,
+		points: Math.round(capped * 10) / 10,
+		detail: `pick=${pick}`,
+	});
 }
 
 function checkConflictingSignals(

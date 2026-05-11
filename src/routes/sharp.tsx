@@ -538,7 +538,11 @@ function SharpMoneyPage() {
 	const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(
 		new Set(),
 	);
-	const [showAllEntries, setShowAllEntries] = useState(false);
+	// showAllEntries is kept as a constant for now — the toggle was removed in
+	// favor of the dim-not-hide near-miss pattern. Leaving the flag in place so
+	// the downstream filter and sort paths still compile and we can reintroduce
+	// an override later if we want one.
+	const [showAllEntries] = useState(false);
 	const [showEdgeStats, setShowEdgeStats] = useState(true);
 	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<
 		string[]
@@ -1098,7 +1102,7 @@ function SharpMoneyPage() {
 		};
 	}, [showAllEntries, baseEntries, botDefaults]);
 
-	const filteredEntries = useMemo(() => {
+	const { filteredEntries, dimmedEntries } = useMemo(() => {
 		const now = new Date();
 		const cutoff = new Date(
 			now.getTime() + UPCOMING_WINDOW_HOURS * 60 * 60 * 1000,
@@ -1107,17 +1111,21 @@ function SharpMoneyPage() {
 			now.getTime() + (botDefaults?.maxMinutesToStart ?? 60) * 60 * 1000,
 		);
 		const startBufferMs = START_TIME_BUFFER_MINUTES * 60 * 1000;
-		let filtered = baseEntries.filter((e) => {
+		const minGradeWeight = gradeWeight(botDefaults?.minGrade ?? "A");
+		const rankByConditionId = new Map<string, number>();
+		for (const [index, conditionId] of botAlignedConditionOrder.entries()) {
+			rankByConditionId.set(conditionId, index);
+		}
+
+		// Hard filters: never show these regardless of showAllEntries.
+		// Includes not-bettable (EVEN, no_price_edge), time-window boundaries,
+		// A+-only mode, and explicit sport selection.
+		const passesHardFilters = (e: SharpMoneyCacheEntry): boolean => {
 			if (e.sharpSide === "EVEN") return false;
-			if (!showAllEntries && getMarketTypeLabel(e.marketTitle) === "other") {
-				return false;
-			}
-			// Hide games that have already started (with buffer)
 			const gameTime = parseEventTime(e.eventTime);
 			if (gameTime) {
 				if (gameTime.getTime() < now.getTime() - startBufferMs) return false;
 				if (gameTime > cutoff) return false;
-				if (!showAllEntries && gameTime > botSyncCutoff) return false;
 				if (showAPlusOnly) {
 					const minutesToStart = (gameTime.getTime() - now.getTime()) / 60000;
 					const isStartingSoon =
@@ -1128,7 +1136,15 @@ function SharpMoneyPage() {
 			} else if (showAPlusOnly) {
 				return false;
 			}
-			if (!showAllEntries) {
+			const gradeWarnings = gradesByConditionId[e.conditionId]?.warnings ?? [];
+			if (gradeWarnings.includes("no_price_edge")) return false;
+			if (
+				selectedSeriesId !== "all" &&
+				e.sportSeriesId !== Number(selectedSeriesId)
+			) {
+				return false;
+			}
+			if (showAPlusOnly) {
 				const signalScore =
 					signalScoreByConditionId[e.conditionId] ?? e.edgeRating;
 				const signalGrade =
@@ -1137,94 +1153,111 @@ function SharpMoneyPage() {
 						edgeRating: e.edgeRating,
 						scoreDifferential: e.scoreDifferential,
 					});
-				if (
-					gradeWeight(signalGrade) < gradeWeight(botDefaults?.minGrade ?? "A")
-				) {
-					return false;
-				}
-				if (showAPlusOnly && signalGrade !== "A+") return false;
+				if (signalGrade !== "A+") return false;
 			}
-			const gradeWarnings = gradesByConditionId[e.conditionId]?.warnings ?? [];
-			if (gradeWarnings.includes("no_price_edge")) return false;
 			return true;
-		});
-		if (selectedSeriesId !== "all") {
-			filtered = filtered.filter(
-				(e) => e.sportSeriesId === Number(selectedSeriesId),
-			);
-		}
-		if (!showAllEntries) {
-			const rankByConditionId = new Map<string, number>();
-			for (const [index, conditionId] of botAlignedConditionOrder.entries()) {
-				rankByConditionId.set(conditionId, index);
+		};
+
+		// Policy filters: applied on top of hard. Failing entries become the
+		// "dimmed" set when showAllEntries is false — they stay visible so the
+		// user can see near-misses, but at reduced opacity. When showAllEntries
+		// is true every hard-passing entry counts as passing (no dim bucket).
+		const passesPolicyFilters = (e: SharpMoneyCacheEntry): boolean => {
+			if (showAllEntries) return true;
+			if (getMarketTypeLabel(e.marketTitle) === "other") return false;
+			const gameTime = parseEventTime(e.eventTime);
+			if (gameTime && gameTime > botSyncCutoff) return false;
+			const signalScore =
+				signalScoreByConditionId[e.conditionId] ?? e.edgeRating;
+			const signalGrade =
+				gradesByConditionId[e.conditionId]?.grade ??
+				signalScoreToGradeLabel(signalScore, {
+					edgeRating: e.edgeRating,
+					scoreDifferential: e.scoreDifferential,
+				});
+			if (gradeWeight(signalGrade) < minGradeWeight) return false;
+			if (!rankByConditionId.has(e.conditionId)) return false;
+			return true;
+		};
+
+		const hardPass = baseEntries.filter(passesHardFilters);
+		const passingRaw = hardPass.filter(passesPolicyFilters);
+		const dimmedRaw = showAllEntries
+			? []
+			: hardPass.filter((e) => !passesPolicyFilters(e));
+
+		const dedupByGroup = (
+			entries: SharpMoneyCacheEntry[],
+		): SharpMoneyCacheEntry[] => {
+			const deduped = new Map<string, SharpMoneyCacheEntry>();
+			for (const entry of entries) {
+				const key = getMarketGroupKey(entry);
+				const existing = deduped.get(key);
+				if (!existing) {
+					deduped.set(key, entry);
+					continue;
+				}
+				const entryScore =
+					signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
+				const existingScore =
+					signalScoreByConditionId[existing.conditionId] ?? existing.edgeRating;
+				const entryGrade =
+					gradesByConditionId[entry.conditionId]?.grade ??
+					signalScoreToGradeLabel(entryScore, {
+						edgeRating: entry.edgeRating,
+						scoreDifferential: entry.scoreDifferential,
+					});
+				const existingGrade =
+					gradesByConditionId[existing.conditionId]?.grade ??
+					signalScoreToGradeLabel(existingScore, {
+						edgeRating: existing.edgeRating,
+						scoreDifferential: existing.scoreDifferential,
+					});
+				const entryWeight = gradeWeight(entryGrade);
+				const existingWeight = gradeWeight(existingGrade);
+				if (entryWeight > existingWeight) {
+					deduped.set(key, entry);
+					continue;
+				}
+				if (entryWeight < existingWeight) continue;
+				if (entryScore > existingScore) {
+					deduped.set(key, entry);
+					continue;
+				}
+				if (entryScore < existingScore) continue;
+				if (entry.edgeRating > existing.edgeRating) {
+					deduped.set(key, entry);
+					continue;
+				}
+				if (entry.edgeRating < existing.edgeRating) continue;
+				if ((entry.scoreDifferential ?? 0) > (existing.scoreDifferential ?? 0)) {
+					deduped.set(key, entry);
+					continue;
+				}
+				const entryTime = parseEventTime(entry.eventTime)?.getTime() ?? 0;
+				const existingTime = parseEventTime(existing.eventTime)?.getTime() ?? 0;
+				if (entryTime > 0 && existingTime > 0 && entryTime < existingTime) {
+					deduped.set(key, entry);
+				}
 			}
-			filtered = filtered
-				.filter((entry) => rankByConditionId.has(entry.conditionId))
+			return [...deduped.values()];
+		};
+
+		let passing: SharpMoneyCacheEntry[];
+		if (!showAllEntries) {
+			// Bot-aligned order is already unique per condition — no dedup needed.
+			passing = passingRaw
+				.slice()
 				.sort(
 					(a, b) =>
 						(rankByConditionId.get(a.conditionId) ?? Number.MAX_SAFE_INTEGER) -
 						(rankByConditionId.get(b.conditionId) ?? Number.MAX_SAFE_INTEGER),
 				);
-			return filtered;
+		} else {
+			passing = dedupByGroup(passingRaw);
 		}
-		const deduped = new Map<string, SharpMoneyCacheEntry>();
-		for (const entry of filtered) {
-			const key = getMarketGroupKey(entry);
-			const existing = deduped.get(key);
-			if (!existing) {
-				deduped.set(key, entry);
-				continue;
-			}
-			const entryScore =
-				signalScoreByConditionId[entry.conditionId] ?? entry.edgeRating;
-			const existingScore =
-				signalScoreByConditionId[existing.conditionId] ?? existing.edgeRating;
-			const entryGrade =
-				gradesByConditionId[entry.conditionId]?.grade ??
-				signalScoreToGradeLabel(entryScore, {
-					edgeRating: entry.edgeRating,
-					scoreDifferential: entry.scoreDifferential,
-				});
-			const existingGrade =
-				gradesByConditionId[existing.conditionId]?.grade ??
-				signalScoreToGradeLabel(existingScore, {
-					edgeRating: existing.edgeRating,
-					scoreDifferential: existing.scoreDifferential,
-				});
-			const entryWeight = gradeWeight(entryGrade);
-			const existingWeight = gradeWeight(existingGrade);
-			if (entryWeight > existingWeight) {
-				deduped.set(key, entry);
-				continue;
-			}
-			if (entryWeight < existingWeight) {
-				continue;
-			}
-			if (entryScore > existingScore) {
-				deduped.set(key, entry);
-				continue;
-			}
-			if (entryScore < existingScore) {
-				continue;
-			}
-			if (entry.edgeRating > existing.edgeRating) {
-				deduped.set(key, entry);
-				continue;
-			}
-			if (entry.edgeRating < existing.edgeRating) {
-				continue;
-			}
-			if ((entry.scoreDifferential ?? 0) > (existing.scoreDifferential ?? 0)) {
-				deduped.set(key, entry);
-				continue;
-			}
-			const entryTime = parseEventTime(entry.eventTime)?.getTime() ?? 0;
-			const existingTime = parseEventTime(existing.eventTime)?.getTime() ?? 0;
-			if (entryTime > 0 && existingTime > 0 && entryTime < existingTime) {
-				deduped.set(key, entry);
-			}
-		}
-		return [...deduped.values()];
+		const dimmed = dedupByGroup(dimmedRaw);
+		return { filteredEntries: passing, dimmedEntries: dimmed };
 	}, [
 		baseEntries,
 		showAllEntries,
@@ -1525,38 +1558,53 @@ function SharpMoneyPage() {
 		return () => clearInterval(interval);
 	}, [refreshSignalHistory, refreshGrades, refreshHealth]);
 
-	const sortedEntries = useMemo(() => {
-		const entriesToSort = [...filteredEntries];
-		entriesToSort.sort((a, b) => {
-			const signalA = signalScoreByConditionId[a.conditionId] ?? 0;
-			const signalB = signalScoreByConditionId[b.conditionId] ?? 0;
-			const gradeA =
-				gradesByConditionId[a.conditionId]?.grade ??
-				signalScoreToGradeLabel(signalA, {
-					edgeRating: a.edgeRating,
-					scoreDifferential: a.scoreDifferential,
-				});
-			const gradeB =
-				gradesByConditionId[b.conditionId]?.grade ??
-				signalScoreToGradeLabel(signalB, {
-					edgeRating: b.edgeRating,
-					scoreDifferential: b.scoreDifferential,
-				});
-			const compositeA = gradeWeight(gradeA) + signalA;
-			const compositeB = gradeWeight(gradeB) + signalB;
-			if (compositeA !== compositeB) return compositeB - compositeA;
-			return b.edgeRating - a.edgeRating;
-		});
-		return entriesToSort;
-	}, [filteredEntries, signalScoreByConditionId, gradesByConditionId]);
+	const sortByComposite = useCallback(
+		(entries: SharpMoneyCacheEntry[]) => {
+			const out = [...entries];
+			out.sort((a, b) => {
+				const signalA = signalScoreByConditionId[a.conditionId] ?? 0;
+				const signalB = signalScoreByConditionId[b.conditionId] ?? 0;
+				const gradeA =
+					gradesByConditionId[a.conditionId]?.grade ??
+					signalScoreToGradeLabel(signalA, {
+						edgeRating: a.edgeRating,
+						scoreDifferential: a.scoreDifferential,
+					});
+				const gradeB =
+					gradesByConditionId[b.conditionId]?.grade ??
+					signalScoreToGradeLabel(signalB, {
+						edgeRating: b.edgeRating,
+						scoreDifferential: b.scoreDifferential,
+					});
+				const compositeA = gradeWeight(gradeA) + signalA;
+				const compositeB = gradeWeight(gradeB) + signalB;
+				if (compositeA !== compositeB) return compositeB - compositeA;
+				return b.edgeRating - a.edgeRating;
+			});
+			return out;
+		},
+		[signalScoreByConditionId, gradesByConditionId],
+	);
+
+	const sortedEntries = useMemo(
+		() => sortByComposite(filteredEntries),
+		[sortByComposite, filteredEntries],
+	);
+
+	const sortedDimmedEntries = useMemo(
+		() => sortByComposite(dimmedEntries),
+		[sortByComposite, dimmedEntries],
+	);
 
 	const isSortingHold = !isInitialSortReady;
 	const displayEntries = !isSortingHold ? sortedEntries : [];
+	const displayDimmedEntries = !isSortingHold ? sortedDimmedEntries : [];
 	const showSortingState = !isLoading && isSortingHold;
 	const showProcessingState =
 		!isLoading &&
 		!showSortingState &&
 		displayEntries.length === 0 &&
+		displayDimmedEntries.length === 0 &&
 		(pipelineStatus?.inProgress ||
 			(entries.length > 0 && readyEntries.length === 0));
 
@@ -1982,30 +2030,19 @@ function SharpMoneyPage() {
 					{!showProcessingState &&
 						!showSortingState &&
 						!isLoading &&
-						displayEntries.length === 0 && (
+						displayEntries.length === 0 &&
+						displayDimmedEntries.length === 0 && (
 							<div className="rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15">
 								<h2 className="font-sans text-base font-semibold text-ink-95">
 									{entries.length > 0
-										? "No ready markets match the current filter"
+										? "No actionable markets right now"
 										: "No sharp money data yet"}
 								</h2>
 								<p className="mt-1.5 max-w-prose font-sans text-sm text-ink-70">
 									{entries.length > 0
-										? "All ready markets are below the B-grade floor. Weaker signals are hidden by default."
+										? "All current markets have already started, fall outside the upcoming window, or lack a price edge."
 										: "Run a refresh to scan top sports markets and surface where sharp money is flowing."}
 								</p>
-								{!pipelineStatus?.inProgress &&
-									entries.length > 0 &&
-									!showAllEntries && (
-										<button
-											type="button"
-											onClick={() => setShowAllEntries(true)}
-											className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-										>
-											<Eye className="h-3.5 w-3.5" />
-											show all {entries.length} markets
-										</button>
-									)}
 							</div>
 						)}
 
@@ -2048,33 +2085,18 @@ function SharpMoneyPage() {
 					{!showProcessingState &&
 						!showSortingState &&
 						!isLoading &&
-						displayEntries.length > 0 && (
+						(displayEntries.length > 0 ||
+							displayDimmedEntries.length > 0) && (
 							<div className="space-y-4">
-								{/* Show count of hidden entries */}
+								{/* Show counts */}
 								{(entries.length > displayEntries.length || showAllEntries) && (
 									<div className="flex items-center justify-end gap-2 font-mono text-xxs tabular-nums text-ink-55">
 										<span>
-											{displayEntries.length}/{entries.length} shown ·{" "}
-											{entries.length - displayEntries.length} filtered
+											{displayEntries.length}/{entries.length} passing
+											{displayDimmedEntries.length > 0
+												? ` · ${displayDimmedEntries.length} near-miss`
+												: ""}
 										</span>
-										<button
-											type="button"
-											onClick={() => setShowAllEntries((prev) => !prev)}
-											aria-pressed={showAllEntries}
-											className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-											title={
-												showAllEntries
-													? "Hide filtered entries"
-													: "Show filtered entries"
-											}
-										>
-											{showAllEntries ? (
-												<EyeOff className="h-3.5 w-3.5" />
-											) : (
-												<Eye className="h-3.5 w-3.5" />
-											)}
-											{showAllEntries ? "filtered" : "show all"}
-										</button>
 									</div>
 								)}
 								{displayEntries.map((entry) => (
@@ -2096,6 +2118,38 @@ function SharpMoneyPage() {
 										showDebug={showRefreshDebug}
 									/>
 								))}
+								{displayDimmedEntries.length > 0 && (
+									<>
+										<div
+											className="flex items-center gap-3 pt-2 font-mono text-xxs uppercase tracking-wider text-ink-40"
+											aria-label="Near-miss section"
+										>
+											<span className="h-px flex-1 bg-ink-15" aria-hidden />
+											<span>near-misses · below criteria</span>
+											<span className="h-px flex-1 bg-ink-15" aria-hidden />
+										</div>
+										{displayDimmedEntries.map((entry) => (
+											<SharpMoneyCard
+												key={entry.id}
+												entry={entry}
+												pickMeta={pickStatusByConditionId[entry.conditionId]}
+												isExpanded={expandedMarkets.has(entry.id)}
+												onToggle={() => toggleMarket(entry)}
+												history={historyByConditionId[entry.conditionId]}
+												isHistoryLoading={historyLoading.has(entry.conditionId)}
+												signalScore={signalScoreByConditionId[entry.conditionId]}
+												gradeData={gradesByConditionId[entry.conditionId]}
+												onRefresh={() => handleRefreshEntry(entry)}
+												isRefreshing={refreshingEntryId === entry.id}
+												disableRefresh={Boolean(pipelineStatus?.inProgress)}
+												maxVolume={maxVolume}
+												debugInfo={debugInfoById[entry.id]}
+												showDebug={showRefreshDebug}
+												dimmed
+											/>
+										))}
+									</>
+								)}
 							</div>
 						)}
 				</main>
@@ -2171,6 +2225,7 @@ function SharpMoneyCard({
 	maxVolume,
 	debugInfo,
 	showDebug,
+	dimmed,
 }: {
 	entry: SharpMoneyCacheEntry;
 	pickMeta?: {
@@ -2202,6 +2257,7 @@ function SharpMoneyCard({
 		even: boolean;
 	};
 	showDebug?: boolean;
+	dimmed?: boolean;
 }) {
 	const [botInspectLoading, setBotInspectLoading] = useState(false);
 	const [botInspectError, setBotInspectError] = useState<string | null>(null);
@@ -2363,7 +2419,10 @@ function SharpMoneyCard({
 	const panelId = `sharp-card-panel-${entry.id}`;
 
 	return (
-		<article className="@container overflow-hidden rounded-lg bg-ink-05 ring-1 ring-inset ring-ink-15">
+		<article
+			className={`@container overflow-hidden rounded-lg bg-ink-05 ring-1 ring-inset ring-ink-15 transition-opacity ${dimmed ? "opacity-40 hover:opacity-70 focus-within:opacity-100" : ""}`}
+			aria-label={dimmed ? "Near-miss market (below filter criteria)" : undefined}
+		>
 			{showDebug && debugInfo && (
 				<div className="flex flex-wrap gap-x-3 gap-y-0.5 bg-ink-10 px-3 py-1.5 font-mono text-xxs uppercase tracking-wider tabular-nums text-ink-55">
 					<span className="text-ink-55">debug</span>

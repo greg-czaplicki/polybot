@@ -55,7 +55,7 @@ describe("computeSignalScoreFromHistory", () => {
 		expect(score).toBeCloseTo(72.5, 6);
 	});
 
-	it("computes signal score with history trends", () => {
+	it("computes signal score with history trends (fresh, 2 stable snapshots)", () => {
 		const score = computeSignalScoreFromHistory(
 			{ edgeRating: 80, scoreDifferential: 30 },
 			[
@@ -73,7 +73,39 @@ describe("computeSignalScoreFromHistory", () => {
 				},
 			],
 		);
-		expect(score).toBeCloseTo(95, 6);
+		// edge*0.7 (56) + diff*0.2 (10) + trend (10) + diffTrend (5) + volume (10) + novelty (6) = 97
+		expect(score).toBeCloseTo(97, 6);
+	});
+
+	it("penalizes stale signals (6+ stable snapshots) vs fresh ones", () => {
+		const staleHistory = Array.from({ length: 8 }, () => ({
+			edgeRating: 80,
+			scoreDifferential: 30,
+			sideA: { totalValue: 150_000 },
+			sideB: { totalValue: 150_000 },
+		}));
+		const stale = computeSignalScoreFromHistory(
+			{ edgeRating: 80, scoreDifferential: 30 },
+			staleHistory,
+		);
+		const fresh = computeSignalScoreFromHistory(
+			{ edgeRating: 80, scoreDifferential: 30 },
+			[
+				{
+					edgeRating: 60,
+					scoreDifferential: 20,
+					sideA: { totalValue: 150_000 },
+					sideB: { totalValue: 150_000 },
+				},
+				{
+					edgeRating: 80,
+					scoreDifferential: 30,
+					sideA: { totalValue: 150_000 },
+					sideB: { totalValue: 150_000 },
+				},
+			],
+		);
+		expect(fresh).toBeGreaterThan(stale);
 	});
 });
 
