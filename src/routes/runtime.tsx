@@ -1889,6 +1889,12 @@ function RuntimePage() {
 										{stats.cacheFreshness.missingHistory} missing history
 									</p>
 								)}
+								<p
+									className="font-mono text-xxs text-ink-55"
+									title={__BUILD_COMMIT_SUBJECT__}
+								>
+									Build {__BUILD_COMMIT__} · {__BUILD_TIME__}
+								</p>
 							</div>
 							{/* Action hierarchy: primary (Refresh Stats), secondary (Copy Snapshot),
 							    tertiary destructive-ish (Backfill, with confirm). */}
