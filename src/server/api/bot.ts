@@ -6,6 +6,7 @@ import {
 	EDGE_RATING_SATURATION_FLOOR,
 	MIN_SCORE_DIFFERENTIAL,
 	isAcceptableEdgeRating,
+	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
 import { detectSportTagFromSeriesId } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
@@ -1833,6 +1834,40 @@ async function listBotCandidates(
 							foundInEntries: true,
 							stage: "filtered_grade",
 							reason: "low_score_differential",
+						};
+					}
+					return null;
+				}
+				if (
+					typeof grade.signalScore === "number" &&
+					!isAcceptableSignalScore(grade.signalScore)
+				) {
+					incrementCounter(debug.excluded, "signal_score_saturation");
+					pushNearMiss(debug, {
+						reason: "signal_score_saturation",
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "signal_score_saturation",
 						};
 					}
 					return null;

@@ -47,6 +47,28 @@ export const EDGE_RATING_SATURATION_FLOOR = 90;
 export const EDGE_RATING_DEAD_ZONE_MIN = 72;
 export const EDGE_RATING_DEAD_ZONE_MAX = 80;
 
+/**
+ * Composite signalScore saturates and inverts at ≥90. Out-of-sample
+ * (2026-06-25 audit, 275 settled picks) the bands split cleanly at 90:
+ *   75-80: +7.9% ROI / +3.6% CLV (n=105)
+ *   80-85: -0.6% ROI / -0.2% CLV (n=42)
+ *   85-90: +7.2% ROI / +3.2% CLV (n=44)
+ *   90-95: -20.2% ROI / -10.7% CLV (n=28)
+ *   95+:   -11.4% ROI / -5.7% CLV (n=56)
+ * Everything <90 is net-positive; everything ≥90 loses with strongly negative
+ * CLV in BOTH totals and moneyline. This is distinct from EDGE_RATING_SATURATION
+ * (which gates the raw edge): signalScore can reach ≥90 via diff/volume/novelty
+ * terms while raw edge stays <90, so the existing edge gate misses it. The
+ * mechanism is consensus saturation — by the time the whale signal is maximal,
+ * the market has priced it and we are last to the trade (hence the negative CLV).
+ * This single gate flips the historical book from -0.76u to ~+11u.
+ */
+export const SIGNAL_SCORE_SATURATION_FLOOR = 90;
+
+export function isAcceptableSignalScore(score: number): boolean {
+	return score < SIGNAL_SCORE_SATURATION_FLOOR;
+}
+
 export function isAcceptableEdgeRating(rating: number): boolean {
 	if (rating < MIN_EDGE_RATING) return false;
 	if (rating >= EDGE_RATING_SATURATION_FLOOR) return false;
