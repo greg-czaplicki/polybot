@@ -684,6 +684,137 @@ def execute_live_trade(
 	response = client.post_order(signed, OrderType.FOK)
 	return {"token_id": token_id, "response": response}
 
+def _coerce_float(value: Any) -> float | None:
+	if value is None:
+		return None
+	try:
+		return float(value)
+	except (TypeError, ValueError):
+		return None
+
+def _response_get(response: Any, *keys: str) -> Any:
+	"""Best-effort lookup across dict keys or object attributes."""
+	for key in keys:
+		if isinstance(response, dict):
+			val = response.get(key)
+		else:
+			val = getattr(response, key, None)
+		if val is not None:
+			return val
+	return None
+
+def parse_fill_from_response(
+	response: Any, stake: float, price: float
+) -> Dict[str, Any]:
+	"""Extract fill details from a CLOB v2 post_order response.
+
+	The exact v2 response shape isn't guaranteed across versions, so this probes
+	several candidate field names and falls back to the intended stake/price so
+	we never lose the notional. The caller also stores the raw response in
+	execution_notes, so anything missed here can be re-parsed later.
+	"""
+	order_id = _response_get(response, "orderID", "orderId", "id")
+	tx = _response_get(
+		response, "transactionHash", "transactionHashes", "transactionsHashes"
+	)
+	if isinstance(tx, (list, tuple)):
+		tx = tx[0] if tx else None
+	status_raw = _response_get(response, "status", "state")
+	success = _response_get(response, "success")
+	making = _coerce_float(_response_get(response, "makingAmount", "making_amount"))
+	taking = _coerce_float(_response_get(response, "takingAmount", "taking_amount"))
+	# Market BUY: USDC spent (making) buys shares received (taking).
+	fill_notional = making if making is not None else _coerce_float(stake)
+	fill_size = taking
+	fill_price: float | None = None
+	if fill_notional and fill_size:
+		fill_price = fill_notional / fill_size
+	# A probability fill price must be in (0, 1]. If the making/taking
+	# interpretation is inverted or the amounts are unreliable, fall back to the
+	# known stake/entry price (the raw response is kept in executionNotes for
+	# later re-parsing rather than trusting a nonsensical value here).
+	if fill_price is None or not 0 < fill_price <= 1.0001:
+		fill_price = _coerce_float(price)
+		fill_notional = _coerce_float(stake)
+		fill_size = None
+	if fill_price is not None:
+		fill_price = round(fill_price, 6)
+	if fill_size is None and fill_notional and fill_price:
+		fill_size = round(fill_notional / fill_price, 4)
+	if status_raw is not None:
+		fill_status = str(status_raw)
+	elif success is False:
+		fill_status = "failed"
+	else:
+		# FOK order returned without raising -> treat as filled.
+		fill_status = "filled"
+	return {
+		"fillStatus": fill_status,
+		"fillPrice": fill_price,
+		"fillSize": fill_size,
+		"fillNotional": fill_notional,
+		"orderId": str(order_id) if order_id is not None else None,
+		"exchangeTradeId": str(tx) if tx is not None else None,
+	}
+
+def report_execution(
+	config: BotConfig, pick_id: str, payload: Dict[str, Any]
+) -> None:
+	"""Persist execution/fill details back onto the pick record."""
+	try:
+		post_json(
+			f"{config.base_url}/api/bot/picks/execution",
+			config.api_key,
+			{"id": pick_id, **payload},
+		)
+	except Exception as exc:
+		print("[bot] failed to report execution:", exc)
+
+def report_pick_execution(
+	config: BotConfig,
+	pick_id: str,
+	trade: Dict[str, Any],
+	stake: float,
+	price: float,
+) -> None:
+	"""Build and send the execution/fill payload for a freshly created pick.
+
+	Reached only after a successful placement (a failed live order returns
+	before the pick is created), so mode is 'paper' (dry-run) or 'live' (real
+	fill). Paper rows record intended sizing tagged fillStatus='paper'; live
+	rows record the parsed fill plus the raw response in executionNotes.
+	"""
+	submitted = trade.get("timestamp") or int(time.time())
+	if trade.get("mode") == "paper":
+		payload: Dict[str, Any] = {
+			"executionSubmittedAt": submitted,
+			"executionFilledAt": submitted,
+			"fillStatus": "paper",
+			"fillPrice": price,
+			"fillSize": round(stake / price, 4) if price else None,
+			"fillNotional": round(stake, 2),
+			"fillSlippageBps": 0,
+			"executionNotes": "paper",
+		}
+	else:
+		fill = parse_fill_from_response(trade.get("orderResponse"), stake, price)
+		slippage_bps = None
+		fill_price = fill.get("fillPrice")
+		if fill_price and price:
+			slippage_bps = round((fill_price - price) / price * 10000, 1)
+		try:
+			raw_notes = json.dumps(trade.get("orderResponse"), default=str)[:900]
+		except Exception:
+			raw_notes = str(trade.get("orderResponse"))[:900]
+		payload = {
+			"executionSubmittedAt": submitted,
+			"executionFilledAt": int(time.time()),
+			"fillSlippageBps": slippage_bps,
+			"executionNotes": raw_notes,
+			**fill,
+		}
+	report_execution(config, pick_id, payload)
+
 def extract_cloudflare_ray_id(error_text: str) -> str | None:
 	match = re.search(r"Cloudflare Ray ID:\\s*<strong[^>]*>([^<]+)</strong>", error_text)
 	if match:
@@ -933,7 +1064,7 @@ def place_bet(
 			"l2Spread": entry.get("l2Spread"),
 			"l2Disagreement": entry.get("l2Disagreement"),
 		}
-		post_json(
+		created = post_json(
 			f"{config.base_url}/api/bot/picks",
 			config.api_key,
 			{
@@ -959,6 +1090,11 @@ def place_bet(
 				"decisionSnapshot": decision_snapshot,
 			},
 		)
+		pick_id = (created or {}).get("pick", {}).get("id")
+		if pick_id:
+			report_pick_execution(config, pick_id, trade, stake, price)
+		else:
+			print("[bot] pick created but no id returned; execution not logged")
 	except Exception as exc:
 		print("[bot] failed to log pick:", exc)
 	state["bankroll"] = round(
