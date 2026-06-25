@@ -69,6 +69,26 @@ export function isAcceptableSignalScore(score: number): boolean {
 	return score < SIGNAL_SCORE_SATURATION_FLOOR;
 }
 
+/**
+ * priceEdge (fairPrice − entryPrice, the expected-value gap) is the single
+ * most CLV-predictive feature we have, and unlike signalScore it is monotonic
+ * AND stable month-over-month. Within the sig<90 population (2026-06-25 audit):
+ *   <0.15:     -6.9 CLV / -14.2% ROI (n=43)
+ *   0.15-0.25: -3.9 CLV /  -8.8% ROI (n=54)
+ *   0.25-0.35: +10.1 CLV / +22.1% ROI (n=69)
+ *   0.35+:     +12.9 CLV / +27.6% ROI (n=25)
+ * The 0.25 break held EVERY month (Apr/May/Jun all show hi≥0.25 positive,
+ * lo<0.25 negative or flat) — it did not flip the way bet_type did. The
+ * <0.25 half is a net -10.8u loser; the ≥0.25 half is the +22.1u profit
+ * engine. Grade should be driven by realized edge (priceEdge), not signal
+ * strength; this floor is the eligibility half of that rebuild.
+ */
+export const MIN_PRICE_EDGE = 0.25;
+
+export function isAcceptablePriceEdge(priceEdge: number): boolean {
+	return priceEdge >= MIN_PRICE_EDGE;
+}
+
 export function isAcceptableEdgeRating(rating: number): boolean {
 	if (rating < MIN_EDGE_RATING) return false;
 	if (rating >= EDGE_RATING_SATURATION_FLOOR) return false;

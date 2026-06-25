@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	MIN_PRICE_EDGE,
+	SIGNAL_SCORE_SATURATION_FLOOR,
 	computeSignalScoreFromHistory,
 	gradeWeight,
+	isAcceptablePriceEdge,
+	isAcceptableSignalScore,
 	signalScoreToGradeLabel,
 } from "@/lib/sharp-grade";
 
@@ -106,6 +110,34 @@ describe("computeSignalScoreFromHistory", () => {
 			],
 		);
 		expect(fresh).toBeGreaterThan(stale);
+	});
+});
+
+describe("isAcceptableSignalScore", () => {
+	it("rejects the saturated band at and above the floor", () => {
+		expect(isAcceptableSignalScore(SIGNAL_SCORE_SATURATION_FLOOR)).toBe(false);
+		expect(isAcceptableSignalScore(95)).toBe(false);
+		expect(isAcceptableSignalScore(100)).toBe(false);
+	});
+	it("accepts the profitable band below the floor", () => {
+		expect(isAcceptableSignalScore(SIGNAL_SCORE_SATURATION_FLOOR - 0.01)).toBe(
+			true,
+		);
+		expect(isAcceptableSignalScore(85)).toBe(true);
+		expect(isAcceptableSignalScore(76)).toBe(true);
+	});
+});
+
+describe("isAcceptablePriceEdge", () => {
+	it("rejects price edge below the floor", () => {
+		expect(isAcceptablePriceEdge(MIN_PRICE_EDGE - 0.01)).toBe(false);
+		expect(isAcceptablePriceEdge(0.15)).toBe(false);
+		expect(isAcceptablePriceEdge(0)).toBe(false);
+	});
+	it("accepts price edge at or above the floor", () => {
+		expect(isAcceptablePriceEdge(MIN_PRICE_EDGE)).toBe(true);
+		expect(isAcceptablePriceEdge(0.3)).toBe(true);
+		expect(isAcceptablePriceEdge(0.5)).toBe(true);
 	});
 });
 

@@ -6,6 +6,7 @@ import {
 	EDGE_RATING_SATURATION_FLOOR,
 	MIN_SCORE_DIFFERENTIAL,
 	isAcceptableEdgeRating,
+	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
 import { detectSportTagFromSeriesId } from "@/lib/sports";
@@ -1974,6 +1975,40 @@ async function listBotCandidates(
 								},
 							})
 						: null;
+				if (
+					typeof priceEdgeResult?.priceEdge === "number" &&
+					!isAcceptablePriceEdge(priceEdgeResult.priceEdge)
+				) {
+					incrementCounter(debug.excluded, "price_edge_below_floor");
+					pushNearMiss(debug, {
+						reason: "price_edge_below_floor",
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "price_edge_below_floor",
+						};
+					}
+					return null;
+				}
 				const hedgingMetrics = computeHedgingMetrics(
 					entry.sideA.topHolders ?? [],
 					entry.sideB.topHolders ?? [],
