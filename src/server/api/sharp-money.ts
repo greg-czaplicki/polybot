@@ -63,8 +63,10 @@ const UNIT_SIZE_SAMPLE_LIMIT = 50;
 const UNIT_SIZE_POSITION_LIMIT = 100;
 const MIN_UNIT_SIZE_SAMPLES = 3;
 const UNIT_SIZE_TOP_SAMPLE = 10;
-const GAMMA_EVENTS_PAGE_LIMIT = 200;
-const GAMMA_EVENTS_MAX_PAGES = 6;
+// Gamma caps /events responses at 100 rows regardless of the requested limit;
+// asking for more silently truncates and desyncs offset-based pagination.
+const GAMMA_EVENTS_PAGE_LIMIT = 100;
+const GAMMA_EVENTS_MAX_PAGES = 12;
 const GAMMA_RETRY_LIMIT = 3;
 const GAMMA_RETRY_BASE_MS = 250;
 const MIN_READY_HOLDER_COUNT = 10;
@@ -988,6 +990,7 @@ export async function fetchTrendingSportsMarkets(
 			let expandedCount = 0;
 			let eventCount = 0;
 			try {
+				let eventsOffset = 0;
 				for (let page = 0; page < GAMMA_EVENTS_MAX_PAGES; page += 1) {
 					const eventsUrl = new URL("/events", POLYMARKET_GAMMA_API);
 					eventsUrl.searchParams.set("series_id", seriesId.toString());
@@ -1000,10 +1003,7 @@ export async function fetchTrendingSportsMarkets(
 						"limit",
 						GAMMA_EVENTS_PAGE_LIMIT.toString(),
 					);
-					eventsUrl.searchParams.set(
-						"offset",
-						String(page * GAMMA_EVENTS_PAGE_LIMIT),
-					);
+					eventsUrl.searchParams.set("offset", String(eventsOffset));
 
 					const responseResult = await fetchWithRetry(eventsUrl.toString());
 					if (!responseResult) {
@@ -1021,6 +1021,7 @@ export async function fetchTrendingSportsMarkets(
 						break;
 					}
 
+					eventsOffset += events.length;
 					eventCount += events.length;
 
 					for (const event of events) {
