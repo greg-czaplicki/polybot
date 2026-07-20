@@ -35,3 +35,9 @@ export function getDb(context?: RequestContext) {
 export function nowUnixSeconds() {
   return Math.floor(Date.now() / 1000)
 }
+
+// Build commit stamped by vite define; guards against environments where the
+// define is not applied (e.g. bare vitest runs).
+export function buildStrategyVersion(): string | null {
+  return typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__ : null
+}

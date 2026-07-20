@@ -3,7 +3,7 @@ import { detectBetType } from "@/lib/markets";
 import { detectSportTag, detectSportTagFromSeriesId } from "@/lib/sports";
 import type { Db } from "../db/client";
 import { run } from "../db/client";
-import { getDb, nowUnixSeconds } from "../env";
+import { buildStrategyVersion, getDb, nowUnixSeconds } from "../env";
 import {
 	deriveFavDogRole,
 	extractSpreadPickedLabel,
@@ -22,6 +22,7 @@ import {
 	type CreateManualPickInput,
 	clearManualPicks,
 	createManualPick,
+	findPriceAtOrBefore,
 	getManualPicksBucketPerformanceSummary,
 	getManualPicksCalibrationSummary,
 	getManualPicksClvTimingSummary,
@@ -36,6 +37,10 @@ import {
 	settleManualPick,
 	updateManualPickOutcome,
 } from "../repositories/manual-picks";
+import {
+	listSharpMoneyHistoryByConditionIds,
+	type SharpMoneyHistoryEntryByConditionId,
+} from "../repositories/sharp-money";
 import { getTeamTrendSnapshotAsOf } from "../repositories/team-trend-snapshots";
 import type { FavDogRole, VenueRole } from "../types/canonical";
 
@@ -114,13 +119,42 @@ export async function settlePendingManualPicks(
 
 	let updated = 0;
 	const now = Date.now();
-	for (const pick of picks) {
-		if (pick.eventTime) {
-			const eventTime = new Date(pick.eventTime).getTime();
-			if (Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000) {
-				continue;
-			}
+	const eligible = picks.filter((pick) => {
+		if (!pick.eventTime) return true;
+		const eventTime = new Date(pick.eventTime).getTime();
+		return !(Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000);
+	});
+	if (eligible.length === 0) {
+		return { checked: picks.length, updated: 0 };
+	}
+
+	// The closing price must come from pre-event history, never from the
+	// resolved market's outcome prices (those are ~0/1 after resolution and
+	// would make CLV a proxy for the outcome itself).
+	let historyByConditionId: SharpMoneyHistoryEntryByConditionId = {};
+	const eventTimesSeconds = eligible
+		.map((pick) =>
+			pick.eventTime
+				? Math.floor(new Date(pick.eventTime).getTime() / 1000)
+				: Number.NaN,
+		)
+		.filter((value) => Number.isFinite(value));
+	if (eventTimesSeconds.length > 0) {
+		try {
+			historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+				db,
+				Array.from(new Set(eligible.map((pick) => pick.conditionId))),
+				Math.min(...eventTimesSeconds) - 4 * 60 * 60,
+			);
+		} catch (error) {
+			console.warn(
+				"[manual-picks] settle close-price history lookup failed; storing null closes",
+				error,
+			);
 		}
+	}
+
+	for (const pick of eligible) {
 		const market = await fetchGammaMarket(pick.conditionId);
 		if (!market) continue;
 		const resolution = resolvePickResult({
@@ -129,18 +163,47 @@ export async function settlePendingManualPicks(
 			market,
 		});
 		if (!resolution) continue;
+		const closePrice = resolveClosingPriceFromHistory(
+			pick,
+			historyByConditionId,
+		);
+		const entryPrice =
+			typeof pick.price === "number" &&
+			Number.isFinite(pick.price) &&
+			pick.price > 0
+				? pick.price
+				: null;
+		const clv =
+			resolution.status !== "push" && closePrice !== null && entryPrice !== null
+				? closePrice - entryPrice
+				: null;
 		await settleManualPick(db, {
 			id: pick.id,
 			status: resolution.status,
 			resolvedOutcome: resolution.resolvedOutcome ?? null,
-			closePrice: resolution.closePrice ?? null,
+			closePrice: resolution.status !== "push" ? closePrice : null,
 			roi: resolution.roi ?? null,
-			clv: resolution.clv ?? null,
+			clv,
 		});
 		updated += 1;
 	}
 
 	return { checked: picks.length, updated };
+}
+
+function resolveClosingPriceFromHistory(
+	pick: ManualPickEntry,
+	historyByConditionId: SharpMoneyHistoryEntryByConditionId,
+): number | null {
+	if (!pick.eventTime) return null;
+	if (pick.sharpSide !== "A" && pick.sharpSide !== "B") return null;
+	const eventTimeSeconds = Math.floor(
+		new Date(pick.eventTime).getTime() / 1000,
+	);
+	if (!Number.isFinite(eventTimeSeconds)) return null;
+	const history = historyByConditionId[pick.conditionId];
+	if (!history || history.length === 0) return null;
+	return findPriceAtOrBefore(history, pick.sharpSide, eventTimeSeconds);
 }
 
 function normalizeOutcome(value: string): string {
@@ -154,9 +217,7 @@ function resolvePickResult(input: {
 }): {
 	status: ManualPickStatus;
 	resolvedOutcome?: string | null;
-	closePrice?: number | null;
 	roi?: number | null;
-	clv?: number | null;
 } | null {
 	const resolved =
 		input.market.resolved === true ||
@@ -230,9 +291,7 @@ function resolvePickResult(input: {
 		return {
 			status,
 			resolvedOutcome,
-			closePrice: null,
 			roi: 0,
-			clv: null,
 		};
 	}
 
@@ -245,10 +304,6 @@ function resolvePickResult(input: {
 		typeof input.entryPrice === "number" && input.entryPrice > 0
 			? input.entryPrice
 			: null;
-	const closePrice =
-		input.sharpSide === "A"
-			? (outcomePrices[0] ?? null)
-			: (outcomePrices[1] ?? null);
 	const roi =
 		entryPrice && status === "win"
 			? 1 / entryPrice - 1
@@ -257,17 +312,11 @@ function resolvePickResult(input: {
 				: entryPrice
 					? 0
 					: null;
-	const clv =
-		entryPrice && closePrice !== null && Number.isFinite(closePrice)
-			? closePrice - entryPrice
-			: null;
 
 	return {
 		status,
 		resolvedOutcome,
-		closePrice: Number.isFinite(closePrice ?? 0) ? closePrice : null,
 		roi,
-		clv,
 	};
 }
 
@@ -571,7 +620,10 @@ export const createManualPickFn = createServerFn({
 			return { error: "invalid_payload" as const, pick: null };
 		}
 		const db = getDb(context);
-		const pick = await createManualPick(db, data);
+		const pick = await createManualPick(db, {
+			...data,
+			strategyVersion: data.strategyVersion ?? buildStrategyVersion() ?? undefined,
+		});
 
 		// Attempt inline enrichment — best-effort, never blocks pick creation
 		let enrichment: PickEnrichmentResult | null = null;

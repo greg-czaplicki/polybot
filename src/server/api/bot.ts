@@ -15,7 +15,7 @@ import type { Db } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
 import { scoreOpportunity } from "../domain/opportunity-scoring";
 import type { Env } from "../env";
-import { getDb, nowUnixSeconds } from "../env";
+import { buildStrategyVersion, getDb, nowUnixSeconds } from "../env";
 import {
 	extractSpreadFromTitle,
 	extractTotalFromTitle,
@@ -2726,7 +2726,8 @@ export async function handleBotRequest(
 			confidence,
 			fairPrice: priceEdgeResult?.fairPrice ?? null,
 			priceEdge: priceEdgeResult?.priceEdge ?? null,
-			strategyVersion: payload.strategyVersion,
+			strategyVersion:
+				payload.strategyVersion ?? buildStrategyVersion() ?? undefined,
 			thresholdUsed,
 			marketQualityScore,
 			warnings,

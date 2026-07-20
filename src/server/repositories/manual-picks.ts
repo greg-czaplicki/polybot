@@ -1175,7 +1175,7 @@ function getPriceForSide(
 		: null;
 }
 
-function findPriceAtOrBefore(
+export function findPriceAtOrBefore(
 	history: NonNullable<SharpMoneyHistoryEntryByConditionId[string]>,
 	sharpSide: "A" | "B",
 	targetSeconds: number,
