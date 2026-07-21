@@ -234,7 +234,11 @@ export async function getTeamTrendSnapshotAtGame(
  * This is the canonical lookup for attaching trend context to picks —
  * it finds the snapshot that was current when a pick was made.
  *
- * SQL: snapshot_type = ? AND as_of_time <= ? ORDER BY as_of_time DESC LIMIT 1
+ * SQL: snapshot_type = ? AND as_of_time < ? ORDER BY as_of_time DESC LIMIT 1
+ *
+ * Strictly-before comparison: snapshots are stamped with the game time of the
+ * last game they INCLUDE, so an equal timestamp would hand back a snapshot
+ * containing that game's own result.
  */
 export async function getTeamTrendSnapshotAsOf(
 	db: Db,
@@ -245,7 +249,7 @@ export async function getTeamTrendSnapshotAsOf(
 	const row = await first<TeamTrendSnapshotRow>(
 		db,
 		`SELECT * FROM team_trend_snapshots
-		WHERE team_id = ? AND snapshot_type = ? AND as_of_time <= ?
+		WHERE team_id = ? AND snapshot_type = ? AND as_of_time < ?
 		ORDER BY as_of_time DESC
 		LIMIT 1`,
 		teamId,

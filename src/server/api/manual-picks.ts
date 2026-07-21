@@ -86,22 +86,29 @@ function parseGammaPrices(
 async function fetchGammaMarket(
 	conditionId: string,
 ): Promise<GammaResolutionMarket | null> {
-	try {
-		const url = new URL("/markets", POLYMARKET_GAMMA_API);
-		url.searchParams.set("condition_ids", conditionId);
-		url.searchParams.set("limit", "1");
-		const response = await fetch(url);
-		if (!response.ok) return null;
-		const data = (await response.json()) as GammaResolutionMarket[];
-		if (!Array.isArray(data) || data.length === 0) return null;
-		const target = conditionId.toLowerCase();
-		const exact = data.find(
-			(market) => (market.conditionId ?? "").toLowerCase() === target,
-		);
-		return exact ?? null;
-	} catch {
-		return null;
+	// Gamma's default listing drops markets once they close; without the
+	// closed=true retry a pick whose market closed before we first checked
+	// stays pending forever.
+	for (const closedParam of [null, "true"]) {
+		try {
+			const url = new URL("/markets", POLYMARKET_GAMMA_API);
+			url.searchParams.set("condition_ids", conditionId);
+			url.searchParams.set("limit", "1");
+			if (closedParam) url.searchParams.set("closed", closedParam);
+			const response = await fetch(url);
+			if (!response.ok) continue;
+			const data = (await response.json()) as GammaResolutionMarket[];
+			if (!Array.isArray(data) || data.length === 0) continue;
+			const target = conditionId.toLowerCase();
+			const exact = data.find(
+				(market) => (market.conditionId ?? "").toLowerCase() === target,
+			);
+			if (exact) return exact;
+		} catch {
+			// fall through to next attempt
+		}
 	}
+	return null;
 }
 
 export async function settlePendingManualPicks(
@@ -576,7 +583,9 @@ async function enrichPickInline(
 	// when the pick was made. This is a read-only check — no data is persisted on
 	// the pick. The result flag lets the caller know whether trend context exists.
 	if (teamId && sportTag) {
-		const asOfTime = eventTimeUnix ?? nowUnixSeconds();
+		// As-of must be pick time, not event time: an event-time cutoff would
+		// admit a snapshot stamped at the game's own start.
+		const asOfTime = nowUnixSeconds();
 		const trendSnapshot = await getTeamTrendSnapshotAsOf(
 			db,
 			teamId,

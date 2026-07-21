@@ -2787,21 +2787,22 @@ export async function handleBotRequest(
 			clientPickId?: string;
 			status?: ManualPickStatus;
 			resolvedOutcome?: string;
-			closePrice?: number;
 			roi?: number;
-			clv?: number;
 		}>(request);
 		if ((!payload?.id && !payload?.clientPickId) || !payload.status) {
 			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
 		}
+		// closePrice/clv are deliberately not accepted from the client: the close
+		// must come from pre-event history (see settlePendingManualPicks), or CLV
+		// degrades back into a rescaled outcome flag.
 		const pick = await settleManualPick(env.POLYWHALER_DB, {
 			id: payload.id,
 			clientPickId: payload.clientPickId,
 			status: payload.status,
 			resolvedOutcome: payload.resolvedOutcome ?? null,
-			closePrice: payload.closePrice ?? null,
+			closePrice: null,
 			roi: payload.roi ?? null,
-			clv: payload.clv ?? null,
+			clv: null,
 		});
 		if (!pick) {
 			return jsonResponse({ error: "pick_not_found" }, { status: 404 });

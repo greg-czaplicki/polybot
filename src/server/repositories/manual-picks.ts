@@ -2020,13 +2020,16 @@ export async function getManualPicksGradeRecalibrationSummary(
 	const aPlus = rows.find((row) => row.grade === "A+");
 	const a = rows.find((row) => row.grade === "A");
 	const b = rows.find((row) => row.grade === "B");
+	// A missing CLV average means "no sample", not "worst possible CLV" —
+	// comparing nulls would emit confident inversion claims from scrubbed data.
 	if (
 		aPlus &&
 		a &&
 		aPlus.count >= 20 &&
 		a.count >= 20 &&
-		(aPlus.avgClvBps ?? Number.NEGATIVE_INFINITY) <=
-			(a.avgClvBps ?? Number.NEGATIVE_INFINITY)
+		aPlus.avgClvBps !== null &&
+		a.avgClvBps !== null &&
+		aPlus.avgClvBps <= a.avgClvBps
 	) {
 		observations.push("A+ is not outperforming A on average CLV.");
 	}
@@ -2035,8 +2038,9 @@ export async function getManualPicksGradeRecalibrationSummary(
 		b &&
 		a.count >= 20 &&
 		b.count >= 20 &&
-		(a.avgClvBps ?? Number.NEGATIVE_INFINITY) <=
-			(b.avgClvBps ?? Number.NEGATIVE_INFINITY)
+		a.avgClvBps !== null &&
+		b.avgClvBps !== null &&
+		a.avgClvBps <= b.avgClvBps
 	) {
 		observations.push("A is not outperforming B on average CLV.");
 	}
@@ -2064,8 +2068,9 @@ export async function getManualPicksGradeRecalibrationSummary(
 	if (
 		highScoreBucket.length >= 20 &&
 		midScoreBucket.length >= 20 &&
-		(highScoreAvgClv ?? Number.NEGATIVE_INFINITY) <=
-			(midScoreAvgClv ?? Number.NEGATIVE_INFINITY)
+		highScoreAvgClv !== null &&
+		midScoreAvgClv !== null &&
+		highScoreAvgClv <= midScoreAvgClv
 	) {
 		observations.push("90+ signal scores are not outperforming 75-90 scores.");
 	}

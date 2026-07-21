@@ -524,6 +524,28 @@ export async function maybeRefreshDailyStatsSnapshot(
 	) {
 		return null;
 	}
+
+	// Picks placed late in day D settle after the UTC rollover; a snapshot
+	// frozen at midnight undercounts settled/wins for every such pick. Keep
+	// re-freezing yesterday until well past its last possible settlement.
+	const previousDayStartAt = dayStartAt - 24 * 60 * 60;
+	const previousDayEndAt = dayStartAt;
+	const settlementGraceSeconds = 12 * 60 * 60;
+	const previousExisting = await first<{ snapshot_created_at: number }>(
+		db,
+		`SELECT snapshot_created_at
+		 FROM daily_stats_snapshots
+		 WHERE day_key = ?`,
+		formatDayKey(previousDayStartAt),
+	);
+	if (
+		!previousExisting?.snapshot_created_at ||
+		previousExisting.snapshot_created_at <
+			previousDayEndAt + settlementGraceSeconds
+	) {
+		await upsertDailyStatsSnapshot(db, previousDayStartAt);
+	}
+
 	return upsertDailyStatsSnapshot(db, dayStartAt);
 }
 

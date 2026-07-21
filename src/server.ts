@@ -19,6 +19,7 @@ import {
 } from "./server/pipeline/sharp-pipeline";
 import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
 import { maybeRefreshDailyStatsSnapshot } from "./server/repositories/daily-stats-snapshots";
+import { getSharpMoneyCacheFreshnessStats } from "./server/repositories/sharp-money";
 
 const startFetch = createStartHandler(defaultStreamHandler);
 
@@ -205,7 +206,10 @@ const serverEntry = {
 				}),
 		);
 		executionCtx.waitUntil(
-			settlePendingManualPicks(env.POLYWHALER_DB, { limit: 100 })
+			// The whole scheduled invocation shares one subrequest budget across
+			// waitUntil branches; each settle costs 1-2 Gamma fetches, so a large
+			// batch here starves canonical sync in the same tick.
+			settlePendingManualPicks(env.POLYWHALER_DB, { limit: 20 })
 				.then((result) => {
 					if (result.updated > 0) {
 						console.log(
@@ -241,6 +245,25 @@ const serverEntry = {
 				})
 				.catch((error) => {
 					console.error("[canonical-sync] Scheduled sync failed", error);
+				}),
+		);
+		executionCtx.waitUntil(
+			// Staleness alarm: the pipeline can degrade silently (upstream returning
+			// empty, queue messages dying) while every tick still reports success.
+			getSharpMoneyCacheFreshnessStats(env.POLYWHALER_DB, 15 * 60)
+				.then((stats) => {
+					const newest = stats.newestHistory;
+					if (!newest) return;
+					const ageMinutes = Math.round((Date.now() / 1000 - newest) / 60);
+					if (ageMinutes > 30) {
+						console.error(
+							`[sharp-pipeline] STALE: newest sharp_money_history row is ${ageMinutes}m old ` +
+								`(${stats.total} cached markets, ${stats.staleHistory} stale)`,
+						);
+					}
+				})
+				.catch((error) => {
+					console.error("[sharp-pipeline] Staleness check failed", error);
 				}),
 		);
 		executionCtx.waitUntil(

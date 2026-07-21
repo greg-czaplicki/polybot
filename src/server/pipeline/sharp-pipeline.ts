@@ -90,8 +90,6 @@ export class SharpPipeline extends DurableObject {
       })
     }
 
-    await this.state.storage.put('lastRun', now)
-
     try {
       await pruneSharpMoneyCacheToWindow(
         this.env.POLYWHALER_DB,
@@ -105,6 +103,10 @@ export class SharpPipeline extends DurableObject {
     const { markets } = await fetchTrendingSportsMarkets({
       includeAllMarkets: false,
     })
+
+    // Burn the cooldown only once the market fetch has succeeded, so a tick
+    // that dies mid-fetch doesn't suppress the immediate retry.
+    await this.state.storage.put('lastRun', now)
 
     if (!markets || markets.length === 0) {
       await this.state.storage.put('status', {
@@ -159,17 +161,33 @@ export async function handleSharpQueue(
 ) {
   for (const message of batch.messages) {
     try {
-      await refreshMarketSharpness(env, message.body)
+      const result = await refreshMarketSharpness(env, message.body)
+      if (result && result.success === false) {
+        console.warn(
+          '[sharp-pipeline] Analysis produced no data',
+          message.body.conditionId,
+          message.body.marketTitle,
+          'error' in result ? result.error : undefined,
+        )
+      }
+      message.ack()
+    } catch (error) {
+      console.error('[sharp-pipeline] Job failed', message.body.conditionId, error)
+      message.retry()
+      continue
+    }
+    // Progress reporting is best-effort; a DO hiccup here must not requeue an
+    // already-persisted analysis (that re-runs the whole fetch and duplicates
+    // history rows).
+    try {
       const stub = getPipelineStub(env)
       await stub.fetch('https://sharp-pipeline/progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ processed: 1 }),
       })
-      message.ack()
     } catch (error) {
-      console.error('[sharp-pipeline] Job failed', message.body.conditionId, error)
-      message.retry()
+      console.warn('[sharp-pipeline] Progress report failed', message.body.conditionId, error)
     }
   }
 }

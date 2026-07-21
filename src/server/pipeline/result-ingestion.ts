@@ -102,7 +102,9 @@ async function fetchEspnScoreboard(
 	const mapping = SPORT_ESPN_MAP[sportTag];
 	if (!mapping) return null;
 
-	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}`;
+	// Without an explicit limit ESPN truncates busy slates (NCAAB weekdays run
+	// 300+ games) with no error or cursor.
+	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=1000`;
 
 	try {
 		const res = await fetch(url);

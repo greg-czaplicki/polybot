@@ -33,7 +33,8 @@
 			{
 				"queue": "sharp-pipeline",
 				"max_batch_size": 1,
-				"max_batch_timeout": 30
+				"max_batch_timeout": 30,
+				"max_retries": 3
 			}
 		]
 	},
@@ -73,7 +74,8 @@
 					{
 						"queue": "sharp-pipeline",
 						"max_batch_size": 1,
-						"max_batch_timeout": 30
+						"max_batch_timeout": 30,
+						"max_retries": 3
 					}
 				]
 			}
