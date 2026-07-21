@@ -22,14 +22,22 @@ Only run `wrangler d1`, `wrangler deploy`, and other Cloudflare commands targeti
 - `docs/audits/` — dated audit and incident reports. Add one for substantive
   audits or incidents.
 
-## Bot Deployment (separate repo)
+## Bot Deployment (separate branch)
 
-The trading bot (`polywhaler-bot.service` on the VPS) runs from its **own git
-repo** — the `bot/` directory here is only a reference mirror. Changes
-committed to `bot/` in this repo do NOT reach the VPS; hand the user a patch
-(`git apply -p2` strips the `bot/` prefix) or the manual edits, then
-`sudo systemctl restart polywhaler-bot`. Bot config is env-driven
-(`BOT_POLL_SECONDS`, `BOT_MAX_CALLS_PER_HOUR`, etc.) via the systemd unit.
+One GitHub repo (`greg-czaplicki/polybot`, remote name `main`), two divergent
+branches:
+
+- **`main`** — the bot lineage (`bot.py` at repo ROOT). The VPS
+  (`polywhaler-bot.service`) pulls this branch. To ship a bot change: apply it
+  to `bot.py` on top of `main/main`, push to `main`, then on the VPS
+  `git pull && sudo systemctl restart polywhaler-bot`.
+- **`master`** — the app lineage (this working tree). `bot/` here is a mirror
+  of the bot branch kept in sync manually; committing to it does NOT reach the
+  VPS by itself.
+
+Bot config is env-driven (`BOT_POLL_SECONDS`, `BOT_MAX_CALLS_PER_HOUR`, etc.)
+via the systemd unit. Remember to `git push main master:master` — the app
+branch only exists on GitHub because of that push (first pushed 2026-07-21).
 
 ## Operational Gotchas
 
