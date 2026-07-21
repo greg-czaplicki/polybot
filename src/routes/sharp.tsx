@@ -1939,7 +1939,7 @@ function SharpMoneyPage() {
 						</div>
 					)}
 
-					{pipelineStatus?.inProgress && !isLoading && (
+					{pipelineStatus?.inProgress && !isLoading && entries.length === 0 && (
 						<div className="mb-4 flex items-center gap-2 rounded-md bg-ink-10 px-3 py-2 ring-1 ring-inset ring-brand-blue/30 font-mono text-xs text-ink-85">
 							<Loader2 className="h-3 w-3 animate-spin text-brand-blue" />
 							<span>
@@ -1947,7 +1947,18 @@ function SharpMoneyPage() {
 								{pipelineStatus.totalQueued
 									? ` (${pipelineStatus.processed ?? 0}/${pipelineStatus.totalQueued})`
 									: ""}
-								. this can take a few minutes on first run.
+								. first results will appear shortly.
+							</span>
+						</div>
+					)}
+					{pipelineStatus?.inProgress && !isLoading && entries.length > 0 && (
+						<div className="mb-4 flex items-center justify-end gap-1.5 font-mono text-xxs text-ink-55">
+							<Loader2 className="h-3 w-3 animate-spin" />
+							<span>
+								updating
+								{pipelineStatus.totalQueued
+									? ` (${pipelineStatus.processed ?? 0}/${pipelineStatus.totalQueued})`
+									: ""}
 							</span>
 						</div>
 					)}
