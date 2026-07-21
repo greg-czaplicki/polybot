@@ -36,8 +36,8 @@ fixing commit.
    Proper fix: separate pick-time-line column captured at creation.
 3. **`roi` uses pick price, not `fill_price`** — overstates realized return by
    average slippage (currently ~0, occasionally ±200–400bps at $2 stakes).
-   `fill_slippage_bps` is computed in the bot client (VPS); sign convention
-   unaudited server-side.
+   `fill_slippage_bps` sign convention audited 2026-07-21: positive =
+   adverse fill (`(fill - price)/price * 10000`, bot.py ~line 804).
 4. **No dead-letter queue on `sharp-pipeline`** — a message that exhausts
    `max_retries: 3` is deleted, so a persistently-failing market loses its
    forensic trail. Needs `wrangler queues create sharp-pipeline-dlq` + config.
