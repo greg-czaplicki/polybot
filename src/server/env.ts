@@ -1,3 +1,5 @@
+import { STRATEGY_VERSION } from "@/lib/strategy-version";
+
 export interface Env {
 	POLYWHALER_DB: D1Database
 	SHARP_PIPELINE: DurableObjectNamespace
@@ -36,8 +38,10 @@ export function nowUnixSeconds() {
   return Math.floor(Date.now() / 1000)
 }
 
-// Build commit stamped by vite define; guards against environments where the
-// define is not applied (e.g. bare vitest runs).
-export function buildStrategyVersion(): string | null {
-  return typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__ : null
+// Strategy era + build commit, e.g. "v4-realized-edge-gates+b40fec0a12".
+// The typeof guard covers environments where the vite define is not applied
+// (e.g. bare vitest runs).
+export function buildStrategyVersion(): string {
+  const commit = typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__ : null
+  return commit ? `${STRATEGY_VERSION}+${commit}` : STRATEGY_VERSION
 }
