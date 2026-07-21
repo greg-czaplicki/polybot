@@ -1496,12 +1496,19 @@ function SharpMoneyPage() {
 				setHealthStatus({ label: "Unknown", detail: "no freshness stats" });
 				return;
 			}
-			if ((stats.paginationCapHits ?? []).length > 0) {
-				setHealthStatus({ label: "Warn", detail: "pagination cap" });
+			// D1-backed signals only: in-memory fetch metrics (pagination caps,
+			// retries) live in the DO isolate and are invisible here. Mirror the
+			// cron staleness alarm so page badge and server logs always agree.
+			const newestHistory = freshness.newestHistory;
+			const ageMinutes = newestHistory
+				? Math.round(Date.now() / 1000 / 60 - newestHistory / 60)
+				: null;
+			if (ageMinutes === null) {
+				setHealthStatus({ label: "Warn", detail: "no history rows" });
 				return;
 			}
-			if ((stats.retryCount ?? 0) > 0) {
-				setHealthStatus({ label: "Warn", detail: "retries" });
+			if (ageMinutes > 30) {
+				setHealthStatus({ label: "Warn", detail: `updated ${ageMinutes}m ago` });
 				return;
 			}
 			const staleRatio = freshness.staleHistory / freshness.total;
@@ -1514,7 +1521,7 @@ function SharpMoneyPage() {
 			}
 			setHealthStatus({
 				label: "Good",
-				detail: `${Math.round(staleRatio * 100)}% stale`,
+				detail: `updated ${ageMinutes}m ago`,
 			});
 		} catch (error) {
 			console.error("Failed to load health stats:", error);
