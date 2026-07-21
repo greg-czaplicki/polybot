@@ -10,3 +10,24 @@ This project shares a Cloudflare account with another project (ParlayWhaler). Ne
 - **This project's durable object:** `SharpPipeline`
 
 Only run `wrangler d1`, `wrangler deploy`, and other Cloudflare commands targeting the resources listed above. Never run `wrangler d1 delete`, `wrangler d1 create`, or deploy commands that could affect databases or workers outside this project.
+
+## Canonical Documentation
+
+- `docs/STRATEGY.md` — strategy era table (`STRATEGY_VERSION` in
+  `src/lib/strategy-version.ts`). Bump the era ONLY when picking behavior
+  changes (gates, scoring, calibration, grading) — never for UI/infra/data
+  fixes — and update the table + `git tag strategy-vN` when you do.
+- `docs/KNOWN-ISSUES.md` — data-validity caveats and deferred issues. Check it
+  before trusting historical metrics; update it when fixing or finding issues.
+- `docs/audits/` — dated audit and incident reports. Add one for substantive
+  audits or incidents.
+
+## Operational Gotchas
+
+- Always query D1 with `--remote`; the local miniflare DB is empty.
+- `manual_picks` timestamps are **seconds**; `canonical_sync_runs` are
+  **milliseconds**.
+- Stored `clv` is valid only for picks settled after 2026-07-20; earlier
+  values were scrubbed to NULL (see docs/KNOWN-ISSUES.md).
+- Deploy with `pnpm run build && pnpm run deploy` (commit first so the build
+  SHA stamped into `strategy_version` matches the deployed code).
