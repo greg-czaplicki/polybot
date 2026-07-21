@@ -1132,6 +1132,24 @@ def run_loop() -> None:
 	window_end = parse_time_window(config.run_window_end)
 	call_timestamps: List[float] = []
 	backoff = 0.0
+	# Pace polls so the hourly call budget lasts the whole hour. Polling faster
+	# than the budget allows burns it in the first part of each rolling hour and
+	# then stalls the bot in a sleep loop for the remainder — dead zones that
+	# drift across the clock and swallow candidates.
+	effective_poll_seconds = config.poll_seconds
+	if config.max_calls_per_hour > 0:
+		budget_interval = (3600 + config.max_calls_per_hour - 1) // config.max_calls_per_hour
+		if budget_interval > effective_poll_seconds:
+			print(
+				"[bot] poll interval",
+				config.poll_seconds,
+				"s exceeds hourly budget of",
+				config.max_calls_per_hour,
+				"calls; pacing to",
+				budget_interval,
+				"s",
+			)
+			effective_poll_seconds = budget_interval
 
 	while True:
 		try:
@@ -1166,7 +1184,9 @@ def run_loop() -> None:
 			placed_groups = set(placed_group_meta.keys())
 			call_timestamps = [t for t in call_timestamps if now - t < 3600]
 			if config.max_calls_per_hour > 0 and len(call_timestamps) >= config.max_calls_per_hour:
-				sleep_seconds = apply_jitter(config.poll_seconds, config.poll_jitter_ratio)
+				# Sleep until the oldest call ages out of the rolling hour so a
+				# slot actually frees, instead of spin-sleeping poll_seconds.
+				sleep_seconds = max(1.0, 3600.0 - (now - call_timestamps[0]) + 1.0)
 				print("[bot] rate cap reached, sleeping", round(sleep_seconds, 1))
 				time.sleep(sleep_seconds)
 				continue
@@ -1316,7 +1336,7 @@ def run_loop() -> None:
 					config.poll_backoff_max,
 					backoff * 2 if backoff else config.poll_backoff_base,
 				)
-		sleep_seconds = apply_jitter(config.poll_seconds, config.poll_jitter_ratio)
+		sleep_seconds = apply_jitter(effective_poll_seconds, config.poll_jitter_ratio)
 		time.sleep(sleep_seconds)
 
 
