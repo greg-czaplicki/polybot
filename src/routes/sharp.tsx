@@ -35,7 +35,6 @@ import {
 	getSharpMoneyGradeMixFn,
 	getSharpMoneyGradesFn,
 	getSharpMoneyHistoryFn,
-	refreshMarketSharpnessFn,
 	type SharpMoneyCacheEntry,
 	type SharpMoneyGradeMix,
 	type SharpMoneyHistoryEntry,
@@ -587,9 +586,6 @@ function SharpMoneyPage() {
 		label: "Good" | "Warn" | "Unknown";
 		detail?: string;
 	}>({ label: "Unknown" });
-	const [refreshingEntryId, setRefreshingEntryId] = useState<string | null>(
-		null,
-	);
 	const [historyByConditionId, setHistoryByConditionId] = useState<
 		Record<string, SharpMoneyHistoryEntry[]>
 	>({});
@@ -931,33 +927,6 @@ function SharpMoneyPage() {
 			window.removeEventListener("touchcancel", handleTouchEnd);
 		};
 	}, [resetPullState, setPullDistanceSafe]);
-
-	const handleRefreshEntry = useCallback(
-		async (entry: SharpMoneyCacheEntry) => {
-			if (refreshingEntryId) return;
-			setRefreshingEntryId(entry.id);
-			try {
-				await refreshMarketSharpnessFn({
-					data: {
-						conditionId: entry.conditionId,
-						marketTitle: entry.marketTitle,
-						marketSlug: entry.marketSlug,
-						eventSlug: entry.eventSlug,
-						sportSeriesId: entry.sportSeriesId,
-						endDate: entry.eventTime,
-						marketVolume: entry.marketVolume,
-						marketLiquidity: entry.marketLiquidity,
-					},
-				});
-				await loadCache({ silent: true });
-			} catch (error) {
-				console.error("Failed to refresh entry:", error);
-			} finally {
-				setRefreshingEntryId(null);
-			}
-		},
-		[loadCache, refreshingEntryId],
-	);
 
 	useEffect(() => {
 		if (!pipelineStatus?.inProgress) {
@@ -2128,9 +2097,6 @@ function SharpMoneyPage() {
 										isHistoryLoading={historyLoading.has(entry.conditionId)}
 										signalScore={signalScoreByConditionId[entry.conditionId]}
 										gradeData={gradesByConditionId[entry.conditionId]}
-										onRefresh={() => handleRefreshEntry(entry)}
-										isRefreshing={refreshingEntryId === entry.id}
-										disableRefresh={Boolean(pipelineStatus?.inProgress)}
 										maxVolume={maxVolume}
 										debugInfo={debugInfoById[entry.id]}
 										showDebug={showRefreshDebug}
@@ -2157,9 +2123,6 @@ function SharpMoneyPage() {
 												isHistoryLoading={historyLoading.has(entry.conditionId)}
 												signalScore={signalScoreByConditionId[entry.conditionId]}
 												gradeData={gradesByConditionId[entry.conditionId]}
-												onRefresh={() => handleRefreshEntry(entry)}
-												isRefreshing={refreshingEntryId === entry.id}
-												disableRefresh={Boolean(pipelineStatus?.inProgress)}
 												maxVolume={maxVolume}
 												debugInfo={debugInfoById[entry.id]}
 												showDebug={showRefreshDebug}
@@ -2237,9 +2200,6 @@ function SharpMoneyCard({
 	isHistoryLoading,
 	signalScore,
 	gradeData,
-	onRefresh,
-	isRefreshing,
-	disableRefresh,
 	maxVolume,
 	debugInfo,
 	showDebug,
@@ -2261,9 +2221,6 @@ function SharpMoneyCard({
 		warnings: string[];
 		historyUpdatedAt?: number;
 	};
-	onRefresh: () => void;
-	isRefreshing: boolean;
-	disableRefresh: boolean;
 	maxVolume: number;
 	debugInfo?: {
 		ready: boolean;
@@ -2380,14 +2337,6 @@ function SharpMoneyCard({
 	const stopPropagation = useCallback((e: React.MouseEvent) => {
 		e.stopPropagation();
 	}, []);
-
-	const handleRefreshClick = useCallback(
-		(e: React.MouseEvent) => {
-			e.stopPropagation();
-			onRefresh();
-		},
-		[onRefresh],
-	);
 
 	const inspectBotDecision = useCallback(async () => {
 		setBotInspectTouched(true);
@@ -2506,19 +2455,6 @@ function SharpMoneyCard({
 							<ExternalLink className="h-4 w-4" />
 						</a>
 					)}
-					{!disableRefresh && (
-						<button
-							type="button"
-							onClick={handleRefreshClick}
-							aria-label="Refresh this market"
-							className="inline-flex h-8 w-8 items-center justify-center rounded text-ink-55 transition-colors hover:bg-ink-15 hover:text-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
-							disabled={isRefreshing}
-						>
-							<RefreshCw
-								className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
-							/>
-						</button>
-					)}
 				</div>
 			</div>
 
@@ -2537,22 +2473,16 @@ function SharpMoneyCard({
 						<h3 className="font-sans text-base font-semibold leading-tight tracking-[-0.01em] text-ink-95 @[480px]:text-lg">
 							{entry.marketTitle}
 						</h3>
-						<div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0 font-mono text-xxs tabular-nums text-ink-55">
-							<span>
-								<span className="text-ink-55">updated</span>{" "}
-								<span className="text-ink-70">
-									{formatRelativeTime(historyUpdatedAt)}
-								</span>
-							</span>
-							{pickMeta && pickStatusLabel && pickPillTone && (
+						{pickMeta && pickStatusLabel && pickPillTone && (
+							<div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0 font-mono text-xxs tabular-nums text-ink-55">
 								<span
 									className={`rounded border px-1.5 py-0 uppercase tracking-wider ${pickPillTone}`}
 									title={`Pick ${pickStatusLabel} ${formatRelativeTime(pickMeta.pickedAt)}`}
 								>
 									{pickStatusLabel}
 								</span>
-							)}
-						</div>
+							</div>
+						)}
 						{entry.sharpSide !== "EVEN" && (
 							<div className="mt-1.5 flex items-baseline gap-2 text-sm">
 								<span className="font-mono text-xxs font-medium uppercase tracking-[0.2em] text-ink-55">
