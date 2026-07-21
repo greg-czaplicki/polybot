@@ -15,7 +15,16 @@ Gate compliance post Jun 25 22:05Z: clean. Zero ss≥90, zero edgeRating in
 [72,80), zero scoreDiff<20, min price_edge exactly 0.25.
 
 Re-audit when era-v4 sample reaches n≈100 (~late Sep 2026 at current volume),
-by which time real CLV should exist on ~50+ picks.
+by which time real CLV should exist on ~50+ picks. Planned analyses:
+
+1. **Does canonicalScore (team trends) predict outcomes?** Trend snapshots
+   (last-10 window, 9 contextual splits) are healthy and scored on every pick,
+   but the score sits 4th in the candidate sort below three continuous floats,
+   so it is essentially never decisive. Test persisted per-pick scores against
+   ROI/CLV and only then decide whether trends deserve real weight.
+2. Totals-vs-moneyline split (signs flipped at tiny n in this audit).
+3. Real-CLV validation of the calibration — the first non-circular CLV test
+   this system has had.
 
 ## Incident 1 — CLV was outcome-contaminated for every pick ever (fixed `b40fec0`)
 
