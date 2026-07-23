@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
@@ -38,6 +39,7 @@ class BotConfig:
 	poly_usdc_token: str
 	poly_conditional_token: str
 	low_roi_threshold: float
+	max_price_drift_bps: float
 	stop_on_403: bool
 	poll_jitter_ratio: float
 	poll_backoff_base: float
@@ -117,6 +119,7 @@ def load_config() -> BotConfig:
 		"POLY_CONDITIONAL_TOKEN", "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 	)
 	low_roi_threshold = float(os.getenv("BOT_LOW_ROI_THRESHOLD", "0.72"))
+	max_price_drift_bps = float(os.getenv("BOT_MAX_PRICE_DRIFT_BPS", "300"))
 	stop_on_403 = env_flag("BOT_STOP_ON_403", True)
 	poll_jitter_ratio = float(os.getenv("BOT_POLL_JITTER", "0.2"))
 	poll_backoff_base = float(os.getenv("BOT_POLL_BACKOFF_BASE", "2"))
@@ -160,6 +163,7 @@ def load_config() -> BotConfig:
 		poly_usdc_token=poly_usdc_token,
 		poly_conditional_token=poly_conditional_token,
 		low_roi_threshold=low_roi_threshold,
+		max_price_drift_bps=max_price_drift_bps,
 		stop_on_403=stop_on_403,
 		poll_jitter_ratio=poll_jitter_ratio,
 		poll_backoff_base=poll_backoff_base,
@@ -384,7 +388,15 @@ def prune_placed_group_meta(
 	return pruned
 
 
+# Every authenticated worker call counts against the hourly budget — the
+# budget exists to pace traffic past Cloudflare rate limits, and a poll that
+# places bets makes several picks/execution POSTs on top of the candidates
+# fetch. Only counting the poll undercounted by up to ~10x at the worst time.
+_worker_call_timestamps: List[float] = []
+
+
 def request_json(url: str, api_key: str) -> Dict[str, Any]:
+	_worker_call_timestamps.append(time.time())
 	request = urllib.request.Request(url)
 	request.add_header("Authorization", f"Bearer {api_key}")
 	request.add_header(
@@ -405,6 +417,7 @@ def request_json(url: str, api_key: str) -> Dict[str, Any]:
 
 
 def post_json(url: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+	_worker_call_timestamps.append(time.time())
 	request = urllib.request.Request(url, method="POST")
 	request.add_header("Authorization", f"Bearer {api_key}")
 	request.add_header("Content-Type", "application/json")
@@ -529,20 +542,36 @@ def fetch_clob_token_map(condition_id: str) -> List[Dict[str, str]]:
 		_token_cache[condition_id] = mapped
 	return mapped
 
+def _parse_json_list(value: Any) -> List[str]:
+	"""Gamma encodes list fields (outcomes, clobTokenIds) as JSON strings."""
+	if isinstance(value, list):
+		return [str(item) for item in value]
+	if isinstance(value, str):
+		try:
+			parsed = json.loads(value)
+			if isinstance(parsed, list):
+				return [str(item) for item in parsed]
+		except json.JSONDecodeError:
+			pass
+	return []
+
+
 def fetch_token_map(condition_id: str) -> List[Dict[str, str]]:
+	# Gamma fallback for when the CLOB markets endpoint fails. The previous
+	# version queried the unsupported `condition_id` param (Gamma ignores it
+	# and returns an arbitrary market), read a `tokens` field Gamma doesn't
+	# have, and then cached the guaranteed-empty result — permanently
+	# disabling live trading for the condition after one transient CLOB
+	# failure. Correct param is condition_ids, tokens come from
+	# outcomes+clobTokenIds (parallel arrays), the returned market must be
+	# verified to match, and empty results are never cached.
 	if not condition_id:
 		return []
 	if condition_id in _token_cache:
 		return _token_cache[condition_id]
 	url = (
 		"https://gamma-api.polymarket.com/markets?"
-		+ urllib.parse.urlencode(
-			{
-				"condition_id": condition_id,
-				"active": "true",
-				"limit": "1",
-			}
-		)
+		+ urllib.parse.urlencode({"condition_ids": condition_id, "limit": "1"})
 	)
 	try:
 		data = request_json_public(url)
@@ -553,28 +582,26 @@ def fetch_token_map(condition_id: str) -> List[Dict[str, str]]:
 		markets = data
 	elif isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
 		markets = data["data"]
-	if not markets:
-		_token_cache[condition_id] = []
+	target = condition_id.lower()
+	market = next(
+		(
+			m
+			for m in markets
+			if isinstance(m, dict)
+			and str(m.get("conditionId") or "").lower() == target
+		),
+		None,
+	)
+	if not market:
 		return []
-	market = markets[0] or {}
-	tokens = market.get("tokens") or []
+	outcomes = _parse_json_list(market.get("outcomes"))
+	token_ids = _parse_json_list(market.get("clobTokenIds"))
 	mapped: List[Dict[str, str]] = []
-	for token in tokens:
-		outcome = (
-			token.get("outcome")
-			or token.get("name")
-			or token.get("label")
-			or token.get("outcome_name")
-		)
-		token_id = (
-			token.get("token_id")
-			or token.get("tokenId")
-			or token.get("clobTokenId")
-			or token.get("id")
-		)
+	for outcome, token_id in zip(outcomes, token_ids):
 		if outcome and token_id:
-			mapped.append({"outcome": str(outcome), "token_id": str(token_id)})
-	_token_cache[condition_id] = mapped
+			mapped.append({"outcome": outcome, "token_id": token_id})
+	if mapped:
+		_token_cache[condition_id] = mapped
 	return mapped
 
 def resolve_token_id(entry: Dict[str, Any]) -> str:
@@ -662,6 +689,59 @@ def get_balance_allowance(
 		except Exception:
 			return {"error": str(exc)}
 
+class OrderStateUnknownError(Exception):
+	"""post_order failed AFTER submission was attempted: the exchange may have
+	accepted (and filled) the order even though we never saw the response.
+	Callers must treat the position as possibly live — never re-bet it."""
+
+	def __init__(self, token_id: str, cause: Exception):
+		super().__init__(f"order state unknown for token {token_id}: {cause}")
+		self.token_id = token_id
+		self.cause = cause
+
+
+def _is_definitive_order_rejection(exc: Exception) -> bool:
+	"""True when the exchange definitively rejected the order (it does not
+	exist), as opposed to a timeout/5xx where it might have been accepted."""
+	status = getattr(exc, "status_code", None)
+	if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+		return True
+	text = str(exc).lower()
+	return any(
+		marker in text
+		for marker in (
+			"http 400",
+			"http 401",
+			"http 403",
+			"http 404",
+			"http 422",
+			"not enough balance",
+			"fok order",
+			"couldn't be fully filled",
+			"could not be fully filled",
+			"invalid amount",
+			"invalid price",
+			"min size",
+			"minimum size",
+		)
+	)
+
+
+def fetch_live_buy_price(token_id: str) -> float | None:
+	"""Best ask from the public CLOB — no client library dependency."""
+	url = (
+		"https://clob.polymarket.com/price?"
+		+ urllib.parse.urlencode({"token_id": token_id, "side": "buy"})
+	)
+	try:
+		data = request_json_public(url)
+	except Exception:
+		return None
+	if isinstance(data, dict):
+		return _coerce_float(data.get("price"))
+	return None
+
+
 def execute_live_trade(
 	entry: Dict[str, Any],
 	stake: float,
@@ -672,17 +752,64 @@ def execute_live_trade(
 	token_id = resolve_token_id(entry)
 	if not token_id:
 		raise RuntimeError("token_id not found for condition")
+	# Re-check gates against the live book. The decision price
+	# (sharpSidePrice) was computed when the worker cached the candidate —
+	# potentially many minutes stale, and these markets move exactly when
+	# sharp action is present.
+	decision_price = _coerce_float(entry.get("sharpSidePrice"))
+	live_price = fetch_live_buy_price(token_id)
+	if live_price is not None:
+		if live_price >= config.low_roi_threshold:
+			raise RuntimeError(
+				f"live ask {live_price} at/above low-ROI threshold {config.low_roi_threshold}"
+			)
+		if decision_price and decision_price > 0:
+			drift_bps = (live_price - decision_price) / decision_price * 10000
+			if drift_bps > config.max_price_drift_bps:
+				raise RuntimeError(
+					f"live ask drifted {round(drift_bps)}bps above decision price {decision_price}"
+				)
 	from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
 	client = build_clob_client(config)
-	order = MarketOrderArgs(
-		token_id=token_id,
-		amount=float(stake),
-		side="BUY",
-		order_type=OrderType.FOK,
-	)
+	# Worst acceptable fill price: decision price + drift cap, never past the
+	# low-ROI threshold. Floored to the 0.01 grid (valid on every tick size,
+	# and rounding DOWN only tightens a BUY bound).
+	bound_candidates = [config.low_roi_threshold]
+	if decision_price and decision_price > 0:
+		bound_candidates.append(
+			decision_price * (1 + config.max_price_drift_bps / 10000)
+		)
+	price_bound = int(min(bound_candidates) * 100) / 100
+	try:
+		order = MarketOrderArgs(
+			token_id=token_id,
+			amount=float(stake),
+			side="BUY",
+			order_type=OrderType.FOK,
+			price=price_bound,
+		)
+	except TypeError:
+		# Client version without the price field — the live-price gates above
+		# still bound the exposure.
+		order = MarketOrderArgs(
+			token_id=token_id,
+			amount=float(stake),
+			side="BUY",
+			order_type=OrderType.FOK,
+		)
 	signed = client.create_market_order(order)
-	response = client.post_order(signed, OrderType.FOK)
-	return {"token_id": token_id, "response": response}
+	try:
+		response = client.post_order(signed, OrderType.FOK)
+	except Exception as exc:
+		if _is_definitive_order_rejection(exc):
+			raise RuntimeError(f"order rejected by exchange: {exc}") from exc
+		raise OrderStateUnknownError(token_id, exc) from exc
+	return {
+		"token_id": token_id,
+		"response": response,
+		"livePrice": live_price,
+		"priceBound": price_bound,
+	}
 
 def _coerce_float(value: Any) -> float | None:
 	if value is None:
@@ -733,7 +860,9 @@ def parse_fill_from_response(
 	# interpretation is inverted or the amounts are unreliable, fall back to the
 	# known stake/entry price (the raw response is kept in executionNotes for
 	# later re-parsing rather than trusting a nonsensical value here).
+	price_fallback = False
 	if fill_price is None or not 0 < fill_price <= 1.0001:
+		price_fallback = True
 		fill_price = _coerce_float(price)
 		fill_notional = _coerce_float(stake)
 		fill_size = None
@@ -745,6 +874,12 @@ def parse_fill_from_response(
 		fill_status = str(status_raw)
 	elif success is False:
 		fill_status = "failed"
+	elif price_fallback:
+		# Response shape unrecognized: the price here is the DECISION price,
+		# not a real fill. A distinct status keeps these out of slippage and
+		# fill-price analyses (they used to land as perfect zero-slippage
+		# fills, indistinguishable from the real thing).
+		fill_status = "filled_unparsed"
 	else:
 		# FOK order returned without raising -> treat as filled.
 		fill_status = "filled"
@@ -755,6 +890,7 @@ def parse_fill_from_response(
 		"fillNotional": fill_notional,
 		"orderId": str(order_id) if order_id is not None else None,
 		"exchangeTradeId": str(tx) if tx is not None else None,
+		"_priceFallback": price_fallback,
 	}
 
 def report_execution(
@@ -770,23 +906,31 @@ def report_execution(
 	except Exception as exc:
 		print("[bot] failed to report execution:", exc)
 
-def report_pick_execution(
-	config: BotConfig,
-	pick_id: str,
+def build_execution_payload(
 	trade: Dict[str, Any],
 	stake: float,
 	price: float,
-) -> None:
-	"""Build and send the execution/fill payload for a freshly created pick.
+) -> Dict[str, Any]:
+	"""Build the execution/fill payload for a placed trade.
 
-	Reached only after a successful placement (a failed live order returns
-	before the pick is created), so mode is 'paper' (dry-run) or 'live' (real
-	fill). Paper rows record intended sizing tagged fillStatus='paper'; live
-	rows record the parsed fill plus the raw response in executionNotes.
+	Modes: 'paper' (dry-run intended sizing), 'live' (parsed fill + raw
+	response in executionNotes), and fillUnknown (order submitted but the
+	response was lost — the position may or may not exist; recorded with
+	fillStatus='unknown' and no fill numbers so nothing fake enters the
+	slippage/fill analyses).
 	"""
 	submitted = trade.get("timestamp") or int(time.time())
+	if trade.get("fillUnknown"):
+		return {
+			"executionSubmittedAt": submitted,
+			"fillStatus": "unknown",
+			"executionNotes": (
+				f"order state unknown (post_order failed after submission): "
+				f"{trade.get('error')}"
+			)[:900],
+		}
 	if trade.get("mode") == "paper":
-		payload: Dict[str, Any] = {
+		return {
 			"executionSubmittedAt": submitted,
 			"executionFilledAt": submitted,
 			"fillStatus": "paper",
@@ -796,30 +940,43 @@ def report_pick_execution(
 			"fillSlippageBps": 0,
 			"executionNotes": "paper",
 		}
-	else:
-		fill = parse_fill_from_response(trade.get("orderResponse"), stake, price)
-		slippage_bps = None
-		fill_price = fill.get("fillPrice")
-		if fill_price and price:
-			slippage_bps = round((fill_price - price) / price * 10000, 1)
-		try:
-			raw_notes = json.dumps(trade.get("orderResponse"), default=str)[:900]
-		except Exception:
-			raw_notes = str(trade.get("orderResponse"))[:900]
-		payload = {
-			"executionSubmittedAt": submitted,
-			"executionFilledAt": int(time.time()),
-			"fillSlippageBps": slippage_bps,
-			"executionNotes": raw_notes,
-			**fill,
-		}
-	report_execution(config, pick_id, payload)
+	fill = parse_fill_from_response(trade.get("orderResponse"), stake, price)
+	price_fallback = bool(fill.pop("_priceFallback", False))
+	slippage_bps = None
+	fill_price = fill.get("fillPrice")
+	# No slippage number for fallback "fills" — it would always be exactly 0
+	# and read as a genuine perfect fill downstream.
+	if fill_price and price and not price_fallback:
+		slippage_bps = round((fill_price - price) / price * 10000, 1)
+	try:
+		raw_notes = json.dumps(trade.get("orderResponse"), default=str)[:900]
+	except Exception:
+		raw_notes = str(trade.get("orderResponse"))[:900]
+	return {
+		"executionSubmittedAt": submitted,
+		"executionFilledAt": int(time.time()),
+		"fillSlippageBps": slippage_bps,
+		"executionNotes": raw_notes,
+		**fill,
+	}
+
+
+def report_pick_execution(
+	config: BotConfig,
+	pick_id: str,
+	trade: Dict[str, Any],
+	stake: float,
+	price: float,
+) -> None:
+	report_execution(config, pick_id, build_execution_payload(trade, stake, price))
 
 def extract_cloudflare_ray_id(error_text: str) -> str | None:
-	match = re.search(r"Cloudflare Ray ID:\\s*<strong[^>]*>([^<]+)</strong>", error_text)
+	# NB: in a raw string \\s means literal-backslash-then-s, which never
+	# matches real Cloudflare pages — that typo made stop_on_403 dead code.
+	match = re.search(r"Cloudflare Ray ID:\s*<strong[^>]*>([^<]+)</strong>", error_text)
 	if match:
 		return match.group(1).strip()
-	match = re.search(r"Cloudflare Ray ID:\\s*([A-Za-z0-9]+)", error_text)
+	match = re.search(r"Cloudflare Ray ID:\s*([A-Za-z0-9]+)", error_text)
 	if match:
 		return match.group(1).strip()
 	return None
@@ -983,8 +1140,12 @@ def place_bet(
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
 		return False
 
+	# Generated BEFORE the order so the pick POST is idempotent: the server
+	# dedupes on client_pick_id, letting the outbox retry safely.
+	client_pick_id = f"bot-{uuid.uuid4().hex}"
 	trade = {
 		"timestamp": int(time.time()),
+		"clientPickId": client_pick_id,
 		"conditionId": entry.get("conditionId"),
 		"marketTitle": entry.get("marketTitle"),
 		"sharpSide": entry.get("sharpSide"),
@@ -1026,6 +1187,19 @@ def place_bet(
 				round(stake, 2),
 			)
 			placed_successfully = True
+		except OrderStateUnknownError as exc:
+			# Submission was attempted and the response was lost — the order
+			# may have filled. Treat the position as live: keep the condition
+			# marked placed (no re-bet) and record a pick with an 'unknown'
+			# fill for manual reconciliation. Never downgrade this to paper.
+			trade["error"] = str(exc)
+			trade["fillUnknown"] = True
+			placed_successfully = True
+			print(
+				colorize("[error]", COLOR_RED),
+				"ORDER STATE UNKNOWN — treating as placed; reconcile manually:",
+				exc,
+			)
 		except Exception as exc:
 			trade["mode"] = "paper"
 			trade["error"] = str(exc)
@@ -1047,60 +1221,119 @@ def place_bet(
 	append_trade_log(config.trade_log_path, trade)
 	if not placed_successfully:
 		return False
+	threshold_used = (
+		config.market_quality_threshold if config.require_microstructure else None
+	)
+	decision_snapshot = {
+		"signalScore": grade.get("signalScore"),
+		"edgeRating": entry.get("edgeRating"),
+		"scoreDifferential": entry.get("scoreDifferential"),
+		"marketQualityScore": grade.get("microstructureScore"),
+		"thresholdUsed": threshold_used,
+		"warnings": grade.get("warnings") or [],
+		"candidateComputedAt": grade.get("computedAt"),
+		"l2Imbalance": entry.get("l2Imbalance"),
+		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
+		"l2Spread": entry.get("l2Spread"),
+		"l2Disagreement": entry.get("l2Disagreement"),
+	}
+	pick_payload = {
+		"clientPickId": client_pick_id,
+		"conditionId": entry.get("conditionId"),
+		"marketTitle": entry.get("marketTitle"),
+		"eventTime": entry.get("eventTime"),
+		"grade": grade_label,
+		"signalScore": grade.get("signalScore"),
+		"edgeRating": entry.get("edgeRating"),
+		"scoreDifferential": entry.get("scoreDifferential"),
+		"sharpSide": entry.get("sharpSide"),
+		"price": price,
+		"thresholdUsed": threshold_used,
+		"marketQualityScore": grade.get("microstructureScore"),
+		"warnings": grade.get("warnings") or [],
+		"candidateComputedAt": grade.get("computedAt"),
+		"l2Imbalance": parse_float(entry.get("l2Imbalance")),
+		"l2ImbalanceNearMid": parse_float(entry.get("l2ImbalanceNearMid")),
+		"l2Spread": parse_float(entry.get("l2Spread")),
+		"l2Disagreement": entry.get("l2Disagreement")
+		if isinstance(entry.get("l2Disagreement"), bool)
+		else None,
+		"decisionSnapshot": decision_snapshot,
+	}
+	execution_payload = build_execution_payload(trade, stake, price)
 	try:
-		threshold_used = (
-			config.market_quality_threshold if config.require_microstructure else None
-		)
-		decision_snapshot = {
-			"signalScore": grade.get("signalScore"),
-			"edgeRating": entry.get("edgeRating"),
-			"scoreDifferential": entry.get("scoreDifferential"),
-			"marketQualityScore": grade.get("microstructureScore"),
-			"thresholdUsed": threshold_used,
-			"warnings": grade.get("warnings") or [],
-			"candidateComputedAt": grade.get("computedAt"),
-			"l2Imbalance": entry.get("l2Imbalance"),
-			"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
-			"l2Spread": entry.get("l2Spread"),
-			"l2Disagreement": entry.get("l2Disagreement"),
-		}
 		created = post_json(
-			f"{config.base_url}/api/bot/picks",
-			config.api_key,
-			{
-				"conditionId": entry.get("conditionId"),
-				"marketTitle": entry.get("marketTitle"),
-				"eventTime": entry.get("eventTime"),
-				"grade": grade_label,
-				"signalScore": grade.get("signalScore"),
-				"edgeRating": entry.get("edgeRating"),
-				"scoreDifferential": entry.get("scoreDifferential"),
-				"sharpSide": entry.get("sharpSide"),
-				"price": price,
-				"thresholdUsed": threshold_used,
-				"marketQualityScore": grade.get("microstructureScore"),
-				"warnings": grade.get("warnings") or [],
-				"candidateComputedAt": grade.get("computedAt"),
-				"l2Imbalance": parse_float(entry.get("l2Imbalance")),
-				"l2ImbalanceNearMid": parse_float(entry.get("l2ImbalanceNearMid")),
-				"l2Spread": parse_float(entry.get("l2Spread")),
-				"l2Disagreement": entry.get("l2Disagreement")
-				if isinstance(entry.get("l2Disagreement"), bool)
-				else None,
-				"decisionSnapshot": decision_snapshot,
-			},
+			f"{config.base_url}/api/bot/picks", config.api_key, pick_payload
 		)
 		pick_id = (created or {}).get("pick", {}).get("id")
 		if pick_id:
-			report_pick_execution(config, pick_id, trade, stake, price)
+			report_execution(config, pick_id, execution_payload)
 		else:
 			print("[bot] pick created but no id returned; execution not logged")
 	except Exception as exc:
-		print("[bot] failed to log pick:", exc)
-	state["bankroll"] = round(
-		state.get("bankroll", config.paper_bankroll) - stake, 2
-	)
+		# A live fill with no D1 row would never be graded or settled. Queue
+		# the report for retry — clientPickId makes the replay idempotent.
+		print("[bot] failed to log pick; queued for retry:", exc)
+		state.setdefault("pendingReports", []).append(
+			{
+				"clientPickId": client_pick_id,
+				"pickPayload": pick_payload,
+				"executionPayload": execution_payload,
+				"createdAt": int(time.time()),
+				"attempts": 0,
+			}
+		)
+	new_bankroll = round(state.get("bankroll", config.paper_bankroll) - stake, 2)
+	if new_bankroll <= 0:
+		# Bankroll is never credited back on wins (no settlement sync yet), so
+		# hitting zero means Kelly sizing would silently stop the bot.
+		print(
+			colorize("[bot]", COLOR_YELLOW),
+			"WARNING: tracked bankroll exhausted — Kelly stakes will be zero"
+			" until BOT_PAPER_BANKROLL is reset or fixed staking is enabled",
+		)
+	state["bankroll"] = max(0.0, new_bankroll)
 	return True
+
+
+def flush_pending_reports(config: BotConfig, state: Dict[str, Any]) -> None:
+	"""Retry pick/execution reports that failed to reach the worker.
+
+	Safe to replay: pick creation dedupes on clientPickId server-side. Entries
+	are dropped (loudly) after 20 attempts or 48h so a poison payload can't
+	wedge the outbox forever.
+	"""
+	pending = state.get("pendingReports") or []
+	if not pending:
+		return
+	remaining: List[Dict[str, Any]] = []
+	for entry in pending:
+		age = int(time.time()) - int(entry.get("createdAt") or 0)
+		if entry.get("attempts", 0) >= 20 or age > 48 * 3600:
+			print(
+				colorize("[bot]", COLOR_RED),
+				"dropping pending pick report after retries:",
+				entry.get("clientPickId"),
+			)
+			continue
+		try:
+			created = post_json(
+				f"{config.base_url}/api/bot/picks",
+				config.api_key,
+				entry["pickPayload"],
+			)
+			pick_id = (created or {}).get("pick", {}).get("id")
+			if pick_id and entry.get("executionPayload"):
+				report_execution(config, pick_id, entry["executionPayload"])
+			print(
+				"[bot] recovered pending pick report",
+				entry.get("clientPickId"),
+			)
+		except Exception as exc:
+			entry["attempts"] = entry.get("attempts", 0) + 1
+			remaining.append(entry)
+			print("[bot] pending pick report retry failed:", exc)
+	state["pendingReports"] = remaining
 
 def run_loop() -> None:
 	config = load_config()
@@ -1130,7 +1363,6 @@ def run_loop() -> None:
 
 	window_start = parse_time_window(config.run_window_start)
 	window_end = parse_time_window(config.run_window_end)
-	call_timestamps: List[float] = []
 	backoff = 0.0
 	# Pace polls so the hourly call budget lasts the whole hour. Polling faster
 	# than the budget allows burns it in the first part of each rolling hour and
@@ -1182,11 +1414,20 @@ def run_loop() -> None:
 			)
 			placed = set(placed_meta.keys())
 			placed_groups = set(placed_group_meta.keys())
-			call_timestamps = [t for t in call_timestamps if now - t < 3600]
-			if config.max_calls_per_hour > 0 and len(call_timestamps) >= config.max_calls_per_hour:
+			# All authenticated worker calls (poll + pick/execution POSTs) are
+			# recorded in _worker_call_timestamps by request_json/post_json.
+			_worker_call_timestamps[:] = [
+				t for t in _worker_call_timestamps if now - t < 3600
+			]
+			if (
+				config.max_calls_per_hour > 0
+				and len(_worker_call_timestamps) >= config.max_calls_per_hour
+			):
 				# Sleep until the oldest call ages out of the rolling hour so a
 				# slot actually frees, instead of spin-sleeping poll_seconds.
-				sleep_seconds = max(1.0, 3600.0 - (now - call_timestamps[0]) + 1.0)
+				sleep_seconds = max(
+					1.0, 3600.0 - (now - _worker_call_timestamps[0]) + 1.0
+				)
 				print("[bot] rate cap reached, sleeping", round(sleep_seconds, 1))
 				time.sleep(sleep_seconds)
 				continue
@@ -1195,7 +1436,13 @@ def run_loop() -> None:
 				sleep_seconds = apply_jitter(backoff, config.poll_jitter_ratio)
 				print("[bot] backoff", round(sleep_seconds, 1), "seconds")
 				time.sleep(sleep_seconds)
-				backoff = 0.0
+				# NB: backoff resets only after a SUCCESSFUL iteration (below),
+				# so consecutive failures actually escalate toward
+				# poll_backoff_max instead of re-arming at the base every time.
+
+			if state.get("pendingReports"):
+				flush_pending_reports(config, state)
+				save_state(config.state_path, state)
 
 			print(
 				"[bot] polling",
@@ -1211,7 +1458,6 @@ def run_loop() -> None:
 				"includeStarted",
 				config.include_started,
 			)
-			call_timestamps.append(time.time())
 			candidates, candidate_debug = fetch_candidates(config)
 			print("[bot] candidates", len(candidates))
 			if len(candidates) == 0 and isinstance(candidate_debug, dict):
@@ -1312,6 +1558,15 @@ def run_loop() -> None:
 							"eventTime": entry.get("eventTime"),
 							"conditionId": condition_id,
 						}
+					# Persist immediately: a crash/restart between a live fill
+					# and the end-of-poll save used to lose every placed marker
+					# from this poll, and the server candidates endpoint has no
+					# already-picked backstop — the bot would re-bet for real.
+					state["placed"] = sorted(placed)
+					state["placedMeta"] = placed_meta
+					state["placedGroups"] = sorted(placed_groups)
+					state["placedGroupMeta"] = placed_group_meta
+					save_state(config.state_path, state)
 					new_bets += 1
 					if new_bets >= config.max_bets:
 						print("[bot] max bets reached", config.max_bets)
@@ -1329,6 +1584,7 @@ def run_loop() -> None:
 			state["placedGroups"] = sorted(placed_groups)
 			state["placedGroupMeta"] = placed_group_meta
 			save_state(config.state_path, state)
+			backoff = 0.0
 		except Exception as exc:
 			print("[bot] error:", exc)
 			if config.poll_backoff_base > 0:
