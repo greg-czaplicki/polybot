@@ -22,6 +22,22 @@ fixing commit.
 - **`strategy_version` on picks made before 2026-07-20 is a backfill**
   (`+backfill` suffix) assigned from `picked_at` vs deploy timestamps — see
   docs/STRATEGY.md.
+- **Book anchor columns (`book_*`) are valid only from 2026-07-23 onward**
+  (migration 0018). Pick-time fields come from a live ESPN fetch at creation
+  (`book_source = 'espn_draftkings'`); a `game_lines` fallback is tagged
+  `'game_lines_stale'` with the row's own `recorded_at` — filter on source
+  when staleness matters. `book_fair_prob`/`book_ev`/`book_clv` are
+  moneyline-picks-only (two-way multiplicative de-vig of the DraftKings ML);
+  totals/spread picks carry only the book's line numbers. `book_clv` =
+  de-vigged book close − pick price (positive = beat the close); the
+  fill-price variant is derivable as `book_close_fair_prob − fill_price`.
+- **`game_lines` `snapshot_type='close'` rows are first-observed lines, not
+  true closes** (discovered 2026-07-23): odds ingestion writes once and skips
+  games that already have a close row, so the value freezes at whatever ESPN
+  showed when the game first entered the fetch window — possibly days before
+  tip. ATS/OU grading against these "closes" inherits that error. True book
+  closes exist only in `book_close_*` on picks (captured post-game, when
+  ESPN's pickcenter is frozen at the closing line).
 
 ## Open code issues (deferred, ranked)
 
@@ -33,7 +49,10 @@ fixing commit.
 2. **`spread_line`/`total_line` on picks are closing lines, not pick-time
    lines** (`getLineValues` prefers `close`; backfill overwrites). Mild
    lookahead if used as pick-time features; `fav_dog_role` derives from them.
-   Proper fix: separate pick-time-line column captured at creation.
+   Partially addressed 2026-07-23: `book_spread_line`/`book_total_line` are
+   genuine pick-time captures (bot picks now run inline enrichment at
+   creation), so use those as pick-time features going forward; the legacy
+   columns and `fav_dog_role` derivation are unchanged.
 3. **`roi` uses pick price, not `fill_price`** — overstates realized return by
    average slippage (currently ~0, occasionally ±200–400bps at $2 stakes).
    `fill_slippage_bps` sign convention audited 2026-07-21: positive =

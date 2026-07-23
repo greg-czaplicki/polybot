@@ -18,7 +18,7 @@
  */
 
 import type { Db } from "../db/client";
-import { all, first } from "../db/client";
+import { all, first, run } from "../db/client";
 import { upsertGameLine } from "../repositories/game-lines";
 import { createGame, updateGameResult } from "../repositories/games";
 import type { TeamRow } from "../types/canonical";
@@ -62,7 +62,7 @@ interface EspnScoreboardResponse {
 // ESPN Summary types (for odds/pickcenter)
 // ---------------------------------------------------------------------------
 
-interface EspnPickcenterEntry {
+export interface EspnPickcenterEntry {
 	provider: { id: string; name: string; priority: number };
 	spread: number;
 	overUnder: number;
@@ -78,8 +78,20 @@ interface EspnPickcenterEntry {
 	};
 }
 
-interface EspnSummaryResponse {
+export interface EspnSummaryResponse {
 	pickcenter?: EspnPickcenterEntry[];
+}
+
+/** Prefer DraftKings, fall back to the first pickcenter provider. */
+export function selectPickcenterEntry(
+	summary: EspnSummaryResponse,
+): EspnPickcenterEntry | null {
+	if (!summary.pickcenter?.length) return null;
+	const dk = summary.pickcenter.find((p) => {
+		const name = p.provider?.name?.toLowerCase() ?? "";
+		return name.includes("draft kings") || name.includes("draftkings");
+	});
+	return dk ?? summary.pickcenter[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +170,7 @@ async function fetchEspnScoreboard(
 	}
 }
 
-async function fetchEspnSummary(
+export async function fetchEspnSummary(
 	sportTag: string,
 	eventId: string,
 ): Promise<EspnSummaryResponse | null> {
@@ -287,13 +299,13 @@ async function findExistingGame(
 	awayTeamId: string,
 	eventTime: number,
 	sportTag: string,
-): Promise<{ id: string; is_final: number } | null> {
+): Promise<{ id: string; is_final: number; espn_event_id: string | null } | null> {
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
-	return first<{ id: string; is_final: number }>(
+	return first<{ id: string; is_final: number; espn_event_id: string | null }>(
 		db,
-		`SELECT id, is_final FROM games
+		`SELECT id, is_final, espn_event_id FROM games
 		 WHERE sport_tag = ?
 		   AND home_team_id = ?
 		   AND away_team_id = ?
@@ -348,14 +360,8 @@ async function ingestOddsForGames(
 			const summary = await fetchEspnSummary(sportTag, espnEventId);
 			result.espnFetches++;
 
-			if (!summary?.pickcenter?.length) continue;
-
-			// Prefer DraftKings (priority 1), fall back to first entry
-			const dk = summary.pickcenter.find(
-				(p) => p.provider.name.toLowerCase().includes("draft kings") ||
-					p.provider.name.toLowerCase().includes("draftkings"),
-			);
-			const entry = dk ?? summary.pickcenter[0];
+			const entry = summary ? selectPickcenterEntry(summary) : null;
+			if (!entry) continue;
 
 			const homeSpread = entry.spread;
 			const totalLine = entry.overUnder;
@@ -484,6 +490,14 @@ export async function ingestEspnSchedule(
 						gameId = existing.id;
 						alreadyFinal = existing.is_final === 1;
 						result.matched++;
+						if (!existing.espn_event_id) {
+							await run(
+								db,
+								`UPDATE games SET espn_event_id = ? WHERE id = ?`,
+								event.id,
+								gameId,
+							);
+						}
 					} else {
 						const game = await createGame(db, {
 							sportTag,
@@ -494,6 +508,12 @@ export async function ingestEspnSchedule(
 						});
 						gameId = game.id;
 						result.created++;
+						await run(
+							db,
+							`UPDATE games SET espn_event_id = ? WHERE id = ?`,
+							event.id,
+							gameId,
+						);
 					}
 
 					// Finalize with scores if completed and not already final

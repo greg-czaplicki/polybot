@@ -11,6 +11,7 @@ import {
 } from "@/lib/sharp-grade";
 import { detectSportTagFromSeriesId } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
+import { enrichPickInline } from "../api/manual-picks";
 import type { Db } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
 import { scoreOpportunity } from "../domain/opportunity-scoring";
@@ -2712,7 +2713,7 @@ export async function handleBotRequest(
 			hedgedValueShareSharpSide,
 			totalHedgedFraction: hedgingMetrics?.totalHedgedFraction ?? null,
 		});
-		const pick = await createManualPick(env.POLYWHALER_DB, {
+		const createInput = {
 			clientPickId: payload.clientPickId,
 			conditionId: payload.conditionId,
 			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
@@ -2724,8 +2725,8 @@ export async function handleBotRequest(
 			sharpSide,
 			price,
 			confidence,
-			fairPrice: priceEdgeResult?.fairPrice ?? null,
-			priceEdge: priceEdgeResult?.priceEdge ?? null,
+			fairPrice: priceEdgeResult?.fairPrice ?? undefined,
+			priceEdge: priceEdgeResult?.priceEdge ?? undefined,
 			strategyVersion:
 				payload.strategyVersion ?? buildStrategyVersion() ?? undefined,
 			thresholdUsed,
@@ -2733,7 +2734,16 @@ export async function handleBotRequest(
 			warnings,
 			decisionSnapshot,
 			candidateComputedAt,
-		});
+		};
+		const pick = await createManualPick(env.POLYWHALER_DB, createInput);
+		// Inline enrichment (game linkage, pick-time lines, book anchor) used to
+		// run only on the UI path; bot picks waited for backfill, which stamps
+		// closing lines after the fact. Running it here captures pick-time data.
+		try {
+			await enrichPickInline(env.POLYWHALER_DB, pick.id, createInput);
+		} catch (error) {
+			console.warn("[bot] inline pick enrichment failed", error);
+		}
 		return jsonResponse({ pick });
 	}
 

@@ -11,6 +11,7 @@ import {
 	persistSyncRun,
 	runCanonicalSync,
 } from "./server/pipeline/canonical-sync";
+import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
 import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
 import {
@@ -219,6 +220,21 @@ const serverEntry = {
 				})
 				.catch((error) => {
 					console.error("[manual-picks] Scheduled settle failed", error);
+				})
+				.then(() =>
+					// Sequenced after settle (1 ESPN fetch per pick) to stay inside
+					// the shared subrequest budget noted above.
+					captureBookClosesForPicks(env.POLYWHALER_DB, { limit: 8 }),
+				)
+				.then((result) => {
+					if (result.updated > 0) {
+						console.log(
+							`[book-odds] Captured book closes for ${result.updated}/${result.checked} picks`,
+						);
+					}
+				})
+				.catch((error) => {
+					console.error("[book-odds] Book close sweep failed", error);
 				}),
 		);
 		executionCtx.waitUntil(

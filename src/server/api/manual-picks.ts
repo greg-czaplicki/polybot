@@ -15,6 +15,10 @@ import {
 	resolvePickedSide,
 } from "../pipeline/pick-enrichment-helpers";
 import {
+	type BookAnchor,
+	captureBookAnchorForGame,
+} from "../pipeline/book-odds";
+import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
 } from "../pipeline/team-seeder";
@@ -389,7 +393,7 @@ export interface PickEnrichmentResult {
  * The canonical pick-context lookup (getPickContextFn) fetches snapshots
  * on demand at read time using the pick's team_id and picked_at timestamp.
  */
-async function enrichPickInline(
+export async function enrichPickInline(
 	db: Db,
 	pickId: string,
 	input: CreateManualPickInput,
@@ -543,6 +547,27 @@ async function enrichPickInline(
 		favDogRole = deriveFavDogRole(homeSpread, isHomeTeam);
 	}
 
+	// 6b. Capture the sportsbook anchor (de-vigged DraftKings via ESPN) at
+	// pick time. Best-effort: a failed fetch must not block enrichment.
+	let bookAnchor: BookAnchor | null = null;
+	if (gameId) {
+		try {
+			bookAnchor = await captureBookAnchorForGame(db, {
+				gameId,
+				venueRole,
+				betType,
+				entryPrice:
+					typeof input.price === "number" &&
+					Number.isFinite(input.price) &&
+					input.price > 0
+						? input.price
+						: null,
+			});
+		} catch {
+			result.failureReasons.push("book_anchor_failed");
+		}
+	}
+
 	// 7. Build UPDATE
 	const updates: string[] = [];
 	const params: unknown[] = [];
@@ -566,6 +591,16 @@ async function enrichPickInline(
 	addField("total_line", totalLine, "total_line");
 	addField("actual_margin", actualMargin, "actual_margin");
 	addField("actual_total", actualTotal, "actual_total");
+	if (bookAnchor) {
+		addField("book_source", bookAnchor.source, "book_source");
+		addField("book_captured_at", bookAnchor.capturedAt, "book_captured_at");
+		addField("book_ml_side", bookAnchor.mlSide, "book_ml_side");
+		addField("book_ml_opp", bookAnchor.mlOpp, "book_ml_opp");
+		addField("book_fair_prob", bookAnchor.fairProb, "book_fair_prob");
+		addField("book_ev", bookAnchor.ev, "book_ev");
+		addField("book_spread_line", bookAnchor.spreadLine, "book_spread_line");
+		addField("book_total_line", bookAnchor.totalLine, "book_total_line");
+	}
 
 	if (updates.length === 0) {
 		return result;

@@ -57,6 +57,21 @@ export interface ManualPickRow {
 	total_line?: number | null;
 	actual_margin?: number | null;
 	actual_total?: number | null;
+	book_source?: string | null;
+	book_captured_at?: number | null;
+	book_ml_side?: number | null;
+	book_ml_opp?: number | null;
+	book_fair_prob?: number | null;
+	book_ev?: number | null;
+	book_spread_line?: number | null;
+	book_total_line?: number | null;
+	book_close_captured_at?: number | null;
+	book_close_ml_side?: number | null;
+	book_close_ml_opp?: number | null;
+	book_close_fair_prob?: number | null;
+	book_close_spread_line?: number | null;
+	book_close_total_line?: number | null;
+	book_clv?: number | null;
 	status: ManualPickStatus;
 	settled_at?: number | null;
 }
@@ -108,6 +123,21 @@ export interface ManualPickEntry {
 	totalLine?: number;
 	actualMargin?: number;
 	actualTotal?: number;
+	bookSource?: string;
+	bookCapturedAt?: number;
+	bookMlSide?: number;
+	bookMlOpp?: number;
+	bookFairProb?: number;
+	bookEv?: number;
+	bookSpreadLine?: number;
+	bookTotalLine?: number;
+	bookCloseCapturedAt?: number;
+	bookCloseMlSide?: number;
+	bookCloseMlOpp?: number;
+	bookCloseFairProb?: number;
+	bookCloseSpreadLine?: number;
+	bookCloseTotalLine?: number;
+	bookClv?: number;
 	status: ManualPickStatus;
 	settledAt?: number;
 }
@@ -493,6 +523,21 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		totalLine: row.total_line ?? undefined,
 		actualMargin: row.actual_margin ?? undefined,
 		actualTotal: row.actual_total ?? undefined,
+		bookSource: row.book_source ?? undefined,
+		bookCapturedAt: row.book_captured_at ?? undefined,
+		bookMlSide: row.book_ml_side ?? undefined,
+		bookMlOpp: row.book_ml_opp ?? undefined,
+		bookFairProb: row.book_fair_prob ?? undefined,
+		bookEv: row.book_ev ?? undefined,
+		bookSpreadLine: row.book_spread_line ?? undefined,
+		bookTotalLine: row.book_total_line ?? undefined,
+		bookCloseCapturedAt: row.book_close_captured_at ?? undefined,
+		bookCloseMlSide: row.book_close_ml_side ?? undefined,
+		bookCloseMlOpp: row.book_close_ml_opp ?? undefined,
+		bookCloseFairProb: row.book_close_fair_prob ?? undefined,
+		bookCloseSpreadLine: row.book_close_spread_line ?? undefined,
+		bookCloseTotalLine: row.book_close_total_line ?? undefined,
+		bookClv: row.book_clv ?? undefined,
 		status: row.status,
 		settledAt: row.settled_at ?? undefined,
 	};
