@@ -1249,7 +1249,10 @@ export async function fetchTrendingSportsMarkets(
 		return { markets: topMarkets };
 	} catch (error) {
 		console.warn("Error fetching trending sports markets", error);
-		return { markets: [] };
+		// fetchFailed lets the pipeline distinguish an outage from a genuinely
+		// empty slate — returning bare [] made failures burn the tick cooldown
+		// as if they were successful "no markets" runs.
+		return { markets: [], fetchFailed: true as const };
 	}
 }
 

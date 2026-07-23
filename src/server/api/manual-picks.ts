@@ -123,18 +123,27 @@ export async function settlePendingManualPicks(
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 100)
 			: 25;
-	const picks = await listManualPicks(db, { status: "pending", limit });
+	// Over-fetch before the eligibility filter: with LIMIT applied first
+	// (newest-first), a page of pending picks on games that haven't started
+	// yet starves older, already-eligible picks. Gamma fetch cost is still
+	// bounded by `limit` via the slice below.
+	const picks = await listManualPicks(db, {
+		status: "pending",
+		limit: Math.min(limit * 4, 100),
+	});
 	if (picks.length === 0) {
 		return { checked: 0, updated: 0 };
 	}
 
 	let updated = 0;
 	const now = Date.now();
-	const eligible = picks.filter((pick) => {
-		if (!pick.eventTime) return true;
-		const eventTime = new Date(pick.eventTime).getTime();
-		return !(Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000);
-	});
+	const eligible = picks
+		.filter((pick) => {
+			if (!pick.eventTime) return true;
+			const eventTime = new Date(pick.eventTime).getTime();
+			return !(Number.isFinite(eventTime) && eventTime > now - 15 * 60 * 1000);
+		})
+		.slice(0, limit);
 	if (eligible.length === 0) {
 		return { checked: picks.length, updated: 0 };
 	}
@@ -214,7 +223,9 @@ function resolveClosingPriceFromHistory(
 	if (!Number.isFinite(eventTimeSeconds)) return null;
 	const history = historyByConditionId[pick.conditionId];
 	if (!history || history.length === 0) return null;
-	return findPriceAtOrBefore(history, pick.sharpSide, eventTimeSeconds);
+	// The pipeline samples every ~2 min while a market is active; a "close"
+	// older than an hour before start is stale coverage, not a closing price.
+	return findPriceAtOrBefore(history, pick.sharpSide, eventTimeSeconds, 3600);
 }
 
 function normalizeOutcome(value: string): string {

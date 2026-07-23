@@ -1230,10 +1230,19 @@ export function findPriceAtOrBefore(
 	history: NonNullable<SharpMoneyHistoryEntryByConditionId[string]>,
 	sharpSide: "A" | "B",
 	targetSeconds: number,
+	maxStalenessSeconds?: number,
 ): number | null {
 	for (let i = history.length - 1; i >= 0; i -= 1) {
 		const row = history[i];
 		if (row.recordedAt > targetSeconds) continue;
+		// With sparse history the "price at target" can be days old; callers
+		// that need a genuine near-target price pass a staleness bound.
+		if (
+			maxStalenessSeconds !== undefined &&
+			row.recordedAt < targetSeconds - maxStalenessSeconds
+		) {
+			return null;
+		}
 		const price = getPriceForSide(row, sharpSide);
 		if (price !== null) return price;
 	}

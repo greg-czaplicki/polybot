@@ -258,7 +258,14 @@ export async function finalizeCompletedGames(
 
 		let games: Game[];
 		try {
-			games = await listUnfinalizedGames(db, sportTag, PER_SPORT_LIMIT);
+			// Games older than 14 days will never finalize from a scoreboard
+			// fetch; letting them in starves the window (LIMIT is oldest-first).
+			games = await listUnfinalizedGames(
+				db,
+				sportTag,
+				PER_SPORT_LIMIT,
+				nowSeconds - 14 * 24 * 60 * 60,
+			);
 		} catch (err) {
 			console.error(
 				`[result-ingestion] Failed to list unfinalized ${sportTag} games:`,

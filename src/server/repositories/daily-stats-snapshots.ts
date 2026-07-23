@@ -358,10 +358,12 @@ async function buildDrift(
 	currentManualPicks: DailyStatsPickSummary,
 	currentCandidateFunnel: DailyStatsCandidateFunnel,
 ): Promise<DailyStatsDrift> {
+	// Strictly earlier days only: != let a historical-day rebuild compare
+	// against days that came after it.
 	const baselineRows = await all<DailyStatsSnapshotRow>(
 		db,
 		`SELECT * FROM daily_stats_snapshots
-		 WHERE day_key != ?
+		 WHERE day_key < ?
 		 ORDER BY day_key DESC
 		 LIMIT 7`,
 		currentDayKey,
@@ -384,28 +386,34 @@ async function buildDrift(
 		};
 	}
 
+	// Average only days that have a value: coercing NULL (no settled picks
+	// that day) to 0 dragged ROI/CLV baselines toward zero on quiet days.
+	const avgDefined = (values: Array<number | null>): number | null => {
+		const defined = values.filter(
+			(value): value is number => value !== null && Number.isFinite(value),
+		);
+		if (defined.length === 0) return null;
+		return defined.reduce((sum, value) => sum + value, 0) / defined.length;
+	};
+
 	const pickSettledBaseline =
 		baseline.reduce((sum, row) => sum + row.manualPicks.settled, 0) /
 		baseline.length;
-	const pickRoiBaseline =
-		baseline.reduce((sum, row) => sum + (row.manualPicks.avgRoi ?? 0), 0) /
-		baseline.length;
-	const pickClvBaseline =
-		baseline.reduce((sum, row) => sum + (row.manualPicks.avgClv ?? 0), 0) /
-		baseline.length;
+	const pickRoiBaseline = avgDefined(
+		baseline.map((row) => row.manualPicks.avgRoi),
+	);
+	const pickClvBaseline = avgDefined(
+		baseline.map((row) => row.manualPicks.avgClv),
+	);
 	const runCountBaseline =
 		baseline.reduce((sum, row) => sum + row.candidateFunnel.runCount, 0) /
 		baseline.length;
-	const avgReturnedPerRunBaseline =
-		baseline.reduce(
-			(sum, row) => sum + (row.candidateFunnel.avgReturnedPerRun ?? 0),
-			0,
-		) / baseline.length;
-	const avgReturnRateBaseline =
-		baseline.reduce(
-			(sum, row) => sum + (row.candidateFunnel.avgReturnRate ?? 0),
-			0,
-		) / baseline.length;
+	const avgReturnedPerRunBaseline = avgDefined(
+		baseline.map((row) => row.candidateFunnel.avgReturnedPerRun),
+	);
+	const avgReturnRateBaseline = avgDefined(
+		baseline.map((row) => row.candidateFunnel.avgReturnRate),
+	);
 
 	return {
 		trailingDays: 7,
@@ -413,22 +421,25 @@ async function buildDrift(
 		picks: {
 			settledDelta: currentManualPicks.settled - pickSettledBaseline,
 			avgRoiDelta:
-				currentManualPicks.avgRoi !== null
+				currentManualPicks.avgRoi !== null && pickRoiBaseline !== null
 					? currentManualPicks.avgRoi - pickRoiBaseline
 					: null,
 			avgClvDelta:
-				currentManualPicks.avgClv !== null
+				currentManualPicks.avgClv !== null && pickClvBaseline !== null
 					? currentManualPicks.avgClv - pickClvBaseline
 					: null,
 		},
 		candidates: {
 			runCountDelta: currentCandidateFunnel.runCount - runCountBaseline,
 			avgReturnedPerRunDelta:
-				currentCandidateFunnel.avgReturnedPerRun !== null
-					? currentCandidateFunnel.avgReturnedPerRun - avgReturnedPerRunBaseline
+				currentCandidateFunnel.avgReturnedPerRun !== null &&
+				avgReturnedPerRunBaseline !== null
+					? currentCandidateFunnel.avgReturnedPerRun -
+						avgReturnedPerRunBaseline
 					: null,
 			avgReturnRateDelta:
-				currentCandidateFunnel.avgReturnRate !== null
+				currentCandidateFunnel.avgReturnRate !== null &&
+				avgReturnRateBaseline !== null
 					? currentCandidateFunnel.avgReturnRate - avgReturnRateBaseline
 					: null,
 		},

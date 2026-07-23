@@ -6,6 +6,9 @@
 		"nodejs_compat"
 	],
 	"main": "src/server.ts",
+	"observability": {
+		"enabled": true
+	},
 	"d1_databases": [
 		{
 			"binding": "POLYWHALER_DB",

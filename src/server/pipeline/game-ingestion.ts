@@ -279,14 +279,18 @@ export async function listUnfinalizedGames(
 	db: Db,
 	sportTag: string,
 	limit = 100,
+	minGameTime?: number,
 ): Promise<Game[]> {
+	// minGameTime keeps permanently-unfinalizable stragglers from occupying
+	// the ASC-ordered LIMIT window forever and starving newer games.
 	const rows = await all<{ id: string }>(
 		db,
 		`SELECT id FROM games
-		 WHERE sport_tag = ? AND is_final = 0
+		 WHERE sport_tag = ? AND is_final = 0 AND game_time >= ?
 		 ORDER BY game_time ASC
 		 LIMIT ?`,
 		sportTag,
+		minGameTime ?? 0,
 		limit,
 	);
 	const games: Game[] = [];

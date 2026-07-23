@@ -56,7 +56,7 @@ detectBetType only returns 'moneyline' when the haystack contains ' vs ' or ' at
 
 ### [P1] Doubleheader collision stamps espn_event_id from the wrong game — book anchors fetch the other game's odds
 
-`src/server/pipeline/espn-schedule-ingestion.ts:294` — dimension: book-anchor — **status: open**
+`src/server/pipeline/espn-schedule-ingestion.ts:294` — dimension: book-anchor — **status: fixed 2026-07-23 batch 3 — nearest-by-time match; a game claimed by a different ESPN event id triggers creation of a separate game row**
 
 findExistingGame dedups on teams+sport within an inclusive ±6h window with LIMIT 1 and no ORDER BY, so both halves of an MLB doubleheader match one game row. The second ESPN event is swallowed (never creates a row), espn_event_id is stamped from whichever event happens to process first, and the finalization writes one game's score onto the shared row. Every book-anchor fetch keyed on that espn_event_id (pick-time captureBookAnchorForGame and the close sweep) then returns odds for the wrong game, and team_game_facts/trends inherit wrong scores and missing games.
 
@@ -136,7 +136,7 @@ detectBetType uses naive substring .includes() over title+outcome+slug with keyw
 
 ### [P1] Drift baseline coerces NULL day-averages to 0 and equal-weights days (avg-of-avgs)
 
-`src/server/repositories/daily-stats-snapshots.ts:391` — dimension: summaries — **status: open**
+`src/server/repositories/daily-stats-snapshots.ts:391` — dimension: summaries — **status: fixed 2026-07-23 batch 3 — NULL days excluded from baselines (still day-weighted by design); baseline restricted to strictly earlier day_keys**
 
 buildDrift computes 7-day baselines as an unweighted mean of per-day averages, and days with no data are coerced to 0 instead of being excluded: `(row.manualPicks.avgRoi ?? 0)`, `(row.manualPicks.avgClv ?? 0)`, `(row.candidateFunnel.avgReturnedPerRun ?? 0)`, `(row.candidateFunnel.avgReturnRate ?? 0)`, each divided by `baseline.length`. A quiet week (avgRoi NULL) yields a baseline ROI of 0, so avgRoiDelta collapses to today's raw avgRoi; with CLV scrubbed to NULL for most history, avgClvDelta is measured against a fabricated 0 baseline. Separately, a day with 1 settled pick weighs the same as a day with 15, so the baseline is an avg-of-avgs, not a pooled average.
 
@@ -249,7 +249,7 @@ finalizeCompletedGames computes the scoreboard date with formatDateUTC(game.game
 
 ### [P2] Permanently-unfinalizable games accumulate with no age cutoff against result-ingestion's LIMIT 50 ASC scan — progressive starvation of game finalization
 
-`src/server/pipeline/result-ingestion.ts:255` — dimension: ingestion — **status: open**
+`src/server/pipeline/result-ingestion.ts:255` — dimension: ingestion — **status: fixed 2026-07-23 batch 3 — 14-day minGameTime cutoff on listUnfinalizedGames**
 
 finalizeCompletedGames takes the 50 OLDEST unfinalized games per sport (listUnfinalizedGames orders game_time ASC, LIMIT 50) and only then filters for eligibility. Games that can never finalize — postponed/cancelled games, ET/UTC-date victims (previous finding), phantom rows from bad market event times — are permanent residents at the head of that ASC scan. Production already has 29 such residents (20 MLB, 9 NBA; oldest 2026-04-25). Once a sport accumulates 50, result-ingestion is 100% starved and no new straggler ever gets a score again; MLB is at 20/50 and climbing. Missing finals cascade into missing team_game_facts and biased team_trend_snapshots, which the planned n≈100 re-audit (analysis 1) will read.
 
@@ -259,7 +259,7 @@ finalizeCompletedGames takes the 50 OLDEST unfinalized games per sport (listUnfi
 
 ### [P2] 6-hour game dedup window collapses MLB doubleheaders into one canonical game row
 
-`src/server/pipeline/game-ingestion.ts:68` — dimension: ingestion — **status: open**
+`src/server/pipeline/game-ingestion.ts:68` — dimension: ingestion — **status: mitigated 2026-07-23 batch 3 — ESPN ingestion now creates both games (event-id-aware) and game matching is nearest-by-time; Polymarket-side game-ingestion dedup window itself unchanged**
 
 findExistingGame (and its twin in espn-schedule-ingestion.ts:294) matches any game with the same home/away teams within +/-6 hours. A traditional MLB doubleheader's two games start ~4-6h apart, so game 2's ESPN event matches game 1's row: the second createGame never happens, game 1's final score is kept (updateGameResult skipped once alreadyFinal), and game 2's result, lines, and facts silently vanish from the canonical layer. Team trend windows (last-10) then run over an incomplete game set for those teams, and any pick made on game 2 of a doubleheader backfills onto game 1's row (pick-backfill uses the same +/-6h team match) — enriching it with the wrong game's margin/total facts.
 
@@ -269,7 +269,7 @@ findExistingGame (and its twin in espn-schedule-ingestion.ts:294) matches any ga
 
 ### [P2] fetchTrendingSportsMarkets swallows all errors into { markets: [] }, defeating the cooldown-only-after-success hardening and faking 'no_markets' during outages
 
-`src/server/api/sharp-money.ts:1250` — dimension: ingestion — **status: open**
+`src/server/api/sharp-money.ts:1250` — dimension: ingestion — **status: fixed 2026-07-23 batch 3 — fetchFailed flag; pipeline returns 'fetch_failed' without burning the cooldown**
 
 The whole market-discovery function is wrapped in a catch that returns { markets: [] }, and per-series pagination failures just `break` with partial pages kept (only a metrics counter records it). The SharpPipeline tick was hardened on 2026-07-20 to 'burn the cooldown only once the market fetch has succeeded', but since the fetch cannot fail visibly, a Gamma outage or mid-pagination failure still burns the 2-minute cooldown, overwrites pipeline status with totalQueued:0, and logs 'no_markets' — exactly the graceful-degradation failure mode the Incident 2 postmortem called out. Data goes stale for the whole interval chain with no retry-now behavior and no error status.
 
@@ -299,7 +299,7 @@ The scheduled cooldown reads lastRunAt from canonical_sync_runs, which is only w
 
 ### [P2] Migration and setup scripts target D1 database name 'polywhaler', which does not exist — config name is 'polywhaler-db'
 
-`package.json:17` — dimension: ops — **status: open**
+`package.json:17` — dimension: ops — **status: fixed 2026-07-23 batch 3 — replaced with d1:exec:remote helper targeting polywhaler-db (migrations apply was unusable anyway: no d1_migrations baseline exists)**
 
 The documented migration path `pnpm run migrate:d1:remote` runs `wrangler d1 migrations apply polywhaler --remote`, but wrangler.jsonc declares database_name 'polywhaler-db' (binding POLYWHALER_DB). Verified against the live account with `wrangler d1 list`: databases are triadic-db, sward-db, polywhaler-db, parlaywhaler — there is no 'polywhaler', so the script fails on every run, meaning migrations (including 0018 applied 2026-07-23) are being applied ad hoc outside the tracked migrations flow. scripts/verify-setup.sh (lines 83, 103, 116, 125) and scripts/backfill-event-timestamps.mjs (line 12: `['d1', 'execute', 'polywhaler', '--json', ...]`) repeat the wrong name. Extra hazard: the shared account's OTHER project's DB is named 'parlaywhaler' — one typo-distance from the wrong name these scripts use — and CLAUDE.md forbids touching it or creating new DBs to 'fix' the lookup failure.
 
@@ -309,7 +309,7 @@ The documented migration path `pnpm run migrate:d1:remote` runs `wrangler d1 mig
 
 ### [P2] Observability not enabled: the staleness alarm and all failure logs are ephemeral console output with no sink
 
-`wrangler.jsonc:85` — dimension: ops — **status: open**
+`wrangler.jsonc:85` — dimension: ops — **status: fixed 2026-07-23 batch 3 — wrangler.jsonc observability.enabled**
 
 wrangler.jsonc has no `observability` block (and no logpush/tail_consumers), so Workers Logs persistence is disabled. Every failure path in the scheduled tick — including the `[sharp-pipeline] STALE` alarm added in the 2026-07-20 hardening sweep specifically to catch silent degradation — is a console.error visible only in a live `wrangler tail` session that nobody runs continuously. The alarm designed to prevent 'pipeline degrades silently while every tick reports success' is itself silent: a repeat of the graceful-degradation failure mode behind Incident 2 (pagination blind spot unnoticed for weeks).
 
@@ -412,7 +412,7 @@ findExistingGame in game-ingestion (and its twin in espn-schedule-ingestion.ts:2
 
 ### [P3] Head-of-line blocking in result ingestion: permanently-unfinalizable games occupy the ASC-ordered LIMIT 50 window and starve new games
 
-`src/server/pipeline/game-ingestion.ts:287` — dimension: data-integrity — **status: open**
+`src/server/pipeline/game-ingestion.ts:287` — dimension: data-integrity — **status: fixed 2026-07-23 batch 3 — same 14-day cutoff**
 
 listUnfinalizedGames returns `ORDER BY game_time ASC LIMIT 50` (PER_SPORT_LIMIT), and finalizeCompletedGames filters for eligibility (game_time + 4h < now) only AFTER that truncation. Games that can never finalize — reversed-orientation duplicates (finding above), games whose UTC date is wrong for the scoreboard fetch (finding above), or teams ESPN can't match — are never evicted and, being oldest, permanently occupy the head of the list. Once 50+ such rows accumulate for a sport, every subsequent cycle processes only the same 50 dead games and newly-completed games never enter the window, so they are never finalized by this path and never produce facts. Graceful-degradation failure of the same species as the Gamma pagination incident: no error, just quietly shrinking coverage over time.
 
@@ -462,7 +462,7 @@ The cron fires every 2 minutes (wrangler.jsonc: "*/2 * * * *") and the DO cooldo
 
 ### [P3] bot_candidate_snapshots grows unbounded — insert-only, no prune anywhere
 
-`src/server/repositories/bot-candidate-snapshots.ts:118` — dimension: ops — **status: open**
+`src/server/repositories/bot-candidate-snapshots.ts:118` — dimension: ops — **status: fixed 2026-07-23 batch 3 — per-tick 30-day prune; 151,822 stale rows purged**
 
 insertBotCandidateSnapshot writes one row (with five JSON blob columns) per bot /api/bot/candidates request and per pick-flow snapshot (bot.ts:1673, 2136), and no code path ever deletes from bot_candidate_snapshots — grep across src/ finds only INSERT and SELECT. KNOWN-ISSUES documents unbounded growth for canonical_sync_runs only; this table is a second unbounded grower, and it is also the audit-critical table for the planned n≈100 gate-rejection counterfactual analysis, so silent bloat/eventual manual truncation would destroy that forensic trail. The prod DB is already 113 MB.
 
@@ -502,7 +502,7 @@ updateManualPickOutcome (used by updateManualPickOutcomeFn, the UI manual-overri
 
 ### [P3] Settlement starvation: pending batch LIMIT applied before the eligibility filter, ordered newest-first
 
-`src/server/api/manual-picks.ts:126` — dimension: settlement — **status: open**
+`src/server/api/manual-picks.ts:126` — dimension: settlement — **status: fixed 2026-07-23 batch 3 — over-fetch then eligibility filter then slice**
 
 settlePendingManualPicks fetches `listManualPicks(db, { status: 'pending', limit })` (cron limit 20, src/server.ts line 213) and only then applies the eventTime>=15-min eligibility filter (lines 133-137). listManualPicks orders `ORDER BY picked_at DESC LIMIT ?` (repo line 654), so the window fills with the NEWEST pending picks — exactly the ones on future games that fail eligibility — while the oldest, actually-settleable picks fall outside the LIMIT and are never fetched whenever pending count exceeds the batch size. During a high-volume slate (>20 pending), finished games' picks wait until newer picks settle first; combined with permanently-unsettleable picks (sharpSide not A/B returns null forever at lines 246-250), settlement can lag by days. Self-healing at current ~6 picks/wk volume, hence P3.
 
@@ -512,7 +512,7 @@ settlePendingManualPicks fetches `listManualPicks(db, { status: 'pending', limit
 
 ### [P3] No staleness bound on the history-derived close price; cross-pick fetch cutoff lets later-event picks take multi-day-old 'closes'
 
-`src/server/api/manual-picks.ts:158` — dimension: settlement — **status: open**
+`src/server/api/manual-picks.ts:158` — dimension: settlement — **status: fixed 2026-07-23 batch 3 — close accepted only within 1h of event start**
 
 The settlement close price is findPriceAtOrBefore's last history row at or before event_time, with no cap on how far before. The batch history fetch uses a single cutoff of `min(all eligible picks' event times) - 4h` (line 158), so for the earliest-event pick staleness is bounded at 4h, but for a pick whose event is N days after the batch minimum the scan can walk back N days+4h (findPriceAtOrBefore, repositories/manual-picks.ts lines 1228-1234, skips forward rows then accepts ANY earlier non-null price). A market that fell below the $10k volume floor (documented overnight staleness) before its game gets a 'close' from many hours or days earlier, recorded indistinguishably from a genuine close — biasing stored clv toward the pick-time price (clv~0) with no annotation of close quality. The 2026-07-20 audit documents 'last price at or before event_time (NULL if no coverage)' but not the unbounded-staleness behavior.
 
@@ -522,7 +522,7 @@ The settlement close price is findPriceAtOrBefore's last history row at or befor
 
 ### [P3] Previous-day drift baseline includes the current day's partial snapshot (no upper day_key bound)
 
-`src/server/repositories/daily-stats-snapshots.ts:364` — dimension: summaries — **status: open**
+`src/server/repositories/daily-stats-snapshots.ts:364` — dimension: summaries — **status: fixed 2026-07-23 batch 3 — WHERE day_key < current**
 
 buildDrift's baseline query excludes only the day being built (`WHERE day_key != ?`) with no `day_key < ?` bound. maybeRefreshDailyStatsSnapshot re-freezes yesterday (lines 541-547) on every hourly refresh until +12h grace — and on every refresh after the day's first, today's snapshot already exists in daily_stats_snapshots. Sorted `day_key DESC LIMIT 7`, today's partial-day row (a few hours of picks/candidate runs) is the first baseline row for yesterday's archived drift, deflating the baseline and inflating yesterday's stored settledDelta/runCountDelta. The final persisted version of each day's drift_json is contaminated this way, since the last re-freeze happens up to 12h into the following day.
 

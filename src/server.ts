@@ -257,6 +257,16 @@ const serverEntry = {
 						);
 					}
 				})
+				.then(() =>
+					// bot_candidate_snapshots is insert-only; prune >30d rows
+					// (indexed on created_at, so this is cheap even per-tick).
+					env.POLYWHALER_DB.prepare(
+						"DELETE FROM bot_candidate_snapshots WHERE created_at < ?",
+					)
+						.bind(Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60)
+						.run()
+						.then(() => {}),
+				)
 				.catch((error) => {
 					console.error("[book-odds] Book close sweep failed", error);
 				}),

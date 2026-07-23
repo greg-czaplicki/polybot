@@ -33,7 +33,9 @@ export async function findGameForPick(
 	// Strategy 1: Match via event_slug in sharp_money_cache → find game by same teams + time
 	// (event_slug groups markets for the same game, but games table doesn't store it directly)
 
-	// Strategy 2: Direct match by teams + time window
+	// Strategy 2: Direct match by teams + time window. Nearest-by-time so a
+	// doubleheader (two same-matchup games inside the window) resolves to the
+	// right game rather than an arbitrary one.
 	if (opts.homeTeamId && opts.awayTeamId && opts.eventTime && opts.sportTag) {
 		const windowSeconds = 6 * 60 * 60; // 6 hours
 		const row = await first<{ id: string }>(
@@ -43,12 +45,14 @@ export async function findGameForPick(
 			   AND home_team_id = ?
 			   AND away_team_id = ?
 			   AND game_time BETWEEN ? AND ?
+			 ORDER BY ABS(game_time - ?) ASC
 			 LIMIT 1`,
 			opts.sportTag,
 			opts.homeTeamId,
 			opts.awayTeamId,
 			opts.eventTime - windowSeconds,
 			opts.eventTime + windowSeconds,
+			opts.eventTime,
 		);
 		return row?.id ?? null;
 	}

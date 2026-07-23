@@ -76,16 +76,33 @@ nulled, actual_total retained), name matching precedes positional mapping,
 and the A→away/B→home fallback is restricted to moneyline where the ordering
 is verified. fav_dog_role now derives only when a picked team exists.
 
+Fixed in batch 3 (2026-07-23 evening): pipeline outage no longer burns the
+tick cooldown as "no_markets"; drift baselines NULL-safe and bounded to
+earlier days; result-ingestion 14-day cutoff (no more straggler starvation);
+doubleheader-aware ESPN event stamping + nearest-by-time game matching;
+settle sweep over-fetches before the eligibility filter; history-close
+requires a sample within 1h of start; bot_candidate_snapshots pruned to 30d
+(151k rows purged); observability enabled; broken migrate script replaced
+with `d1:exec:remote`.
+
 Still open, in rough fix order:
 
 1. Bot (fix on `main` branch): order timeout treated as not-placed (can
    double-bet), fills lost when pick POST fails (no clientPickId sent),
    duplicate-bet guard is local-state only, market FOK orders have no price
    bound.
-2. MLB doubleheaders collapse into one game (6h dedup window) and can stamp
-   the wrong espn_event_id — poisons book anchors for those games.
-3. Shadow-window summary silently limited to picks with surviving
+2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
+3. Trend-snapshot timing (recon P2s): as_of_time is game START (leaks
+   in-progress games into as-of lookups) and late-processed games can
+   include later results (lookahead). Fix BEFORE the n≈100 re-audit judges
+   team trends.
+4. Scoring-behavior findings needing an era decision (do NOT fix casually):
+   empty-side sharpScore=50 inflation; edgeRating "volume bonus" computed
+   from liquidity. Both change picking behavior → strategy era bump.
+5. Remaining P2/P3s tracked in docs/audits/2026-07-23-agent-recon.md
+   (canonical-sync reversed-order spread signs, games dedup race, summary
+   label/unit nits, wentToOt hardcoded, DO tick cooldown jitter).
 
 ## Open code issues (deferred, ranked)
 

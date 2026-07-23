@@ -303,6 +303,8 @@ async function findExistingGame(
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
+	// Nearest-by-time: doubleheaders put two same-matchup games inside the
+	// window; an arbitrary LIMIT 1 could return the other game.
 	return first<{ id: string; is_final: number; espn_event_id: string | null }>(
 		db,
 		`SELECT id, is_final, espn_event_id FROM games
@@ -310,12 +312,14 @@ async function findExistingGame(
 		   AND home_team_id = ?
 		   AND away_team_id = ?
 		   AND game_time BETWEEN ? AND ?
+		 ORDER BY ABS(game_time - ?) ASC
 		 LIMIT 1`,
 		sportTag,
 		homeTeamId,
 		awayTeamId,
 		windowStart,
 		windowEnd,
+		eventTime,
 	);
 }
 
@@ -486,7 +490,14 @@ export async function ingestEspnSchedule(
 					let gameId: string;
 					let alreadyFinal = false;
 
-					if (existing) {
+					// A nearest game already claimed by a DIFFERENT ESPN event is the
+					// other half of a doubleheader — create a separate game row
+					// instead of collapsing both events onto one.
+					const claimedByOtherEvent =
+						existing?.espn_event_id != null &&
+						existing.espn_event_id !== event.id;
+
+					if (existing && !claimedByOtherEvent) {
 						gameId = existing.id;
 						alreadyFinal = existing.is_final === 1;
 						result.matched++;

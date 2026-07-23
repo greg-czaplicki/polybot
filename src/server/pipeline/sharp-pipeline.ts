@@ -100,9 +100,20 @@ export class SharpPipeline extends DurableObject {
       console.error('[sharp-pipeline] Failed to prune cache', error)
     }
 
-    const { markets } = await fetchTrendingSportsMarkets({
+    const { markets, fetchFailed } = await fetchTrendingSportsMarkets({
       includeAllMarkets: false,
     })
+
+    if (fetchFailed) {
+      // Leave the cooldown unburned so the next tick retries immediately.
+      await this.state.storage.put('status', {
+        inProgress: false,
+        updatedAt: Date.now(),
+        totalQueued: 0,
+        processed: 0,
+      } satisfies PipelineStatus)
+      return Response.json({ queued: false, reason: 'fetch_failed' })
+    }
 
     // Burn the cooldown only once the market fetch has succeeded, so a tick
     // that dies mid-fetch doesn't suppress the immediate retry.
