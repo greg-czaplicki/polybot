@@ -197,11 +197,18 @@ export function extractSpreadPickedLabel(
 /**
  * Resolves which team was picked based on the sharp_side label.
  *
- * Strategy:
- * 1. Match picked side / label against side labels from cache
- *    (for these sports markets, side_a tracks the named market side and maps to
- *    the home team in our "Away vs Home" title convention)
- * 2. Substring match against team names (only if unambiguous)
+ * Side-to-venue conventions differ by market type (verified against live
+ * cache rows, 2026-07-23 recon): moneyline titles are "Away vs Home" and
+ * side A is the first-listed (away) team, but spread markets set side A to
+ * the team NAMED in the title (no venue guarantee), and totals sides are
+ * Over/Under — not teams at all. So:
+ *
+ * 1. Totals (and props) get no team side — callers keep team linkage null.
+ * 2. Name matching runs first: a picked label, or the cached label behind a
+ *    literal 'a'/'b' side, is substring-matched against the resolved team
+ *    names (unambiguous matches only).
+ * 3. The positional A→away / B→home fallback applies ONLY to moneyline
+ *    markets, where that ordering is empirically verified.
  *
  * Returns null when confidence is insufficient rather than guessing.
  */
@@ -214,13 +221,18 @@ export function resolvePickedSide(opts: {
 	awayTeamName: string;
 	homeTeamId: string;
 	awayTeamId: string;
+	betType?: string | null;
 }): {
 	teamId: string;
 	opponentId: string;
 	venueRole: VenueRole;
 	isHomeTeam: boolean;
 } | null {
-	const { pickedLabel, sideALabel, sideBLabel } = opts;
+	const { pickedLabel, sideALabel, sideBLabel, betType } = opts;
+
+	// Over/Under and prop sides are not teams; fabricating a team link here
+	// poisoned venue/fav-dog analytics for every totals pick.
+	if (betType === "total" || betType === "prop") return null;
 
 	const parsedSpreadLabel = extractSpreadPickedLabel(opts.marketTitle ?? null);
 	const candidateLabels = [parsedSpreadLabel, pickedLabel]
@@ -235,67 +247,56 @@ export function resolvePickedSide(opts: {
 	const normA = sideALabel?.trim().toLowerCase() ?? null;
 	const normB = sideBLabel?.trim().toLowerCase() ?? null;
 
+	const asHome = {
+		teamId: opts.homeTeamId,
+		opponentId: opts.awayTeamId,
+		venueRole: "home" as VenueRole,
+		isHomeTeam: true,
+	};
+	const asAway = {
+		teamId: opts.awayTeamId,
+		opponentId: opts.homeTeamId,
+		venueRole: "away" as VenueRole,
+		isHomeTeam: false,
+	};
+
+	// Unambiguous substring match of a label against the two team names.
+	const matchByName = (label: string) => {
+		const matchesHome = normHome.includes(label) || label.includes(normHome);
+		const matchesAway = normAway.includes(label) || label.includes(normAway);
+		if (matchesHome && !matchesAway) return asHome;
+		if (matchesAway && !matchesHome) return asAway;
+		return null;
+	};
+
+	// A→away/B→home holds for moneyline title ordering only. betType == null
+	// means the caller didn't classify; keep legacy behavior there.
+	const positionalAllowed = betType == null || betType === "moneyline";
+
 	for (const normalizedPick of candidateLabels) {
-		// Strategy 1: Directly interpret stored sharp sides.
-		if (normalizedPick === "a") {
-			return {
-				teamId: opts.awayTeamId,
-				opponentId: opts.homeTeamId,
-				venueRole: "away",
-				isHomeTeam: false,
-			};
-		}
-		if (normalizedPick === "b") {
-			return {
-				teamId: opts.homeTeamId,
-				opponentId: opts.awayTeamId,
-				venueRole: "home",
-				isHomeTeam: true,
-			};
-		}
-
-		// Strategy 2: Match picked label against side labels from cache.
-		if (normA && normB) {
-			if (normalizedPick === normA) {
-				return {
-					teamId: opts.awayTeamId,
-					opponentId: opts.homeTeamId,
-					venueRole: "away",
-					isHomeTeam: false,
-				};
+		// Literal stored side: resolve through the cached side label by name,
+		// falling back to position only where the ordering is verified.
+		if (normalizedPick === "a" || normalizedPick === "b") {
+			const sideLabel = normalizedPick === "a" ? normA : normB;
+			if (sideLabel) {
+				const viaName = matchByName(sideLabel);
+				if (viaName) return viaName;
 			}
-			if (normalizedPick === normB) {
-				return {
-					teamId: opts.homeTeamId,
-					opponentId: opts.awayTeamId,
-					venueRole: "home",
-					isHomeTeam: true,
-				};
+			if (positionalAllowed) {
+				return normalizedPick === "a" ? asAway : asHome;
 			}
+			continue;
 		}
 
-		// Strategy 3: Direct substring match of picked label against team names.
-		// Only assign if exactly one team matches (avoid ambiguity).
-		const matchesHome =
-			normHome.includes(normalizedPick) || normalizedPick.includes(normHome);
-		const matchesAway =
-			normAway.includes(normalizedPick) || normalizedPick.includes(normAway);
+		// Direct name match of the picked label itself.
+		const viaName = matchByName(normalizedPick);
+		if (viaName) return viaName;
 
-		if (matchesHome && !matchesAway) {
-			return {
-				teamId: opts.homeTeamId,
-				opponentId: opts.awayTeamId,
-				venueRole: "home",
-				isHomeTeam: true,
-			};
-		}
-		if (matchesAway && !matchesHome) {
-			return {
-				teamId: opts.awayTeamId,
-				opponentId: opts.homeTeamId,
-				venueRole: "away",
-				isHomeTeam: false,
-			};
+		// Label equals a cached side label that couldn't be name-matched
+		// (abbreviations etc.): positional mapping only where verified.
+		if (positionalAllowed && normA && normB) {
+			if (normalizedPick === normA) return asAway;
+			if (normalizedPick === normB) return asHome;
 		}
 	}
 

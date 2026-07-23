@@ -430,6 +430,10 @@ export async function enrichPickInline(
 	let homeTeamId: string | null = null;
 	let awayTeamId: string | null = null;
 
+	// Totals/prop sides (Over/Under, BTTS) are not teams; we still resolve the
+	// matchup's team IDs for game matching, but assign no picked-team linkage.
+	const teamSidedMarket = betType !== "total" && betType !== "prop";
+
 	if (sportTag) {
 		const parsed = parseTeamsFromTitle(title);
 		if (parsed) {
@@ -447,25 +451,30 @@ export async function enrichPickInline(
 					snapshot?.selectedOutcome ??
 					null;
 
-				const sideLabels = await getSideLabels(db, input.conditionId);
+				const sideLabels = teamSidedMarket
+					? await getSideLabels(db, input.conditionId)
+					: { sideALabel: null, sideBLabel: null };
 
-				const resolved = resolvePickedSide({
-					pickedLabel,
-					marketTitle: title,
-					sideALabel: sideLabels.sideALabel,
-					sideBLabel: sideLabels.sideBLabel,
-					homeTeamName: homeTeam.name,
-					awayTeamName: awayTeam.name,
-					homeTeamId: homeTeam.id,
-					awayTeamId: awayTeam.id,
-				});
+				const resolved = teamSidedMarket
+					? resolvePickedSide({
+							pickedLabel,
+							marketTitle: title,
+							sideALabel: sideLabels.sideALabel,
+							sideBLabel: sideLabels.sideBLabel,
+							homeTeamName: homeTeam.name,
+							awayTeamName: awayTeam.name,
+							homeTeamId: homeTeam.id,
+							awayTeamId: awayTeam.id,
+							betType,
+						})
+					: null;
 
 				if (resolved) {
 					teamId = resolved.teamId;
 					opponentId = resolved.opponentId;
 					venueRole = resolved.venueRole;
 					isHomeTeam = resolved.isHomeTeam;
-				} else {
+				} else if (teamSidedMarket) {
 					const explicitPickedLabel = extractSpreadPickedLabel(title);
 					const resolvedPickedTeam = explicitPickedLabel
 						? await resolveSingleTeam(db, sportTag, explicitPickedLabel)
@@ -548,8 +557,18 @@ export async function enrichPickInline(
 		}
 		actualMargin = facts.actualMargin;
 		actualTotal = facts.actualTotal;
+	} else if (gameId && betType === "total" && (homeTeamId || awayTeamId)) {
+		// Totals picks have no picked team, but actual_total is a property of
+		// the game — read it via either participant's fact row.
+		const facts = await getFactValues(
+			db,
+			gameId,
+			(homeTeamId ?? awayTeamId) as string,
+		);
+		actualTotal = facts.actualTotal;
 	}
-	if (!favDogRole && homeSpread !== null) {
+	// fav/dog is relative to a picked team; without one it's meaningless.
+	if (!favDogRole && homeSpread !== null && teamId) {
 		favDogRole = deriveFavDogRole(homeSpread, isHomeTeam);
 	}
 

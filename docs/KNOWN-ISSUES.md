@@ -70,18 +70,21 @@ US-Eastern date, book_source derived from actual provider (+
 book_close_source, migration 0019), close-sweep livelock (RANDOM order +
 14-day give-up).
 
+Fixed in batch 2 (2026-07-23): resolvePickedSide side-mapping — totals/prop
+picks get no team linkage (Over/Under is not a team; 155 historical rows
+nulled, actual_total retained), name matching precedes positional mapping,
+and the A→away/B→home fallback is restricted to moneyline where the ordering
+is verified. fav_dog_role now derives only when a picked team exists.
+
 Still open, in rough fix order:
 
-1. `resolvePickedSide`/enrichment hard-maps side A→away, side B→home for all
-   market types — inverts team linkage on spread markets, fabricates it on
-   totals.
-2. Bot (fix on `main` branch): order timeout treated as not-placed (can
+1. Bot (fix on `main` branch): order timeout treated as not-placed (can
    double-bet), fills lost when pick POST fails (no clientPickId sent),
    duplicate-bet guard is local-state only, market FOK orders have no price
    bound.
-3. MLB doubleheaders collapse into one game (6h dedup window) and can stamp
+2. MLB doubleheaders collapse into one game (6h dedup window) and can stamp
    the wrong espn_event_id — poisons book anchors for those games.
-4. Shadow-window summary silently limited to picks with surviving
+3. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
 
 ## Open code issues (deferred, ranked)
