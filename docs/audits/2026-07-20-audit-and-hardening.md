@@ -21,10 +21,32 @@ by which time real CLV should exist on ~50+ picks. Planned analyses:
    (last-10 window, 9 contextual splits) are healthy and scored on every pick,
    but the score sits 4th in the candidate sort below three continuous floats,
    so it is essentially never decisive. Test persisted per-pick scores against
-   ROI/CLV and only then decide whether trends deserve real weight.
+   ROI/CLV and only then decide whether trends deserve real weight. Frame it
+   as **incremental lift over priceEdge/book_ev**, not standalone predictive
+   power — canonicalScore is already correlated with edge/scoreDiff (May MLB
+   forensic), so standalone correlation would double-count. Caveat: ATS/OU
+   trend records grade against `game_lines` "closes" that are actually
+   first-observed lines (see KNOWN-ISSUES 2026-07-23) — fix or bound that
+   error before promoting trends on the strength of this test.
 2. Totals-vs-moneyline split (signs flipped at tiny n in this audit).
 3. Real-CLV validation of the calibration — the first non-circular CLV test
-   this system has had.
+   this system has had. Book-anchor CLV (`book_clv`, logged from 2026-07-23)
+   is the primary skill metric: per-observation variance is a fraction of
+   ROI's, so a real edge resolves in ~50-100 picks instead of ~400+.
+4. **Pre-registered gate hypotheses (stated 2026-07-23, before the data).**
+   Predicted to hold: `price_edge >= 0.25` floor and the `signal_score >= 90`
+   saturation gate. On probation (no causal story, flip-flopped between the
+   Mar 29 and May 11 audits): the edgeRating dead-zone band-pass [72,80).
+   The re-audit GRADES these predictions on era-v4 picks; it does not re-tune
+   thresholds on the same data — that discipline is the point.
+5. **Grade the gate-rejected candidates.** The definitive gate test is
+   counterfactual: settle gate-rejected candidates on paper and compare with
+   accepted picks. Rejects performing as well as picks ⇒ the gate is noise.
+   Prerequisite to verify beforehand: `bot_candidate_snapshots` must be
+   capturing rejected candidates with reject reasons, not only accepted ones.
+6. Also note: the ROI band evidence cited in `src/lib/sharp-grade.ts` comments
+   stands, but the CLV corroboration quoted there comes from the
+   pre-`b40fec0` contaminated CLV (Incident 1 below) and should be ignored.
 
 ## Incident 1 — CLV was outcome-contaminated for every pick ever (fixed `b40fec0`)
 

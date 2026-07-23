@@ -35,9 +35,23 @@ fixing commit.
   true closes** (discovered 2026-07-23): odds ingestion writes once and skips
   games that already have a close row, so the value freezes at whatever ESPN
   showed when the game first entered the fetch window — possibly days before
-  tip. ATS/OU grading against these "closes" inherits that error. True book
-  closes exist only in `book_close_*` on picks (captured post-game, when
-  ESPN's pickcenter is frozen at the closing line).
+  tip. Downstream contamination: `team_game_facts` ATS/OU results,
+  `team_trend_snapshots` ATS/OU records, and `fav_dog_role` all grade or
+  derive against these lines. Any analysis that would *increase* the weight
+  of team trends must first fix or bound this error. True book closes exist
+  only in `book_close_*` on picks (captured post-game, when ESPN's
+  pickcenter is frozen at the closing line).
+- **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
+  band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
+  retrospectively on ~160-298 picks across multiple bucketings — in-sample,
+  multiple-comparisons-exposed. The edgeRating dead-zone flip-flopped between
+  the 2026-03-29 and 2026-05-11 audits (opposite conclusions on overlapping
+  data). The CLV corroboration quoted in `src/lib/sharp-grade.ts` comments
+  is pre-`b40fec0` contaminated CLV — ROI bands stand, CLV numbers don't.
+  Clean out-of-sample evidence is n=19 (t≈0.5). Disposition: pre-registered
+  hypotheses graded at the n≈100 re-audit (see
+  docs/audits/2026-07-20-audit-and-hardening.md, planned analyses 4-5) —
+  not re-tuned.
 
 ## Open code issues (deferred, ranked)
 
