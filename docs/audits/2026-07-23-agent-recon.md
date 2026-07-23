@@ -66,7 +66,7 @@ findExistingGame dedups on teams+sport within an inclusive ±6h window with LIMI
 
 ### [P1] Timeout/exception after post_order treated as not-placed: live order can fill while bot forgets it and re-bets
 
-`bot/bot.py:684` — dimension: bot — **status: open**
+`bot/bot.py:684` — dimension: bot — **status: fixed 2026-07-23 bot batch (b8594ae) — OrderStateUnknownError: pessimistic placed-marking + fillStatus='unknown' pick; definitive 4xx rejections stay clean failures**
 
 execute_live_trade submits a FOK market order (`response = client.post_order(signed, OrderType.FOK)`, line 684). If the HTTP call raises after the exchange accepted the order (timeout, dropped response, Cloudflare 403 on the response path), place_bet's except handler (lines 1029-1045) rewrites the trade as `trade["mode"] = "paper"`, sets placed_successfully=False, creates no pick, and does NOT add the conditionId to the placed set. The order may have actually filled on-chain: the position is untracked in D1 and the next poll re-places the same bet (double spend). There is no orderId reconciliation or open-order check anywhere in the file.
 
@@ -76,7 +76,7 @@ execute_live_trade submits a FOK market order (`response = client.post_order(sig
 
 ### [P1] Live fill permanently lost from D1 when the pick-creation POST fails; bot never sends the clientPickId idempotency key the server supports
 
-`bot/bot.py:1098` — dimension: bot — **status: open**
+`bot/bot.py:1098` — dimension: bot — **status: fixed 2026-07-23 bot batch — clientPickId on every trade + pendingReports outbox retried each poll (server dedupe verified idempotent)**
 
 Pick creation happens after the live order. If `post_json(.../api/bot/picks, ...)` (lines 1067-1092) throws, the handler at 1098-1099 only prints `"[bot] failed to log pick:"` — no retry, no queue — yet place_bet still returns True and the conditionId is marked placed, so the fill is never re-reported. A real-money position then exists with no manual_picks row: it is never graded, settled, or counted in ROI/CLV. The server explicitly supports idempotent creation via clientPickId (src/server/api/bot.ts line 2717 passes `payload.clientPickId`; manual-picks.ts lines 554-558 do `SELECT * FROM manual_picks WHERE client_pick_id = ?` before INSERT), but the bot's payload (bot.py 1070-1091) contains no clientPickId, so even a manual retry would duplicate.
 
@@ -86,7 +86,7 @@ Pick creation happens after the live order. If `post_json(.../api/bot/picks, ...
 
 ### [P1] Duplicate-bet guard is only the local state file, saved once per poll after all bets; server candidates never exclude already-picked conditions
 
-`bot/bot.py:1331` — dimension: bot — **status: open**
+`bot/bot.py:1331` — dimension: bot — **status: fixed 2026-07-23 bot batch — state saved after every placement (server-side candidate exclusion still open as defense-in-depth)**
 
 run_loop places up to max_bets live orders inside the for-loop (line 1301) but persists placed/placedMeta only once at the end of the whole iteration (`save_state(config.state_path, state)`, line 1331). A crash/OOM/systemd restart between a live fill and that save loses every placed marker from the poll. The server offers no backstop: listBotCandidates (src/server/api/bot.ts line 1504) builds candidates purely from the sharp-money cache — grep shows zero references to manual_picks anywhere in bot.ts — so on restart the same conditions come back as candidates and the bot re-places real orders (each also creating a duplicate manual_picks row, since inserts are only deduped by the clientPickId the bot doesn't send).
 
@@ -96,7 +96,7 @@ run_loop places up to max_bets live orders inside the for-loop (line 1301) but p
 
 ### [P1] Market FOK order carries no price bound: fills at whatever the book shows, while the low-ROI gate is checked against a stale cached price
 
-`bot/bot.py:677` — dimension: bot — **status: open**
+`bot/bot.py:677` — dimension: bot — **status: fixed 2026-07-23 bot batch — fresh best-ask gate (low-ROI + max-drift 300bps default) and max-price bound on the FOK order**
 
 place_bet gates on `entry.get("sharpSidePrice")` (line 964) — a price computed when the worker cached the candidate (grade.computedAt, potentially many minutes before execution) — including the `float(price) >= config.low_roi_threshold` skip at line 968. execute_live_trade then submits `MarketOrderArgs(token_id=token_id, amount=float(stake), side="BUY", order_type=OrderType.FOK)` (lines 677-682) with no price/limit argument and no fresh midpoint check (the bot fetches no live price at all before ordering). If the market moved between candidate computation and execution — exactly when sharp action is present — the FOK market order fills at the current book price, possibly far above the 0.72 ROI ceiling the strategy just enforced, and the resulting slippage_bps measures decision-price drift rather than execution quality.
 
@@ -179,7 +179,7 @@ captureBookClosesForPicks selects `ORDER BY p.picked_at DESC LIMIT 8` and, when 
 
 ### [P2] stop_on_403 Cloudflare kill switch is dead code: ray-ID regexes contain literal backslashes and can never match
 
-`bot/bot.py:819` — dimension: bot — **status: open**
+`bot/bot.py:819` — dimension: bot — **status: fixed 2026-07-23 bot batch — regex typo; verified against real Cloudflare block HTML**
 
 extract_cloudflare_ray_id uses raw strings with a doubled backslash: `r"Cloudflare Ray ID:\\s*<strong..."` and `r"Cloudflare Ray ID:\\s*([A-Za-z0-9]+)"`. In a raw string `\\s` is regex 'literal backslash then s', not whitespace, so the pattern requires a literal `\` after the colon — real Cloudflare block pages have a space. Verified empirically: both patterns return None against genuine Cloudflare 403 HTML while the single-backslash version matches. Consequence: `trade["cloudflareRayId"]` is never set and the `config.stop_on_403` shutdown path (lines 1041-1044) never fires — the bot keeps hammering an edge that is actively blocking it (the exact failure mode this switch was added for), with every attempt logged as a mode='paper' trade.
 
@@ -189,7 +189,7 @@ extract_cloudflare_ray_id uses raw strings with a doubled backslash: `r"Cloudfla
 
 ### [P2] Gamma token-map fallback queries an arbitrary market and permanently negative-caches, disabling live trading for a condition after one transient CLOB failure
 
-`bot/bot.py:537` — dimension: bot — **status: open**
+`bot/bot.py:537` — dimension: bot — **status: fixed 2026-07-23 bot batch — condition_ids param, outcomes+clobTokenIds parsing, match verification, no empty-result caching**
 
 fetch_token_map calls `gamma-api.polymarket.com/markets?condition_id=...` (lines 537-546). Verified live: Gamma ignores the `condition_id` parameter (a request with condition_id=0x000...0 returned an unrelated market, 'New Rihanna Album before GTA VI'), and Gamma market objects contain no `tokens` field at all (they expose `clobTokenIds`/`outcomes`), so `market.get("tokens") or []` is always empty and the function always returns [] — but first it executes `_token_cache[condition_id] = mapped` (line 577), permanently caching the empty list. Since fetch_clob_token_map checks `if condition_id in _token_cache: return` (line 512) before hitting the CLOB, one transient CLOB /markets error (its `except Exception: data = {}` at 517-518 doesn't cache, but then resolve_token_id falls through to fetch_token_map which does) makes every subsequent live trade for that condition fail with 'token_id not found' until process restart.
 
@@ -199,7 +199,7 @@ fetch_token_map calls `gamma-api.polymarket.com/markets?condition_id=...` (lines
 
 ### [P2] Bankroll is only ever debited — never credited on settlement — so Kelly stakes decay monotonically until the bot silently stops betting
 
-`bot/bot.py:1100` — dimension: bot — **status: open**
+`bot/bot.py:1100` — dimension: bot — **status: partially fixed 2026-07-23 bot batch — floored at 0 with loud warning; credit-on-settlement remains an open design item**
 
 After every placement (paper and live), `state["bankroll"]` is reduced by the stake (lines 1100-1102). Nothing in bot.py ever adds winnings back or reconciles against outcomes — the bot has no settlement path at all. With default sizing (`stake = bankroll * kelly * kelly_fraction`, line 978), the bankroll declines strictly monotonically across the persisted state file, stakes shrink proportionally, and once `stake < config.min_stake` every candidate is skipped with 'skip tiny stake' (lines 982-984) — the bot dies quietly with no error. With BOT_FIXED_STAKE set, stakes are unaffected but bankroll still drains linearly and goes negative in state.json, making any future switch back to Kelly sizing produce negative stakes fed into `min(stake, max_stake)`.
 
@@ -372,7 +372,7 @@ Strategies 1 and 2 of resolvePickedSide assume side_a = away (first-listed team 
 
 ### [P3] Unparseable fill response silently records fillPrice = pick price and fillSlippageBps = 0.0, indistinguishable from a genuine zero-slippage fill
 
-`bot/bot.py:736` — dimension: bot — **status: open**
+`bot/bot.py:736` — dimension: bot — **status: fixed 2026-07-23 bot batch — fillStatus='filled_unparsed', slippage omitted**
 
 parse_fill_from_response falls back to the intended stake/entry price whenever makingAmount/takingAmount are missing or imply a price outside (0, 1.0001] (lines 736-739). report_pick_execution then computes `slippage_bps = round((fill_price - price) / price * 10000, 1)` (lines 802-804) — which is exactly 0.0 in the fallback case — and posts it as a real number. So every fill whose v2 response shape isn't recognized lands in D1 as fillStatus likely 'filled' (line 749-750 defaults to 'filled' when no status field), fillPrice = decision price, fillSlippageBps = 0. This contaminates the planned roi-vs-fill and book_clv fill-price analyses with fake-perfect fills; the KNOWN-ISSUES note that slippage is 'currently ~0' may partly be this artifact rather than measured execution quality. (Sign convention itself is already documented — this is the distinct fake-zero fallback.)
 
@@ -382,7 +382,7 @@ parse_fill_from_response falls back to the intended stake/entry price whenever m
 
 ### [P3] Exponential backoff never escalates: backoff is reset to 0 before the next failure, so every error waits the base delay
 
-`bot/bot.py:1198` — dimension: bot — **status: open**
+`bot/bot.py:1198` — dimension: bot — **status: fixed 2026-07-23 bot batch — resets only after a successful poll**
 
 The backoff sleep sets `backoff = 0.0` after sleeping (line 1198). The except handler computes `backoff * 2 if backoff else config.poll_backoff_base` (lines 1335-1338), but by the time any exception occurs backoff has always been zeroed by the previous iteration's sleep, so it re-arms at the 2s base every time. `poll_backoff_max` (default 120s) is unreachable; a persistently failing upstream (e.g. the Cloudflare-blocked worker this bot has actually experienced) is retried at full poll cadence + 2s forever instead of backing off — compounding the dead stop_on_403 switch.
 
@@ -392,7 +392,7 @@ The backoff sleep sets `backoff = 0.0` after sleeping (line 1198). The except ha
 
 ### [P3] Hourly call budget counts only the candidates poll; pick/execution POSTs and public CLOB/Gamma fetches are unmetered
 
-`bot/bot.py:1214` — dimension: bot — **status: open**
+`bot/bot.py:1214` — dimension: bot — **status: fixed 2026-07-23 bot batch — all authenticated worker calls metered**
 
 `call_timestamps.append(time.time())` (line 1214) is the only place a call is recorded against `max_calls_per_hour`, immediately before fetch_candidates. Each placed bet additionally makes a picks POST plus an execution POST to the same worker (post_json at lines 1067 and 765), and resolve_token_id makes CLOB/Gamma requests — none counted. A poll that places max_bets=5 bets issues ~11 worker requests but consumes 1 budget slot, so the budget (added specifically to pace calls after Cloudflare rate blocks — commit 595c49b) undercounts by up to ~10x during the busiest windows, exactly when triggering edge rate-limiting is most costly.
 

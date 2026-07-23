@@ -85,12 +85,20 @@ requires a sample within 1h of start; bot_candidate_snapshots pruned to 30d
 (151k rows purged); observability enabled; broken migrate script replaced
 with `d1:exec:remote`.
 
+Fixed in the bot batch (2026-07-23 night, bot branch `b8594ae` — restart
+the VPS service to activate): unknown-order-state handling (no more
+double-bet on timeout), clientPickId + pendingReports outbox (fills can't
+be lost from D1), per-bet state persistence, live-price gates + bounded FOK
+orders (BOT_MAX_PRICE_DRIFT_BPS, default 300), working stop_on_403 kill
+switch, non-poisoning Gamma token fallback, honest 'filled_unparsed'
+status, escalating backoff, full call metering. Bankroll floored at 0 with
+warning — credit-on-settlement still an open design item.
+
 Still open, in rough fix order:
 
-1. Bot (fix on `main` branch): order timeout treated as not-placed (can
-   double-bet), fills lost when pick POST fails (no clientPickId sent),
-   duplicate-bet guard is local-state only, market FOK orders have no price
-   bound.
+1. Bot follow-ups: bankroll credit-on-settlement (Kelly sizing decays
+   monotonically until then — use BOT_FIXED_STAKE meanwhile); server-side
+   already-picked exclusion in /api/bot/candidates as defense-in-depth.
 2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
 3. Trend-snapshot timing (recon P2s): as_of_time is game START (leaks
