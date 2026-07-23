@@ -238,7 +238,12 @@ function resolvePickResult(input: {
 	const outcomes = parseGammaList(input.market.outcomes);
 	const outcomePrices = parseGammaPrices(input.market.outcomePrices);
 
-	if (!resolved && resolution === null) {
+	// Loose == also catches undefined: live Gamma responses omit `resolved`,
+	// `resolution`, and `umaResolutionStatus` entirely, so a strict null check
+	// never fires and every open market would fall through to the price
+	// fallback below (2026-07-23 recon P0: in-progress blowouts at >=0.98
+	// settled mid-game and comebacks left permanently wrong outcomes).
+	if (!resolved && resolution == null) {
 		return null;
 	}
 
@@ -274,8 +279,9 @@ function resolvePickResult(input: {
 	}
 
 	// Fallback: some sports markets may have null resolution while outcome prices
-	// already reflect the winner (1/0 or near-1/near-0).
-	if (!resolvedSide && outcomePrices.length >= 2) {
+	// already reflect the winner (1/0 or near-1/near-0). Only for closed
+	// markets — a live in-game price can touch the thresholds and come back.
+	if (!resolvedSide && resolved && outcomePrices.length >= 2) {
 		const priceA = outcomePrices[0] ?? 0;
 		const priceB = outcomePrices[1] ?? 0;
 		const winThreshold = 0.98;

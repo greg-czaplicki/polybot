@@ -756,11 +756,14 @@ export async function settleManualPick(
 	const settledAt = input.status === "pending" ? null : nowUnixSeconds();
 	const whereClause = input.id ? "id = ?" : "client_pick_id = ?";
 	const whereValue = input.id ?? input.clientPickId ?? null;
+	// Only pending picks may be settled here: without the status guard a
+	// second call (e.g. the outcome endpoint after the cron already settled)
+	// would null out the genuine close_price/clv this row already carries.
 	await run(
 		db,
 		`UPDATE manual_picks
      SET status = ?, settled_at = ?, resolved_outcome = ?, close_price = ?, roi = ?, clv = ?
-     WHERE ${whereClause}`,
+     WHERE ${whereClause} AND status = 'pending'`,
 		input.status,
 		settledAt,
 		input.resolvedOutcome ?? null,
