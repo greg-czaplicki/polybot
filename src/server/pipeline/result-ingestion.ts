@@ -125,14 +125,20 @@ async function fetchEspnScoreboard(
 }
 
 /**
- * Formats a unix timestamp (seconds) as YYYYMMDD in UTC.
+ * Formats a unix timestamp (seconds) as YYYYMMDD in US-Eastern time.
+ * ESPN scoreboards group games by their US-Eastern slate date; a 7pm ET
+ * game is next-day UTC, so a UTC-keyed lookup never finds night games.
  */
-function formatDateUTC(unixSeconds: number): string {
-	const d = new Date(unixSeconds * 1000);
-	const yyyy = d.getUTCFullYear();
-	const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-	const dd = String(d.getUTCDate()).padStart(2, "0");
-	return `${yyyy}${mm}${dd}`;
+function formatDateEastern(unixSeconds: number): string {
+	// en-CA locale renders as YYYY-MM-DD
+	return new Intl.DateTimeFormat("en-CA", {
+		timeZone: "America/New_York",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	})
+		.format(new Date(unixSeconds * 1000))
+		.replace(/-/g, "");
 }
 
 /**
@@ -271,7 +277,7 @@ export async function finalizeCompletedGames(
 		// Group by date string for batched ESPN calls
 		const byDate = new Map<string, Game[]>();
 		for (const game of eligible) {
-			const dateStr = formatDateUTC(game.gameTime as number);
+			const dateStr = formatDateEastern(game.gameTime as number);
 			const group = byDate.get(dateStr);
 			if (group) {
 				group.push(game);

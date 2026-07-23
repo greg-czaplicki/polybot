@@ -66,6 +66,7 @@ export interface ManualPickRow {
 	book_spread_line?: number | null;
 	book_total_line?: number | null;
 	book_close_captured_at?: number | null;
+	book_close_source?: string | null;
 	book_close_ml_side?: number | null;
 	book_close_ml_opp?: number | null;
 	book_close_fair_prob?: number | null;
@@ -132,6 +133,7 @@ export interface ManualPickEntry {
 	bookSpreadLine?: number;
 	bookTotalLine?: number;
 	bookCloseCapturedAt?: number;
+	bookCloseSource?: string;
 	bookCloseMlSide?: number;
 	bookCloseMlOpp?: number;
 	bookCloseFairProb?: number;
@@ -532,6 +534,7 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		bookSpreadLine: row.book_spread_line ?? undefined,
 		bookTotalLine: row.book_total_line ?? undefined,
 		bookCloseCapturedAt: row.book_close_captured_at ?? undefined,
+		bookCloseSource: row.book_close_source ?? undefined,
 		bookCloseMlSide: row.book_close_ml_side ?? undefined,
 		bookCloseMlOpp: row.book_close_ml_opp ?? undefined,
 		bookCloseFairProb: row.book_close_fair_prob ?? undefined,

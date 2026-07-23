@@ -83,8 +83,28 @@ const serverEntry = {
 			}
 		}
 
+		// Mutating canonical ops require the bot bearer key. Fails closed if the
+		// key is unset. /_pipeline/trigger stays open: the UI calls it from the
+		// browser and it only pokes the same DO tick the cron fires every 2 min.
+		const requireOpsAuth = (): Response | null => {
+			const apiKey = env.BOT_API_KEY;
+			const authorization = request.headers.get("Authorization") ?? "";
+			const token = authorization.toLowerCase().startsWith("bearer ")
+				? authorization.slice(7).trim()
+				: null;
+			if (!apiKey || !token || token !== apiKey) {
+				return new Response(JSON.stringify({ error: "unauthorized" }), {
+					status: 401,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return null;
+		};
+
 		// Trigger manual canonical sync
 		if (url.pathname === "/_canonical/trigger" && request.method === "POST") {
+			const denied = requireOpsAuth();
+			if (denied) return denied;
 			try {
 				const body = (await request.json().catch(() => ({}))) as {
 					skipSeeding?: boolean;
@@ -134,6 +154,8 @@ const serverEntry = {
 			url.pathname === "/_canonical/backfill-snapshots" &&
 			request.method === "POST"
 		) {
+			const denied = requireOpsAuth();
+			if (denied) return denied;
 			try {
 				const sportTagParam = url.searchParams.get("sportTag") ?? undefined;
 				const limitParam = Number(url.searchParams.get("limit"));
@@ -161,6 +183,8 @@ const serverEntry = {
 			url.pathname === "/_canonical/backfill-picks" &&
 			request.method === "POST"
 		) {
+			const denied = requireOpsAuth();
+			if (denied) return denied;
 			try {
 				const modeParam = url.searchParams.get("mode");
 				const repairWindowParam = Number(

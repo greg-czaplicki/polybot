@@ -62,21 +62,26 @@ live price extremes — guard + closed-market requirement + settle status
 guard; 9 exposed historical picks re-verified clean against Gamma finals).
 Highest-priority still open, in rough fix order:
 
-1. `detectBetType` misses "vs." (dot) so moneyline picks classify as
-   `other` — kills bet_type analytics AND the book-anchor fair-prob path.
-2. `resolvePickedSide`/enrichment hard-maps side A→away, side B→home for all
+Fixed in batch 1 (2026-07-23 afternoon): detectBetType word-boundary rewrite
+(140 historical picks relabeled; bet_type now clean), canonical ops endpoints
+gated by BOT_API_KEY (`/_pipeline/trigger` deliberately open — UI calls it,
+equivalent to the cron tick), result-ingestion scoreboard lookups keyed by
+US-Eastern date, book_source derived from actual provider (+
+book_close_source, migration 0019), close-sweep livelock (RANDOM order +
+14-day give-up).
+
+Still open, in rough fix order:
+
+1. `resolvePickedSide`/enrichment hard-maps side A→away, side B→home for all
    market types — inverts team linkage on spread markets, fabricates it on
    totals.
-3. Bot (fix on `main` branch): order timeout treated as not-placed (can
+2. Bot (fix on `main` branch): order timeout treated as not-placed (can
    double-bet), fills lost when pick POST fails (no clientPickId sent),
    duplicate-bet guard is local-state only, market FOK orders have no price
    bound.
-4. Unauthenticated pipeline ops endpoints in server.ts (force-trigger,
-   backfill).
-5. ESPN scoreboard queried by UTC date but ESPN slates are US-Eastern —
-   night games never finalize via the straggler path; doubleheaders collapse
-   into one game (6h dedup window) and can stamp the wrong espn_event_id.
-6. Shadow-window summary silently limited to picks with surviving
+3. MLB doubleheaders collapse into one game (6h dedup window) and can stamp
+   the wrong espn_event_id — poisons book anchors for those games.
+4. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
 
 ## Open code issues (deferred, ranked)

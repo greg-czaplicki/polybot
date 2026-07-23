@@ -46,7 +46,7 @@ resolvePickResult's guard `if (!resolved && resolution === null) return null;` n
 
 ### [P1] Moneyline picks classified as 'other' — entire book de-vig/EV/CLV path never executes
 
-`src/lib/markets.ts:61` — dimension: book-anchor — **status: open**
+`src/lib/markets.ts:61` — dimension: book-anchor — **status: fixed 2026-07-23 batch 1 — word-boundary matching incl. "vs."; 140 historical picks relabeled**
 
 detectBetType only returns 'moneyline' when the haystack contains ' vs ' or ' at ' (space-delimited), but every Polymarket moneyline title uses 'vs.' with a period (e.g. 'Chicago White Sox vs. Texas Rangers'), so ML picks get bet_type='other'. Both book-anchor capture points gate the de-vig on betType === 'moneyline' (src/server/pipeline/book-odds.ts:148 pick-time, :227 close sweep), so book_ml_side/book_ml_opp/book_fair_prob/book_ev/book_close_ml_*/book_close_fair_prob/book_clv will NEVER be populated for any pick — the headline metrics of yesterday's deploy are structurally dead.
 
@@ -116,7 +116,7 @@ resolvePickedSide strategy 1 maps pickedLabel 'a' -> awayTeamId/venue_role='away
 
 ### [P1] Unauthenticated pipeline/canonical ops endpoints, including force-trigger and full pick backfill
 
-`src/server.ts:42` — dimension: ops — **status: open**
+`src/server.ts:42` — dimension: ops — **status: mostly fixed 2026-07-23 batch 1 — canonical trigger/backfills gated by BOT_API_KEY bearer (fail closed); /_pipeline/trigger deliberately left open (UI calls it; equivalent to the 2-min cron tick)**
 
 The worker handles POST /_pipeline/trigger, POST /_canonical/trigger, POST /_canonical/backfill-snapshots, and POST /_canonical/backfill-picks before the auth-carrying app handler, with no credential check of any kind. /_pipeline/trigger forwards the raw request body to the DO tick, so anyone can POST {"force":true} to bypass the 2-minute cooldown and re-queue the full market batch repeatedly (each re-run INSERTs new sharp_money_history rows and burns the shared Data-API/Gamma subrequest budget — the exact duplicate-history failure the 2026-07-20 hardening fixed for queue acks). /_canonical/backfill-picks?mode=full runs backfillManualPicks in full mode, which rewrites linkage fields (and per KNOWN-ISSUES overwrites spread_line/total_line) on every pick in manual_picks.
 
@@ -126,7 +126,7 @@ The worker handles POST /_pipeline/trigger, POST /_canonical/trigger, POST /_can
 
 ### [P1] detectBetType substring matching misclassifies bet_type (e.g. 'Thunder' contains 'under' -> total), corrupting persisted bet-type analytics
 
-`src/lib/markets.ts:26` — dimension: scoring — **status: open**
+`src/lib/markets.ts:26` — dimension: scoring — **status: fixed 2026-07-23 batch 1 — word-boundary regexes; 140 historical picks relabeled (134 other→moneyline, 6 →prop)**
 
 detectBetType uses naive substring .includes() over title+outcome+slug with keyword lists containing common substrings, and total/future/spread checks run before the moneyline check. Any market whose text contains 'under' as a substring — e.g. every Oklahoma City Thunder game ('Thunder vs. Pacers') — is classified 'total' even when it is a moneyline. TOTAL_KEYWORDS also contains regex-syntax literals ('goals?', 'points?', 'runs?') that can never match via .includes(), showing the list was written as regex but used as literals. SPREAD_KEYWORDS contains 'line', so any text containing 'moneyline' returns 'spread' (the moneyline branch at line 61 is unreachable for it); FUTURE_KEYWORDS ('winner', 'finals', 'title') fire before the total/moneyline checks on playoff-named events. This detected value is persisted as manual_picks.bet_type at pick creation (src/server/api/manual-picks.ts:411 'const betType = detectBetType({ title }) ?? null;') and in backfill (src/server/pipeline/pick-backfill.ts:211), then consumed by canonical analytics (src/server/api/canonical-analytics.ts:408 'betType: pick.bet_type') and canonical feature vectors (src/server/domain/canonical-features.ts:280), where scoreOpportunity routes betType==='total' through OU-only scorers (src/server/domain/opportunity-scoring.ts:97-115) — so misclassified picks are scored by the wrong scorer family in retrospectives. Meanwhile the bot's own classifier getMarketTypeLabel (src/server/api/bot.ts:689) classifies the same Thunder title correctly as moneyline (it requires 'o/u'/'over/under'/'total'), so decisionSnapshot.marketType and the bet_type column disagree for the same pick; grade summaries prefer the snapshot (src/server/repositories/manual-picks.ts:1146-1167) while canonical analytics use the column. The totals-vs-moneyline split is planned analysis #2 of the n≈100 re-audit, so this directly contaminates a decision-driving metric.
 
@@ -159,7 +159,7 @@ getManualPicksShadowWindowSummary skips any pick whose condition has no sharp_mo
 
 ### [P2] book_source hardcoded 'espn_draftkings' even when the pickcenter entry is a fallback non-DK provider
 
-`src/server/pipeline/book-odds.ts:111` — dimension: book-anchor — **status: open**
+`src/server/pipeline/book-odds.ts:111` — dimension: book-anchor — **status: fixed 2026-07-23 batch 1 — source derived from actual provider; book_close_source added (migration 0019)**
 
 captureBookAnchorForGame sets source = 'espn_draftkings' unconditionally whenever the live ESPN fetch yields any pickcenter entry, but selectPickcenterEntry falls back to summary.pickcenter[0] (any provider) when DraftKings is absent. The provider is never recorded, so book_* rows can silently mix books; worse, pick-time and close-time captures can come from DIFFERENT providers, making book_clv a cross-book comparison with no trace in the data.
 
@@ -169,7 +169,7 @@ captureBookAnchorForGame sets source = 'espn_draftkings' unconditionally wheneve
 
 ### [P2] Close sweep livelock: permanently-failing ESPN fetches are retried forever and starve older picks
 
-`src/server/pipeline/book-odds.ts:208` — dimension: book-anchor — **status: open**
+`src/server/pipeline/book-odds.ts:208` — dimension: book-anchor — **status: fixed 2026-07-23 batch 1 — RANDOM() candidate order + 14-day give-up stamp**
 
 captureBookClosesForPicks selects `ORDER BY p.picked_at DESC LIMIT 8` and, when fetchEspnSummary returns null (any non-OK HTTP status, including permanent 404s from stale/reissued event ids — ESPN reissues event ids for rescheduled/makeup games, e.g. the 4018987xx makeup ids observed on 2026-07-22), the pick is left unstamped with no retry counter or backoff. Such picks are re-selected every scheduled tick forever, burning up to 8 subrequests/tick; once the number of permanently-failing settled picks reaches the limit (8), every older unstamped pick is starved of book-close capture indefinitely.
 
@@ -229,7 +229,7 @@ getLineInputsFromCache matches a cache market to a canonical game accepting EITH
 
 ### [P2] Straggler finalization queries the ESPN scoreboard by UTC date of game_time; evening US games live on the previous ET slate and are never found
 
-`src/server/pipeline/result-ingestion.ts:274` — dimension: data-integrity — **status: open**
+`src/server/pipeline/result-ingestion.ts:274` — dimension: data-integrity — **status: fixed 2026-07-23 batch 1 — same Eastern-date fix**
 
 finalizeCompletedGames groups unfinalized games by formatDateUTC(game.gameTime) and fetches scoreboard?dates=YYYYMMDD for that UTC date. ESPN's scoreboard dates parameter groups events by the US/Eastern slate date. Any game starting 00:00-04:00 UTC (8pm ET through West-coast late games — a large share of MLB/NBA slates) has a UTC date one day after its ESPN slate date, so the fetched scoreboard doesn't contain it and findMatchingScore returns null every cycle ('not_found'). These games are exactly the ones most likely to need this straggler path (espn-schedule ingestion covers most games via its own -3..+1 date loop with per-event startDate matching, which is why the bug is masked). Games that depend on this path (e.g. polymarket-created games espn-schedule never matched) stay unfinalized permanently -> no team_game_facts -> systematic underrepresentation of late/West-coast games in trend windows (survivorship species).
 
@@ -239,7 +239,7 @@ finalizeCompletedGames groups unfinalized games by formatDateUTC(game.gameTime) 
 
 ### [P2] result-ingestion queries ESPN scoreboard by UTC date, but ESPN groups games by US-Eastern date — night games can never be finalized by the straggler path
 
-`src/server/pipeline/result-ingestion.ts:130` — dimension: ingestion — **status: open**
+`src/server/pipeline/result-ingestion.ts:130` — dimension: ingestion — **status: fixed 2026-07-23 batch 1 — straggler path now keys scoreboard fetches by US-Eastern date**
 
 finalizeCompletedGames computes the scoreboard date with formatDateUTC(game.gameTime) and fetches exactly that one date, but ESPN's scoreboard `dates=YYYYMMDD` parameter is keyed to the US-Eastern game day. Any game starting 00:00-04:59 UTC (i.e., every US prime-time game, ~8pm ET and later) has a UTC date one day ahead of its ESPN date, so the fetch hits the wrong day's scoreboard and findMatchingScore returns not_found forever. espn-schedule-ingestion masks this for games finalized within its 3-day lookback, but any straggler older than that which is a night game is permanently unfinalizable — no score, no team_game_facts, no trend contribution.
 
@@ -279,7 +279,7 @@ The whole market-discovery function is wrapped in a catch that returns { markets
 
 ### [P2] Book-anchor lines are stamped 'espn_draftkings' even when the DraftKings provider is absent and a different sportsbook's odds are used
 
-`src/server/pipeline/book-odds.ts:111` — dimension: ingestion — **status: open**
+`src/server/pipeline/book-odds.ts:111` — dimension: ingestion — **status: fixed 2026-07-23 batch 1 — same provider-derivation fix**
 
 selectPickcenterEntry falls back to summary.pickcenter[0] (any provider ESPN lists) when DraftKings is missing, but every consumer hardcodes the source label: captureBookAnchorForGame sets source='espn_draftkings' regardless of which provider was selected, and ingestOddsForGames writes game_lines rows with source 'espn_draftkings' the same way. captureBookClosesForPicks records no provider at all. book_clv — designated in the 2026-07-20 audit as the primary skill metric for the n≈100 re-audit — can therefore compare a pick-time DraftKings line against a close from a different book (or vice versa), injecting cross-book vig/line differences into the metric with no way to filter them out afterward.
 

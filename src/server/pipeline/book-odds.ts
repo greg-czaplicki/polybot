@@ -55,6 +55,14 @@ function toFiniteOrNull(value: number | null | undefined): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** Source label reflecting the provider actually used, not an assumption. */
+function bookSourceForEntry(entry: EspnPickcenterEntry): string {
+	const name = entry.provider?.name?.toLowerCase() ?? "";
+	if (name.includes("draft")) return "espn_draftkings";
+	const slug = name.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+	return slug ? `espn_${slug}` : "espn_unknown";
+}
+
 function oddsFromPickcenter(entry: EspnPickcenterEntry): BookOdds {
 	return {
 		homeSpread: toFiniteOrNull(entry.spread),
@@ -114,7 +122,10 @@ export async function captureBookAnchorForGame(
 	if (game.espn_event_id) {
 		const summary = await fetchEspnSummary(game.sport_tag, game.espn_event_id);
 		const entry = summary ? selectPickcenterEntry(summary) : null;
-		if (entry) odds = oddsFromPickcenter(entry);
+		if (entry) {
+			odds = oddsFromPickcenter(entry);
+			source = bookSourceForEntry(entry);
+		}
 	}
 
 	if (!odds) {
@@ -180,35 +191,52 @@ export async function captureBookClosesForPicks(
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 25)
 			: 8;
+	// RANDOM() ordering prevents livelock: with a fixed order, a handful of
+	// picks whose ESPN fetch permanently fails would occupy the LIMIT window
+	// every sweep and starve everything behind them.
 	const rows = await all<{
 		id: string;
 		price: number | null;
 		venue_role: string | null;
 		bet_type: string | null;
 		status: string;
+		picked_at: number;
 		espn_event_id: string;
 		sport_tag: string;
 	}>(
 		db,
-		`SELECT p.id, p.price, p.venue_role, p.bet_type, p.status,
+		`SELECT p.id, p.price, p.venue_role, p.bet_type, p.status, p.picked_at,
 		        g.espn_event_id, g.sport_tag
 		 FROM manual_picks p
 		 JOIN games g ON g.id = p.game_id
 		 WHERE p.status != 'pending'
 		   AND p.book_close_captured_at IS NULL
 		   AND g.espn_event_id IS NOT NULL
-		 ORDER BY p.picked_at DESC
+		 ORDER BY RANDOM()
 		 LIMIT ?`,
 		limit,
 	);
 	if (rows.length === 0) return { checked: 0, updated: 0 };
 
+	const GIVE_UP_AFTER_SECONDS = 14 * 24 * 60 * 60;
 	let updated = 0;
 	for (const row of rows) {
+		const now = nowUnixSeconds();
+		// A pick this old whose close still isn't captured is unrecoverable
+		// (ESPN summaries age out); stamp it so it stops consuming fetches.
+		if (now - row.picked_at > GIVE_UP_AFTER_SECONDS) {
+			await run(
+				db,
+				`UPDATE manual_picks SET book_close_captured_at = ? WHERE id = ?`,
+				now,
+				row.id,
+			);
+			updated += 1;
+			continue;
+		}
 		const summary = await fetchEspnSummary(row.sport_tag, row.espn_event_id);
 		// Network/API failure: leave untouched so the next sweep retries.
 		if (!summary) continue;
-		const now = nowUnixSeconds();
 		const entry = selectPickcenterEntry(summary);
 		if (!entry) {
 			// Pickcenter absent post-game is permanent; stamp captured_at with
@@ -240,6 +268,7 @@ export async function captureBookClosesForPicks(
 			db,
 			`UPDATE manual_picks SET
 				book_close_captured_at = ?,
+				book_close_source = ?,
 				book_close_ml_side = ?,
 				book_close_ml_opp = ?,
 				book_close_fair_prob = ?,
@@ -248,6 +277,7 @@ export async function captureBookClosesForPicks(
 				book_clv = ?
 			 WHERE id = ?`,
 			now,
+			bookSourceForEntry(entry),
 			mapped?.mlSide ?? null,
 			mapped?.mlOpp ?? null,
 			closeFairProb,

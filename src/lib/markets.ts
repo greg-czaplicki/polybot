@@ -23,9 +23,13 @@ const FUTURE_KEYWORDS = [
   'title',
 ]
 
-const TOTAL_KEYWORDS = ['total', 'over', 'under', 'o/u', 'goals?', 'points?', 'runs?']
-const SPREAD_KEYWORDS = ['spread', 'handicap', 'line', ' -', ' +']
-const PROP_KEYWORDS = ['most', 'fewest', 'top', 'passes', 'yards', 'home runs', 'strikeouts']
+// Word-boundary matching: bare substrings misclassified real titles —
+// 'under' matched "Thunder", 'line' matched "moneyline", and ' vs ' missed
+// the "vs." (dot) form every moneyline title actually uses.
+const TOTAL_RE = /\b(?:total|over|under|o\/u)\b/
+const SPREAD_RE = /\b(?:spread|handicap|line)\b|[\s(][+-]\d/
+const MONEYLINE_RE = /\bvs\b|\bat\b|moneyline/
+const PROP_KEYWORDS = ['most', 'fewest', 'top', 'passes', 'yards', 'home runs', 'strikeouts', 'both teams to score']
 const PARLAY_KEYWORDS = ['parlay']
 
 function normalize(value?: string | null) {
@@ -46,11 +50,11 @@ export function detectBetType(descriptor: MarketDescriptor): BetType {
     return 'future'
   }
 
-  if (TOTAL_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
+  if (TOTAL_RE.test(haystack)) {
     return 'total'
   }
 
-  if (SPREAD_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
+  if (SPREAD_RE.test(haystack)) {
     return 'spread'
   }
 
@@ -58,7 +62,7 @@ export function detectBetType(descriptor: MarketDescriptor): BetType {
     return 'prop'
   }
 
-  if (haystack.includes(' vs ') || haystack.includes(' at ') || haystack.includes('moneyline')) {
+  if (MONEYLINE_RE.test(haystack)) {
     return 'moneyline'
   }
 
