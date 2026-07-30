@@ -160,6 +160,7 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">W-L</th>
 								<th className="pb-2 pr-4">Units</th>
 								<th className="pb-2 pr-4">ROI</th>
+								<th className="pb-2 pr-4">Avg CLV</th>
 								<th className="pb-2">Avg mins-to-start</th>
 							</tr>
 						</thead>
@@ -185,6 +186,9 @@ function ShadowBookPage() {
 									</td>
 									<td className={`py-2 pr-4 ${roiClass(r.roiPct)}`}>
 										{formatRoi(r.roiPct)}
+									</td>
+									<td className={`py-2 pr-4 ${roiClass(r.avgClvPct)}`}>
+										{formatRoi(r.avgClvPct)}
 									</td>
 									<td className="py-2 text-ink-55">
 										{r.avgMinutesToStart !== null
@@ -222,7 +226,8 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">Pending</th>
 								<th className="pb-2 pr-4">W-L</th>
 								<th className="pb-2 pr-4">Units</th>
-								<th className="pb-2">ROI</th>
+								<th className="pb-2 pr-4">ROI</th>
+								<th className="pb-2">Avg CLV</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -246,14 +251,17 @@ function ShadowBookPage() {
 									<td className={`py-2 pr-4 ${roiClass(r.units)}`}>
 										{formatUnits(r.units)}
 									</td>
-									<td className={`py-2 ${roiClass(r.roiPct)}`}>
+									<td className={`py-2 pr-4 ${roiClass(r.roiPct)}`}>
 										{formatRoi(r.roiPct)}
+									</td>
+									<td className={`py-2 ${roiClass(r.avgClvPct)}`}>
+										{formatRoi(r.avgClvPct)}
 									</td>
 								</tr>
 							))}
 							{bySport.length === 0 && !isLoading ? (
 								<tr>
-									<td colSpan={7} className="py-4 text-ink-55">
+									<td colSpan={8} className="py-4 text-ink-55">
 										No shadow candidates yet.
 									</td>
 								</tr>

@@ -16,6 +16,7 @@ export interface ShadowReasonSummary {
 	pushes: number;
 	units: number | null;
 	roiPct: number | null;
+	avgClvPct: number | null;
 	avgMinutesToStart: number | null;
 }
 
@@ -29,6 +30,7 @@ export interface ShadowSportSummary {
 	pushes: number;
 	units: number | null;
 	roiPct: number | null;
+	avgClvPct: number | null;
 }
 
 export interface ShadowRowSummary {
@@ -58,6 +60,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			losses: number;
 			pushes: number;
 			units: number | null;
+			avg_clv: number | null;
 			avg_mins: number | null;
 		}>(
 			db,
@@ -68,6 +71,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'loss') AS losses,
 			        SUM(status = 'push') AS pushes,
 			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
 			        AVG(minutes_to_start) AS avg_mins
 			 FROM shadow_candidates
 			 GROUP BY reject_reason
@@ -86,6 +90,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 				units: r.units,
 				roiPct:
 					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
+				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
 				avgMinutesToStart: r.avg_mins,
 			};
 		});
@@ -99,6 +104,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			losses: number;
 			pushes: number;
 			units: number | null;
+			avg_clv: number | null;
 		}>(
 			db,
 			`SELECT reject_reason,
@@ -108,7 +114,8 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'win') AS wins,
 			        SUM(status = 'loss') AS losses,
 			        SUM(status = 'push') AS pushes,
-			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units
+			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv
 			 FROM shadow_candidates
 			 GROUP BY reject_reason, sport_tag
 			 ORDER BY reject_reason ASC, total DESC`,
@@ -127,6 +134,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 				units: r.units,
 				roiPct:
 					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
+				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
 			};
 		});
 

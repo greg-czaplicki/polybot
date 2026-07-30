@@ -23,7 +23,11 @@ import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
-import { listSharpMoneyCache } from "../repositories/sharp-money";
+import { findPriceAtOrBefore } from "../repositories/manual-picks";
+import {
+	listSharpMoneyCache,
+	listSharpMoneyHistoryByConditionIds,
+} from "../repositories/sharp-money";
 
 export interface ShadowCandidateInput {
 	conditionId: string;
@@ -214,6 +218,27 @@ export async function settleShadowCandidates(
 	);
 	if (rows.length === 0) return { checked: 0, updated: 0 };
 
+	// Close prices from pre-event history (same rule as real picks: last
+	// sample within 1h of start, NEVER post-resolution outcome prices).
+	// History prunes at 7 days, so this must happen at settlement time.
+	let historyByConditionId: Awaited<
+		ReturnType<typeof listSharpMoneyHistoryByConditionIds>
+	> = {};
+	const eventTimes = rows
+		.map((r) => r.event_time)
+		.filter((t): t is number => typeof t === "number");
+	if (eventTimes.length > 0) {
+		try {
+			historyByConditionId = await listSharpMoneyHistoryByConditionIds(
+				db,
+				[...new Set(rows.map((r) => r.condition_id))],
+				Math.min(...eventTimes) - 4 * 60 * 60,
+			);
+		} catch (error) {
+			console.warn("[shadow-book] close-price history lookup failed:", error);
+		}
+	}
+
 	let updated = 0;
 	for (const row of rows) {
 		const market = await fetchGammaMarket(row.condition_id);
@@ -224,14 +249,28 @@ export async function settleShadowCandidates(
 			market,
 		});
 		if (!resolution) continue;
+		const history = historyByConditionId[row.condition_id];
+		const closePrice =
+			row.event_time !== null &&
+			history &&
+			history.length > 0 &&
+			(row.sharp_side === "A" || row.sharp_side === "B")
+				? findPriceAtOrBefore(history, row.sharp_side, row.event_time, 3600)
+				: null;
+		const clv =
+			resolution.status !== "push" && closePrice !== null
+				? closePrice - row.price
+				: null;
 		await run(
 			db,
 			`UPDATE shadow_candidates
-			 SET status = ?, resolved_outcome = ?, roi = ?, settled_at = ?
+			 SET status = ?, resolved_outcome = ?, roi = ?, close_price = ?, clv = ?, settled_at = ?
 			 WHERE id = ?`,
 			resolution.status,
 			resolution.resolvedOutcome ?? null,
 			resolution.roi ?? null,
+			closePrice,
+			clv,
 			now,
 			row.id,
 		);
