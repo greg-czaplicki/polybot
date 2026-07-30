@@ -42,6 +42,13 @@ branch only exists on GitHub because of that push (first pushed 2026-07-21).
 ## Operational Gotchas
 
 - Always query D1 with `--remote`; the local miniflare DB is empty.
+- Apply schema changes with `wrangler d1 migrations apply polywhaler-db
+  --remote` (never `execute --file` for migrations — it bypasses the
+  `d1_migrations` ledger, which is how the ledger desynced before its
+  2026-07-30 repair). There is no staging DB: before writing a migration,
+  remember SQLite `ALTER TABLE ADD COLUMN` is not idempotent, so a file
+  must never be edited after it has been applied — add a new numbered file
+  instead.
 - `manual_picks` timestamps are **seconds**; `canonical_sync_runs` are
   **milliseconds**.
 - Stored `clv` is valid only for picks settled after 2026-07-20; earlier
