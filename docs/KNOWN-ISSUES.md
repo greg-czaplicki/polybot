@@ -70,6 +70,18 @@ fixing commit.
   of team trends must first fix or bound this error. True book closes exist
   only in `book_close_*` on picks (captured post-game, when ESPN's
   pickcenter is frozen at the closing line).
+- **Hard gates were unfalsifiable before 2026-07-30 (shadow book).** All 318
+  picks settled before then are 1–3h — timing windows, sport excludes, and
+  the low_conviction filter produced only silence, so no gate could be
+  proven right or wrong from the pick book. From 2026-07-30 the
+  `shadow_candidates` table records every policy-gate reject at first sight
+  and settles it via the pick resolution path without betting; audit with
+  ROI grouped by `reject_reason`. Gate performance claims for periods
+  before 2026-07-30 have no counterfactual data. Related in-sample finding
+  (2026-07-30 audit, multiple-comparisons-exposed, pre-registered for the
+  n≈100 re-audit, NOT acted on): v4 picks with zero warnings were 18–8
+  (+41.5%, t=2.17) vs break-even with ≥1 warning; `sharpSideValueRatio`
+  quartiles showed no gradient.
 - **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
   band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
   retrospectively on ~160-298 picks across multiple bucketings — in-sample,
