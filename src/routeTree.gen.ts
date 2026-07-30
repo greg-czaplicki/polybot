@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as StrategyRouteImport } from './routes/strategy'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
+import { Route as ShadowRouteImport } from './routes/shadow'
 import { Route as RuntimeRouteImport } from './routes/runtime'
 import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as LoginRouteImport } from './routes/login'
@@ -34,6 +35,11 @@ const StatsRoute = StatsRouteImport.update({
 const SharpRoute = SharpRouteImport.update({
   id: '/sharp',
   path: '/sharp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ShadowRoute = ShadowRouteImport.update({
+  id: '/shadow',
+  path: '/shadow',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RuntimeRoute = RuntimeRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
+  '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
@@ -98,6 +105,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
+  '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
@@ -112,6 +120,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
+  '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
@@ -127,6 +136,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/opportunities'
     | '/runtime'
+    | '/shadow'
     | '/sharp'
     | '/stats'
     | '/strategy'
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/opportunities'
     | '/runtime'
+    | '/shadow'
     | '/sharp'
     | '/stats'
     | '/strategy'
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/opportunities'
     | '/runtime'
+    | '/shadow'
     | '/sharp'
     | '/stats'
     | '/strategy'
@@ -167,6 +179,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   OpportunitiesRoute: typeof OpportunitiesRoute
   RuntimeRoute: typeof RuntimeRoute
+  ShadowRoute: typeof ShadowRoute
   SharpRoute: typeof SharpRouteWithChildren
   StatsRoute: typeof StatsRoute
   StrategyRoute: typeof StrategyRoute
@@ -193,6 +206,13 @@ declare module '@tanstack/react-router' {
       path: '/sharp'
       fullPath: '/sharp'
       preLoaderRoute: typeof SharpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/shadow': {
+      id: '/shadow'
+      path: '/shadow'
+      fullPath: '/shadow'
+      preLoaderRoute: typeof ShadowRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/runtime': {
@@ -272,6 +292,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   OpportunitiesRoute: OpportunitiesRoute,
   RuntimeRoute: RuntimeRoute,
+  ShadowRoute: ShadowRoute,
   SharpRoute: SharpRouteWithChildren,
   StatsRoute: StatsRoute,
   StrategyRoute: StrategyRoute,
