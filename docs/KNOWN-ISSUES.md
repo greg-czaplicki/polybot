@@ -60,16 +60,20 @@ fixing commit.
   totals/spread picks carry only the book's line numbers. `book_clv` =
   de-vigged book close − pick price (positive = beat the close); the
   fill-price variant is derivable as `book_close_fair_prob − fill_price`.
-- **`game_lines` `snapshot_type='close'` rows are first-observed lines, not
-  true closes** (discovered 2026-07-23): odds ingestion writes once and skips
-  games that already have a close row, so the value freezes at whatever ESPN
-  showed when the game first entered the fetch window — possibly days before
-  tip. Downstream contamination: `team_game_facts` ATS/OU results,
-  `team_trend_snapshots` ATS/OU records, and `fav_dog_role` all grade or
-  derive against these lines. Any analysis that would *increase* the weight
-  of team trends must first fix or bound this error. True book closes exist
-  only in `book_close_*` on picks (captured post-game, when ESPN's
-  pickcenter is frozen at the closing line).
+- **`game_lines` `snapshot_type='close'` rows are TRUE closes only from
+  2026-07-30** (first-observed before that; discovered 2026-07-23): odds
+  ingestion used to write once and never revisit, freezing the value at
+  whatever ESPN showed when the game first entered the fetch window. Fixed
+  2026-07-30: each close row is refreshed once after kickoff, when ESPN's
+  pickcenter is frozen at the closing line; refreshed rows have
+  `recorded_at > games.game_time` (that inequality is the true-close
+  marker). Rows finalized before the fix remain first-observed, so
+  `team_game_facts` ATS/OU results, `team_trend_snapshots` ATS/OU records,
+  and `fav_dog_role` computed from pre-2026-07-30 games still carry the
+  old error — any analysis that would *increase* the weight of team trends
+  should restrict to facts graded after the fix (or to `recorded_at >
+  game_time` lines). `book_close_*` on picks was always post-game-captured
+  and unaffected.
 - **Hard gates were unfalsifiable before 2026-07-30 (shadow book).** All 318
   picks settled before then are 1–3h — timing windows, sport excludes, and
   the low_conviction filter produced only silence, so no gate could be

@@ -371,27 +371,35 @@ async function ingestOddsForGames(
 	// Check which games already have closing lines (batched to stay under D1's 999-variable limit)
 	const gameIds = pending.map((p) => p.gameId);
 	const BATCH_SIZE = 80; // D1 allows max 100 bind params per query
-	const hasLine = new Set<string>();
+	const closeRecordedAt = new Map<string, number>();
 	for (let i = 0; i < gameIds.length; i += BATCH_SIZE) {
 		const batch = gameIds.slice(i, i + BATCH_SIZE);
 		const placeholders = batch.map(() => "?").join(",");
-		const rows = await all<{ game_id: string }>(
+		const rows = await all<{ game_id: string; recorded_at: number }>(
 			db,
-			`SELECT game_id FROM game_lines
+			`SELECT game_id, recorded_at FROM game_lines
 			 WHERE game_id IN (${placeholders}) AND snapshot_type = 'close'`,
 			...batch,
 		);
-		for (const r of rows) hasLine.add(r.game_id);
+		for (const r of rows) closeRecordedAt.set(r.game_id, r.recorded_at);
 	}
 
-	// Filter to games that need lines, cap at MAX_ODDS_FETCHES. Prioritize by
-	// proximity to kickoff rather than sport-loop order: pending is pushed in
-	// DEFAULT_SPORT_TAGS order (ncaaf last), so on a ~130-game CFB Saturday
-	// the budget would otherwise be consumed by earlier sports and days-old
-	// no-pickcenter games that retry forever.
+	// Fetch when a game has no close row yet, OR once after kickoff when the
+	// existing row predates kickoff: ESPN's pickcenter freezes at the closing
+	// line once a game starts, so that single refresh replaces the
+	// first-observed line (possibly days old) with the true close. The
+	// refreshed row gets recorded_at > game_time, so it is never re-fetched.
+	// Prioritize by proximity to kickoff rather than sport-loop order:
+	// pending is pushed in DEFAULT_SPORT_TAGS order (ncaaf last), so on a
+	// ~130-game CFB Saturday the budget would otherwise be consumed by
+	// earlier sports and dead retries.
 	const nowSec = Math.floor(Date.now() / 1000);
 	const needLines = pending
-		.filter((p) => !hasLine.has(p.gameId))
+		.filter((p) => {
+			const recordedAt = closeRecordedAt.get(p.gameId);
+			if (recordedAt === undefined) return true;
+			return p.gameTime <= nowSec && recordedAt < p.gameTime;
+		})
 		.sort(
 			(a, b) => Math.abs(a.gameTime - nowSec) - Math.abs(b.gameTime - nowSec),
 		)
