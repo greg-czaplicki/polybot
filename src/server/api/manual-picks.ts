@@ -88,7 +88,7 @@ function parseGammaPrices(
 		.filter((entry) => Number.isFinite(entry));
 }
 
-async function fetchGammaMarket(
+export async function fetchGammaMarket(
 	conditionId: string,
 ): Promise<GammaResolutionMarket | null> {
 	// Gamma's default listing drops markets once they close; without the
@@ -233,7 +233,7 @@ function normalizeOutcome(value: string): string {
 	return value.trim().toLowerCase();
 }
 
-function resolvePickResult(input: {
+export function resolvePickResult(input: {
 	sharpSide?: string;
 	entryPrice?: number;
 	market: GammaResolutionMarket;

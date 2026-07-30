@@ -10,6 +10,10 @@ import {
 	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
 import { isNflPreseasonTime } from "@/lib/sports";
+import {
+	recordShadowCandidates,
+	type ShadowCandidateInput,
+} from "../pipeline/shadow-book";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { enrichPickInline } from "../api/manual-picks";
@@ -1734,6 +1738,7 @@ async function listBotCandidates(
 		teamByAlias: new Map(),
 		snapshotByKey: new Map(),
 	};
+	const shadowInputs: ShadowCandidateInput[] = [];
 	const baseCandidates = (
 		await Promise.all(
 			upcomingEntries.map(async (entry) => {
@@ -1761,6 +1766,26 @@ async function listBotCandidates(
 				if (policy.reject) {
 					const rejectReason = policy.rejectReason ?? "policy_rejected";
 					incrementCounter(debug.excluded, rejectReason);
+					shadowInputs.push({
+						conditionId: entry.conditionId,
+						rejectReason,
+						marketTitle: entry.marketTitle,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sportSeriesId: entry.sportSeriesId,
+						sharpSide: entry.sharpSide,
+						price:
+							entry.sharpSide === "A"
+								? (entry.sideA.price ?? null)
+								: entry.sharpSide === "B"
+									? (entry.sideB.price ?? null)
+									: null,
+						grade: grade?.grade ?? undefined,
+						baseMinGrade: options.minGrade,
+						signalScore: grade?.signalScore,
+						marketQualityScore: grade?.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+						eventTime: entry.eventTime,
+					});
 					pushNearMiss(debug, {
 						reason: rejectReason,
 						conditionId: entry.conditionId,
@@ -2079,6 +2104,15 @@ async function listBotCandidates(
 			}),
 		)
 	).filter((candidate) => candidate !== null);
+	if (!inspectConditionId && shadowInputs.length > 0) {
+		// Shadow book: persist policy-rejected candidates for later settlement
+		// so hard gates stay falsifiable. Never blocks the scan.
+		try {
+			await recordShadowCandidates(db, shadowInputs);
+		} catch (error) {
+			console.warn("[bot] shadow-book record failed:", error);
+		}
+	}
 	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	const deduped = new Map<string, (typeof candidates)[number]>();
