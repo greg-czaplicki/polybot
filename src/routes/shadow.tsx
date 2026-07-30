@@ -6,6 +6,7 @@ import {
 	getShadowBookSummaryFn,
 	type ShadowReasonSummary,
 	type ShadowRowSummary,
+	type ShadowSportSummary,
 } from "../server/api/shadow-book-api";
 
 export const Route = createFileRoute("/shadow")({
@@ -63,6 +64,7 @@ function formatTime(seconds: number | null): string {
 
 function ShadowBookPage() {
 	const [reasons, setReasons] = useState<ShadowReasonSummary[]>([]);
+	const [bySport, setBySport] = useState<ShadowSportSummary[]>([]);
 	const [recent, setRecent] = useState<ShadowRowSummary[]>([]);
 	const [computedAt, setComputedAt] = useState<number | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -74,6 +76,7 @@ function ShadowBookPage() {
 		try {
 			const result = await getShadowBookSummaryFn();
 			setReasons(result.reasons);
+			setBySport(result.bySport);
 			setRecent(result.recent);
 			setComputedAt(result.computedAt);
 		} catch (err) {
@@ -191,6 +194,64 @@ function ShadowBookPage() {
 								</tr>
 							))}
 							{reasons.length === 0 && !isLoading ? (
+								<tr>
+									<td colSpan={7} className="py-4 text-ink-55">
+										No shadow candidates yet.
+									</td>
+								</tr>
+							) : null}
+						</tbody>
+					</table>
+				</div>
+
+				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
+					Performance by gate × sport
+				</h2>
+				<p className="mt-1 text-xs text-ink-55">
+					The same gate can be right for one sport and wrong for another
+					(e.g. football spreads vs. MLB spreads). Sport comes from the
+					series registry; soccer shows per-league (epl/mls).
+				</p>
+				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
+					<table className="min-w-full text-left text-sm text-ink-85">
+						<thead>
+							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+								<th className="pb-2 pr-4">Gate</th>
+								<th className="pb-2 pr-4">Sport</th>
+								<th className="pb-2 pr-4">Total</th>
+								<th className="pb-2 pr-4">Pending</th>
+								<th className="pb-2 pr-4">W-L</th>
+								<th className="pb-2 pr-4">Units</th>
+								<th className="pb-2">ROI</th>
+							</tr>
+						</thead>
+						<tbody>
+							{bySport.map((r) => (
+								<tr
+									key={`${r.rejectReason}-${r.sportTag}`}
+									className="border-t border-ink-10"
+								>
+									<td className="py-2 pr-4 text-xs text-ink-55">
+										{r.rejectReason}
+									</td>
+									<td className="py-2 pr-4 uppercase text-ink-95">
+										{r.sportTag}
+									</td>
+									<td className="py-2 pr-4">{r.total}</td>
+									<td className="py-2 pr-4">{r.pending}</td>
+									<td className="py-2 pr-4">
+										{r.wins}-{r.losses}
+										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
+									</td>
+									<td className={`py-2 pr-4 ${roiClass(r.units)}`}>
+										{formatUnits(r.units)}
+									</td>
+									<td className={`py-2 ${roiClass(r.roiPct)}`}>
+										{formatRoi(r.roiPct)}
+									</td>
+								</tr>
+							))}
+							{bySport.length === 0 && !isLoading ? (
 								<tr>
 									<td colSpan={7} className="py-4 text-ink-55">
 										No shadow candidates yet.

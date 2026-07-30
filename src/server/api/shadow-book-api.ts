@@ -19,6 +19,18 @@ export interface ShadowReasonSummary {
 	avgMinutesToStart: number | null;
 }
 
+export interface ShadowSportSummary {
+	rejectReason: string;
+	sportTag: string;
+	total: number;
+	pending: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	units: number | null;
+	roiPct: number | null;
+}
+
 export interface ShadowRowSummary {
 	marketTitle: string;
 	rejectReason: string;
@@ -78,6 +90,46 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
+		const sportRows = await all<{
+			reject_reason: string;
+			sport_tag: string | null;
+			total: number;
+			pending: number;
+			wins: number;
+			losses: number;
+			pushes: number;
+			units: number | null;
+		}>(
+			db,
+			`SELECT reject_reason,
+			        sport_tag,
+			        COUNT(*) AS total,
+			        SUM(status = 'pending') AS pending,
+			        SUM(status = 'win') AS wins,
+			        SUM(status = 'loss') AS losses,
+			        SUM(status = 'push') AS pushes,
+			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units
+			 FROM shadow_candidates
+			 GROUP BY reject_reason, sport_tag
+			 ORDER BY reject_reason ASC, total DESC`,
+		);
+
+		const bySport: ShadowSportSummary[] = sportRows.map((r) => {
+			const settled = r.wins + r.losses;
+			return {
+				rejectReason: r.reject_reason,
+				sportTag: r.sport_tag ?? "unknown",
+				total: r.total,
+				pending: r.pending,
+				wins: r.wins,
+				losses: r.losses,
+				pushes: r.pushes,
+				units: r.units,
+				roiPct:
+					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
+			};
+		});
+
 		const recentRows = await all<{
 			market_title: string;
 			reject_reason: string;
@@ -116,6 +168,11 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			warnings: r.warnings_json,
 		}));
 
-		return { computedAt: Math.floor(Date.now() / 1000), reasons, recent };
+		return {
+			computedAt: Math.floor(Date.now() / 1000),
+			reasons,
+			bySport,
+			recent,
+		};
 	},
 );
