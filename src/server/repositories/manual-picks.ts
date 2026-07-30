@@ -239,6 +239,12 @@ export interface ManualPickShadowWindowSegment {
 	key: string;
 	label: string;
 	matchedPicks: number;
+	/**
+	 * Picks with surviving sharp_money_history (~7-day retention). Synthetic
+	 * lead-time windows and CLV can only be computed for these; the "actual"
+	 * row covers all matched picks with a stored price.
+	 */
+	withHistory: number;
 	rows: ManualPickShadowWindowRow[];
 }
 
@@ -1702,24 +1708,33 @@ export async function getManualPicksShadowWindowSummary(
 			const rows = windows.map((window) => {
 				const bucket = initMutableBucket(window.label);
 				for (const candidate of segmentCandidates) {
-					const history = historyByConditionId[candidate.pick.conditionId];
-					if (!history || history.length === 0) continue;
-					const closePrice = findPriceAtOrBefore(
-						history,
-						candidate.sharpSide,
-						candidate.eventTimeSeconds,
-					);
+					// History is pruned at ~7 days; it is required for synthetic
+					// lead-time windows and for CLV, but the "actual" row must not
+					// silently shrink to the with-history subsample (2026-07-23
+					// recon P1): a stored pick price is enough to count the pick.
+					const history =
+						historyByConditionId[candidate.pick.conditionId] ?? [];
+					const hasHistory = history.length > 0;
+					const closePrice = hasHistory
+						? findPriceAtOrBefore(
+								history,
+								candidate.sharpSide,
+								candidate.eventTimeSeconds,
+							)
+						: null;
 					if (window.key === "actual") {
 						const entryPrice =
 							(typeof candidate.pick.price === "number" &&
 							Number.isFinite(candidate.pick.price) &&
 							candidate.pick.price > 0
 								? candidate.pick.price
-								: findPriceAtOrBefore(
-										history,
-										candidate.sharpSide,
-										candidate.pick.pickedAt,
-									)) ?? null;
+								: hasHistory
+									? findPriceAtOrBefore(
+											history,
+											candidate.sharpSide,
+											candidate.pick.pickedAt,
+										)
+									: null) ?? null;
 						if (entryPrice === null) continue;
 						applyPickToBucket(bucket, {
 							...candidate.pick,
@@ -1730,6 +1745,7 @@ export async function getManualPicksShadowWindowSummary(
 						});
 						continue;
 					}
+					if (!hasHistory) continue;
 					const targetSeconds =
 						candidate.eventTimeSeconds - (window.leadMinutes ?? 0) * 60;
 					const entryPrice = findPriceAtOrBefore(
@@ -1765,6 +1781,10 @@ export async function getManualPicksShadowWindowSummary(
 				key: segment.key,
 				label: segment.label,
 				matchedPicks: segmentCandidates.length,
+				withHistory: segmentCandidates.filter(
+					({ pick }) =>
+						(historyByConditionId[pick.conditionId] ?? []).length > 0,
+				).length,
 				rows,
 			};
 		}),

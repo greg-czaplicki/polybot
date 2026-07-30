@@ -33,7 +33,7 @@ forward-looking only.
 
 ### [P0] Live in-game markets settle on price extremes: unresolved-market guard is dead code because Gamma never returns `resolved`/`resolution`
 
-`src/server/api/manual-picks.ts:241` — dimension: settlement — **status: open**
+`src/server/api/manual-picks.ts:241` — dimension: settlement — **status: fixed 2026-07-23 (c39e44f) — loose `== null` guard so undefined resolution bails early; price fallback requires `resolved`/closed. Re-verified in code 2026-07-30.**
 
 resolvePickResult's guard `if (!resolved && resolution === null) return null;` never fires: live-verified Gamma /markets responses contain NO `resolved` and NO `resolution` keys (both undefined, and `undefined === null` is false), and `umaResolutionStatus` is absent on open markets. So every settlement pass on a live market (closed=false) falls through to the outcomePrices fallback (lines 278-290, winThreshold 0.98 / loseThreshold 0.02), which has no closed/resolved precondition. The eligibility filter (lines 133-137) admits any pick whose event started >=15 minutes ago, so a pick on a game IN PROGRESS whose live price hits >=0.98/<=0.02 (routine in blowouts) is settled win/loss mid-game. A comeback leaves a permanently wrong win/loss, wrong roi, and wrong resolved_outcome — settled picks are never re-checked. This also means the numeric and string `resolution` branches (lines 256-274) are dead code and ALL historical settlements have flowed through the price fallback.
 
@@ -86,7 +86,7 @@ Pick creation happens after the live order. If `post_json(.../api/bot/picks, ...
 
 ### [P1] Duplicate-bet guard is only the local state file, saved once per poll after all bets; server candidates never exclude already-picked conditions
 
-`bot/bot.py:1331` — dimension: bot — **status: fixed 2026-07-23 bot batch — state saved after every placement (server-side candidate exclusion still open as defense-in-depth)**
+`bot/bot.py:1331` — dimension: bot — **status: fixed 2026-07-23 bot batch — state saved after every placement; server-side defense-in-depth added 2026-07-30 (candidate scan excludes conditions picked in the last 7 days, `already_picked` counter)**
 
 run_loop places up to max_bets live orders inside the for-loop (line 1301) but persists placed/placedMeta only once at the end of the whole iteration (`save_state(config.state_path, state)`, line 1331). A crash/OOM/systemd restart between a live fill and that save loses every placed marker from the poll. The server offers no backstop: listBotCandidates (src/server/api/bot.ts line 1504) builds candidates purely from the sharp-money cache — grep shows zero references to manual_picks anywhere in bot.ts — so on restart the same conditions come back as candidates and the bot re-places real orders (each also creating a duplicate manual_picks row, since inserts are only deduped by the clientPickId the bot doesn't send).
 
@@ -146,7 +146,7 @@ buildDrift computes 7-day baselines as an unweighted mean of per-day averages, a
 
 ### [P1] Shadow-window summary silently restricted to picks with surviving sharp_money_history (~7-day retention), including the 'Actual entry' row
 
-`src/server/repositories/manual-picks.ts:1713` — dimension: summaries — **status: open**
+`src/server/repositories/manual-picks.ts:1713` — dimension: summaries — **status: fixed 2026-07-30 — "actual" row uses stored pick price without requiring history; synthetic/CLV rows still history-bound; `withHistory` count exposed per segment so the effective denominator is visible.**
 
 getManualPicksShadowWindowSummary skips any pick whose condition has no sharp_money_history rows — before even reaching the 'actual' window branch, which needs no history when pick.price exists. sharp_money_history is pruned at 7 days (sharp-money.ts:181 `HISTORY_RETENTION_HOURS = 24 * 7`), so every row of every window — including 'Actual entry' hitRate/avgRoi — reflects only roughly the last week of settled picks, while `settledPicks` and `matchedPicks` report the full population. KNOWN-ISSUES item 1 designates this summary as the trustworthy CLV view while persisted clv heals, making the hidden recency filter decision-relevant: its hit rates and ROIs look like all-time segment stats but are a small recent subsample.
 

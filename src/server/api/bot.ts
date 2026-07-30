@@ -18,6 +18,7 @@ import { deriveSnapshotType } from "../api/canonical-analytics";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { enrichPickInline } from "../api/manual-picks";
 import type { Db } from "../db/client";
+import { all } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
 import { scoreOpportunity } from "../domain/opportunity-scoring";
 import type { Env } from "../env";
@@ -1577,6 +1578,17 @@ async function listBotCandidates(
 		limit,
 		windowHours,
 	});
+	// Defense-in-depth against duplicate bets (2026-07-23 recon P1): the
+	// bot's own guard is a local state file that can be lost; exclude
+	// conditions already picked in the last 7 days server-side too.
+	const recentlyPickedRows = await all<{ condition_id: string }>(
+		db,
+		`SELECT DISTINCT condition_id FROM manual_picks WHERE picked_at >= ?`,
+		nowUnixSeconds() - 7 * 24 * 60 * 60,
+	);
+	const recentlyPickedConditionIds = new Set(
+		recentlyPickedRows.map((row) => row.condition_id),
+	);
 	const debug: BotCandidatesDebug = {
 		totalEntries: entries.length,
 		upcomingEntries: 0,
@@ -1637,6 +1649,18 @@ async function listBotCandidates(
 				foundInEntries: true,
 				stage: "entries",
 			};
+		}
+		if (recentlyPickedConditionIds.has(entry.conditionId)) {
+			incrementCounter(debug.excluded, "already_picked");
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "already_picked",
+				};
+			}
+			return false;
 		}
 		const marketType = getMarketTypeLabel(entry.marketTitle);
 		if (marketType === "other") {

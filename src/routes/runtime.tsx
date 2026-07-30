@@ -362,6 +362,7 @@ type ShadowWindowSegment = {
 	key: string;
 	label: string;
 	matchedPicks: number;
+	withHistory?: number;
 	rows: ShadowWindowRow[];
 };
 
@@ -3074,6 +3075,9 @@ function RuntimePage() {
 												</p>
 												<p className="mt-1 text-xs text-ink-55">
 													Matched picks: {segment.matchedPicks}
+													{typeof segment.withHistory === "number"
+														? ` • With price history (CLV + synthetic rows): ${segment.withHistory}`
+														: null}
 												</p>
 												<table className="mt-3 min-w-full text-left text-sm text-ink-85">
 													<thead>
