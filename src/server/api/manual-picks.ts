@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag } from "@/lib/sports";
+import { detectSportTag, toCanonicalSportTag } from "@/lib/sports";
 import { resolveSportTagFromSeriesId } from "./series-registry";
 import type { Db } from "../db/client";
 import { run } from "../db/client";
@@ -428,11 +428,15 @@ export async function enrichPickInline(
 	// 1. Detect bet_type
 	const betType = detectBetType({ title }) ?? null;
 
-	// 2. Detect sport_tag
-	const sportTag =
+	// 2. Detect sport_tag (canonicalized: epl/mls store as "soccer", matching
+	// teams/games sport_tag so resolution works)
+	const detectedSportTag =
 		resolveSportTagFromSeriesId(snapshot?.sportSeriesId) ??
 		detectSportTag({ title }) ??
 		null;
+	const sportTag = detectedSportTag
+		? toCanonicalSportTag(detectedSportTag)
+		: null;
 
 	// 3. Parse team names and resolve IDs
 	let teamId: string | null = null;

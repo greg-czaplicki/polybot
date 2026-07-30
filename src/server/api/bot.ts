@@ -9,7 +9,7 @@ import {
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
-import { isNflPreseasonTime } from "@/lib/sports";
+import { isNflPreseasonTime, toCanonicalSportTag } from "@/lib/sports";
 import {
 	recordShadowCandidates,
 	type ShadowCandidateInput,
@@ -1094,8 +1094,10 @@ async function computeCanonicalBotCandidateScore(
 	snapshotType: string;
 	warnings: string[];
 } | null> {
-	const sportTag = resolveSportTagFromSeriesId(entry.sportSeriesId);
-	if (!sportTag) return null;
+	const resolvedTag = resolveSportTagFromSeriesId(entry.sportSeriesId);
+	if (!resolvedTag) return null;
+	// epl/mls teams/games store under canonical "soccer"
+	const sportTag = toCanonicalSportTag(resolvedTag);
 	const marketType = getMarketTypeLabel(entry.marketTitle);
 	if (
 		marketType !== "spread" &&

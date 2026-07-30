@@ -22,7 +22,7 @@
  */
 
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag } from "@/lib/sports";
+import { detectSportTag, toCanonicalSportTag } from "@/lib/sports";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
@@ -220,7 +220,9 @@ export async function backfillManualPicks(
 					eventSlug: snapshot?.eventSlug,
 				}) ??
 				null;
-			const sportTag = inferredSportTag ?? pick.sport_tag ?? null;
+			const rawSportTag = inferredSportTag ?? pick.sport_tag ?? null;
+			// epl/mls store as canonical "soccer" (matches teams/games sport_tag)
+			const sportTag = rawSportTag ? toCanonicalSportTag(rawSportTag) : null;
 
 			// 3. Parse team names and resolve IDs.
 			// We use the picked side label (from sharp_side, decision snapshot, or

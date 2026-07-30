@@ -14,7 +14,11 @@
  * Results are persisted to canonical_sync_runs for freshness/status visibility.
  */
 
-import { detectSportTag, isNflPreseasonTime } from "@/lib/sports";
+import {
+	detectSportTag,
+	isNflPreseasonTime,
+	toCanonicalSportTag,
+} from "@/lib/sports";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import {
@@ -117,7 +121,9 @@ interface CacheRow {
 }
 
 /** Default sport tags with team seeding support. */
-const DEFAULT_SPORT_TAGS = ["nfl", "nba", "mlb", "ncaab", "ncaaf"];
+// epl/mls select the ESPN soccer feeds; their games/teams store under the
+// canonical tag "soccer" (see toCanonicalSportTag).
+const DEFAULT_SPORT_TAGS = ["nfl", "nba", "mlb", "ncaab", "ncaaf", "epl", "mls"];
 
 /** Staleness threshold: 6 hours without a successful run = stale. */
 const STALENESS_THRESHOLD_MS = 6 * 60 * 60 * 1000;
@@ -158,7 +164,7 @@ async function getMarketInputsFromCache(db: Db): Promise<MarketGameInput[]> {
 
 		inputs.push({
 			marketTitle: row.market_title,
-			sportTag,
+			sportTag: toCanonicalSportTag(sportTag),
 			eventTime,
 		});
 	}
@@ -203,7 +209,7 @@ async function getLineInputsFromCache(db: Db): Promise<MarketLineInput[]> {
 		// Resolve teams from market title — skip if we can't identify both teams
 		const resolved = await resolveTeamFromMarketTitle(
 			db,
-			sportTag,
+			toCanonicalSportTag(sportTag),
 			row.market_title,
 		);
 		if (!resolved) continue;
@@ -404,7 +410,9 @@ export async function runCanonicalSync(
 		let totalSkipped = 0;
 		let totalErrors = 0;
 
-		for (const sportTag of sportTags) {
+		// Facts are computed per canonical tag (epl+mls collapse to "soccer").
+		const canonicalTags = [...new Set(sportTags.map(toCanonicalSportTag))];
+		for (const sportTag of canonicalTags) {
 			const result: PipelineBatchResult = await processUnprocessedGames(
 				db,
 				sportTag,

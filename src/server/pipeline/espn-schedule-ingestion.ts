@@ -19,6 +19,7 @@
 
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
+import { toCanonicalSportTag } from "@/lib/sports";
 import { upsertGameLine } from "../repositories/game-lines";
 import { createGame, updateGameResult } from "../repositories/games";
 import type { TeamRow } from "../types/canonical";
@@ -105,6 +106,10 @@ const SPORT_ESPN_MAP: Record<string, { sport: string; league: string }> = {
 	mlb: { sport: "baseball", league: "mlb" },
 	ncaab: { sport: "basketball", league: "mens-college-basketball" },
 	ncaaf: { sport: "football", league: "college-football" },
+	// Both leagues store under canonical sport_tag "soccer" (see
+	// toCanonicalSportTag); the per-league keys only select the ESPN feed.
+	epl: { sport: "soccer", league: "eng.1" },
+	mls: { sport: "soccer", league: "usa.1" },
 };
 
 /**
@@ -474,11 +479,15 @@ export async function ingestEspnSchedule(
 	const lookahead = options?.lookaheadDays ?? DEFAULT_LOOKAHEAD_DAYS;
 	const dates = getDateRange(lookback, lookahead);
 
-	// Pre-load team caches per sport (1 DB query per sport instead of N per event)
+	// Pre-load team caches per CANONICAL sport (1 DB query per sport instead
+	// of N per event; epl+mls share the "soccer" cache).
 	const teamCaches = new Map<string, Map<string, string>>();
 	for (const sportTag of sportTags) {
 		if (!SPORT_ESPN_MAP[sportTag]) continue;
-		teamCaches.set(sportTag, await loadTeamCache(db, sportTag));
+		const canonicalTag = toCanonicalSportTag(sportTag);
+		if (!teamCaches.has(canonicalTag)) {
+			teamCaches.set(canonicalTag, await loadTeamCache(db, canonicalTag));
+		}
 	}
 
 	// Track games that may need odds fetched
@@ -491,7 +500,8 @@ export async function ingestEspnSchedule(
 
 	for (const sportTag of sportTags) {
 		if (!SPORT_ESPN_MAP[sportTag]) continue;
-		const cache = teamCaches.get(sportTag);
+		const canonicalTag = toCanonicalSportTag(sportTag);
+		const cache = teamCaches.get(canonicalTag);
 		if (!cache) continue;
 
 		for (const dateStr of dates) {
@@ -535,7 +545,7 @@ export async function ingestEspnSchedule(
 						homeTeamId,
 						awayTeamId,
 						eventTime,
-						sportTag,
+						canonicalTag,
 					);
 
 					let gameId: string;
@@ -581,7 +591,7 @@ export async function ingestEspnSchedule(
 						}
 					} else {
 						const game = await createGame(db, {
-							sportTag,
+							sportTag: canonicalTag,
 							season,
 							seasonType,
 							week,

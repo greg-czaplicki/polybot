@@ -12,6 +12,7 @@
  * on the same date and match by team identity (abbreviation or name) on both sides.
  */
 
+import { toCanonicalSportTag } from "@/lib/sports";
 import type { Db } from "../db/client";
 import { updateGameResult } from "../repositories/games";
 import { getTeamById } from "../repositories/teams";
@@ -79,6 +80,9 @@ const SPORT_ESPN_MAP: Record<string, { sport: string; league: string }> = {
 	mlb: { sport: "baseball", league: "mlb" },
 	ncaab: { sport: "basketball", league: "mens-college-basketball" },
 	ncaaf: { sport: "football", league: "college-football" },
+	// Stored under canonical sport_tag "soccer"; keys select the ESPN feed.
+	epl: { sport: "soccer", league: "eng.1" },
+	mls: { sport: "soccer", league: "usa.1" },
 };
 
 /** Only finalize games whose start time + this buffer is in the past. */
@@ -260,9 +264,11 @@ export async function finalizeCompletedGames(
 		try {
 			// Games older than 14 days will never finalize from a scoreboard
 			// fetch; letting them in starves the window (LIMIT is oldest-first).
+			// Canonical tag: epl+mls games are stored as "soccer"; each league's
+			// scoreboard only matches its own games, the rest just miss.
 			games = await listUnfinalizedGames(
 				db,
-				sportTag,
+				toCanonicalSportTag(sportTag),
 				PER_SPORT_LIMIT,
 				nowSeconds - 14 * 24 * 60 * 60,
 			);

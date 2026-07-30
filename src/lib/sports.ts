@@ -550,6 +550,16 @@ export function getSportLabel(tag?: string | null): string | undefined {
 }
 
 /**
+ * Canonical DB sport tag for team/game storage. All soccer leagues share one
+ * "soccer" tag: title-based sport detection returns "soccer" for club-name
+ * matchups (it can't tell EPL from MLS from a title), so per-league tags
+ * would break canonical team resolution.
+ */
+export function toCanonicalSportTag(tag: string): string {
+	return tag === "epl" || tag === "mls" ? "soccer" : tag;
+}
+
+/**
  * NFL preseason detection by date: the regular season kicks off the Thursday
  * after Labor Day (first Monday of September); any NFL game between July 1
  * and that Thursday is preseason (Hall of Fame game + preseason weeks 1-3).
