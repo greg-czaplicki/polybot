@@ -1591,6 +1591,45 @@ async function listBotCandidates(
 		returnedBySportSeries: {},
 		nearMisses: [],
 	};
+	// Shadow book: every gate that filters a candidate records it here for
+	// later no-bet settlement, so gates stay falsifiable. First sighting per
+	// (condition_id, reason) wins; recorded after the scan completes.
+	const shadowInputs: ShadowCandidateInput[] = [];
+	const pushShadowCandidate = (
+		entry: (typeof entries)[number],
+		rejectReason: string,
+		context?: {
+			minutesToStart?: number | null;
+			grade?: {
+				grade?: GradeLabel | null;
+				signalScore?: number;
+				microstructureScore?: number;
+				warnings?: string[];
+			} | null;
+		},
+	) => {
+		shadowInputs.push({
+			conditionId: entry.conditionId,
+			rejectReason,
+			marketTitle: entry.marketTitle,
+			marketType: getMarketTypeLabel(entry.marketTitle),
+			sportSeriesId: entry.sportSeriesId,
+			sharpSide: entry.sharpSide,
+			price:
+				entry.sharpSide === "A"
+					? (entry.sideA.price ?? null)
+					: entry.sharpSide === "B"
+						? (entry.sideB.price ?? null)
+						: null,
+			grade: context?.grade?.grade ?? undefined,
+			baseMinGrade: options.minGrade,
+			signalScore: context?.grade?.signalScore,
+			marketQualityScore: context?.grade?.microstructureScore,
+			minutesToStart: context?.minutesToStart ?? null,
+			eventTime: entry.eventTime,
+			warnings: context?.grade?.warnings,
+		});
+	};
 	const upcomingEntries = entries.filter((entry) => {
 		if (inspectConditionId && entry.conditionId === inspectConditionId) {
 			debug.inspect = {
@@ -1614,6 +1653,7 @@ async function listBotCandidates(
 		}
 		if (shouldRequireReady && !entry.isReady) {
 			incrementCounter(debug.excluded, "not_ready");
+			pushShadowCandidate(entry, "not_ready");
 			if (inspectConditionId && entry.conditionId === inspectConditionId) {
 				debug.inspect = {
 					conditionId: inspectConditionId,
@@ -1665,6 +1705,7 @@ async function listBotCandidates(
 		const minutesToStart = diffMs / 60_000;
 		if (minutesToStart < minMinutesToStart) {
 			incrementCounter(debug.excluded, "too_close_to_start");
+			pushShadowCandidate(entry, "too_close_to_start", { minutesToStart });
 			if (inspectConditionId && entry.conditionId === inspectConditionId) {
 				debug.inspect = {
 					conditionId: inspectConditionId,
@@ -1678,6 +1719,7 @@ async function listBotCandidates(
 		const inWindow = minutesToStart <= maxMinutesToStart;
 		if (!inWindow) {
 			incrementCounter(debug.excluded, "outside_window");
+			pushShadowCandidate(entry, "outside_window", { minutesToStart });
 			if (inspectConditionId && entry.conditionId === inspectConditionId) {
 				debug.inspect = {
 					conditionId: inspectConditionId,
@@ -1738,7 +1780,6 @@ async function listBotCandidates(
 		teamByAlias: new Map(),
 		snapshotByKey: new Map(),
 	};
-	const shadowInputs: ShadowCandidateInput[] = [];
 	const baseCandidates = (
 		await Promise.all(
 			upcomingEntries.map(async (entry) => {
@@ -1766,25 +1807,9 @@ async function listBotCandidates(
 				if (policy.reject) {
 					const rejectReason = policy.rejectReason ?? "policy_rejected";
 					incrementCounter(debug.excluded, rejectReason);
-					shadowInputs.push({
-						conditionId: entry.conditionId,
-						rejectReason,
-						marketTitle: entry.marketTitle,
-						marketType: getMarketTypeLabel(entry.marketTitle),
-						sportSeriesId: entry.sportSeriesId,
-						sharpSide: entry.sharpSide,
-						price:
-							entry.sharpSide === "A"
-								? (entry.sideA.price ?? null)
-								: entry.sharpSide === "B"
-									? (entry.sideB.price ?? null)
-									: null,
-						grade: grade?.grade ?? undefined,
-						baseMinGrade: options.minGrade,
-						signalScore: grade?.signalScore,
-						marketQualityScore: grade?.microstructureScore,
+					pushShadowCandidate(entry, rejectReason, {
 						minutesToStart: policyMinutesToStart,
-						eventTime: entry.eventTime,
+						grade,
 					});
 					pushNearMiss(debug, {
 						reason: rejectReason,
@@ -1829,6 +1854,10 @@ async function listBotCandidates(
 				}
 				if (GRADE_RANK[grade.grade] < GRADE_RANK[policy.minGrade]) {
 					incrementCounter(debug.excluded, "below_policy_grade");
+					pushShadowCandidate(entry, "below_policy_grade", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason: "below_policy_grade",
 						conditionId: entry.conditionId,
@@ -1863,6 +1892,10 @@ async function listBotCandidates(
 					entry.scoreDifferential < MIN_SCORE_DIFFERENTIAL
 				) {
 					incrementCounter(debug.excluded, "low_score_differential");
+					pushShadowCandidate(entry, "low_score_differential", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason: "low_score_differential",
 						conditionId: entry.conditionId,
@@ -1897,6 +1930,10 @@ async function listBotCandidates(
 					!isAcceptableSignalScore(grade.signalScore)
 				) {
 					incrementCounter(debug.excluded, "signal_score_saturation");
+					pushShadowCandidate(entry, "signal_score_saturation", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason: "signal_score_saturation",
 						conditionId: entry.conditionId,
@@ -1938,6 +1975,10 @@ async function listBotCandidates(
 								? "edge_rating_dead_zone"
 								: "edge_rating_below_floor";
 					incrementCounter(debug.excluded, reason);
+					pushShadowCandidate(entry, reason, {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason,
 						conditionId: entry.conditionId,
@@ -1972,6 +2013,10 @@ async function listBotCandidates(
 					(grade.microstructureScore ?? 0) < policy.marketQualityThreshold
 				) {
 					incrementCounter(debug.excluded, "below_policy_microstructure");
+					pushShadowCandidate(entry, "below_policy_microstructure", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason: "below_policy_microstructure",
 						conditionId: entry.conditionId,
@@ -2033,6 +2078,10 @@ async function listBotCandidates(
 					!isAcceptablePriceEdge(priceEdgeResult.priceEdge)
 				) {
 					incrementCounter(debug.excluded, "price_edge_below_floor");
+					pushShadowCandidate(entry, "price_edge_below_floor", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
 					pushNearMiss(debug, {
 						reason: "price_edge_below_floor",
 						conditionId: entry.conditionId,

@@ -38,6 +38,7 @@ export interface ShadowCandidateInput {
 	marketQualityScore?: number;
 	minutesToStart?: number | null;
 	eventTime?: string | null;
+	warnings?: string[];
 }
 
 function generateId(): string {
@@ -80,8 +81,9 @@ export async function recordShadowCandidates(
 					id, condition_id, reject_reason, market_title, market_type,
 					sport_series_id, sport_tag, sharp_side, price, grade,
 					base_min_grade, signal_score, market_quality_score,
-					minutes_to_start, event_time, strategy_version, created_at, status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+					minutes_to_start, event_time, strategy_version, created_at,
+					warnings_json, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 				generateId(),
 				input.conditionId,
 				input.rejectReason,
@@ -99,6 +101,9 @@ export async function recordShadowCandidates(
 				Number.isFinite(eventTimeSeconds) ? eventTimeSeconds : null,
 				STRATEGY_VERSION,
 				nowUnixSeconds(),
+				input.warnings && input.warnings.length > 0
+					? JSON.stringify(input.warnings)
+					: null,
 			);
 			recorded += 1;
 		} catch (error) {
