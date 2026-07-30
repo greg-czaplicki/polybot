@@ -13,7 +13,10 @@ import {
 } from "./server/pipeline/canonical-sync";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
-import { settleShadowCandidates } from "./server/pipeline/shadow-book";
+import {
+	recordEarlyWindowShadows,
+	settleShadowCandidates,
+} from "./server/pipeline/shadow-book";
 import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
 import {
 	handleSharpQueue,
@@ -259,11 +262,13 @@ const serverEntry = {
 					}
 				})
 				.then(() =>
-					// Shadow book: settle gate-rejected candidates through the same
-					// resolution path (1-2 Gamma fetches each; sequenced after the
-					// pick settle for the same shared-budget reason).
-					settleShadowCandidates(env.POLYWHALER_DB, { limit: 10 }),
+					// Shadow book: record beyond-window entries (D1-only), then
+					// settle gate-rejected candidates through the same resolution
+					// path (1-2 Gamma fetches each; sequenced after the pick
+					// settle for the same shared-budget reason).
+					recordEarlyWindowShadows(env.POLYWHALER_DB),
 				)
+				.then(() => settleShadowCandidates(env.POLYWHALER_DB, { limit: 10 }))
 				.then((result) => {
 					if (result.updated > 0) {
 						console.log(

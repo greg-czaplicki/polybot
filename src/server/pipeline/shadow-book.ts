@@ -23,6 +23,7 @@ import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
+import { listSharpMoneyCache } from "../repositories/sharp-money";
 
 export interface ShadowCandidateInput {
 	conditionId: string;
@@ -112,6 +113,63 @@ export async function recordShadowCandidates(
 		}
 	}
 	return recorded;
+}
+
+/**
+ * Mirrors the bot's max-minutes-to-start window (see bot_candidate_snapshots:
+ * consistently 60-180). Entries beyond it never reach the candidate scan at
+ * all — the scan's cache query is clipped to ceil(maxMinutesToStart/60) hours
+ * — so the early-timing counterfactual must be recorded here, from the cron
+ * tick, NOT by widening the scan (that could displace real in-window
+ * candidates via the edge-rating-ordered LIMIT).
+ */
+const BOT_MAX_MINUTES_TO_START = 180;
+
+/**
+ * Record "what if we bet earlier than the bot's window" shadows: cache
+ * entries starting more than BOT_MAX_MINUTES_TO_START out, at their current
+ * price. Grade fields stay null — grading only runs inside the scan.
+ * D1-only (no external fetches); safe on every cron tick.
+ */
+export async function recordEarlyWindowShadows(
+	db: Db,
+	options?: { maxMinutesToStart?: number },
+): Promise<number> {
+	const maxMinutes = options?.maxMinutesToStart ?? BOT_MAX_MINUTES_TO_START;
+	try {
+		const entries = await listSharpMoneyCache(db, {
+			limit: 50,
+			windowHours: 24,
+		});
+		const now = Date.now();
+		const inputs: ShadowCandidateInput[] = [];
+		for (const entry of entries) {
+			if (!entry.eventTime) continue;
+			const eventTimeMs = new Date(entry.eventTime).getTime();
+			if (!Number.isFinite(eventTimeMs)) continue;
+			const minutesToStart = (eventTimeMs - now) / 60_000;
+			if (minutesToStart <= maxMinutes) continue;
+			inputs.push({
+				conditionId: entry.conditionId,
+				rejectReason: "outside_window",
+				marketTitle: entry.marketTitle,
+				sportSeriesId: entry.sportSeriesId,
+				sharpSide: entry.sharpSide,
+				price:
+					entry.sharpSide === "A"
+						? (entry.sideA.price ?? null)
+						: entry.sharpSide === "B"
+							? (entry.sideB.price ?? null)
+							: null,
+				minutesToStart,
+				eventTime: entry.eventTime,
+			});
+		}
+		return await recordShadowCandidates(db, inputs);
+	} catch (error) {
+		console.warn("[shadow-book] early-window record failed:", error);
+		return 0;
+	}
 }
 
 interface ShadowRow {
