@@ -4,6 +4,10 @@ export interface SportMarketDescriptor {
 	eventSlug?: string | null;
 }
 
+// Static fallback map only. Polymarket creates a new series per season for
+// most sports (nfl-2025, nba-2026, premier-league-2025, ...), so current IDs
+// are resolved dynamically by src/server/api/series-registry.ts; this map
+// covers historical IDs and pre-resolution lookups.
 const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10187: "nfl",
 	10345: "nba",
@@ -12,6 +16,7 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	3: "mlb",
 	10346: "nhl",
 	10188: "epl",
+	10189: "mls",
 };
 
 interface SportTagDefinition {

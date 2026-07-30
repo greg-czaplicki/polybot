@@ -9,6 +9,7 @@ import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
+import { resolveSeriesRegistry } from "./series-registry";
 import {
 	backfillSharpMoneyHistory,
 	clearAllSharpMoneyCache,
@@ -39,18 +40,9 @@ export type {
 const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
 const POLYMARKET_DATA_API = "https://data-api.polymarket.com";
 
-// Sport tags we want to track for sharp money
-const SPORTS_SERIES_IDS: Partial<Record<string, number>> = {
-	ncaab: 10470,
-	epl: 10188,
-	mlb: 3,
-	cfb: 10210,
-	nfl: 10187,
-	nba: 10345,
-	nhl: 10346,
-	atp: 10365,
-	mma: 10500,
-};
+// Sport series are resolved dynamically (Polymarket mints a new series per
+// season, e.g. premier-league-2025 -> premier-league-2026); see
+// series-registry.ts for the sport roster and fallback IDs.
 
 const GAME_BETS_TAG_ID = 100639;
 
@@ -75,7 +67,6 @@ const MIN_READY_PNL_COVERAGE = 0.6;
 const LOW_ROI_PRICE_THRESHOLD = 0.7143;
 const MIN_MICROSTRUCTURE_SCORE = 0.58;
 
-const TARGET_SPORT_SERIES_IDS = [10187, 10345, 10210, 10470, 3, 10346, 10188];
 
 export type TrendingSportsPayload = {
 	limit?: number;
@@ -160,15 +151,10 @@ export type SharpMoneyGradeMix = {
 	aPlusOrARate: number;
 };
 
-const SERIES_ID_TO_TAG = new Map<number, string>(
-	Object.entries(SPORTS_SERIES_IDS)
-		.filter(([, id]) => typeof id === "number")
-		.map(([tag, id]) => [id as number, tag]),
-);
-
-function isTargetSeriesId(seriesId?: number | null): boolean {
+async function isTargetSeriesId(seriesId?: number | null): Promise<boolean> {
 	if (seriesId === null || seriesId === undefined) return false;
-	return TARGET_SPORT_SERIES_IDS.includes(seriesId);
+	const registry = await resolveSeriesRegistry();
+	return registry.targetSeriesIds.includes(seriesId);
 }
 
 type RuntimeMarketStats = {
@@ -690,8 +676,11 @@ function enhanceMarketTitle(title: string, slug?: string): string {
 	// Extract game info from slug
 	// Format: {sport}-{team1}-{team2}-{date}-{type}
 	// e.g., cfb-nmx-minnst-2025-12-26-total-43pt5, nba-cha-orl-2025-12-26-total-230pt5
+	// Sport prefix is open-ended: a hardcoded alternation silently stops
+	// matching when a new sport (mls, uel, ...) is added, which collapses all
+	// of that sport's generic O/U titles into one dedupe group downstream.
 	const slugMatch = slug.match(
-		/^(?:cfb|nfl|nba|nhl|mlb|ncaab|epl)-([a-z0-9]+)-([a-z0-9]+)-\d{4}-\d{2}-\d{2}/i,
+		/^[a-z]+-([a-z0-9]+)-([a-z0-9]+)-\d{4}-\d{2}-\d{2}/i,
 	);
 
 	if (!slugMatch) {
@@ -938,10 +927,12 @@ export async function fetchTrendingSportsMarkets(
 		typeof payload.minVolumeUsd === "number" && payload.minVolumeUsd >= 0
 			? payload.minVolumeUsd
 			: MIN_VOLUME_USD;
+	const seriesRegistry = await resolveSeriesRegistry();
 	const seriesIds =
 		payload.seriesIds && payload.seriesIds.length > 0
 			? payload.seriesIds
-			: TARGET_SPORT_SERIES_IDS;
+			: seriesRegistry.targetSeriesIds;
+	const seriesIdToTag = seriesRegistry.idToTag;
 	console.log(
 		"[sharp-money] Received seriesIds:",
 		payload.seriesIds,
@@ -977,7 +968,7 @@ export async function fetchTrendingSportsMarkets(
 		const CONCURRENCY = 3;
 		const seriesQueue = [...seriesIds];
 		const fetchSeries = async (seriesId: number) => {
-			const tag = SERIES_ID_TO_TAG.get(seriesId) ?? `series-${seriesId}`;
+			const tag = seriesIdToTag.get(seriesId) ?? `series-${seriesId}`;
 			const tagMarkets: GammaMarket[] = [];
 
 			if (!seriesId) {
@@ -1128,12 +1119,16 @@ export async function fetchTrendingSportsMarkets(
 			}
 		}
 		const uniqueCombinedMarkets = [...combinedByConditionId.values()];
-		const sportsOnlyMarkets = uniqueCombinedMarkets.filter((market) =>
-			isTargetSeriesId(market.seriesId),
+		// Filter against the series actually fetched this run (not the global
+		// target list) so caller-supplied seriesIds aren't silently dropped.
+		const fetchedSeriesIds = new Set(seriesIds);
+		const sportsOnlyMarkets = uniqueCombinedMarkets.filter(
+			(market) =>
+				market.seriesId !== undefined && fetchedSeriesIds.has(market.seriesId),
 		);
 		const combinedTagMap = new Map<string, GammaMarket[]>();
 		for (const market of uniqueCombinedMarkets) {
-			const tag = SERIES_ID_TO_TAG.get(market.seriesId ?? -1) ?? "unknown";
+			const tag = seriesIdToTag.get(market.seriesId ?? -1) ?? "unknown";
 			if (!combinedTagMap.has(tag)) combinedTagMap.set(tag, []);
 			combinedTagMap.get(tag)?.push(market);
 		}
@@ -1193,7 +1188,7 @@ export async function fetchTrendingSportsMarkets(
 		});
 		const filteredTagMap = new Map<string, GammaMarket[]>();
 		for (const market of sportsMarkets) {
-			const tag = SERIES_ID_TO_TAG.get(market.seriesId ?? -1) ?? "unknown";
+			const tag = seriesIdToTag.get(market.seriesId ?? -1) ?? "unknown";
 			if (!filteredTagMap.has(tag)) filteredTagMap.set(tag, []);
 			filteredTagMap.get(tag)?.push(market);
 		}
@@ -3574,7 +3569,7 @@ export async function refreshMarketSharpness(
 	payload: SharpAnalysisPayload,
 ) {
 	const { sportSeriesId } = payload;
-	if (sportSeriesId !== undefined && !isTargetSeriesId(sportSeriesId)) {
+	if (sportSeriesId !== undefined && !(await isTargetSeriesId(sportSeriesId))) {
 		console.warn(
 			"[sharp-money] REJECTED - Not a target series:",
 			payload.marketTitle,

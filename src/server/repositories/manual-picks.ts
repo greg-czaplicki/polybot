@@ -1,5 +1,6 @@
 import { detectBetType } from "../../lib/markets";
-import { detectSportTag } from "../../lib/sports";
+import { detectSportTag, getSportLabel } from "../../lib/sports";
+import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
@@ -433,26 +434,6 @@ const GRADE_TO_SIGNAL_SCORE: Record<string, number> = {
 	B: 70,
 	C: 55,
 	D: 40,
-};
-
-const SERIES_LABELS: Record<number, string> = {
-	10187: "NFL",
-	10345: "NBA",
-	10210: "College Football",
-	10470: "College Basketball",
-	3: "MLB",
-	10346: "NHL",
-	10188: "Premier League",
-};
-
-const SPORT_TAG_TO_SERIES_ID: Record<string, number> = {
-	nfl: 10187,
-	nba: 10345,
-	cfb: 10210,
-	ncaab: 10470,
-	mlb: 3,
-	nhl: 10346,
-	epl: 10188,
 };
 
 function parseStringArray(
@@ -1089,11 +1070,15 @@ function resolveSportForPick(
 	label: string;
 	seriesId?: number;
 } {
-	const seriesId = extractSportSeriesId(pick) ?? fallbackSeriesId ?? null;
-	if (seriesId && SERIES_LABELS[seriesId]) {
+	// Group by sport TAG rather than raw series ID: Polymarket mints a new
+	// series per season, so ID-keyed buckets (series_10188 vs series_13001)
+	// would split one sport's history across seasons.
+	const seriesId = extractSportSeriesId(pick) ?? fallbackSeriesId ?? undefined;
+	const seriesTag = resolveSportTagFromSeriesId(seriesId);
+	if (seriesTag) {
 		return {
-			sportTag: `series_${seriesId}`,
-			label: SERIES_LABELS[seriesId],
+			sportTag: seriesTag,
+			label: getSportLabel(seriesTag) ?? seriesTag.toUpperCase(),
 			seriesId,
 		};
 	}
@@ -1106,17 +1091,9 @@ function resolveSportForPick(
 		slug: marketSlug,
 	});
 	if (detected) {
-		const mappedSeriesId = SPORT_TAG_TO_SERIES_ID[detected];
-		if (mappedSeriesId && SERIES_LABELS[mappedSeriesId]) {
-			return {
-				sportTag: `series_${mappedSeriesId}`,
-				label: SERIES_LABELS[mappedSeriesId],
-				seriesId: mappedSeriesId,
-			};
-		}
 		return {
 			sportTag: detected,
-			label: detected.toUpperCase(),
+			label: getSportLabel(detected) ?? detected.toUpperCase(),
 		};
 	}
 

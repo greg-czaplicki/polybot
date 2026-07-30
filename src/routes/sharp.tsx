@@ -52,14 +52,19 @@ export const Route = createFileRoute("/sharp")({
 const selectedSeriesId = "all" as const;
 const showAPlusOnly = false;
 
+// Known-season labels only; unknown (newer-season) IDs fall back to
+// `Series <id>` via getSeriesLabel. Server-side sport resolution is dynamic
+// (see src/server/api/series-registry.ts).
 const SERIES_LABELS: Record<number, string> = {
 	10187: "NFL",
+	12185: "NFL",
 	10345: "NBA",
 	10210: "College Football",
 	10470: "College Basketball",
 	3: "MLB",
 	10346: "NHL",
 	10188: "Premier League",
+	10189: "MLS",
 };
 
 const USD_FORMATTER = new Intl.NumberFormat("en-US", {

@@ -22,7 +22,8 @@
  */
 
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag, detectSportTagFromSeriesId } from "@/lib/sports";
+import { detectSportTag } from "@/lib/sports";
+import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
@@ -213,7 +214,7 @@ export async function backfillManualPicks(
 
 			// 2. Detect sport_tag
 			const inferredSportTag =
-				detectSportTagFromSeriesId(snapshot?.sportSeriesId) ??
+				resolveSportTagFromSeriesId(snapshot?.sportSeriesId) ??
 				detectSportTag({
 					title,
 					eventSlug: snapshot?.eventSlug,

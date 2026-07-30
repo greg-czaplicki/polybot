@@ -9,8 +9,8 @@ import {
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
-import { detectSportTagFromSeriesId } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
+import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { enrichPickInline } from "../api/manual-picks";
 import type { Db } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
@@ -66,7 +66,6 @@ const DEFAULT_BOT_REQUIRE_READY = true;
 const DEFAULT_BOT_INCLUDE_STARTED = false;
 const DEFAULT_BOT_REQUIRE_MICROSTRUCTURE = true;
 const DEFAULT_BOT_MARKET_QUALITY_THRESHOLD = 0.9;
-const NBA_SPORT_SERIES_ID = 10345;
 const GRADE_RANK: Record<GradeLabel, number> = {
 	"A+": 5,
 	A: 4,
@@ -748,12 +747,12 @@ export function resolveTimingBucket(
 	return "3h+";
 }
 
+// Policy is keyed by sport TAG, not raw series ID: Polymarket mints a new
+// series ID per season (nhl-2026 -> nhl-2027, ...), so an ID-keyed gate like
+// the NHL exclusion would silently stop firing at the next season boundary.
+// The registry resolves current-season IDs; lib/sports covers historical ones.
 function getSportPolicyKey(sportSeriesId?: number): string {
-	if (sportSeriesId === NBA_SPORT_SERIES_ID) return "nba";
-	if (sportSeriesId === 3) return "mlb";
-	if (sportSeriesId === 10470) return "ncaab";
-	if (sportSeriesId === 10346) return "nhl";
-	return "default";
+	return resolveSportTagFromSeriesId(sportSeriesId) ?? "default";
 }
 
 function buildPolicy(
@@ -804,7 +803,9 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
-	if (input.sportSeriesId === 10346) {
+	const sportKey = getSportPolicyKey(input.sportSeriesId);
+
+	if (sportKey === "nhl") {
 		return buildPolicy(
 			{
 				...input,
@@ -826,7 +827,7 @@ export function getBotCandidatePolicy(input: {
 	// historical NBA picks landed in the 90+min window with -22% to -100% ROI.
 	// The 60-90min slice was roughly break-even. Tighten NBA to <=90 min only.
 	if (
-		input.sportSeriesId === 10345 &&
+		sportKey === "nba" &&
 		input.minutesToStart !== null &&
 		input.minutesToStart > 90
 	) {
@@ -847,7 +848,7 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
-	if (input.sportSeriesId === 10470 && input.marketType === "spread") {
+	if (sportKey === "ncaab" && input.marketType === "spread") {
 		return buildPolicy(
 			{
 				...input,
@@ -936,7 +937,7 @@ export function getBotCandidatePolicy(input: {
 		};
 	}
 
-	if (input.sportSeriesId === NBA_SPORT_SERIES_ID) {
+	if (sportKey === "nba") {
 		if (timingBucket === "1-3h" && input.marketType === "moneyline") {
 			policy = {
 				...policy,
@@ -957,7 +958,7 @@ export function getBotCandidatePolicy(input: {
 		}
 	}
 
-	if (input.sportSeriesId === 3) {
+	if (sportKey === "mlb") {
 		if (timingBucket === "1-3h" && input.marketType === "moneyline") {
 			policy = {
 				...policy,
@@ -978,7 +979,7 @@ export function getBotCandidatePolicy(input: {
 		}
 	}
 
-	if (input.sportSeriesId === 10470) {
+	if (sportKey === "ncaab") {
 		policy = {
 			...policy,
 			marketQualityThreshold: Math.max(policy.marketQualityThreshold, 0.75),
@@ -1019,12 +1020,10 @@ function getBotCandidatePolicyKey(input: {
 	minutesToStart: number | null;
 }): string {
 	const timingBucket = resolveTimingBucket(input.minutesToStart);
-	const sportKey =
-		input.sportSeriesId === 10470
-			? "ncaab"
-			: input.sportSeriesId === 10346
-				? "nhl"
-				: "default";
+	// Intentionally narrower than getSportPolicyKey: telemetry counters have
+	// historically only broken out ncaab/nhl; keep their keys stable.
+	const tag = getSportPolicyKey(input.sportSeriesId);
+	const sportKey = tag === "ncaab" || tag === "nhl" ? tag : "default";
 	return `${sportKey}|${input.marketType}|${timingBucket}|${input.policy.minGrade}|q${input.policy.marketQualityThreshold.toFixed(2)}`;
 }
 
@@ -1063,7 +1062,7 @@ async function computeCanonicalBotCandidateScore(
 	snapshotType: string;
 	warnings: string[];
 } | null> {
-	const sportTag = detectSportTagFromSeriesId(entry.sportSeriesId);
+	const sportTag = resolveSportTagFromSeriesId(entry.sportSeriesId);
 	if (!sportTag) return null;
 	const marketType = getMarketTypeLabel(entry.marketTitle);
 	if (

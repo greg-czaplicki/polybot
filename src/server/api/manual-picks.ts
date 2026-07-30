@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { detectBetType } from "@/lib/markets";
-import { detectSportTag, detectSportTagFromSeriesId } from "@/lib/sports";
+import { detectSportTag } from "@/lib/sports";
+import { resolveSportTagFromSeriesId } from "./series-registry";
 import type { Db } from "../db/client";
 import { run } from "../db/client";
 import { buildStrategyVersion, getDb, nowUnixSeconds } from "../env";
@@ -429,7 +430,7 @@ export async function enrichPickInline(
 
 	// 2. Detect sport_tag
 	const sportTag =
-		detectSportTagFromSeriesId(snapshot?.sportSeriesId) ??
+		resolveSportTagFromSeriesId(snapshot?.sportSeriesId) ??
 		detectSportTag({ title }) ??
 		null;
 

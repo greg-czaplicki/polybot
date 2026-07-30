@@ -770,6 +770,7 @@ function RuntimePage() {
 			sportPerformanceResult?.rows.find(
 				(row) =>
 					row.seriesId === 10470 ||
+					row.sportTag === "ncaab" ||
 					row.sportTag === "series_10470" ||
 					row.label.toLowerCase().includes("ncaab"),
 			) ?? null,

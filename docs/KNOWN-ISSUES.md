@@ -5,6 +5,25 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Sport coverage gaps before 2026-07-30.** Series IDs were hardcoded and
+  Polymarket mints a new Gamma series per season (`nfl-2025` → `nfl-2026`,
+  `premier-league-2025`, ...), so the pipeline was structurally blind to (a)
+  any sport not in the list — MLS, all non-EPL soccer, the entire 2026 World
+  Cup (June 11–July 19) — and (b) any tracked sport once its next-season
+  series appeared. Fixed 2026-07-30: `src/server/api/series-registry.ts`
+  resolves active series dynamically by slug probe (6h in-memory TTL,
+  hardcoded fallback); MLS added as a target sport. Volume/coverage
+  comparisons that straddle 2026-07-30 are confounded by the wider universe.
+- **Sport-performance stats regrouped by tag on 2026-07-30.** Grouping keys
+  changed from `series_<id>` (season-bound) to sport tags (`mlb`, `epl`, ...)
+  so one sport's history no longer splits at season boundaries. Consumers of
+  the stats API that matched on `series_*` keys must use tags.
+- **Soccer picks have no canonical linkage or book anchor.** ESPN
+  schedule/team ingestion does not cover soccer, so soccer picks get
+  `game_id = NULL` (no trend features, settlement via market resolution
+  only), and `book_*` de-vig columns are moneyline-only while soccer picks
+  to date are all totals/BTTS.
+
 - **CLV is valid only from 2026-07-20 onward.** Before `b40fec0`,
   `close_price` was captured from the resolved market (~0/1), so every stored
   `clv` was a rescaled win/loss flag. All settled picks were scrubbed to NULL
