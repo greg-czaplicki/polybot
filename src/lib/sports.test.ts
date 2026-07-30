@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	detectSportTag,
 	detectSportTagFromSeriesId,
+	isNflPreseasonTime,
 	isSportsMarket,
 } from "./sports";
 
@@ -62,5 +63,26 @@ describe("isSportsMarket", () => {
 				title: "Los Angeles Angels vs. Houston Astros",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("isNflPreseasonTime", () => {
+	it("flags August and pre-kickoff September games as preseason", () => {
+		// 2026: Labor Day Sep 7, kickoff Thursday Sep 10.
+		expect(isNflPreseasonTime(Date.UTC(2026, 7, 6, 0, 0))).toBe(true); // HOF game
+		expect(isNflPreseasonTime(Date.UTC(2026, 8, 9, 23, 0))).toBe(true); // day before kickoff
+		expect(isNflPreseasonTime(Date.UTC(2026, 8, 11, 0, 20))).toBe(false); // week 1 Thu night
+		expect(isNflPreseasonTime(Date.UTC(2026, 8, 13, 17, 0))).toBe(false); // week 1 Sunday
+	});
+
+	it("never flags games outside July-September", () => {
+		expect(isNflPreseasonTime(Date.UTC(2026, 0, 11, 18, 0))).toBe(false); // playoffs
+		expect(isNflPreseasonTime(Date.UTC(2026, 11, 13, 18, 0))).toBe(false); // December
+	});
+
+	it("rolls forward to other seasons' Labor Days", () => {
+		// 2027: Labor Day Sep 6, kickoff Thursday Sep 9.
+		expect(isNflPreseasonTime(Date.UTC(2027, 8, 8, 23, 0))).toBe(true);
+		expect(isNflPreseasonTime(Date.UTC(2027, 8, 10, 0, 20))).toBe(false);
 	});
 });

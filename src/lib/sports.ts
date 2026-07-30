@@ -549,6 +549,25 @@ export function getSportLabel(tag?: string | null): string | undefined {
 	return SPORT_LABEL_MAP[tag] ?? tag.toUpperCase();
 }
 
+/**
+ * NFL preseason detection by date: the regular season kicks off the Thursday
+ * after Labor Day (first Monday of September); any NFL game between July 1
+ * and that Thursday is preseason (Hall of Fame game + preseason weeks 1-3).
+ * Date math instead of a hardcoded date so it rolls forward every season.
+ */
+export function isNflPreseasonTime(eventTimeMs: number): boolean {
+	if (!Number.isFinite(eventTimeMs)) return false;
+	const date = new Date(eventTimeMs);
+	const month = date.getUTCMonth();
+	// Only July(6), August(7), September(8) can be preseason.
+	if (month < 6 || month > 8) return false;
+	const year = date.getUTCFullYear();
+	const sept1Dow = new Date(Date.UTC(year, 8, 1)).getUTCDay();
+	const laborDayDate = 1 + ((8 - sept1Dow) % 7);
+	const kickoffMs = Date.UTC(year, 8, laborDayDate + 3);
+	return eventTimeMs < kickoffMs;
+}
+
 const ESPORTS_KEYWORDS = [
 	"counter-strike",
 	"cs:go",

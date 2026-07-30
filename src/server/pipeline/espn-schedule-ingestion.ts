@@ -51,6 +51,7 @@ interface EspnCompetition {
 interface EspnEvent {
 	id: string;
 	season: { year: number; type: number };
+	week?: { number: number };
 	competitions: EspnCompetition[];
 }
 
@@ -245,6 +246,7 @@ async function loadTeamCache(
 
 	// Map: normalized lookup key → team ID
 	const cache = new Map<string, string>();
+	const ambiguous = new Set<string>();
 
 	for (const row of rows) {
 		const team: TeamLookup = {
@@ -264,8 +266,21 @@ async function loadTeamCache(
 		].filter(Boolean) as string[];
 
 		for (const key of keys) {
-			cache.set(key.toLowerCase(), team.id);
+			const normalized = key.toLowerCase();
+			const existing = cache.get(normalized);
+			if (existing !== undefined && existing !== team.id) {
+				// Shared identifier (e.g. the bare nickname "Tigers" in NCAAF).
+				// Last-write-wins would silently resolve games to the wrong
+				// team; mark ambiguous so resolution skips instead.
+				ambiguous.add(normalized);
+				continue;
+			}
+			cache.set(normalized, team.id);
 		}
+	}
+
+	for (const key of ambiguous) {
+		cache.delete(key);
 	}
 
 	return cache;
@@ -299,15 +314,25 @@ async function findExistingGame(
 	awayTeamId: string,
 	eventTime: number,
 	sportTag: string,
-): Promise<{ id: string; is_final: number; espn_event_id: string | null } | null> {
+): Promise<{
+	id: string;
+	is_final: number;
+	espn_event_id: string | null;
+	season: string | null;
+} | null> {
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
 	// Nearest-by-time: doubleheaders put two same-matchup games inside the
 	// window; an arbitrary LIMIT 1 could return the other game.
-	return first<{ id: string; is_final: number; espn_event_id: string | null }>(
+	return first<{
+		id: string;
+		is_final: number;
+		espn_event_id: string | null;
+		season: string | null;
+	}>(
 		db,
-		`SELECT id, is_final, espn_event_id FROM games
+		`SELECT id, is_final, espn_event_id, season FROM games
 		 WHERE sport_tag = ?
 		   AND home_team_id = ?
 		   AND away_team_id = ?
@@ -333,7 +358,12 @@ async function findExistingGame(
  */
 async function ingestOddsForGames(
 	db: Db,
-	pending: Array<{ gameId: string; espnEventId: string; sportTag: string }>,
+	pending: Array<{
+		gameId: string;
+		espnEventId: string;
+		sportTag: string;
+		gameTime: number;
+	}>,
 	result: EspnScheduleIngestionResult,
 ): Promise<void> {
 	if (pending.length === 0) return;
@@ -354,9 +384,17 @@ async function ingestOddsForGames(
 		for (const r of rows) hasLine.add(r.game_id);
 	}
 
-	// Filter to games that need lines, cap at MAX_ODDS_FETCHES
+	// Filter to games that need lines, cap at MAX_ODDS_FETCHES. Prioritize by
+	// proximity to kickoff rather than sport-loop order: pending is pushed in
+	// DEFAULT_SPORT_TAGS order (ncaaf last), so on a ~130-game CFB Saturday
+	// the budget would otherwise be consumed by earlier sports and days-old
+	// no-pickcenter games that retry forever.
+	const nowSec = Math.floor(Date.now() / 1000);
 	const needLines = pending
 		.filter((p) => !hasLine.has(p.gameId))
+		.sort(
+			(a, b) => Math.abs(a.gameTime - nowSec) - Math.abs(b.gameTime - nowSec),
+		)
 		.slice(0, MAX_ODDS_FETCHES);
 
 	for (const { gameId, espnEventId, sportTag } of needLines) {
@@ -436,7 +474,12 @@ export async function ingestEspnSchedule(
 	}
 
 	// Track games that may need odds fetched
-	const pendingOdds: Array<{ gameId: string; espnEventId: string; sportTag: string }> = [];
+	const pendingOdds: Array<{
+		gameId: string;
+		espnEventId: string;
+		sportTag: string;
+		gameTime: number;
+	}> = [];
 
 	for (const sportTag of sportTags) {
 		if (!SPORT_ESPN_MAP[sportTag]) continue;
@@ -497,6 +540,13 @@ export async function ingestEspnSchedule(
 						existing?.espn_event_id != null &&
 						existing.espn_event_id !== event.id;
 
+					const season =
+						event.season?.year != null ? String(event.season.year) : undefined;
+					const seasonType =
+						event.season?.type != null ? String(event.season.type) : undefined;
+					const week =
+						event.week?.number != null ? String(event.week.number) : undefined;
+
 					if (existing && !claimedByOtherEvent) {
 						gameId = existing.id;
 						alreadyFinal = existing.is_final === 1;
@@ -509,9 +559,24 @@ export async function ingestEspnSchedule(
 								gameId,
 							);
 						}
+						// Backfill season metadata on rows created before it was
+						// stamped (or created by the Polymarket ingestion path).
+						if (existing.season == null && season) {
+							await run(
+								db,
+								`UPDATE games SET season = ?, season_type = ?, week = ? WHERE id = ? AND season IS NULL`,
+								season,
+								seasonType ?? null,
+								week ?? null,
+								gameId,
+							);
+						}
 					} else {
 						const game = await createGame(db, {
 							sportTag,
+							season,
+							seasonType,
+							week,
 							gameTime: eventTime,
 							homeTeamId,
 							awayTeamId,
@@ -547,6 +612,7 @@ export async function ingestEspnSchedule(
 						gameId,
 						espnEventId: event.id,
 						sportTag,
+						gameTime: eventTime,
 					});
 				} catch (err) {
 					result.errors++;

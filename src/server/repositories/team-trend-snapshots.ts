@@ -8,6 +8,14 @@ import type {
 	TrendSnapshotType,
 } from "../types/canonical";
 
+/**
+ * Default freshness bound for "latest snapshot" lookups: 45 days spans any
+ * in-season gap (all-star break, byes) but not an off-season, so a new
+ * season's week 1 degrades to "no snapshot" instead of scoring on last
+ * season's final form.
+ */
+const DEFAULT_LATEST_SNAPSHOT_MAX_AGE_SECONDS = 45 * 24 * 60 * 60;
+
 function parseRow(row: TeamTrendSnapshotRow): TeamTrendSnapshot {
 	return {
 		id: row.id,
@@ -195,6 +203,14 @@ export async function getLatestTeamTrendSnapshot(
 	if (filter.windowSize) {
 		where.push(`window_size = ?`);
 		params.push(filter.windowSize);
+	}
+	const maxAgeSeconds =
+		filter.maxAgeSeconds === undefined
+			? DEFAULT_LATEST_SNAPSHOT_MAX_AGE_SECONDS
+			: filter.maxAgeSeconds;
+	if (maxAgeSeconds !== null) {
+		where.push(`as_of_time >= ?`);
+		params.push(nowUnixSeconds() - maxAgeSeconds);
 	}
 
 	const row = await first<TeamTrendSnapshotRow>(

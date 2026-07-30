@@ -100,4 +100,40 @@ describe("getBotCandidatePolicy", () => {
 		expect(mlbTotal.minGrade).toBe("B");
 		expect(mlbTotal.notes).toContain("mlb_total_preferred");
 	});
+
+	it("rejects NFL preseason games by event date", () => {
+		// 2026 Labor Day is Sep 7; kickoff Thursday is Sep 10.
+		const preseason = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10187,
+			minutesToStart: 120,
+			eventTimeMs: Date.UTC(2026, 7, 15, 23, 0),
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(preseason.reject).toBe(true);
+		expect(preseason.rejectReason).toBe("nfl_preseason_excluded");
+
+		const week1 = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10187,
+			minutesToStart: 120,
+			eventTimeMs: Date.UTC(2026, 8, 11, 0, 20),
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(week1.reject).toBeUndefined();
+	});
+
+	it("does not apply the preseason gate to non-NFL sports", () => {
+		const mlbAugust = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 3,
+			minutesToStart: 120,
+			eventTimeMs: Date.UTC(2026, 7, 15, 23, 0),
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(mlbAugust.reject).toBeUndefined();
+	});
 });

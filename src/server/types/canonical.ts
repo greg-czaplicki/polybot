@@ -313,4 +313,11 @@ export interface TeamTrendSnapshotFilter {
 	sportTag?: string;
 	snapshotType?: TrendSnapshotType;
 	windowSize?: number;
+	/**
+	 * Maximum snapshot age in seconds for "latest" lookups. Defaults to 45
+	 * days, which spans any in-season gap (all-star breaks, byes) but not an
+	 * off-season — without it, week 1 of a new season scores on last season's
+	 * final snapshot presented as current. Pass null to disable.
+	 */
+	maxAgeSeconds?: number | null;
 }

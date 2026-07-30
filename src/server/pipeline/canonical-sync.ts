@@ -14,7 +14,7 @@
  * Results are persisted to canonical_sync_runs for freshness/status visibility.
  */
 
-import { detectSportTag } from "@/lib/sports";
+import { detectSportTag, isNflPreseasonTime } from "@/lib/sports";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import {
@@ -148,6 +148,12 @@ async function getMarketInputsFromCache(db: Db): Promise<MarketGameInput[]> {
 		// Parse event_time — stored as ISO string in sharp_money_cache
 		const eventTimeMs = new Date(row.event_time as string).getTime();
 		if (!Number.isFinite(eventTimeMs)) continue;
+
+		// ESPN ingestion skips preseason (season.type 1); skip here too so
+		// Polymarket preseason markets don't create canonical games that
+		// contaminate regular-season trend windows.
+		if (sportTag === "nfl" && isNflPreseasonTime(eventTimeMs)) continue;
+
 		const eventTime = Math.floor(eventTimeMs / 1000);
 
 		inputs.push({

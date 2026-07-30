@@ -18,6 +18,16 @@ fixing commit.
   changed from `series_<id>` (season-bound) to sport tags (`mlb`, `epl`, ...)
   so one sport's history no longer splits at season boundaries. Consumers of
   the stats API that matched on `series_*` keys must use tags.
+- **Football (NFL/NCAAF) canonical data starts with the 2026 season.** The
+  system went live Feb 2026 as football ended, so `games`/facts/trends have
+  zero football history; week-1 scoring correctly degrades to
+  "missing snapshot". 2026-07-30 readiness work: full-FBS NCAAF seeding
+  (148 teams), NFL preseason gate (`nfl_preseason_excluded`, era v5),
+  `games.season/season_type/week` stamped from ESPN going forward (NULL on
+  all earlier rows — 2025 MLB/NBA rows are not season-taggable), odds
+  fetches prioritized by kickoff proximity, 45-day max-age guard on latest
+  trend snapshots. Ambiguous team aliases (e.g. bare "Tigers") now skip
+  resolution instead of silently linking the wrong team.
 - **Soccer picks have no canonical linkage or book anchor.** ESPN
   schedule/team ingestion does not cover soccer, so soccer picks get
   `game_id = NULL` (no trend features, settlement via market resolution

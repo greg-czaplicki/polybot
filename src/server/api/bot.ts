@@ -9,6 +9,7 @@ import {
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 } from "@/lib/sharp-grade";
+import { isNflPreseasonTime } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { enrichPickInline } from "../api/manual-picks";
@@ -781,6 +782,8 @@ export function getBotCandidatePolicy(input: {
 	marketType: BotCandidateMarketType;
 	sportSeriesId?: number;
 	minutesToStart: number | null;
+	/** Absolute event time (ms). Used for date-based gates (NFL preseason). */
+	eventTimeMs?: number | null;
 	baseMinGrade: GradeLabel;
 	baseMarketQualityThreshold: number;
 }): BotCandidatePolicy {
@@ -804,6 +807,30 @@ export function getBotCandidatePolicy(input: {
 	}
 
 	const sportKey = getSportPolicyKey(input.sportSeriesId);
+
+	// NFL preseason: starters sit, outcomes are semi-random, and our sharp
+	// signal has never been validated on exhibition games. Hard reject.
+	if (
+		sportKey === "nfl" &&
+		typeof input.eventTimeMs === "number" &&
+		isNflPreseasonTime(input.eventTimeMs)
+	) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NFL preseason excluded",
+				rankingAdjustment: -100,
+				notes: ["preseason_excluded"],
+				reject: true,
+				rejectReason: "nfl_preseason_excluded",
+			},
+		);
+	}
 
 	if (sportKey === "nhl") {
 		return buildPolicy(
@@ -1720,6 +1747,7 @@ async function listBotCandidates(
 					marketType: getMarketTypeLabel(entry.marketTitle),
 					sportSeriesId: entry.sportSeriesId,
 					minutesToStart: policyMinutesToStart,
+					eventTimeMs: policyEventTime?.getTime() ?? null,
 					baseMinGrade: options.minGrade,
 					baseMarketQualityThreshold: marketQualityThreshold,
 				});
