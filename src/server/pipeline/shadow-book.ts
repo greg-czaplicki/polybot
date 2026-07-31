@@ -113,7 +113,7 @@ export async function recordShadowCandidates(
 			recorded += 1;
 		} catch (error) {
 			console.warn("[shadow-book] record failed:", error);
-			return recorded;
+			continue;
 		}
 	}
 	return recorded;
