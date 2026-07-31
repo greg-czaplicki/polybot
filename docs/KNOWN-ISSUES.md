@@ -81,7 +81,11 @@ fixing commit.
   `shadow_candidates` table records every policy-gate reject at first sight
   and settles it via the pick resolution path without betting; audit with
   ROI grouped by `reject_reason`. Gate performance claims for periods
-  before 2026-07-30 have no counterfactual data. Related in-sample finding
+  before 2026-07-30 have no counterfactual data. Trend-dimension slicing of
+  shadow rows (`trend_context_json`: fav/dog role, venue, streaks, canonical
+  score; migration 0023) is populated only from 2026-07-31, first-sighting
+  rows only; `market_type` on cron-path `outside_window` rows is likewise
+  NULL before 2026-07-31. Related in-sample finding
   (2026-07-30 audit, multiple-comparisons-exposed, pre-registered for the
   n≈100 re-audit, NOT acted on): v4 picks with zero warnings were 18–8
   (+41.5%, t=2.17) vs break-even with ≥1 warning; `sharpSideValueRatio`

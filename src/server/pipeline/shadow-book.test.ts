@@ -39,6 +39,23 @@ describe("recordShadowCandidates", () => {
 		expect(vi.mocked(run)).not.toHaveBeenCalled();
 	});
 
+	it("serializes trend context when provided", async () => {
+		vi.mocked(run).mockClear();
+		const trendContext = {
+			canonicalScore: 55,
+			favDogRole: "dog",
+			team: { atsStreakType: "W", atsStreakLength: 3 },
+		};
+		await recordShadowCandidates({} as Db, [{ ...baseInput, trendContext }]);
+		const params = vi.mocked(run).mock.calls[0].slice(2);
+		expect(params).toContain(JSON.stringify(trendContext));
+
+		vi.mocked(run).mockClear();
+		await recordShadowCandidates({} as Db, [baseInput]);
+		const noContextParams = vi.mocked(run).mock.calls[0].slice(2);
+		expect(noContextParams.filter((p) => p === null).length).toBeGreaterThan(0);
+	});
+
 	it("dedupes by condition and reason within a batch", async () => {
 		vi.mocked(run).mockClear();
 		const recorded = await recordShadowCandidates({} as Db, [

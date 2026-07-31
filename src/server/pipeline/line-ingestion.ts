@@ -51,6 +51,41 @@ export interface LineIngestionResult {
 // Line extraction from market titles
 // ---------------------------------------------------------------------------
 
+const GAME_PROP_KEYWORDS = [
+	"nrfi",
+	"yrfi",
+	"btts",
+	"both teams to score",
+	"draw no bet",
+	"first goal",
+	"clean sheet",
+	"double result",
+];
+
+/**
+ * Classifies a market title into a bet type. Shared by the candidate scan
+ * (grading, policy segments) and the shadow book (rejected-candidate rows).
+ */
+export function getMarketTypeLabel(
+	marketTitle: string,
+): "total" | "spread" | "moneyline" | "prop" | "other" {
+	const lower = marketTitle.toLowerCase();
+	const plainMatchup =
+		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
+	if (
+		lower.includes("o/u") ||
+		lower.includes("over/under") ||
+		lower.includes("total")
+	) {
+		return "total";
+	}
+	if (lower.includes("spread")) return "spread";
+	if (plainMatchup) return "moneyline";
+	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
+	if (GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw))) return "prop";
+	return "other";
+}
+
 /**
  * Extracts a spread value from a market title.
  *

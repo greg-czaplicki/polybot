@@ -11,6 +11,7 @@ import {
 } from "@/lib/sharp-grade";
 import { isNflPreseasonTime, toCanonicalSportTag } from "@/lib/sports";
 import {
+	listExistingShadowKeys,
 	recordShadowCandidates,
 	type ShadowCandidateInput,
 } from "../pipeline/shadow-book";
@@ -26,6 +27,7 @@ import { buildStrategyVersion, getDb, nowUnixSeconds } from "../env";
 import {
 	extractSpreadFromTitle,
 	extractTotalFromTitle,
+	getMarketTypeLabel,
 	identifySpreadTeamPosition,
 } from "../pipeline/line-ingestion";
 import {
@@ -680,37 +682,6 @@ function incrementCounter(record: Record<string, number>, key: string): void {
 	record[key] = (record[key] ?? 0) + 1;
 }
 
-const GAME_PROP_KEYWORDS = [
-	"nrfi",
-	"yrfi",
-	"btts",
-	"both teams to score",
-	"draw no bet",
-	"first goal",
-	"clean sheet",
-	"double result",
-];
-
-function getMarketTypeLabel(
-	marketTitle: string,
-): "total" | "spread" | "moneyline" | "prop" | "other" {
-	const lower = marketTitle.toLowerCase();
-	const plainMatchup =
-		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
-	if (
-		lower.includes("o/u") ||
-		lower.includes("over/under") ||
-		lower.includes("total")
-	) {
-		return "total";
-	}
-	if (lower.includes("spread")) return "spread";
-	if (plainMatchup) return "moneyline";
-	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
-	if (GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw))) return "prop";
-	return "other";
-}
-
 function normalizeMatchupTitle(marketTitle: string): string {
 	const [matchup] = marketTitle.split(":", 1);
 	return matchup.trim().toLowerCase();
@@ -1093,6 +1064,7 @@ async function computeCanonicalBotCandidateScore(
 	totalScore: number;
 	snapshotType: string;
 	warnings: string[];
+	trendContext: Record<string, unknown>;
 } | null> {
 	const resolvedTag = resolveSportTagFromSeriesId(entry.sportSeriesId);
 	if (!resolvedTag) return null;
@@ -1188,6 +1160,19 @@ async function computeCanonicalBotCandidateScore(
 			totalScore: score.totalScore,
 			snapshotType: "home",
 			warnings: score.warnings,
+			trendContext: {
+				betType: "total",
+				totalLine,
+				pickedDirection,
+				venueRole: null,
+				favDogRole: null,
+				spreadLine: null,
+				// For totals, "team" is the home side, "opponent" the away side.
+				team,
+				opponent,
+				teamSnapshotFound: homeOverall !== null,
+				opponentSnapshotFound: awayOverall !== null,
+			},
 		};
 	}
 
@@ -1247,17 +1232,18 @@ async function computeCanonicalBotCandidateScore(
 
 	const team = extractSideFeatures(teamOverall, teamSplit);
 	const opponent = extractSideFeatures(opponentOverall, opponentSplit);
+	const pickedSpreadLine =
+		homeSpread === null
+			? null
+			: pickedSide.isHomeTeam
+				? homeSpread
+				: -homeSpread;
 	const score = scoreOpportunity({
 		sportTag,
 		betType: marketType,
 		venueRole,
 		favDogRole,
-		spreadLine:
-			homeSpread === null
-				? null
-				: pickedSide.isHomeTeam
-					? homeSpread
-					: -homeSpread,
+		spreadLine: pickedSpreadLine,
 		totalLine: null,
 		pickedDirection: null,
 		team,
@@ -1282,6 +1268,18 @@ async function computeCanonicalBotCandidateScore(
 		totalScore: score.totalScore,
 		snapshotType,
 		warnings: score.warnings,
+		trendContext: {
+			betType: marketType,
+			totalLine: null,
+			pickedDirection: null,
+			venueRole,
+			favDogRole,
+			spreadLine: pickedSpreadLine,
+			team,
+			opponent,
+			teamSnapshotFound: teamOverall !== null,
+			opponentSnapshotFound: opponentOverall !== null,
+		},
 	};
 }
 
@@ -1609,6 +1607,12 @@ async function listBotCandidates(
 	// later no-bet settlement, so gates stay falsifiable. First sighting per
 	// (condition_id, reason) wins; recorded after the scan completes.
 	const shadowInputs: ShadowCandidateInput[] = [];
+	// Entry objects for shadow candidates, kept so trend context can be
+	// computed for first-sighting rows after the scan (needs sideA/sideB).
+	const shadowEntryByConditionId = new Map<
+		string,
+		(typeof entries)[number]
+	>();
 	const pushShadowCandidate = (
 		entry: (typeof entries)[number],
 		rejectReason: string,
@@ -1643,6 +1647,7 @@ async function listBotCandidates(
 			eventTime: entry.eventTime,
 			warnings: context?.grade?.warnings,
 		});
+		shadowEntryByConditionId.set(entry.conditionId, entry);
 	};
 	const upcomingEntries = entries.filter((entry) => {
 		if (inspectConditionId && entry.conditionId === inspectConditionId) {
@@ -2182,6 +2187,49 @@ async function listBotCandidates(
 	if (!inspectConditionId && shadowInputs.length > 0) {
 		// Shadow book: persist policy-rejected candidates for later settlement
 		// so hard gates stay falsifiable. Never blocks the scan.
+		// Trend context only for first sightings (rows the INSERT OR IGNORE
+		// will actually keep) — repeat sightings on later ticks skip the
+		// canonical lookups entirely. Cache is shared with the survivors'
+		// canonical scoring, so a matchup's teams/snapshots load once.
+		// Enrichment failure must not lose the rows themselves.
+		try {
+			const existingKeys = await listExistingShadowKeys(
+				db,
+				shadowInputs.map((input) => input.conditionId),
+			);
+			const trendContextByConditionId = new Map<
+				string,
+				Record<string, unknown> | null
+			>();
+			for (const input of shadowInputs) {
+				if (existingKeys.has(`${input.conditionId}|${input.rejectReason}`))
+					continue;
+				if (!trendContextByConditionId.has(input.conditionId)) {
+					const entry = shadowEntryByConditionId.get(input.conditionId);
+					const canonical = entry
+						? await computeCanonicalBotCandidateScore(
+								db,
+								canonicalScoreCache,
+								entry,
+							)
+						: null;
+					trendContextByConditionId.set(
+						input.conditionId,
+						canonical
+							? {
+									canonicalScore: canonical.totalScore,
+									snapshotType: canonical.snapshotType,
+									...canonical.trendContext,
+								}
+							: null,
+					);
+				}
+				input.trendContext =
+					trendContextByConditionId.get(input.conditionId) ?? null;
+			}
+		} catch (error) {
+			console.warn("[bot] shadow trend-context enrichment failed:", error);
+		}
 		try {
 			await recordShadowCandidates(db, shadowInputs);
 		} catch (error) {

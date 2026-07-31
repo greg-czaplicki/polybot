@@ -23,6 +23,7 @@ import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
+import { getMarketTypeLabel } from "./line-ingestion";
 import { findPriceAtOrBefore } from "../repositories/manual-picks";
 import {
 	listSharpMoneyCache,
@@ -44,10 +45,42 @@ export interface ShadowCandidateInput {
 	minutesToStart?: number | null;
 	eventTime?: string | null;
 	warnings?: string[];
+	/**
+	 * Canonical trend features at record time (fav/dog role, venue, streaks,
+	 * canonical score) — same data the scorer sees for real picks. Serialized
+	 * to trend_context_json.
+	 */
+	trendContext?: Record<string, unknown> | null;
 }
 
 function generateId(): string {
 	return `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * Keys ("conditionId|rejectReason") already present in shadow_candidates,
+ * for the given condition ids. Lets callers skip expensive per-row work
+ * (trend-context computation) for candidates whose first sighting was a
+ * prior scan — INSERT OR IGNORE would drop the row anyway.
+ */
+export async function listExistingShadowKeys(
+	db: Db,
+	conditionIds: string[],
+): Promise<Set<string>> {
+	const keys = new Set<string>();
+	const ids = [...new Set(conditionIds)];
+	const CHUNK = 80;
+	for (let i = 0; i < ids.length; i += CHUNK) {
+		const chunk = ids.slice(i, i + CHUNK);
+		const rows = await all<{ condition_id: string; reject_reason: string }>(
+			db,
+			`SELECT condition_id, reject_reason FROM shadow_candidates
+			 WHERE condition_id IN (${chunk.map(() => "?").join(",")})`,
+			...chunk,
+		);
+		for (const row of rows) keys.add(`${row.condition_id}|${row.reject_reason}`);
+	}
+	return keys;
 }
 
 /**
@@ -87,8 +120,8 @@ export async function recordShadowCandidates(
 					sport_series_id, sport_tag, sharp_side, price, grade,
 					base_min_grade, signal_score, market_quality_score,
 					minutes_to_start, event_time, strategy_version, created_at,
-					warnings_json, status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+					warnings_json, trend_context_json, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 				generateId(),
 				input.conditionId,
 				input.rejectReason,
@@ -109,6 +142,7 @@ export async function recordShadowCandidates(
 				input.warnings && input.warnings.length > 0
 					? JSON.stringify(input.warnings)
 					: null,
+				input.trendContext ? JSON.stringify(input.trendContext) : null,
 			);
 			recorded += 1;
 		} catch (error) {
@@ -157,6 +191,7 @@ export async function recordEarlyWindowShadows(
 				conditionId: entry.conditionId,
 				rejectReason: "outside_window",
 				marketTitle: entry.marketTitle,
+				marketType: getMarketTypeLabel(entry.marketTitle),
 				sportSeriesId: entry.sportSeriesId,
 				sharpSide: entry.sharpSide,
 				price:
