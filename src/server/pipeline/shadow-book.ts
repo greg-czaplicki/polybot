@@ -15,20 +15,18 @@
  */
 
 import { STRATEGY_VERSION } from "@/lib/strategy-version";
-import {
-	fetchGammaMarket,
-	resolvePickResult,
-} from "../api/manual-picks";
+import { fetchGammaMarket, resolvePickResult } from "../api/manual-picks";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
+import { computeSharpMoneyGrades } from "../api/sharp-money";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
-import { getMarketTypeLabel } from "./line-ingestion";
 import { findPriceAtOrBefore } from "../repositories/manual-picks";
 import {
 	listSharpMoneyCache,
 	listSharpMoneyHistoryByConditionIds,
 } from "../repositories/sharp-money";
+import { getMarketTypeLabel } from "./line-ingestion";
 
 export interface ShadowCandidateInput {
 	conditionId: string;
@@ -78,7 +76,8 @@ export async function listExistingShadowKeys(
 			 WHERE condition_id IN (${chunk.map(() => "?").join(",")})`,
 			...chunk,
 		);
-		for (const row of rows) keys.add(`${row.condition_id}|${row.reject_reason}`);
+		for (const row of rows)
+			keys.add(`${row.condition_id}|${row.reject_reason}`);
 	}
 	return keys;
 }
@@ -147,7 +146,6 @@ export async function recordShadowCandidates(
 			recorded += 1;
 		} catch (error) {
 			console.warn("[shadow-book] record failed:", error);
-			continue;
 		}
 	}
 	return recorded;
@@ -166,8 +164,9 @@ const BOT_MAX_MINUTES_TO_START = 180;
 /**
  * Record "what if we bet earlier than the bot's window" shadows: cache
  * entries starting more than BOT_MAX_MINUTES_TO_START out, at their current
- * price. Grade fields stay null — grading only runs inside the scan.
- * D1-only (no external fetches); safe on every cron tick.
+ * price. First sightings are graded via the same pass as the scan so their
+ * rows are comparable to would-have-been-picks (2026-08-03 checkpoint
+ * caveat). D1-only (no external fetches); safe on every cron tick.
  */
 export async function recordEarlyWindowShadows(
 	db: Db,
@@ -204,7 +203,37 @@ export async function recordEarlyWindowShadows(
 				eventTime: entry.eventTime,
 			});
 		}
-		return await recordShadowCandidates(db, inputs);
+		if (inputs.length === 0) return 0;
+		// Grade only first sightings — the insert would drop repeats anyway,
+		// and this runs every cron tick. Grading failure must not lose rows.
+		const existingKeys = await listExistingShadowKeys(
+			db,
+			inputs.map((input) => input.conditionId),
+		);
+		const fresh = inputs.filter(
+			(input) =>
+				!existingKeys.has(`${input.conditionId}|${input.rejectReason}`),
+		);
+		if (fresh.length === 0) return 0;
+		try {
+			const grades = await computeSharpMoneyGrades(db, {
+				conditionIds: [...new Set(fresh.map((input) => input.conditionId))],
+			});
+			const gradeByConditionId = new Map(
+				grades.results.map((result) => [result.conditionId, result]),
+			);
+			for (const input of fresh) {
+				const grade = gradeByConditionId.get(input.conditionId);
+				if (!grade || grade.error) continue;
+				input.grade = grade.grade ?? undefined;
+				input.signalScore = grade.signalScore;
+				input.marketQualityScore = grade.microstructureScore;
+				input.warnings = grade.warnings;
+			}
+		} catch (error) {
+			console.warn("[shadow-book] early-window grading failed:", error);
+		}
+		return await recordShadowCandidates(db, fresh);
 	} catch (error) {
 		console.warn("[shadow-book] early-window record failed:", error);
 		return 0;

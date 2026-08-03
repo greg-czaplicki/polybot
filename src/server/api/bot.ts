@@ -4,20 +4,15 @@ import {
 	EDGE_RATING_DEAD_ZONE_MAX,
 	EDGE_RATING_DEAD_ZONE_MIN,
 	EDGE_RATING_SATURATION_FLOOR,
-	MIN_SCORE_DIFFERENTIAL,
 	isAcceptableEdgeRating,
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
+	MIN_SCORE_DIFFERENTIAL,
 } from "@/lib/sharp-grade";
 import { isNflPreseasonTime, toCanonicalSportTag } from "@/lib/sports";
-import {
-	listExistingShadowKeys,
-	recordShadowCandidates,
-	type ShadowCandidateInput,
-} from "../pipeline/shadow-book";
 import { deriveSnapshotType } from "../api/canonical-analytics";
-import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { enrichPickInline } from "../api/manual-picks";
+import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
@@ -35,6 +30,11 @@ import {
 	extractSpreadPickedLabel,
 	resolvePickedSide,
 } from "../pipeline/pick-enrichment-helpers";
+import {
+	listExistingShadowKeys,
+	recordShadowCandidates,
+	type ShadowCandidateInput,
+} from "../pipeline/shadow-book";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
@@ -1112,14 +1112,12 @@ async function computeCanonicalBotCandidateScore(
 
 	if (marketType === "total") {
 		const totalLine = extractTotalFromTitle(entry.marketTitle);
-		const [homeOverall, homeVenue, awayOverall, awayVenue] = await Promise.all(
-			[
-				getCachedSnapshot(homeTeam.id, "overall"),
-				getCachedSnapshot(homeTeam.id, "home"),
-				getCachedSnapshot(awayTeam.id, "overall"),
-				getCachedSnapshot(awayTeam.id, "away"),
-			],
-		);
+		const [homeOverall, homeVenue, awayOverall, awayVenue] = await Promise.all([
+			getCachedSnapshot(homeTeam.id, "overall"),
+			getCachedSnapshot(homeTeam.id, "home"),
+			getCachedSnapshot(awayTeam.id, "overall"),
+			getCachedSnapshot(awayTeam.id, "away"),
+		]);
 
 		const team = extractSideFeatures(homeOverall, homeVenue);
 		const opponent = extractSideFeatures(awayOverall, awayVenue);
@@ -1293,8 +1291,7 @@ function compareBotCandidates(left: BotCandidate, right: BotCandidate): number {
 
 	const leftPriceEdge = left.grade.priceEdge ?? 0;
 	const rightPriceEdge = right.grade.priceEdge ?? 0;
-	if (leftPriceEdge !== rightPriceEdge)
-		return rightPriceEdge - leftPriceEdge;
+	if (leftPriceEdge !== rightPriceEdge) return rightPriceEdge - leftPriceEdge;
 
 	const leftCanonical = left.grade.canonicalScore ?? 0;
 	const rightCanonical = right.grade.canonicalScore ?? 0;
@@ -1609,10 +1606,7 @@ async function listBotCandidates(
 	const shadowInputs: ShadowCandidateInput[] = [];
 	// Entry objects for shadow candidates, kept so trend context can be
 	// computed for first-sighting rows after the scan (needs sideA/sideB).
-	const shadowEntryByConditionId = new Map<
-		string,
-		(typeof entries)[number]
-	>();
+	const shadowEntryByConditionId = new Map<string, (typeof entries)[number]>();
 	const pushShadowCandidate = (
 		entry: (typeof entries)[number],
 		rejectReason: string,
@@ -1763,7 +1757,98 @@ async function listBotCandidates(
 		return inWindow;
 	});
 	debug.upcomingEntries = upcomingEntries.length;
+	const canonicalScoreCache: CanonicalScoreCache = {
+		teamByAlias: new Map(),
+		snapshotByKey: new Map(),
+	};
+	// Shadow book: persist policy-rejected candidates for later settlement so
+	// hard gates stay falsifiable. Never blocks the scan. Called from both the
+	// normal path and the zero-upcoming early return — a tick where every
+	// entry fails the pre-filter must still record its shadows (a lone game
+	// already inside the timing window would otherwise never be recorded).
+	const recordShadowBook = async () => {
+		if (inspectConditionId || shadowInputs.length === 0) return;
+		try {
+			// Enrichment only for first sightings (rows the INSERT OR IGNORE
+			// will actually keep) — repeat sightings on later ticks skip the
+			// work. Enrichment failure must not lose the rows themselves.
+			const existingKeys = await listExistingShadowKeys(
+				db,
+				shadowInputs.map((input) => input.conditionId),
+			);
+			const firstSightings = shadowInputs.filter(
+				(input) =>
+					!existingKeys.has(`${input.conditionId}|${input.rejectReason}`),
+			);
+			// Pre-filter rejects (timing, not_ready) are pushed before the
+			// scan's grade pass runs, so grade them here — otherwise their
+			// shadow rows test the raw signal, not would-have-been-picks
+			// (2026-08-03 checkpoint caveat). D1-only reads.
+			const ungradedIds = [
+				...new Set(
+					firstSightings
+						.filter((input) => input.signalScore === undefined)
+						.map((input) => input.conditionId),
+				),
+			];
+			if (ungradedIds.length > 0) {
+				const lateGrades = await computeSharpMoneyGrades(db, {
+					conditionIds: ungradedIds,
+				});
+				const lateGradeByConditionId = new Map(
+					lateGrades.results.map((result) => [result.conditionId, result]),
+				);
+				for (const input of firstSightings) {
+					if (input.signalScore !== undefined) continue;
+					const grade = lateGradeByConditionId.get(input.conditionId);
+					if (!grade || grade.error) continue;
+					input.grade = grade.grade ?? undefined;
+					input.signalScore = grade.signalScore;
+					input.marketQualityScore = grade.microstructureScore;
+					input.warnings = grade.warnings;
+				}
+			}
+			// Trend context: cache is shared with the survivors' canonical
+			// scoring, so a matchup's teams/snapshots load once.
+			const trendContextByConditionId = new Map<
+				string,
+				Record<string, unknown> | null
+			>();
+			for (const input of firstSightings) {
+				if (!trendContextByConditionId.has(input.conditionId)) {
+					const entry = shadowEntryByConditionId.get(input.conditionId);
+					const canonical = entry
+						? await computeCanonicalBotCandidateScore(
+								db,
+								canonicalScoreCache,
+								entry,
+							)
+						: null;
+					trendContextByConditionId.set(
+						input.conditionId,
+						canonical
+							? {
+									canonicalScore: canonical.totalScore,
+									snapshotType: canonical.snapshotType,
+									...canonical.trendContext,
+								}
+							: null,
+					);
+				}
+				input.trendContext =
+					trendContextByConditionId.get(input.conditionId) ?? null;
+			}
+		} catch (error) {
+			console.warn("[bot] shadow enrichment failed:", error);
+		}
+		try {
+			await recordShadowCandidates(db, shadowInputs);
+		} catch (error) {
+			console.warn("[bot] shadow-book record failed:", error);
+		}
+	};
 	if (upcomingEntries.length === 0) {
+		await recordShadowBook();
 		const result = {
 			candidates: [],
 			requested: 0,
@@ -1807,10 +1892,6 @@ async function listBotCandidates(
 	const gradeByConditionId = new Map(
 		gradesResult.results.map((result) => [result.conditionId, result]),
 	);
-	const canonicalScoreCache: CanonicalScoreCache = {
-		teamByAlias: new Map(),
-		snapshotByKey: new Map(),
-	};
 	const baseCandidates = (
 		await Promise.all(
 			upcomingEntries.map(async (entry) => {
@@ -2002,7 +2083,7 @@ async function listBotCandidates(
 						entry.edgeRating >= EDGE_RATING_SATURATION_FLOOR
 							? "edge_rating_saturation"
 							: entry.edgeRating >= EDGE_RATING_DEAD_ZONE_MIN &&
-								  entry.edgeRating < EDGE_RATING_DEAD_ZONE_MAX
+									entry.edgeRating < EDGE_RATING_DEAD_ZONE_MAX
 								? "edge_rating_dead_zone"
 								: "edge_rating_below_floor";
 					incrementCounter(debug.excluded, reason);
@@ -2184,58 +2265,7 @@ async function listBotCandidates(
 			}),
 		)
 	).filter((candidate) => candidate !== null);
-	if (!inspectConditionId && shadowInputs.length > 0) {
-		// Shadow book: persist policy-rejected candidates for later settlement
-		// so hard gates stay falsifiable. Never blocks the scan.
-		// Trend context only for first sightings (rows the INSERT OR IGNORE
-		// will actually keep) — repeat sightings on later ticks skip the
-		// canonical lookups entirely. Cache is shared with the survivors'
-		// canonical scoring, so a matchup's teams/snapshots load once.
-		// Enrichment failure must not lose the rows themselves.
-		try {
-			const existingKeys = await listExistingShadowKeys(
-				db,
-				shadowInputs.map((input) => input.conditionId),
-			);
-			const trendContextByConditionId = new Map<
-				string,
-				Record<string, unknown> | null
-			>();
-			for (const input of shadowInputs) {
-				if (existingKeys.has(`${input.conditionId}|${input.rejectReason}`))
-					continue;
-				if (!trendContextByConditionId.has(input.conditionId)) {
-					const entry = shadowEntryByConditionId.get(input.conditionId);
-					const canonical = entry
-						? await computeCanonicalBotCandidateScore(
-								db,
-								canonicalScoreCache,
-								entry,
-							)
-						: null;
-					trendContextByConditionId.set(
-						input.conditionId,
-						canonical
-							? {
-									canonicalScore: canonical.totalScore,
-									snapshotType: canonical.snapshotType,
-									...canonical.trendContext,
-								}
-							: null,
-					);
-				}
-				input.trendContext =
-					trendContextByConditionId.get(input.conditionId) ?? null;
-			}
-		} catch (error) {
-			console.warn("[bot] shadow trend-context enrichment failed:", error);
-		}
-		try {
-			await recordShadowCandidates(db, shadowInputs);
-		} catch (error) {
-			console.warn("[bot] shadow-book record failed:", error);
-		}
-	}
+	await recordShadowBook();
 	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	const deduped = new Map<string, (typeof candidates)[number]>();
