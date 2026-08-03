@@ -1,7 +1,7 @@
 /**
  * Shadow book: makes hard policy gates falsifiable.
  *
- * Every pick-time policy gate (0-15m timing, NBA >90m, NHL, NCAAB spread,
+ * Every pick-time policy gate (sub-60m timing, NBA >90m, NHL, NCAAB spread,
  * spread blanket, NFL preseason, ...) is a filter — rejected candidates never
  * produce outcomes, so a gate can never be proven right or wrong from the
  * pick book alone (2026-07-30 audit: all 318 settled picks are 1-3h; the
