@@ -174,8 +174,12 @@ export async function recordEarlyWindowShadows(
 ): Promise<number> {
 	const maxMinutes = options?.maxMinutesToStart ?? BOT_MAX_MINUTES_TO_START;
 	try {
+		// limit must cover the full 24h window: listSharpMoneyCache orders by
+		// edge_rating DESC, so a tight cap would silently bias the
+		// outside_window shadow population toward high-edge candidates on
+		// busy days (NFL Sunday / CFB Saturday).
 		const entries = await listSharpMoneyCache(db, {
-			limit: 50,
+			limit: 200,
 			windowHours: 24,
 		});
 		const now = Date.now();
@@ -249,9 +253,29 @@ interface ShadowRow {
 }
 
 /**
+ * A row failing this many settle attempts moves to an hourly retry cadence
+ * instead of being checked every tick.
+ */
+const SETTLE_BACKOFF_AFTER_ATTEMPTS = 10;
+const SETTLE_BACKOFF_SECONDS = 3600;
+/**
+ * A row still unresolved this long after its event is a canceled/delisted
+ * market that will never settle — mark it 'void' so it stops consuming
+ * settle slots. 'void' keeps the record but drops out of win/loss/pending
+ * aggregates (UMA disputes and postponement make-ups resolve well within
+ * this window).
+ */
+const VOID_AFTER_SECONDS = 14 * 24 * 60 * 60;
+
+/**
  * Settle pending shadow candidates whose events have started, via the same
  * Gamma resolution path as real picks (resolvePickResult — including the
  * mid-game-settlement guard). Bounded by `limit` Gamma fetches per call.
+ *
+ * Queue order is settle_attempts ASC so rows whose market never resolves
+ * cannot occupy the head of the event_time-ordered batch forever and starve
+ * fresh settlements (observed 2026-08-03: one unresolved game held 4 of 10
+ * slots on every tick).
  */
 export async function settleShadowCandidates(
 	db: Db,
@@ -261,10 +285,26 @@ export async function settleShadowCandidates(
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 50)
 			: 15;
+	const now = nowUnixSeconds();
+	try {
+		const voided = await run(
+			db,
+			`UPDATE shadow_candidates
+			 SET status = 'void', settled_at = ?
+			 WHERE status = 'pending' AND COALESCE(event_time, created_at) < ?`,
+			now,
+			now - VOID_AFTER_SECONDS,
+		);
+		const changes = voided.meta?.changes;
+		if (typeof changes === "number" && changes > 0) {
+			console.warn(`[shadow-book] voided ${changes} unresolvable rows`);
+		}
+	} catch (error) {
+		console.warn("[shadow-book] void sweep failed:", error);
+	}
 	// Same eligibility rule as picks: event started at least 15 minutes ago.
 	// Rows with NULL event_time settle only once they are 24h old, as a
 	// safety valve against permanently-pending rows.
-	const now = nowUnixSeconds();
 	const rows = await all<ShadowRow>(
 		db,
 		`SELECT id, condition_id, sharp_side, price, event_time
@@ -274,10 +314,17 @@ export async function settleShadowCandidates(
 		     (event_time IS NOT NULL AND event_time <= ?)
 		     OR (event_time IS NULL AND created_at <= ?)
 		   )
-		 ORDER BY event_time ASC
+		   AND (
+		     settle_attempts < ?
+		     OR last_checked_at IS NULL
+		     OR last_checked_at <= ?
+		   )
+		 ORDER BY settle_attempts ASC, event_time ASC
 		 LIMIT ?`,
 		now - 15 * 60,
 		now - 24 * 60 * 60,
+		SETTLE_BACKOFF_AFTER_ATTEMPTS,
+		now - SETTLE_BACKOFF_SECONDS,
 		limit,
 	);
 	if (rows.length === 0) return { checked: 0, updated: 0 };
@@ -306,13 +353,28 @@ export async function settleShadowCandidates(
 	let updated = 0;
 	for (const row of rows) {
 		const market = await fetchGammaMarket(row.condition_id);
-		if (!market) continue;
-		const resolution = resolvePickResult({
-			sharpSide: row.sharp_side,
-			entryPrice: row.price,
-			market,
-		});
-		if (!resolution) continue;
+		const resolution = market
+			? resolvePickResult({
+					sharpSide: row.sharp_side,
+					entryPrice: row.price,
+					market,
+				})
+			: null;
+		if (!resolution) {
+			try {
+				await run(
+					db,
+					`UPDATE shadow_candidates
+					 SET settle_attempts = settle_attempts + 1, last_checked_at = ?
+					 WHERE id = ?`,
+					now,
+					row.id,
+				);
+			} catch (error) {
+				console.warn("[shadow-book] attempt bump failed:", error);
+			}
+			continue;
+		}
 		const history = historyByConditionId[row.condition_id];
 		const closePrice =
 			row.event_time !== null &&

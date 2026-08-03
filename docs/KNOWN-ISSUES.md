@@ -85,7 +85,17 @@ fixing commit.
   shadow rows (`trend_context_json`: fav/dog role, venue, streaks, canonical
   score; migration 0023) is populated only from 2026-07-31, first-sighting
   rows only; `market_type` on cron-path `outside_window` rows is likewise
-  NULL before 2026-07-31. Related in-sample finding
+  NULL before 2026-07-31. **Pre-filter shadow rows (`too_close_to_start`,
+  `outside_window`, `not_ready`) have `grade`/`signal_score`/`warnings_json`
+  = NULL before 2026-08-03 ~22:33 UTC** — those gates fire before the scan's
+  grade pass, so earlier rows test the raw sharp signal, not
+  would-have-been-picks (see
+  docs/audits/2026-08-03-shadow-checkpoint-too-close-to-start.md); graded at
+  record time from then on — filter `grade IS NOT NULL` for
+  would-have-been-pick analyses. Shadow rows may also be **`status='void'`**
+  (from 2026-08-03, migration 0024): still unresolved 14 days after their
+  event — canceled/delisted markets; excluded from win/loss/pending
+  aggregates by construction. Related in-sample finding
   (2026-07-30 audit, multiple-comparisons-exposed, pre-registered for the
   n≈100 re-audit, NOT acted on): v4 picks with zero warnings were 18–8
   (+41.5%, t=2.17) vs break-even with ≥1 warning; `sharpSideValueRatio`
