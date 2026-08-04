@@ -92,10 +92,7 @@ export function isAcceptablePriceEdge(priceEdge: number): boolean {
 export function isAcceptableEdgeRating(rating: number): boolean {
 	if (rating < MIN_EDGE_RATING) return false;
 	if (rating >= EDGE_RATING_SATURATION_FLOOR) return false;
-	if (
-		rating >= EDGE_RATING_DEAD_ZONE_MIN &&
-		rating < EDGE_RATING_DEAD_ZONE_MAX
-	)
+	if (rating >= EDGE_RATING_DEAD_ZONE_MIN && rating < EDGE_RATING_DEAD_ZONE_MAX)
 		return false;
 	return true;
 }
@@ -104,11 +101,31 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
-export function computeSignalScoreFromHistory(
+/**
+ * Component breakdown of the composite signal score. Persisted per pick and
+ * shadow row (2026-08-04 deep-dive follow-up) so the blend weights can be
+ * recalibrated against outcomes later — the blended total alone can't be
+ * decomposed after the fact.
+ */
+export interface SignalScoreBreakdown {
+	total: number;
+	/** True when history had <2 snapshots and the degenerate blend was used. */
+	degenerate: boolean;
+	edgeScore: number;
+	diffScore: number;
+	trendScore: number;
+	diffTrendScore: number;
+	volumeScore: number;
+	noveltyScore: number;
+	snapshotCount: number;
+	stabilityCount: number;
+}
+
+export function computeSignalScoreBreakdownFromHistory(
 	entry: SharpSignalEntry,
 	history: SharpSignalHistoryEntry[] | undefined,
 	minEdgeRating: number = MIN_EDGE_RATING,
-): number {
+): SignalScoreBreakdown {
 	const edgeScore = clamp(entry.edgeRating, EDGE_RATING_MIN, EDGE_RATING_MAX);
 	const diffScore =
 		(clamp(entry.scoreDifferential ?? 0, SCORE_DIFF_MIN, SCORE_DIFF_MAX) /
@@ -116,7 +133,18 @@ export function computeSignalScoreFromHistory(
 		100;
 
 	if (!history || history.length < 2) {
-		return clamp(edgeScore * 0.75 + diffScore * 0.25, 0, 100);
+		return {
+			total: clamp(edgeScore * 0.75 + diffScore * 0.25, 0, 100),
+			degenerate: true,
+			edgeScore,
+			diffScore,
+			trendScore: 0,
+			diffTrendScore: 0,
+			volumeScore: 0,
+			noveltyScore: 0,
+			snapshotCount: history?.length ?? 0,
+			stabilityCount: 0,
+		};
 	}
 
 	const start = history[0];
@@ -149,7 +177,27 @@ export function computeSignalScoreFromHistory(
 		volumeScore +
 		noveltyScore;
 
-	return clamp(total, 0, 100);
+	return {
+		total: clamp(total, 0, 100),
+		degenerate: false,
+		edgeScore,
+		diffScore,
+		trendScore,
+		diffTrendScore,
+		volumeScore,
+		noveltyScore,
+		snapshotCount: history.length,
+		stabilityCount,
+	};
+}
+
+export function computeSignalScoreFromHistory(
+	entry: SharpSignalEntry,
+	history: SharpSignalHistoryEntry[] | undefined,
+	minEdgeRating: number = MIN_EDGE_RATING,
+): number {
+	return computeSignalScoreBreakdownFromHistory(entry, history, minEdgeRating)
+		.total;
 }
 
 /**
@@ -175,7 +223,11 @@ export function computeSignalScoreFromWindow(
 	window: SharpSignalHistoryEntry[],
 	minEdgeRating: number = MIN_EDGE_RATING,
 ): number {
-	const edgeScore = clamp(snapshot.edgeRating, EDGE_RATING_MIN, EDGE_RATING_MAX);
+	const edgeScore = clamp(
+		snapshot.edgeRating,
+		EDGE_RATING_MIN,
+		EDGE_RATING_MAX,
+	);
 	const diffScore =
 		(clamp(snapshot.scoreDifferential ?? 0, SCORE_DIFF_MIN, SCORE_DIFF_MAX) /
 			SCORE_DIFF_MAX) *

@@ -1,15 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
+	computeSignalScoreBreakdownFromHistory,
 	computeSignalScoreFromHistory,
 	type GradeLabel,
 	MIN_EDGE_RATING,
+	type SignalScoreBreakdown,
 	signalScoreToGradeLabel,
 } from "../../lib/sharp-grade";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
-import { resolveSeriesRegistry } from "./series-registry";
+import { recordWalletEntries } from "../pipeline/wallet-clv";
 import {
 	backfillSharpMoneyHistory,
 	clearAllSharpMoneyCache,
@@ -29,7 +31,7 @@ import {
 	type UpsertSharpMoneyCacheInput,
 	upsertSharpMoneyCache,
 } from "../repositories/sharp-money";
-import { recordWalletEntries } from "../pipeline/wallet-clv";
+import { resolveSeriesRegistry } from "./series-registry";
 
 // Re-export types for frontend use
 export type {
@@ -67,7 +69,6 @@ const MIN_READY_PNL_COVERAGE = 0.6;
 // -250 implied probability ≈ 0.7142857
 const LOW_ROI_PRICE_THRESHOLD = 0.7143;
 const MIN_MICROSTRUCTURE_SCORE = 0.58;
-
 
 export type TrendingSportsPayload = {
 	limit?: number;
@@ -108,6 +109,9 @@ export type SharpGradeResult = {
 	conditionId: string;
 	grade: GradeLabel | null;
 	signalScore?: number;
+	/** Component breakdown of signalScore — persisted per pick/shadow for
+	 * later weight recalibration; nothing gates on it. */
+	signalComponents?: SignalScoreBreakdown;
 	edgeRating?: number;
 	scoreDifferential?: number;
 	microstructureScore?: number;
@@ -871,7 +875,10 @@ export function computeHedgingMetrics(
 	const sideBByWallet = new Map<string, number>();
 	for (const h of sideBTopHolders) {
 		if (!h.proxyWallet) continue;
-		sideBByWallet.set(h.proxyWallet, (sideBByWallet.get(h.proxyWallet) ?? 0) + h.amount);
+		sideBByWallet.set(
+			h.proxyWallet,
+			(sideBByWallet.get(h.proxyWallet) ?? 0) + h.amount,
+		);
 	}
 
 	let hedgedWalletCount = 0;
@@ -3422,7 +3429,7 @@ export async function computeSharpMoneyGrades(
 			(historyByConditionId as SharpMoneyHistoryEntryByConditionId)[
 				conditionId
 			] ?? [];
-		const signalScore = computeSignalScoreFromHistory(
+		const signalComponents = computeSignalScoreBreakdownFromHistory(
 			{
 				edgeRating: entry.edgeRating,
 				scoreDifferential: entry.scoreDifferential,
@@ -3430,6 +3437,7 @@ export async function computeSharpMoneyGrades(
 			history,
 			MIN_EDGE_RATING,
 		);
+		const signalScore = signalComponents.total;
 		const grade = signalScoreToGradeLabel(signalScore, {
 			edgeRating: entry.edgeRating,
 			scoreDifferential: entry.scoreDifferential,
@@ -3517,6 +3525,7 @@ export async function computeSharpMoneyGrades(
 			conditionId,
 			grade,
 			signalScore,
+			signalComponents,
 			edgeRating: entry.edgeRating,
 			scoreDifferential: entry.scoreDifferential,
 			microstructureScore,

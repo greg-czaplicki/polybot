@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { GradeLabel } from "@/lib/sharp-grade";
+import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
 	EDGE_RATING_DEAD_ZONE_MIN,
@@ -31,6 +31,7 @@ import {
 	resolvePickedSide,
 } from "../pipeline/pick-enrichment-helpers";
 import {
+	compactTopHolders,
 	listExistingShadowKeys,
 	recordShadowCandidates,
 	type ShadowCandidateInput,
@@ -1428,6 +1429,7 @@ function buildDecisionSnapshot(input: {
 	price?: number;
 	grade?: string;
 	signalScore?: number;
+	signalComponents?: SignalScoreBreakdown | null;
 	edgeRating?: number;
 	scoreDifferential?: number;
 	marketQualityScore?: number;
@@ -1490,6 +1492,8 @@ function buildDecisionSnapshot(input: {
 		priceAtPick: input.price ?? null,
 		grade: input.grade ?? null,
 		signalScore: input.signalScore ?? null,
+		signalComponents: input.signalComponents ?? null,
+		topHoldersSharpSide: compactTopHolders(sortedSharpSideHolders),
 		edgeRating: input.edgeRating ?? null,
 		scoreDifferential: input.scoreDifferential ?? null,
 		marketQualityScore: input.marketQualityScore ?? null,
@@ -1615,11 +1619,18 @@ async function listBotCandidates(
 			grade?: {
 				grade?: GradeLabel | null;
 				signalScore?: number;
+				signalComponents?: SignalScoreBreakdown;
 				microstructureScore?: number;
 				warnings?: string[];
 			} | null;
 		},
 	) => {
+		const sharpSideHolders =
+			entry.sharpSide === "A"
+				? entry.sideA.topHolders
+				: entry.sharpSide === "B"
+					? entry.sideB.topHolders
+					: [];
 		shadowInputs.push({
 			conditionId: entry.conditionId,
 			rejectReason,
@@ -1640,6 +1651,8 @@ async function listBotCandidates(
 			minutesToStart: context?.minutesToStart ?? null,
 			eventTime: entry.eventTime,
 			warnings: context?.grade?.warnings,
+			signalComponents: context?.grade?.signalComponents ?? null,
+			topHolders: compactTopHolders(sharpSideHolders),
 		});
 		shadowEntryByConditionId.set(entry.conditionId, entry);
 	};
@@ -1804,6 +1817,7 @@ async function listBotCandidates(
 					if (!grade || grade.error) continue;
 					input.grade = grade.grade ?? undefined;
 					input.signalScore = grade.signalScore;
+					input.signalComponents = grade.signalComponents ?? null;
 					input.marketQualityScore = grade.microstructureScore;
 					input.warnings = grade.warnings;
 				}
@@ -2899,6 +2913,15 @@ export async function handleBotRequest(
 					})
 				: null;
 
+		// Server-side signal component breakdown for the decision snapshot —
+		// the bot's payload only carries the blended score. One extra grade
+		// compute per pick creation (rare); best-effort.
+		const componentGrade = await computeSharpMoneyGrades(env.POLYWHALER_DB, {
+			conditionIds: [payload.conditionId],
+		})
+			.then((result) => result.results[0] ?? null)
+			.catch(() => null);
+
 		const decisionSnapshot = buildDecisionSnapshot({
 			payloadSnapshot: payload.decisionSnapshot,
 			cacheEntry,
@@ -2909,6 +2932,7 @@ export async function handleBotRequest(
 			price,
 			grade: payload.grade,
 			signalScore,
+			signalComponents: componentGrade?.signalComponents ?? null,
 			edgeRating,
 			scoreDifferential,
 			marketQualityScore,

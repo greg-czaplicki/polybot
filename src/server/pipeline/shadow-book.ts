@@ -14,6 +14,7 @@
  * saved or cost.
  */
 
+import type { SignalScoreBreakdown } from "@/lib/sharp-grade";
 import { STRATEGY_VERSION } from "@/lib/strategy-version";
 import { fetchGammaMarket, resolvePickResult } from "../api/manual-picks";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
@@ -49,10 +50,51 @@ export interface ShadowCandidateInput {
 	 * to trend_context_json.
 	 */
 	trendContext?: Record<string, unknown> | null;
+	/**
+	 * Signal-score component breakdown at record time (edge/diff/trend/
+	 * novelty/volume terms). Serialized to signal_components_json so blend
+	 * weights can be recalibrated from shadow outcomes.
+	 */
+	signalComponents?: SignalScoreBreakdown | null;
+	/**
+	 * Compact sharp-side top-holder roster at record time — joins shadow
+	 * outcomes to wallet-CLV skill scores. Serialized to top_holders_json.
+	 */
+	topHolders?: Array<Record<string, unknown>> | null;
 }
 
 function generateId(): string {
 	return `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * Compact sharp-side holder roster for persistence on picks and shadows —
+ * enough to join outcomes to wallet-CLV skill scores later, small enough to
+ * store on every row. (2026-08-04 deep-dive follow-up.)
+ */
+export function compactTopHolders(
+	holders: Array<{
+		proxyWallet: string;
+		amount: number;
+		unitSize?: number | null;
+		pnlAll?: number | null;
+		momentumWeight?: number | null;
+		pnlTierWeight?: number | null;
+	}>,
+	limit = 10,
+): Array<Record<string, unknown>> {
+	return holders
+		.slice()
+		.sort((left, right) => right.amount - left.amount)
+		.slice(0, limit)
+		.map((holder) => ({
+			wallet: holder.proxyWallet,
+			amountUsd: Math.round(holder.amount),
+			unitSize: holder.unitSize ?? null,
+			pnlAll: holder.pnlAll ?? null,
+			momentumWeight: holder.momentumWeight ?? null,
+			pnlTierWeight: holder.pnlTierWeight ?? null,
+		}));
 }
 
 /**
@@ -119,8 +161,9 @@ export async function recordShadowCandidates(
 					sport_series_id, sport_tag, sharp_side, price, grade,
 					base_min_grade, signal_score, market_quality_score,
 					minutes_to_start, event_time, strategy_version, created_at,
-					warnings_json, trend_context_json, status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+					warnings_json, trend_context_json, signal_components_json,
+					top_holders_json, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 				generateId(),
 				input.conditionId,
 				input.rejectReason,
@@ -142,6 +185,10 @@ export async function recordShadowCandidates(
 					? JSON.stringify(input.warnings)
 					: null,
 				input.trendContext ? JSON.stringify(input.trendContext) : null,
+				input.signalComponents ? JSON.stringify(input.signalComponents) : null,
+				input.topHolders && input.topHolders.length > 0
+					? JSON.stringify(input.topHolders)
+					: null,
 			);
 			recorded += 1;
 		} catch (error) {
@@ -205,6 +252,13 @@ export async function recordEarlyWindowShadows(
 							: null,
 				minutesToStart,
 				eventTime: entry.eventTime,
+				topHolders: compactTopHolders(
+					entry.sharpSide === "A"
+						? entry.sideA.topHolders
+						: entry.sharpSide === "B"
+							? entry.sideB.topHolders
+							: [],
+				),
 			});
 		}
 		if (inputs.length === 0) return 0;
@@ -231,6 +285,7 @@ export async function recordEarlyWindowShadows(
 				if (!grade || grade.error) continue;
 				input.grade = grade.grade ?? undefined;
 				input.signalScore = grade.signalScore;
+				input.signalComponents = grade.signalComponents ?? null;
 				input.marketQualityScore = grade.microstructureScore;
 				input.warnings = grade.warnings;
 			}
