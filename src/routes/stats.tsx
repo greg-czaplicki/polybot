@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { MatchupCard } from "@/components/canonical/matchup-card";
+import { PlChartSection } from "@/components/charts/pl-chart-section";
 import { usePickContext } from "@/components/canonical/pick-context-panel";
 import { TeamTrendCard } from "@/components/canonical/team-trend-card";
 import {
@@ -223,6 +224,10 @@ function StatsPage() {
 							/>
 						</div>
 					</div>
+
+					{/* P/L curves — has its own range row, independent of the
+					    list's calendar-window pills below */}
+					<PlChartSection />
 
 					{/* Window filter pills */}
 					<div

@@ -56,6 +56,10 @@ pre {
   --signal-bad: oklch(0.66 0.17 25);
   --signal-bad-dim: oklch(0.51 0.14 25);
 
+  /* Chart series — shadow-book line. Magenta: CVD-separable from brand-blue
+     on the ink-05 surface and outside every signal-* status hue family. */
+  --series-shadow: oklch(0.6 0.14 345);
+
   /* shadcn-compatible tokens (default = dark, since app is dark-only) */
   --background: var(--ink-00);
   --foreground: var(--ink-95);
@@ -187,6 +191,7 @@ pre {
   --color-signal-warn-dim: var(--signal-warn-dim);
   --color-signal-bad: var(--signal-bad);
   --color-signal-bad-dim: var(--signal-bad-dim);
+  --color-series-shadow: var(--series-shadow);
 
   --font-sans:
     'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
