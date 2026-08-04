@@ -109,3 +109,18 @@ Moneyline (+49%, n=19) currently ahead of totals (+19%, n=34) — reverses the
    is the most likely too-strict gate. Recheck at n≈50 (existing watch item).
 5. A+ dead by construction — either retire the label or re-earn it via a
    calibrated path.
+
+## 7. Follow-ups shipped same day (data collection only, no era bump)
+
+- **Wallet-CLV foundation** (`0b291e4`): `wallet_entries` (migration 0025)
+  records per-wallet position entries by diffing top-holder snapshots
+  (share-based, ≥$100, pre-start only); cron settles each entry against the
+  pre-event close and stamps per-entry CLV; voids after 7d. Verified live —
+  offline re-implementation of the diff predicted exactly the rows recorded.
+- **Feature persistence** (`7904ed4`): signal-score component breakdown
+  (`computeSignalScoreBreakdownFromHistory`, pure refactor) now stored on
+  every pick (`decision_snapshot_json.signalComponents` +
+  `.topHoldersSharpSide`) and every shadow row (migration 0026:
+  `signal_components_json`, `top_holders_json`), across the scan, late-graded
+  pre-filter, and early-window cron paths. Enables blend-weight recalibration
+  and pick↔wallet-CLV joins for both accepted and rejected candidates.
