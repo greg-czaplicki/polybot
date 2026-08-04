@@ -29,6 +29,7 @@ import {
 	type UpsertSharpMoneyCacheInput,
 	upsertSharpMoneyCache,
 } from "../repositories/sharp-money";
+import { recordWalletEntries } from "../pipeline/wallet-clv";
 
 // Re-export types for frontend use
 export type {
@@ -3588,6 +3589,21 @@ export async function refreshMarketSharpness(
 		return { success: false, error };
 	}
 
+	// Wallet CLV foundation: capture the previous snapshot BEFORE the upsert
+	// overwrites it, so top-holder position diffs can be recorded as entries.
+	// Best-effort — a failure here must never block the cache update.
+	let previousCacheEntry: Awaited<
+		ReturnType<typeof getSharpMoneyCacheByConditionId>
+	> = null;
+	try {
+		previousCacheEntry = await getSharpMoneyCacheByConditionId(
+			env.POLYWHALER_DB,
+			analysis.conditionId,
+		);
+	} catch (error) {
+		console.warn("[wallet-clv] previous snapshot read failed", error);
+	}
+
 	const computedAt = nowUnixSeconds();
 	const cacheInput: UpsertSharpMoneyCacheInput = {
 		conditionId: analysis.conditionId,
@@ -3611,6 +3627,22 @@ export async function refreshMarketSharpness(
 	};
 
 	await upsertSharpMoneyCache(env.POLYWHALER_DB, cacheInput);
+
+	try {
+		await recordWalletEntries(env.POLYWHALER_DB, {
+			conditionId: analysis.conditionId,
+			marketTitle: analysis.marketTitle,
+			eventTime: analysis.eventTime,
+			sportSeriesId: analysis.sportSeriesId,
+			prev: previousCacheEntry
+				? { sideA: previousCacheEntry.sideA, sideB: previousCacheEntry.sideB }
+				: null,
+			next: { sideA: cacheInput.sideA, sideB: cacheInput.sideB },
+		});
+	} catch (error) {
+		console.warn("[wallet-clv] entry recording failed", error);
+	}
+
 	await insertSharpMoneyHistory(env.POLYWHALER_DB, {
 		conditionId: analysis.conditionId,
 		recordedAt: computedAt,

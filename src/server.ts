@@ -6,23 +6,24 @@ import { handleBotRequest } from "./server/api/bot";
 import { handleBotControlRequest } from "./server/api/bot-control";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import type { Env, RequestContext } from "./server/env";
+import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import {
 	getCanonicalFreshness,
 	persistSyncRun,
 	runCanonicalSync,
 } from "./server/pipeline/canonical-sync";
-import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
 import {
 	recordEarlyWindowShadows,
 	settleShadowCandidates,
 } from "./server/pipeline/shadow-book";
-import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
 import {
 	handleSharpQueue,
 	SharpPipeline,
 } from "./server/pipeline/sharp-pipeline";
 import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
+import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
+import { settleWalletEntries } from "./server/pipeline/wallet-clv";
 import { maybeRefreshDailyStatsSnapshot } from "./server/repositories/daily-stats-snapshots";
 import { getSharpMoneyCacheFreshnessStats } from "./server/repositories/sharp-money";
 
@@ -273,6 +274,18 @@ const serverEntry = {
 					if (result.updated > 0) {
 						console.log(
 							`[shadow-book] Settled ${result.updated}/${result.checked} shadow candidates`,
+						);
+					}
+				})
+				.then(() =>
+					// Wallet-CLV entries settle from sharp_money_history — D1-only,
+					// no external fetches, so it doesn't eat the subrequest budget.
+					settleWalletEntries(env.POLYWHALER_DB, { limit: 50 }),
+				)
+				.then((result) => {
+					if (result.updated > 0 || result.voided > 0) {
+						console.log(
+							`[wallet-clv] Settled ${result.updated}, voided ${result.voided} of ${result.checked} open entries`,
 						);
 					}
 				})
