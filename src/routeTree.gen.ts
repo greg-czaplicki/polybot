@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WalletsRouteImport } from './routes/wallets'
 import { Route as StrategyRouteImport } from './routes/strategy'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
@@ -22,6 +23,11 @@ import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SharpMarketConditionIdRouteImport } from './routes/sharp.market.$conditionId'
 
+const WalletsRoute = WalletsRouteImport.update({
+  id: '/wallets',
+  path: '/wallets',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StrategyRoute = StrategyRouteImport.update({
   id: '/strategy',
   path: '/strategy',
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
+  '/wallets': typeof WalletsRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesByTo {
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
+  '/wallets': typeof WalletsRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRoutesById {
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/sharp': typeof SharpRouteWithChildren
   '/stats': typeof StatsRoute
   '/strategy': typeof StrategyRoute
+  '/wallets': typeof WalletsRoute
   '/sharp/market/$conditionId': typeof SharpMarketConditionIdRoute
 }
 export interface FileRouteTypes {
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/sharp'
     | '/stats'
     | '/strategy'
+    | '/wallets'
     | '/sharp/market/$conditionId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
     | '/sharp'
     | '/stats'
     | '/strategy'
+    | '/wallets'
     | '/sharp/market/$conditionId'
   id:
     | '__root__'
@@ -168,6 +179,7 @@ export interface FileRouteTypes {
     | '/sharp'
     | '/stats'
     | '/strategy'
+    | '/wallets'
     | '/sharp/market/$conditionId'
   fileRoutesById: FileRoutesById
 }
@@ -183,10 +195,18 @@ export interface RootRouteChildren {
   SharpRoute: typeof SharpRouteWithChildren
   StatsRoute: typeof StatsRoute
   StrategyRoute: typeof StrategyRoute
+  WalletsRoute: typeof WalletsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/wallets': {
+      id: '/wallets'
+      path: '/wallets'
+      fullPath: '/wallets'
+      preLoaderRoute: typeof WalletsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/strategy': {
       id: '/strategy'
       path: '/strategy'
@@ -296,6 +316,7 @@ const rootRouteChildren: RootRouteChildren = {
   SharpRoute: SharpRouteWithChildren,
   StatsRoute: StatsRoute,
   StrategyRoute: StrategyRoute,
+  WalletsRoute: WalletsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
