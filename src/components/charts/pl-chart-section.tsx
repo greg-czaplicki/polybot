@@ -23,6 +23,11 @@ const SERIES_COLORS = {
 	shadow: "var(--series-shadow)",
 };
 
+export interface PlRange {
+	start: string;
+	end: string;
+}
+
 type PresetKey = "7d" | "30d" | "90d" | "all";
 
 const PRESETS: { key: PresetKey; label: string; days: number | null }[] = [
@@ -44,10 +49,10 @@ function fromDateInputValue(value: string): number | null {
 	return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
 }
 
-function presetRange(
+export function presetRange(
 	preset: PresetKey,
 	firstSettleSec: number | null,
-): { start: string; end: string } {
+): PlRange {
 	const end = new Date();
 	const start = new Date();
 	const spec = PRESETS.find((p) => p.key === preset);
@@ -61,6 +66,21 @@ function presetRange(
 	return { start: toDateInputValue(start), end: toDateInputValue(end) };
 }
 
+/**
+ * Inclusive-start / exclusive-end unix-second bounds for a date range, with
+ * the end day fully included. Null when the range is empty or unparsable.
+ */
+export function rangeBounds(
+	range: PlRange,
+): { startSec: number; endExclusiveSec: number } | null {
+	const startSec = fromDateInputValue(range.start);
+	const endSec = fromDateInputValue(range.end);
+	if (startSec === null || endSec === null || endSec < startSec) return null;
+	const endDate = new Date(endSec * 1000);
+	endDate.setDate(endDate.getDate() + 1);
+	return { startSec, endExclusiveSec: Math.floor(endDate.getTime() / 1000) };
+}
+
 function formatUnits(value: number): string {
 	return `${value >= 0 ? "+" : ""}${value.toFixed(1)}u`;
 }
@@ -69,10 +89,86 @@ function formatClvCents(value: number): string {
 	return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(0)}¢`;
 }
 
-export function PlChartSection() {
+/**
+ * The shared range control: preset pills + custom date inputs. Rendered by
+ * the page above everything the range scopes (stats strip, charts, list).
+ */
+export function PlRangeRow({
+	range,
+	onChange,
+	firstDateSec,
+}: {
+	range: PlRange;
+	onChange: (range: PlRange) => void;
+	firstDateSec: number | null;
+}) {
+	const activePreset = useMemo<PresetKey | null>(() => {
+		for (const preset of PRESETS) {
+			const candidate = presetRange(preset.key, firstDateSec);
+			if (candidate.start === range.start && candidate.end === range.end) {
+				return preset.key;
+			}
+		}
+		return null;
+	}, [range, firstDateSec]);
+
+	return (
+		// biome-ignore lint/a11y/useSemanticElements: role="group" with aria-label is the right ARIA pattern for a non-landmark control cluster.
+		<div
+			className="flex flex-wrap items-center gap-2"
+			role="group"
+			aria-label="Date range"
+		>
+			{PRESETS.map((preset) => {
+				const active = activePreset === preset.key;
+				return (
+					<button
+						type="button"
+						key={preset.key}
+						onClick={() => onChange(presetRange(preset.key, firstDateSec))}
+						aria-pressed={active}
+						className={`inline-flex h-11 items-center rounded-full px-4 font-mono text-xxs uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8 ${
+							active
+								? "bg-brand-blue font-bold text-ink-00 ring-1 ring-inset ring-ink-00/20"
+								: "bg-ink-10 font-semibold text-ink-70 hover:bg-ink-15 hover:text-ink-95"
+						}`}
+					>
+						{preset.label}
+					</button>
+				);
+			})}
+			<span className="ml-1 flex items-center gap-1.5">
+				<input
+					type="date"
+					value={range.start}
+					max={range.end}
+					aria-label="Range start date"
+					onChange={(event) =>
+						onChange({ ...range, start: event.target.value })
+					}
+					className="h-11 rounded-md bg-ink-10 px-2 font-mono text-xs tabular-nums text-ink-85 ring-1 ring-inset ring-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
+					style={{ colorScheme: "dark" }}
+				/>
+				<span aria-hidden className="font-mono text-xs text-ink-55">
+					–
+				</span>
+				<input
+					type="date"
+					value={range.end}
+					min={range.start}
+					aria-label="Range end date"
+					onChange={(event) => onChange({ ...range, end: event.target.value })}
+					className="h-11 rounded-md bg-ink-10 px-2 font-mono text-xs tabular-nums text-ink-85 ring-1 ring-inset ring-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
+					style={{ colorScheme: "dark" }}
+				/>
+			</span>
+		</div>
+	);
+}
+
+export function PlChartSection({ range }: { range: PlRange }) {
 	const [data, setData] = useState<PlTimeseriesResult | null>(null);
 	const [loadFailed, setLoadFailed] = useState(false);
-	const [range, setRange] = useState(() => presetRange("30d", null));
 
 	useEffect(() => {
 		let cancelled = false;
@@ -90,18 +186,6 @@ export function PlChartSection() {
 			cancelled = true;
 		};
 	}, []);
-
-	const firstSettleSec = data?.picks[0]?.settledAt ?? null;
-
-	const activePreset = useMemo<PresetKey | null>(() => {
-		for (const preset of PRESETS) {
-			const candidate = presetRange(preset.key, firstSettleSec);
-			if (candidate.start === range.start && candidate.end === range.end) {
-				return preset.key;
-			}
-		}
-		return null;
-	}, [range, firstSettleSec]);
 
 	const chart = useMemo(() => {
 		if (!data) return null;
@@ -156,61 +240,6 @@ export function PlChartSection() {
 						{formatUnits(chart.netUnits)}
 					</span>
 				)}
-			</div>
-
-			{/* Range row — scopes every panel below */}
-			{/* biome-ignore lint/a11y/useSemanticElements: role="group" with
-			    aria-label is the right ARIA pattern for a non-landmark control cluster. */}
-			<div
-				className="flex flex-wrap items-center gap-2"
-				role="group"
-				aria-label="Chart date range"
-			>
-				{PRESETS.map((preset) => {
-					const active = activePreset === preset.key;
-					return (
-						<button
-							type="button"
-							key={preset.key}
-							onClick={() => setRange(presetRange(preset.key, firstSettleSec))}
-							aria-pressed={active}
-							className={`inline-flex h-11 items-center rounded-full px-4 font-mono text-xxs uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8 ${
-								active
-									? "bg-brand-blue font-bold text-ink-00 ring-1 ring-inset ring-ink-00/20"
-									: "bg-ink-10 font-semibold text-ink-70 hover:bg-ink-15 hover:text-ink-95"
-							}`}
-						>
-							{preset.label}
-						</button>
-					);
-				})}
-				<span className="ml-1 flex items-center gap-1.5">
-					<input
-						type="date"
-						value={range.start}
-						max={range.end}
-						aria-label="Range start date"
-						onChange={(event) =>
-							setRange((prev) => ({ ...prev, start: event.target.value }))
-						}
-						className="h-11 rounded-md bg-ink-10 px-2 font-mono text-xs tabular-nums text-ink-85 ring-1 ring-inset ring-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
-						style={{ colorScheme: "dark" }}
-					/>
-					<span aria-hidden className="font-mono text-xs text-ink-55">
-						–
-					</span>
-					<input
-						type="date"
-						value={range.end}
-						min={range.start}
-						aria-label="Range end date"
-						onChange={(event) =>
-							setRange((prev) => ({ ...prev, end: event.target.value }))
-						}
-						className="h-11 rounded-md bg-ink-10 px-2 font-mono text-xs tabular-nums text-ink-85 ring-1 ring-inset ring-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
-						style={{ colorScheme: "dark" }}
-					/>
-				</span>
 			</div>
 
 			{loadFailed && (

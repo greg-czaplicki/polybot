@@ -3,9 +3,15 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { MatchupCard } from "@/components/canonical/matchup-card";
-import { PlChartSection } from "@/components/charts/pl-chart-section";
 import { usePickContext } from "@/components/canonical/pick-context-panel";
 import { TeamTrendCard } from "@/components/canonical/team-trend-card";
+import {
+	PlChartSection,
+	type PlRange,
+	PlRangeRow,
+	presetRange,
+	rangeBounds,
+} from "@/components/charts/pl-chart-section";
 import {
 	clearManualPicksFn,
 	listManualPicksFn,
@@ -26,15 +32,6 @@ function formatRelativeTime(timestamp: number): string {
 	return `${Math.floor(diff / 86400)}d ago`;
 }
 
-type WindowKey = "day" | "week" | "month" | "all";
-
-const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
-	{ key: "day", label: "Daily" },
-	{ key: "week", label: "Weekly" },
-	{ key: "month", label: "Monthly" },
-	{ key: "all", label: "All-time" },
-];
-
 function statusLabelTone(status: ManualPickEntry["status"]): string {
 	switch (status) {
 		case "win":
@@ -53,7 +50,7 @@ function StatsPage() {
 	const [isLoading, setIsLoading] = useState(false);
 	const [isClearing, setIsClearing] = useState(false);
 	const [confirmingClear, setConfirmingClear] = useState(false);
-	const [windowFilter, setWindowFilter] = useState<WindowKey>("week");
+	const [range, setRange] = useState<PlRange>(() => presetRange("30d", null));
 
 	useEffect(() => {
 		if (!confirmingClear) return;
@@ -103,18 +100,26 @@ function StatsPage() {
 		}
 	};
 
+	// Earliest pick anchors the "All" preset for the shared range row.
+	const firstPickSec = useMemo(
+		() =>
+			settledPicks.length > 0
+				? Math.min(...settledPicks.map((pick) => pick.pickedAt))
+				: null,
+		[settledPicks],
+	);
+
+	// One range scopes everything below the row: stats strip, charts
+	// (settled-time basis), and the pick list (picked-time basis).
 	const filteredPicks = useMemo(() => {
-		if (windowFilter === "all") return settledPicks;
-		const start = new Date();
-		start.setHours(0, 0, 0, 0);
-		if (windowFilter === "week") {
-			start.setDate(start.getDate() - start.getDay());
-		} else if (windowFilter === "month") {
-			start.setDate(1);
-		}
-		const cutoffSeconds = Math.floor(start.getTime() / 1000);
-		return settledPicks.filter((pick) => pick.pickedAt >= cutoffSeconds);
-	}, [settledPicks, windowFilter]);
+		const bounds = rangeBounds(range);
+		if (!bounds) return settledPicks;
+		return settledPicks.filter(
+			(pick) =>
+				pick.pickedAt >= bounds.startSec &&
+				pick.pickedAt < bounds.endExclusiveSec,
+		);
+	}, [settledPicks, range]);
 
 	const stats = useMemo(() => {
 		const counts = { win: 0, loss: 0, push: 0, pending: 0 };
@@ -210,6 +215,13 @@ function StatsPage() {
 							</div>
 						</div>
 
+						{/* Shared range row — scopes the stats strip, charts, and list */}
+						<PlRangeRow
+							range={range}
+							onChange={setRange}
+							firstDateSec={firstPickSec}
+						/>
+
 						{/* Stats strip — tab-num, separate from actions */}
 						<div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
 							<StatPair label="total" value={stats.total} />
@@ -225,35 +237,8 @@ function StatsPage() {
 						</div>
 					</div>
 
-					{/* P/L curves — has its own range row, independent of the
-					    list's calendar-window pills below */}
-					<PlChartSection />
-
-					{/* Window filter pills */}
-					<div
-						className="mb-4 flex flex-wrap items-center gap-2"
-						role="group"
-						aria-label="Time window"
-					>
-						{WINDOW_OPTIONS.map((option) => {
-							const active = windowFilter === option.key;
-							return (
-								<button
-									type="button"
-									key={option.key}
-									onClick={() => setWindowFilter(option.key)}
-									aria-pressed={active}
-									className={`inline-flex h-11 items-center rounded-full px-4 font-mono text-xxs uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-9 ${
-										active
-											? "bg-brand-blue font-bold text-ink-00 ring-1 ring-inset ring-ink-00/20"
-											: "bg-ink-10 font-semibold text-ink-70 hover:bg-ink-15 hover:text-ink-95"
-									}`}
-								>
-									{option.label}
-								</button>
-							);
-						})}
-					</div>
+					{/* P/L curves — scoped by the shared range row above */}
+					<PlChartSection range={range} />
 
 					{/* Pick list */}
 					<section
@@ -381,9 +366,7 @@ function PickRow({ pick }: { pick: ManualPickEntry }) {
 						{pick.settledAt && (
 							<>
 								<span aria-hidden>·</span>
-								<span>
-									settled {formatRelativeTime(pick.settledAt)}
-								</span>
+								<span>settled {formatRelativeTime(pick.settledAt)}</span>
 							</>
 						)}
 					</div>
