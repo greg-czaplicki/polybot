@@ -19,6 +19,7 @@ const NAV_LINKS: { href: string; label: string }[] = [
 	{ href: "/bot", label: "Bot" },
 	{ href: "/stats", label: "Stats" },
 	{ href: "/shadow", label: "Shadow" },
+	{ href: "/wallets", label: "Wallets" },
 	{ href: "/strategy", label: "Strategy" },
 	{ href: "/canonical", label: "Canonical" },
 ];

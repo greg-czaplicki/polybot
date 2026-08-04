@@ -1681,6 +1681,12 @@ function SharpMoneyPage() {
 								>
 									stats
 								</a>
+								<a
+									href="/wallets"
+									className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+								>
+									wallets
+								</a>
 							</div>
 						</div>
 					</div>
