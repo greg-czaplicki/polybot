@@ -38,8 +38,8 @@ fixing commit.
   same-day CORRECTION). The 2026-07-22 BAL@BOS doubleheader triggered
   `f91dce2`'s tie-unaware nearest-by-time matching into creating 848
   duplicate game rows (one every ~2 min for 2.5 days — the loop ended when
-  the 3-day lookback dropped the slate date, and THE BUG IS STILL LIVE at
-  HEAD; see 2026-08-05-post-recon-deep-dive.md #2), each with facts, so
+  the 3-day lookback dropped the slate date; the tie-break bug was FIXED
+  later that day, see 2026-08-05-post-recon-deep-dive.md #2), each with facts, so
   every Orioles/Red Sox trend snapshot computed in that window had its
   last-10 filled with copies of that one game. Data cleaned up + rebuilt
   2026-08-05 (snapshot-bound commit `06d798a`). Three picks made during the window
@@ -48,6 +48,11 @@ fixing commit.
   pick-time trend context; exclude them from trend-bucket analyses. Totals
   don't consume trends in scoring, so decision impact was nil.
 
+- **wallet_entries is valid only from 2026-08-05 onward.** The original
+  share-reconstruction mixed price bases (USD valued at mid ÷ ask-based
+  side price), fabricating 'increase' entries from spread oscillation
+  (deep-dive finding #5). All 1,467 pre-fix rows were deleted 2026-08-05;
+  diffs now use raw shares carried from the holders API.
 - **CLV is valid only from 2026-07-20 onward.** Before `b40fec0`,
   `close_price` was captured from the resolved market (~0/1), so every stored
   `clv` was a rescaled win/loss flag. All settled picks were scrubbed to NULL

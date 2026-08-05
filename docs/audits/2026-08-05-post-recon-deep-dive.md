@@ -181,15 +181,42 @@ Highlights worth an early look:
 
 Full agent transcripts: session workflow `wf_e39c0131-16a`.
 
-## Recommended fix order
+## Resolution — all six P1s FIXED same day (2026-08-05)
 
-1. **Registry warm-up in request path** (#1/#7) — before Aug 7 preseason.
-2. **Doubleheader tie-break** (#2) — next MLB doubleheader recreates the
-   incident; trivial ORDER BY fix + optional unique index.
-3. **Soccer orientation** (#3) + Red Bulls alias — before EPL ~Aug 15;
-   includes orphan cleanup + pick relink.
-4. **CFB limit** (#4) — one-line, before ~Aug 29.
-5. **Wallet CLV price basis** (#5) — dataset pollutes daily; scrub after.
-6. **signalComponents provenance** (#6) — before the n≈100 recalibration.
-7. P2 shadow-book epistemics items batched (gate-parity for cron shadows,
-   fallback-defaults marker, recording-staleness alarm).
+App commits `1c1cb4d` + follow-up (deployed); bot branch `c87f2e4`
+(pulled + restarted on the VPS):
+
+1. **Registry warm-up** — `warmSeriesRegistry()` (bounded 5s wait, shared
+   in-flight discovery) awaited in `listBotCandidates`, `handleBotRequest`,
+   and the cron shadow path; `nfl-2026` (12185) added to fallbackIds and
+   the static map as a deterministic floor. Verify: watch the first
+   preseason slate (Aug 7) rejects with `nfl_preseason_excluded`.
+2. **Doubleheader tie-break** — `findExistingGame` prefers the row already
+   stamped with the processing event's `espn_event_id`, then unclaimed
+   (NULL) rows, then nearest-by-time; `findGameForPick` prefers
+   ESPN-linked rows, accepts either team orientation, deterministic
+   ordering. Verify at the next same-time MLB doubleheader.
+3. **Soccer orientation** — `parseTeamsFromTitle` is sport-aware (soccer =
+   home-first); Polymarket game dedup matches either orientation with
+   ESPN-linked preference; New York Red Bulls seeded. Both reversed
+   orphans deleted; the live MLS pick relinked to the real ESPN game row
+   (which has the close line). Verify on the next MLS slate + EPL restart.
+4. **CFB limit** — scoreboard `limit=500` + `groups=80` (CFB) /
+   `groups=50` (NCAAB); live-verified full slates (62/45/146 events).
+5. **Wallet CLV basis** — raw `shares` carried from the holders API
+   through cache JSON into the diff; cross-basis (legacy×shares)
+   comparisons refused during the transition tick. All 1,467 polluted
+   wallet_entries rows wiped (backup in session scratchpad); collection
+   restarted clean. Leaderboard/CLV data valid from 2026-08-05 only.
+6. **signalComponents provenance** — candidates response now carries
+   `signalComponents`; the bot echoes them in `decision_snapshot` (bot
+   `c87f2e4`); the server prefers the echo and stamps
+   `signalComponentsProvenance` ('scan_payload' | 'post_recompute') so
+   calibration can filter recomputed vectors. Picks created before
+   2026-08-05 have post-hoc components (filter `total != signal_score`).
+
+## Still open from this audit
+
+- 3 confirmed P2 shadow-book epistemics items (gate-parity for cron
+  shadows, fallback-defaults marker, recording-staleness alarm).
+- The 25-item unverified tail above.
