@@ -2636,6 +2636,7 @@ export async function analyzeMarketSharpness(
 					pseudonym: holder.pseudonym,
 					profileImage: holder.profileImage,
 					amount: holder.amount,
+					shares: holder.shares,
 					pnlDay: pnl.day,
 					pnlWeek: pnl.week,
 					pnlMonth: pnl.month,
