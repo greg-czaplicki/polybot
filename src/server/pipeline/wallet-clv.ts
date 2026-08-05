@@ -9,8 +9,13 @@
  * picking path reads wallet_entries yet.
  *
  * Diff semantics: holder `amount` is USD (shares × price), so a price move
- * alone changes it. Diffs are therefore computed in SHARES (amount / side
- * price) and only converted back to USD for storage.
+ * alone changes it. Diffs are therefore computed in SHARES — preferring the
+ * raw `shares` field carried from the CLOB holders API. Reconstructing
+ * shares as amount/price is only a legacy fallback for pre-2026-08-05
+ * cache rows: amount is valued at token.price (mid) while the stored side
+ * price is ask-based, so the division mixes bases and spread oscillation
+ * on a static position fabricates deltas (see the 2026-08-05 deep-dive
+ * audit, confirmed finding #5).
  */
 
 import type { Db } from "../db/client";
@@ -31,6 +36,8 @@ const VOID_AFTER_SECONDS = 7 * 86400;
 export interface HolderPosition {
 	proxyWallet: string;
 	amount: number;
+	/** Raw share count; present on snapshots written after 2026-08-05. */
+	shares?: number | null;
 }
 
 export interface SideSnapshot {
@@ -80,26 +87,38 @@ export function computeWalletEntryDiffs(
 		const nextPrice = nextSide.price;
 		if (!validPrice(nextPrice)) continue;
 
-		const prevByWallet = new Map<string, number>();
-		if (validPrice(prevSide.price)) {
-			for (const holder of prevSide.topHolders) {
-				if (!holder.proxyWallet || !Number.isFinite(holder.amount)) continue;
-				prevByWallet.set(
-					holder.proxyWallet.toLowerCase(),
-					holder.amount / prevSide.price,
-				);
+		const holderShares = (
+			holder: HolderPosition,
+			sidePrice: number | null | undefined,
+		): number | null => {
+			if (typeof holder.shares === "number" && Number.isFinite(holder.shares)) {
+				return holder.shares;
 			}
-		} else if (prevSide.topHolders.length > 0) {
-			// Previous price unknown → previous shares unrecoverable; skip the
-			// side rather than record price-move artifacts as entries.
-			continue;
+			// Legacy fallback (pre-shares cache rows): basis-mixed, see header.
+			return validPrice(sidePrice) ? holder.amount / sidePrice : null;
+		};
+
+		const prevByWallet = new Map<string, number>();
+		let prevUnderivable = false;
+		for (const holder of prevSide.topHolders) {
+			if (!holder.proxyWallet || !Number.isFinite(holder.amount)) continue;
+			const shares = holderShares(holder, prevSide.price);
+			if (shares === null) {
+				// Previous shares unrecoverable; skip the side rather than
+				// record price-move artifacts as entries.
+				prevUnderivable = true;
+				break;
+			}
+			prevByWallet.set(holder.proxyWallet.toLowerCase(), shares);
 		}
+		if (prevUnderivable) continue;
 
 		for (const holder of nextSide.topHolders) {
 			if (!holder.proxyWallet || !Number.isFinite(holder.amount)) continue;
 			if (holder.amount <= 0) continue;
 			const wallet = holder.proxyWallet.toLowerCase();
-			const nextShares = holder.amount / nextPrice;
+			const nextShares = holderShares(holder, nextPrice);
+			if (nextShares === null) continue;
 			const prevShares = prevByWallet.get(wallet);
 
 			if (prevShares === undefined) {

@@ -4,6 +4,7 @@ import {
 } from "@tanstack/react-start/server";
 import { handleBotRequest } from "./server/api/bot";
 import { handleBotControlRequest } from "./server/api/bot-control";
+import { warmSeriesRegistry } from "./server/api/series-registry";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
@@ -309,6 +310,11 @@ const serverEntry = {
 						);
 					}
 				})
+				.then(() =>
+					// Shadow rows stamp sport_tag via the series registry; warm it
+					// so a cold cron isolate labels new-season series correctly.
+					warmSeriesRegistry(),
+				)
 				.then(() =>
 					// Shadow book: record beyond-window entries (D1-only), then
 					// settle gate-rejected candidates through the same resolution

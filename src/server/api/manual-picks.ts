@@ -451,7 +451,7 @@ export async function enrichPickInline(
 	const teamSidedMarket = betType !== "total" && betType !== "prop";
 
 	if (sportTag) {
-		const parsed = parseTeamsFromTitle(title);
+		const parsed = parseTeamsFromTitle(title, sportTag);
 		if (parsed) {
 			const [homeTeam, awayTeam] = await Promise.all([
 				resolveSingleTeam(db, sportTag, parsed.home),

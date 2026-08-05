@@ -12,7 +12,10 @@ import {
 import { isNflPreseasonTime, toCanonicalSportTag } from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import { enrichPickInline } from "../api/manual-picks";
-import { resolveSportTagFromSeriesId } from "../api/series-registry";
+import {
+	resolveSportTagFromSeriesId,
+	warmSeriesRegistry,
+} from "../api/series-registry";
 import type { Db } from "../db/client";
 import { all } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
@@ -1082,7 +1085,7 @@ async function computeCanonicalBotCandidateScore(
 	if (entry.sharpSide !== "A" && entry.sharpSide !== "B") return null;
 
 	const matchupTitle = entry.marketTitle.split(":", 1)[0]?.trim() ?? "";
-	const parsedTeams = parseTeamsFromTitle(matchupTitle);
+	const parsedTeams = parseTeamsFromTitle(matchupTitle, sportTag);
 	if (!parsedTeams) return null;
 
 	const getCachedTeam = (alias: string) => {
@@ -1419,6 +1422,25 @@ function extractSnapshotStringArray(
 	return null;
 }
 
+/**
+ * Pull the scan-time signal component breakdown out of the bot's echoed
+ * decision snapshot, if present and plausibly shaped. Anything else returns
+ * null and the caller falls back to a stamped POST-time recompute.
+ */
+function extractPayloadSignalComponents(
+	payloadSnapshot: unknown,
+): SignalScoreBreakdown | null {
+	if (!payloadSnapshot || typeof payloadSnapshot !== "object") return null;
+	const candidate = (payloadSnapshot as Record<string, unknown>)
+		.signalComponents;
+	if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+		return null;
+	}
+	const total = (candidate as Record<string, unknown>).total;
+	if (typeof total !== "number" || !Number.isFinite(total)) return null;
+	return candidate as unknown as SignalScoreBreakdown;
+}
+
 function buildDecisionSnapshot(input: {
 	payloadSnapshot?: unknown;
 	cacheEntry: Awaited<ReturnType<typeof getSharpMoneyCacheByConditionId>>;
@@ -1430,6 +1452,9 @@ function buildDecisionSnapshot(input: {
 	grade?: string;
 	signalScore?: number;
 	signalComponents?: SignalScoreBreakdown | null;
+	/** 'scan_payload' = echoed from the candidate scan; 'post_recompute' =
+	 * recomputed at POST time (later snapshot — filter from calibration). */
+	signalComponentsProvenance?: string | null;
 	edgeRating?: number;
 	scoreDifferential?: number;
 	marketQualityScore?: number;
@@ -1493,6 +1518,7 @@ function buildDecisionSnapshot(input: {
 		grade: input.grade ?? null,
 		signalScore: input.signalScore ?? null,
 		signalComponents: input.signalComponents ?? null,
+		signalComponentsProvenance: input.signalComponentsProvenance ?? null,
 		topHoldersSharpSide: compactTopHolders(sortedSharpSideHolders),
 		edgeRating: input.edgeRating ?? null,
 		scoreDifferential: input.scoreDifferential ?? null,
@@ -1537,6 +1563,10 @@ async function listBotCandidates(
 	db: D1Database,
 	options: BotCandidatesOptions,
 ): Promise<BotCandidatesResult> {
+	// Sport-keyed policy gates resolve series -> tag through the registry
+	// snapshot; warm it so a cold isolate can label new-season series IDs
+	// (otherwise nfl_preseason_excluded etc. silently don't fire).
+	await warmSeriesRegistry();
 	const windowMinutes =
 		typeof options.windowMinutes === "number" && options.windowMinutes > 0
 			? options.windowMinutes
@@ -2252,6 +2282,10 @@ async function listBotCandidates(
 					grade: {
 						grade: grade.grade,
 						signalScore: grade.signalScore,
+						// Scan-time component breakdown; the bot echoes this back on
+						// pick creation so the persisted components describe the
+						// snapshot that actually produced the decision score.
+						signalComponents: grade.signalComponents ?? null,
 						edgeRating: grade.edgeRating,
 						scoreDifferential: grade.scoreDifferential,
 						microstructureScore: grade.microstructureScore,
@@ -2569,6 +2603,10 @@ export async function handleBotRequest(
 
 	const auth = requireBotAuth(request, env);
 	if (!auth.ok) return auth.response;
+
+	// Warm series->tag labeling for every bot path (pick creation stamps
+	// sport_tag; candidates evaluates sport-keyed gates).
+	await warmSeriesRegistry();
 
 	if (url.pathname === "/api/bot/health") {
 		if (request.method !== "GET") {
@@ -2913,14 +2951,28 @@ export async function handleBotRequest(
 					})
 				: null;
 
-		// Server-side signal component breakdown for the decision snapshot —
-		// the bot's payload only carries the blended score. One extra grade
-		// compute per pick creation (rare); best-effort.
-		const componentGrade = await computeSharpMoneyGrades(env.POLYWHALER_DB, {
-			conditionIds: [payload.conditionId],
-		})
-			.then((result) => result.results[0] ?? null)
-			.catch(() => null);
+		// Signal component breakdown: prefer the scan-time components the bot
+		// echoes from the candidate payload (they describe the snapshot that
+		// produced the decision score). Recomputing here reads a LATER cache/
+		// history state — on outbox replays up to 48h later — so a recompute
+		// is a stamped fallback only, filterable from calibration.
+		const payloadComponents = extractPayloadSignalComponents(
+			payload.decisionSnapshot,
+		);
+		const componentGrade = payloadComponents
+			? null
+			: await computeSharpMoneyGrades(env.POLYWHALER_DB, {
+					conditionIds: [payload.conditionId],
+				})
+					.then((result) => result.results[0] ?? null)
+					.catch(() => null);
+		const signalComponents =
+			payloadComponents ?? componentGrade?.signalComponents ?? null;
+		const signalComponentsProvenance = payloadComponents
+			? "scan_payload"
+			: componentGrade?.signalComponents
+				? "post_recompute"
+				: null;
 
 		const decisionSnapshot = buildDecisionSnapshot({
 			payloadSnapshot: payload.decisionSnapshot,
@@ -2932,7 +2984,8 @@ export async function handleBotRequest(
 			price,
 			grade: payload.grade,
 			signalScore,
-			signalComponents: componentGrade?.signalComponents ?? null,
+			signalComponents,
+			signalComponentsProvenance,
 			edgeRating,
 			scoreDifferential,
 			marketQualityScore,

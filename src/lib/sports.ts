@@ -10,6 +10,7 @@ export interface SportMarketDescriptor {
 // covers historical IDs and pre-resolution lookups.
 const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10187: "nfl",
+	12185: "nfl", // nfl-2026
 	10345: "nba",
 	10210: "ncaaf",
 	10470: "ncaab",

@@ -13,6 +13,8 @@ export interface TopHolderPnlData {
 	pseudonym?: string;
 	profileImage?: string;
 	amount: number;
+	/** Raw share count (pre-USD-conversion); see HolderWithPnl.shares. */
+	shares?: number;
 	pnlDay?: number | null;
 	pnlWeek?: number | null;
 	pnlMonth?: number | null;

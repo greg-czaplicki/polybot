@@ -521,6 +521,13 @@ export interface HolderWithPnl {
 	pseudonym?: string;
 	profileImage?: string;
 	amount: number;
+	/**
+	 * Raw share count from the CLOB holders API, BEFORE the USD conversion.
+	 * Wallet-CLV diffs need this: reconstructing shares as amount/price
+	 * mixes price bases (amount is valued at token.price, the stored side
+	 * price is ask-based) and fabricates entries from spread oscillation.
+	 */
+	shares?: number;
 	outcomeIndex: number;
 	pnlDay?: number | null;
 	pnlWeek?: number | null;
@@ -2312,6 +2319,7 @@ export async function analyzeMarketSharpness(
 					pseudonym: holder.pseudonym,
 					profileImage: holder.profileImageOptimized || holder.profileImage,
 					amount: usdValue, // Now in USD instead of shares
+					shares: holder.amount, // raw shares, kept for wallet-CLV diffs
 					outcomeIndex: holder.outcomeIndex,
 				};
 

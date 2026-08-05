@@ -50,7 +50,8 @@ export type SeriesSportConfig =
  * Fallback IDs are the resolved series as of 2026-07-30.
  */
 export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
-	{ tag: "nfl", kind: "seasonal", slugBase: "nfl", fallbackIds: [10187], target: true },
+	// 12185 = nfl-2026 (minted by 2026-08-05); 10187 = nfl-2025, still active.
+	{ tag: "nfl", kind: "seasonal", slugBase: "nfl", fallbackIds: [10187, 12185], target: true },
 	{ tag: "nba", kind: "seasonal", slugBase: "nba", fallbackIds: [10345], target: true },
 	// Tag is "ncaaf" (canonical DB convention: teams/games sport_tag), but the
 	// Gamma series slug base is "cfb" (cfb-2025, cfb-2026, ...).
@@ -273,6 +274,35 @@ export async function resolveSeriesRegistry(options?: {
 /** Synchronous best-effort registry for callers that cannot await (labeling). */
 export function getSeriesRegistrySnapshot(): SeriesRegistry {
 	return cachedRegistry ?? buildFallbackRegistry();
+}
+
+let inflightWarm: Promise<SeriesRegistry> | null = null;
+
+/**
+ * Warm the registry cache from the request path, waiting at most
+ * `maxWaitMs`. Without this, isolates that serve /api/bot/candidates or
+ * pick creation without ever running the pipeline sync label new-season
+ * series IDs as unknown, so sport-keyed policy gates (nfl_preseason_
+ * excluded, nhl_sport_excluded) silently don't fire. The bounded wait
+ * keeps a Gamma outage from stalling bot requests: on timeout the caller
+ * proceeds with the best-effort snapshot while discovery finishes and
+ * benefits the next request on this isolate. Concurrent callers share one
+ * discovery via `inflightWarm`.
+ */
+export async function warmSeriesRegistry(maxWaitMs = 5000): Promise<void> {
+	if (
+		cachedRegistry &&
+		Date.now() - cachedRegistry.resolvedAt < REGISTRY_TTL_MS
+	) {
+		return;
+	}
+	inflightWarm ??= resolveSeriesRegistry().finally(() => {
+		inflightWarm = null;
+	});
+	await Promise.race([
+		inflightWarm,
+		new Promise((resolve) => setTimeout(resolve, maxWaitMs)),
+	]);
 }
 
 /**

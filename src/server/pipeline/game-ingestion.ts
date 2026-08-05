@@ -83,17 +83,25 @@ async function findExistingGame(
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
+	// Match EITHER team orientation: a title parse that swaps home/away
+	// (soccer titles are home-first; occasional US-sport parse errors) must
+	// dedup against the ESPN-created row instead of spawning a reversed
+	// duplicate that can never finalize. Prefer the ESPN-linked row, then
+	// the oldest, for determinism.
 	const row = await first<{ id: string }>(
 		db,
 		`SELECT id FROM games
 		 WHERE sport_tag = ?
-		   AND home_team_id = ?
-		   AND away_team_id = ?
+		   AND ((home_team_id = ? AND away_team_id = ?)
+		     OR (home_team_id = ? AND away_team_id = ?))
 		   AND game_time BETWEEN ? AND ?
+		 ORDER BY (espn_event_id IS NOT NULL) DESC, created_at ASC
 		 LIMIT 1`,
 		sportTag,
 		homeTeamId,
 		awayTeamId,
+		awayTeamId,
+		homeTeamId,
 		windowStart,
 		windowEnd,
 	);

@@ -155,8 +155,19 @@ async function fetchEspnScoreboard(
 	if (!mapping) return null;
 
 	// Without an explicit limit ESPN truncates busy slates (NCAAB weekdays run
-	// 300+ games) with no error or cursor.
-	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=1000`;
+	// 300+ games) with no error or cursor — but limit>500 silently flips
+	// college scoreboards to the curated Top-25 view (live-verified
+	// 2026-08-05: CFB dates=20250830 returns 62 events at limit=500, only 25
+	// at limit=1000). Keep the limit at 500 and pass the all-games groups
+	// param for college feeds (FBS=80, D1 hoops=50, which is also the only
+	// way NCAAB returns the full slate).
+	const groups =
+		mapping.league === "college-football"
+			? "&groups=80"
+			: mapping.league === "mens-college-basketball"
+				? "&groups=50"
+				: "";
+	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=500${groups}`;
 
 	try {
 		const res = await fetch(url);
@@ -319,6 +330,7 @@ async function findExistingGame(
 	awayTeamId: string,
 	eventTime: number,
 	sportTag: string,
+	espnEventId: string,
 ): Promise<{
 	id: string;
 	is_final: number;
@@ -328,8 +340,12 @@ async function findExistingGame(
 	const windowStart = eventTime - GAME_TIME_MATCH_WINDOW_SECONDS;
 	const windowEnd = eventTime + GAME_TIME_MATCH_WINDOW_SECONDS;
 
-	// Nearest-by-time: doubleheaders put two same-matchup games inside the
-	// window; an arbitrary LIMIT 1 could return the other game.
+	// Preference order matters for doubleheaders, whose two games can carry
+	// the SAME listed start time (2026-07-22 BAL@BOS): (1) the row already
+	// stamped with THIS event's id — without this, game 2's event keeps
+	// matching game 1's row and the claimedByOtherEvent branch creates a
+	// fresh duplicate every cycle (the 848-row incident); (2) an unclaimed
+	// row (espn_event_id NULL) we can stamp; (3) nearest by time.
 	return first<{
 		id: string;
 		is_final: number;
@@ -342,13 +358,16 @@ async function findExistingGame(
 		   AND home_team_id = ?
 		   AND away_team_id = ?
 		   AND game_time BETWEEN ? AND ?
-		 ORDER BY ABS(game_time - ?) ASC
+		 ORDER BY IFNULL(espn_event_id = ?, 0) DESC,
+		          (espn_event_id IS NULL) DESC,
+		          ABS(game_time - ?) ASC
 		 LIMIT 1`,
 		sportTag,
 		homeTeamId,
 		awayTeamId,
 		windowStart,
 		windowEnd,
+		espnEventId,
 		eventTime,
 	);
 }
@@ -546,6 +565,7 @@ export async function ingestEspnSchedule(
 						awayTeamId,
 						eventTime,
 						canonicalTag,
+						event.id,
 					);
 
 					let gameId: string;

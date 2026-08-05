@@ -87,4 +87,60 @@ describe("computeWalletEntryDiffs", () => {
 			"B:increase",
 		]);
 	});
+
+	it("prefers raw shares over amount/price reconstruction (basis mismatch)", () => {
+		// Static 20,000-share position. The USD amount is valued at the mid
+		// while side price is the ask, so amount/price reconstruction drifts
+		// tick to tick (0.50→0.505 mid at a fixed 0.51 ask ≈ +$100 phantom
+		// delta). With raw shares present, no entry is recorded.
+		const prev: MarketSnapshot = {
+			sideA: {
+				price: 0.51,
+				topHolders: [{ proxyWallet: "0xabc", amount: 10_000, shares: 20_000 }],
+			},
+			sideB: { price: 0.49, topHolders: [] },
+		};
+		const next: MarketSnapshot = {
+			sideA: {
+				price: 0.51,
+				topHolders: [{ proxyWallet: "0xabc", amount: 10_100, shares: 20_000 }],
+			},
+			sideB: { price: 0.49, topHolders: [] },
+		};
+		expect(computeWalletEntryDiffs(prev, next)).toEqual([]);
+	});
+
+	it("computes deltas from raw shares when present", () => {
+		const prev: MarketSnapshot = {
+			sideA: {
+				price: 0.5,
+				topHolders: [{ proxyWallet: "0xabc", amount: 5_000, shares: 10_000 }],
+			},
+			sideB: { price: 0.5, topHolders: [] },
+		};
+		const next: MarketSnapshot = {
+			sideA: {
+				price: 0.5,
+				topHolders: [{ proxyWallet: "0xabc", amount: 7_500, shares: 15_000 }],
+			},
+			sideB: { price: 0.5, topHolders: [] },
+		};
+		const diffs = computeWalletEntryDiffs(prev, next);
+		expect(diffs).toHaveLength(1);
+		expect(diffs[0].deltaUsd).toBeCloseTo(2500); // 5,000 shares × 0.50
+	});
+
+	it("still diffs shares against a legacy prev snapshot without shares", () => {
+		const prev = snapshot(0.4, [["0xabc", 4000]]); // legacy: 10,000 shares
+		const next: MarketSnapshot = {
+			sideA: {
+				price: 0.5,
+				topHolders: [{ proxyWallet: "0xabc", amount: 7_500, shares: 15_000 }],
+			},
+			sideB: { price: 0.5, topHolders: [] },
+		};
+		const diffs = computeWalletEntryDiffs(prev, next);
+		expect(diffs).toHaveLength(1);
+		expect(diffs[0].deltaUsd).toBeCloseTo(2500);
+	});
 });

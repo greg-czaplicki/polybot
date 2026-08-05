@@ -241,7 +241,7 @@ export async function backfillManualPicks(
 			const teamSidedMarket = betType !== "total" && betType !== "prop";
 
 			if (!teamId && sportTag) {
-				const parsed = parseTeamsFromTitle(title);
+				const parsed = parseTeamsFromTitle(title, sportTag);
 				if (parsed) {
 					const homeTeam = await resolveSingleTeam(db, sportTag, parsed.home);
 					const awayTeam = await resolveSingleTeam(db, sportTag, parsed.away);

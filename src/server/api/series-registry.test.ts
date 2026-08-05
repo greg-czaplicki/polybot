@@ -68,9 +68,8 @@ describe("resolveSeriesRegistry", () => {
 
 		const registry = await resolveSeriesRegistry();
 		const nfl = registry.series.filter((s) => s.tag === "nfl");
-		expect(nfl).toEqual([
-			expect.objectContaining({ seriesId: 10187, source: "fallback" }),
-		]);
+		expect(nfl.map((s) => s.seriesId).sort()).toEqual([10187, 12185]);
+		expect(nfl.every((s) => s.source === "fallback")).toBe(true);
 		// No probe errors occurred, so this is off-season, not a failure.
 		expect(registry.discoveryFailures).toEqual([]);
 	});

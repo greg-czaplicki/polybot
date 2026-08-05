@@ -8,6 +8,7 @@
  *   and resolves to canonical team IDs via alias lookup
  */
 
+import { toCanonicalSportTag } from "../../lib/sports";
 import type { Db } from "../db/client";
 import type { UpsertTeamInput } from "../repositories/teams";
 import {
@@ -2593,6 +2594,16 @@ const SOCCER_TEAMS: UpsertTeamInput[] = [
 		aliases: ["NYCFC", "NYC", "NYCFC FC", "NYCFC AFC"],
 	},
 	{
+		// Missing from the original 50-club seed; without an exact alias the
+		// word-fallback resolved "New York Red Bulls" to Newcastle United
+		// via Newcastle's "NEW" abbreviation alias.
+		name: "New York Red Bulls",
+		shortName: "Red Bulls",
+		abbreviation: "RBNY",
+		sportTag: "soccer",
+		aliases: ["Red Bulls", "RBNY", "NY Red Bulls", "New York Red Bulls FC"],
+	},
+	{
 		name: "Orlando City SC",
 		shortName: "Orlando",
 		abbreviation: "ORL",
@@ -2758,13 +2769,19 @@ function cleanTeamFragment(raw: string): string {
 
 /**
  * Parses team name candidates from a market title string.
- * Returns [awayCandidate, homeCandidate] following "Away @ Home" convention.
  * Returns null if the title cannot be parsed into two team candidates.
+ *
+ * "vs" ordering is SPORT-DEPENDENT: Polymarket lists US sports as
+ * "Away vs Home" but soccer as "Home vs Away" ("Arsenal FC vs Burnley FC"
+ * is an Arsenal home fixture — verified against ESPN for live MLS slates).
+ * Pass `sportTag` so soccer titles don't get inverted; without it the US
+ * convention is assumed.
  */
 export function parseTeamsFromTitle(
 	title: string,
+	sportTag?: string,
 ): { away: string; home: string } | null {
-	// Try "Team A at/@ Team B" (away @ home)
+	// Try "Team A at/@ Team B" (away @ home in every sport)
 	const atMatch = title.match(/^(.+?)\s+(?:at|@)\s+(.+)/i);
 	if (atMatch) {
 		const away = cleanTeamFragment(atMatch[1]);
@@ -2778,9 +2795,11 @@ export function parseTeamsFromTitle(
 		const teamA = cleanTeamFragment(vsMatch[1]);
 		const teamB = cleanTeamFragment(vsMatch[2]);
 		if (teamA && teamB) {
-			// "vs" convention: first listed is away, second is home
-			// (Polymarket typically lists "Away vs Home")
-			return { away: teamA, home: teamB };
+			const homeFirst =
+				sportTag != null && toCanonicalSportTag(sportTag) === "soccer";
+			return homeFirst
+				? { home: teamA, away: teamB }
+				: { away: teamA, home: teamB };
 		}
 	}
 
@@ -2804,7 +2823,7 @@ export async function resolveTeamFromMarketTitle(
 	sportTag: string,
 	marketTitle: string,
 ): Promise<ResolvedTeams | null> {
-	const parsed = parseTeamsFromTitle(marketTitle);
+	const parsed = parseTeamsFromTitle(marketTitle, sportTag);
 	if (!parsed) return null;
 
 	// Try to resolve each candidate via alias matching
