@@ -1226,6 +1226,10 @@ def place_bet(
 	)
 	decision_snapshot = {
 		"signalScore": grade.get("signalScore"),
+		# Scan-time component breakdown from the candidates response; the
+		# server persists these instead of recomputing at POST time (which
+		# would describe a later snapshot than the decision score).
+		"signalComponents": grade.get("signalComponents"),
 		"edgeRating": entry.get("edgeRating"),
 		"scoreDifferential": entry.get("scoreDifferential"),
 		"marketQualityScore": grade.get("microstructureScore"),
