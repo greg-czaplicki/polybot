@@ -130,8 +130,12 @@ describe("computeWalletEntryDiffs", () => {
 		expect(diffs[0].deltaUsd).toBeCloseTo(2500); // 5,000 shares × 0.50
 	});
 
-	it("still diffs shares against a legacy prev snapshot without shares", () => {
-		const prev = snapshot(0.4, [["0xabc", 4000]]); // legacy: 10,000 shares
+	it("skips wallets whose prev and next snapshots use different share bases", () => {
+		// Legacy prev (reconstructed shares) vs shares-carrying next: the two
+		// values live on different price bases, so a delta between them is the
+		// fabrication bug. The transition tick records nothing; the wallet
+		// resumes diffing once both snapshots carry raw shares.
+		const prev = snapshot(0.4, [["0xabc", 4000]]); // legacy: no shares field
 		const next: MarketSnapshot = {
 			sideA: {
 				price: 0.5,
@@ -139,8 +143,26 @@ describe("computeWalletEntryDiffs", () => {
 			},
 			sideB: { price: 0.5, topHolders: [] },
 		};
+		expect(computeWalletEntryDiffs(prev, next)).toEqual([]);
+	});
+
+	it("new wallets still record as new_top20 during the basis transition", () => {
+		const prev = snapshot(0.5, [["0xaaa", 3000]]); // legacy
+		const next: MarketSnapshot = {
+			sideA: {
+				price: 0.5,
+				topHolders: [
+					{ proxyWallet: "0xaaa", amount: 3000, shares: 6000 },
+					{ proxyWallet: "0xnew", amount: 900, shares: 1800 },
+				],
+			},
+			sideB: { price: 0.5, topHolders: [] },
+		};
 		const diffs = computeWalletEntryDiffs(prev, next);
 		expect(diffs).toHaveLength(1);
-		expect(diffs[0].deltaUsd).toBeCloseTo(2500);
+		expect(diffs[0]).toMatchObject({
+			walletAddress: "0xnew",
+			kind: "new_top20",
+		});
 	});
 });

@@ -87,18 +87,23 @@ export function computeWalletEntryDiffs(
 		const nextPrice = nextSide.price;
 		if (!validPrice(nextPrice)) continue;
 
+		const rawShares = (holder: HolderPosition): number | null =>
+			typeof holder.shares === "number" && Number.isFinite(holder.shares)
+				? holder.shares
+				: null;
 		const holderShares = (
 			holder: HolderPosition,
 			sidePrice: number | null | undefined,
-		): number | null => {
-			if (typeof holder.shares === "number" && Number.isFinite(holder.shares)) {
-				return holder.shares;
-			}
+		): { value: number; raw: boolean } | null => {
+			const raw = rawShares(holder);
+			if (raw !== null) return { value: raw, raw: true };
 			// Legacy fallback (pre-shares cache rows): basis-mixed, see header.
-			return validPrice(sidePrice) ? holder.amount / sidePrice : null;
+			return validPrice(sidePrice)
+				? { value: holder.amount / sidePrice, raw: false }
+				: null;
 		};
 
-		const prevByWallet = new Map<string, number>();
+		const prevByWallet = new Map<string, { value: number; raw: boolean }>();
 		let prevUnderivable = false;
 		for (const holder of prevSide.topHolders) {
 			if (!holder.proxyWallet || !Number.isFinite(holder.amount)) continue;
@@ -117,9 +122,16 @@ export function computeWalletEntryDiffs(
 			if (!holder.proxyWallet || !Number.isFinite(holder.amount)) continue;
 			if (holder.amount <= 0) continue;
 			const wallet = holder.proxyWallet.toLowerCase();
-			const nextShares = holderShares(holder, nextPrice);
-			if (nextShares === null) continue;
-			const prevShares = prevByWallet.get(wallet);
+			const next = holderShares(holder, nextPrice);
+			if (next === null) continue;
+			const nextShares = next.value;
+			const prevEntry = prevByWallet.get(wallet);
+			// A raw-shares snapshot diffed against a reconstructed one (or vice
+			// versa) compares two price bases — exactly the fabrication bug.
+			// Skip the wallet for this transition tick; both sides carry raw
+			// shares from the next tick on.
+			if (prevEntry !== undefined && prevEntry.raw !== next.raw) continue;
+			const prevShares = prevEntry?.value;
 
 			if (prevShares === undefined) {
 				if (holder.amount >= MIN_DELTA_USD) {
