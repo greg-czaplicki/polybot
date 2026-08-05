@@ -34,12 +34,15 @@ fixing commit.
   only), and `book_*` de-vig columns are moneyline-only while soccer picks
   to date are all totals/BTTS.
 - **BAL/BOS trend data was corrupt 2026-07-23 → 2026-08-05** (see
-  docs/audits/2026-08-05-duplicate-game-incident.md). The 2026-07-22 BAL@BOS
-  doubleheader triggered the pre-`f91dce2` matching bug into creating 848
-  duplicate game rows (one every ~2 min for 2.5 days), each with facts, so
+  docs/audits/2026-08-05-duplicate-game-incident.md, including its
+  same-day CORRECTION). The 2026-07-22 BAL@BOS doubleheader triggered
+  `f91dce2`'s tie-unaware nearest-by-time matching into creating 848
+  duplicate game rows (one every ~2 min for 2.5 days — the loop ended when
+  the 3-day lookback dropped the slate date, and THE BUG IS STILL LIVE at
+  HEAD; see 2026-08-05-post-recon-deep-dive.md #2), each with facts, so
   every Orioles/Red Sox trend snapshot computed in that window had its
-  last-10 filled with copies of that one game. Cleaned up + rebuilt
-  2026-08-05 (fix commit `06d798a`). Three picks made during the window
+  last-10 filled with copies of that one game. Data cleaned up + rebuilt
+  2026-08-05 (snapshot-bound commit `06d798a`). Three picks made during the window
   (`pick_1785197348845_5gck6mk`, `pick_1785531552200_ns3ve7v`,
   `pick_1785622207476_beejpwc` — all totals, all losses) carry poisoned
   pick-time trend context; exclude them from trend-bucket analyses. Totals

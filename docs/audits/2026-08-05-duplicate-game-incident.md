@@ -1,5 +1,18 @@
 # 2026-08-05 — Duplicate-game incident (BAL@BOS doubleheader) + snapshot lookahead fix
 
+> **CORRECTION (same day, post-recon deep dive):** the causal story below
+> is backwards. Timeline analysis (see
+> 2026-08-05-post-recon-deep-dive.md, confirmed finding #2) proves
+> `f91dce2` **started** the creation loop (committed 14:35 UTC 07-23;
+> duplicates began 14:36) — the pre-f91dce2 code swallowed the second
+> event and could not create duplicates. The loop stopped at 07-25 23:59
+> UTC because the 3-day ingestion lookback dropped the 07-22 slate date,
+> not because anything was fixed. **The bug is still live at HEAD**:
+> `findExistingGame`'s nearest-by-time match has no tie-break and no
+> espn_event_id preference, so the next same-time-listed doubleheader
+> recreates the incident. Read "Before the doubleheader-aware matching
+> fix" claims below with that in mind.
+
 Discovered while implementing the recon-audit trend-snapshot lookahead fix:
 a contamination scan of `team_trend_snapshots` surfaced ~5,400 suspicious
 rows that all traced back to one runaway duplicate-game loop.
