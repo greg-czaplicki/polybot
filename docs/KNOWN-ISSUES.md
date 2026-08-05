@@ -33,6 +33,17 @@ fixing commit.
   `game_id = NULL` (no trend features, settlement via market resolution
   only), and `book_*` de-vig columns are moneyline-only while soccer picks
   to date are all totals/BTTS.
+- **BAL/BOS trend data was corrupt 2026-07-23 → 2026-08-05** (see
+  docs/audits/2026-08-05-duplicate-game-incident.md). The 2026-07-22 BAL@BOS
+  doubleheader triggered the pre-`f91dce2` matching bug into creating 848
+  duplicate game rows (one every ~2 min for 2.5 days), each with facts, so
+  every Orioles/Red Sox trend snapshot computed in that window had its
+  last-10 filled with copies of that one game. Cleaned up + rebuilt
+  2026-08-05 (fix commit `06d798a`). Three picks made during the window
+  (`pick_1785197348845_5gck6mk`, `pick_1785531552200_ns3ve7v`,
+  `pick_1785622207476_beejpwc` — all totals, all losses) carry poisoned
+  pick-time trend context; exclude them from trend-bucket analyses. Totals
+  don't consume trends in scoring, so decision impact was nil.
 
 - **CLV is valid only from 2026-07-20 onward.** Before `b40fec0`,
   `close_price` was captured from the resolved market (~0/1), so every stored
@@ -160,10 +171,12 @@ Still open, in rough fix order:
    already-picked exclusion in /api/bot/candidates as defense-in-depth.
 2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
-3. Trend-snapshot timing (recon P2s): as_of_time is game START (leaks
-   in-progress games into as-of lookups) and late-processed games can
-   include later results (lookahead). Fix BEFORE the n≈100 re-audit judges
-   team trends.
+3. Trend-snapshot timing (recon P2s): the late-processing lookahead was
+   FIXED 2026-08-05 (`06d798a` — windows bounded at `as_of_time`, plus a
+   repair pass that recomputes newer snapshots when a late game lands).
+   Remaining half: as_of_time is game START, so an as-of lookup timed
+   between a game's start and its end can read that game's final result
+   (only bites picks placed while a prior game is in progress — rare).
 4. Scoring-behavior findings needing an era decision (do NOT fix casually):
    empty-side sharpScore=50 inflation; edgeRating "volume bonus" computed
    from liquidity. Both change picking behavior → strategy era bump.
