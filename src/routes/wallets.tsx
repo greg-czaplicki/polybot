@@ -30,6 +30,15 @@ function formatCents(value: number | null): string {
 	return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}¢`;
 }
 
+function formatPct(value: number | null): string {
+	if (value === null || !Number.isFinite(value)) return "—";
+	return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
+}
+
+function profileUrl(address: string): string {
+	return `https://polymarket.com/profile/${address}`;
+}
+
 function clvClass(value: number | null): string {
 	if (value === null || !Number.isFinite(value)) return "text-ink-55";
 	return value >= 0 ? "text-signal-pos" : "text-signal-bad";
@@ -161,8 +170,9 @@ function WalletsPage() {
 							Skill Leaderboard
 						</h2>
 						<p className="mb-3 font-sans text-xs text-ink-55">
-							Wallets with ≥3 settled entries, ranked by average CLV — did their
-							entry price beat the close?
+							Wallets with ≥3 settled entries, ranked by relative CLV (close
+							move as % of entry price) — did their entry beat the close, and
+							by how much relative to what they paid?
 						</p>
 						{leaderboard.length === 0 ? (
 							<div className="font-mono text-sm text-ink-55">
@@ -175,6 +185,7 @@ function WalletsPage() {
 									<thead>
 										<tr className="text-left text-xxs uppercase tracking-wider text-ink-55">
 											<th className="py-1.5 pr-4 font-semibold">Wallet</th>
+											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
 											<th className="py-1.5 pr-4 font-semibold">Entries</th>
@@ -185,12 +196,22 @@ function WalletsPage() {
 									<tbody className="divide-y divide-ink-15">
 										{leaderboard.map((row) => (
 											<tr key={row.walletAddress}>
-												<td className="py-2 pr-4 text-ink-85">
-													{shortWallet(row.walletAddress)}
+												<td className="py-2 pr-4">
+													<a
+														href={profileUrl(row.walletAddress)}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="text-ink-85 underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+													>
+														{shortWallet(row.walletAddress)}
+													</a>
 												</td>
 												<td
-													className={`py-2 pr-4 font-semibold ${clvClass(row.avgClv)}`}
+													className={`py-2 pr-4 font-semibold ${clvClass(row.avgRelClv)}`}
 												>
+													{formatPct(row.avgRelClv)}
+												</td>
+												<td className={`py-2 pr-4 ${clvClass(row.avgClv)}`}>
 													{formatCents(row.avgClv)}
 												</td>
 												<td className="py-2 pr-4 text-ink-70">
@@ -268,7 +289,14 @@ function WalletsPage() {
 											</div>
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 font-mono text-xxs tabular-nums text-ink-55">
-											<span>{shortWallet(entry.walletAddress)}</span>
+											<a
+												href={profileUrl(entry.walletAddress)}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+											>
+												{shortWallet(entry.walletAddress)}
+											</a>
 											<span aria-hidden>·</span>
 											<span>
 												{entry.kind === "new_top20" ? "new" : "added"}

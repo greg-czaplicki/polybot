@@ -13,7 +13,7 @@
  */
 
 import type { Db } from "../db/client";
-import { all } from "../db/client";
+import { all, run } from "../db/client";
 import { listTeamGameFacts } from "../repositories/team-game-facts";
 import {
 	deleteTeamTrendSnapshots,
@@ -114,12 +114,53 @@ export async function computeSnapshotsForGame(
 	home: ComputeSnapshotsResult;
 	away: ComputeSnapshotsResult;
 }> {
+	// Bound each window at the as-of game's start time (inclusive of the
+	// game itself). Without this, a game fact-processed out of chronological
+	// order writes a snapshot whose window contains games played AFTER its
+	// as_of_time — lookahead that every retrospective as-of consumer inherits.
+	const bound = { beforeGameTime: gameTime + 1 };
 	const [home, away] = await Promise.all([
-		computeSnapshotsForTeam(db, homeTeamId, sportTag, gameId, gameTime),
-		computeSnapshotsForTeam(db, awayTeamId, sportTag, gameId, gameTime),
+		computeSnapshotsForTeam(db, homeTeamId, sportTag, gameId, gameTime, bound),
+		computeSnapshotsForTeam(db, awayTeamId, sportTag, gameId, gameTime, bound),
 	]);
 
 	return { home, away };
+}
+
+/**
+ * After a late-processed game lands, snapshots for the same team stamped
+ * with a LATER as_of_time were computed without it — their windows are
+ * stale. Recompute every existing as-of row newer than the late game.
+ * Normal chronological processing finds nothing to do.
+ */
+export async function repairSnapshotsAfterLateGame(
+	db: Db,
+	teamId: string,
+	sportTag: string,
+	lateGameTime: number,
+): Promise<number> {
+	const newer = await all<{ as_of_game_id: string; as_of_time: number }>(
+		db,
+		`SELECT DISTINCT as_of_game_id, as_of_time FROM team_trend_snapshots
+		 WHERE team_id = ? AND sport_tag = ? AND as_of_time > ?`,
+		teamId,
+		sportTag,
+		lateGameTime,
+	);
+
+	let recomputed = 0;
+	for (const row of newer) {
+		const result = await computeSnapshotsForTeam(
+			db,
+			teamId,
+			sportTag,
+			row.as_of_game_id,
+			row.as_of_time,
+			{ beforeGameTime: row.as_of_time + 1 },
+		);
+		recomputed += result.snapshotsComputed;
+	}
+	return recomputed;
 }
 
 /**
@@ -162,8 +203,76 @@ export async function recomputeAllSnapshotsForTeam(
 		sportTag,
 		mostRecent.gameId,
 		mostRecent.gameTime,
-		{ windowSize },
+		{ windowSize, beforeGameTime: mostRecent.gameTime + 1 },
 	);
+}
+
+export interface RebuildSnapshotHistoryResult {
+	teamId: string;
+	sportTag: string;
+	gamesProcessed: number;
+	snapshotsComputed: number;
+}
+
+/**
+ * Delete and rebuild a team's snapshot history — one as-of row per fact
+ * game in chronological order, each window bounded at its as-of time.
+ * Repair tool for teams whose snapshots were computed from corrupted or
+ * out-of-order facts (e.g. the 2026-07-22 BAL@BOS duplicate-game incident).
+ *
+ * `sinceGameTime` limits the rebuild (and the delete) to as-of rows at or
+ * after that time — use it to keep the D1 query count bounded when only a
+ * recent stretch is contaminated.
+ */
+export async function rebuildSnapshotHistoryForTeam(
+	db: Db,
+	teamId: string,
+	sportTag: string,
+	options?: { windowSize?: number; sinceGameTime?: number },
+): Promise<RebuildSnapshotHistoryResult> {
+	const since = options?.sinceGameTime ?? 0;
+
+	const games = await all<{ game_id: string; game_time: number }>(
+		db,
+		`SELECT DISTINCT game_id, game_time FROM team_game_facts
+		 WHERE team_id = ? AND sport_tag = ? AND game_time >= ?
+		 ORDER BY game_time ASC`,
+		teamId,
+		sportTag,
+		since,
+	);
+
+	await run(
+		db,
+		`DELETE FROM team_trend_snapshots
+		 WHERE team_id = ? AND sport_tag = ? AND as_of_time >= ?`,
+		teamId,
+		sportTag,
+		since,
+	);
+
+	let snapshotsComputed = 0;
+	for (const game of games) {
+		const result = await computeSnapshotsForTeam(
+			db,
+			teamId,
+			sportTag,
+			game.game_id,
+			game.game_time,
+			{
+				windowSize: options?.windowSize,
+				beforeGameTime: game.game_time + 1,
+			},
+		);
+		snapshotsComputed += result.snapshotsComputed;
+	}
+
+	return {
+		teamId,
+		sportTag,
+		gamesProcessed: games.length,
+		snapshotsComputed,
+	};
 }
 
 export interface BackfillSnapshotsResult {

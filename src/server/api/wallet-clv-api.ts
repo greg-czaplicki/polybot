@@ -37,6 +37,7 @@ export interface WalletLeaderboardRow {
 	entries: number;
 	closed: number;
 	avgClv: number;
+	avgRelClv: number | null;
 	beatCloseCount: number;
 	totalDeltaUsd: number;
 	lastSeenAt: number;
@@ -91,12 +92,15 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 		);
 
 		// Skill needs repetition: require >=3 settled entries before a wallet
-		// earns a leaderboard row, ranked by average CLV.
+		// earns a leaderboard row. Ranked by RELATIVE CLV (clv / entry_price):
+		// a 2¢ beat on a 10¢ entry is a 20% edge, on a 90¢ entry it's noise —
+		// absolute cents would bias the ranking toward mid-priced entries.
 		const leaderboardRows = await all<{
 			wallet_address: string;
 			entries: number;
 			closed: number;
 			avg_clv: number;
+			avg_rel_clv: number | null;
 			beat_close: number;
 			total_delta: number;
 			last_seen: number;
@@ -106,13 +110,14 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			        COUNT(*) AS entries,
 			        SUM(status = 'closed') AS closed,
 			        AVG(CASE WHEN status = 'closed' THEN clv END) AS avg_clv,
+			        AVG(CASE WHEN status = 'closed' AND entry_price > 0 THEN clv / entry_price END) AS avg_rel_clv,
 			        SUM(CASE WHEN status = 'closed' AND clv > 0 THEN 1 ELSE 0 END) AS beat_close,
 			        SUM(delta_usd) AS total_delta,
 			        MAX(observed_at) AS last_seen
 			 FROM wallet_entries
 			 GROUP BY wallet_address
 			 HAVING SUM(status = 'closed') >= 3
-			 ORDER BY avg_clv DESC
+			 ORDER BY avg_rel_clv DESC
 			 LIMIT 25`,
 		);
 
@@ -146,6 +151,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			entries: row.entries,
 			closed: row.closed,
 			avgClv: row.avg_clv,
+			avgRelClv: row.avg_rel_clv,
 			beatCloseCount: row.beat_close,
 			totalDeltaUsd: row.total_delta,
 			lastSeenAt: row.last_seen,

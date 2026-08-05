@@ -23,6 +23,7 @@ import {
 import {
 	type ComputeSnapshotsResult,
 	computeSnapshotsForGame,
+	repairSnapshotsAfterLateGame,
 } from "./snapshot-computation";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,14 @@ export async function processGame(
 		game.sportTag,
 		gameTime,
 	);
+
+	// If this game was processed late, snapshots stamped after it were
+	// computed without its fact — recompute them. No-op in the normal
+	// chronological case.
+	await Promise.all([
+		repairSnapshotsAfterLateGame(db, game.homeTeamId, game.sportTag, gameTime),
+		repairSnapshotsAfterLateGame(db, game.awayTeamId, game.sportTag, gameTime),
+	]);
 
 	return { gameId, facts, snapshots };
 }

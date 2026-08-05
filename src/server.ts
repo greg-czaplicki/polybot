@@ -22,7 +22,10 @@ import {
 	SharpPipeline,
 } from "./server/pipeline/sharp-pipeline";
 import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
-import { backfillMissingSnapshots } from "./server/pipeline/snapshot-computation";
+import {
+	backfillMissingSnapshots,
+	rebuildSnapshotHistoryForTeam,
+} from "./server/pipeline/snapshot-computation";
 import { settleWalletEntries } from "./server/pipeline/wallet-clv";
 import { maybeRefreshDailyStatsSnapshot } from "./server/repositories/daily-stats-snapshots";
 import { getSharpMoneyCacheFreshnessStats } from "./server/repositories/sharp-money";
@@ -173,6 +176,50 @@ const serverEntry = {
 				});
 			} catch (error) {
 				console.error("[canonical-sync] Backfill snapshots error:", error);
+				return new Response(
+					JSON.stringify({ success: false, error: String(error) }),
+					{
+						status: 500,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+		}
+
+		// Rebuild one team's snapshot history from clean facts, each as-of row
+		// bounded at its own game time. Repair tool for snapshot corruption
+		// (e.g. the 2026-07-22 BAL@BOS duplicate-game incident).
+		if (
+			url.pathname === "/_canonical/rebuild-team-snapshots" &&
+			request.method === "POST"
+		) {
+			const denied = requireOpsAuth();
+			if (denied) return denied;
+			try {
+				const teamId = url.searchParams.get("teamId");
+				const sportTag = url.searchParams.get("sportTag");
+				if (!teamId || !sportTag) {
+					return new Response(
+						JSON.stringify({ error: "teamId and sportTag are required" }),
+						{ status: 400, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				const sinceParam = Number(url.searchParams.get("sinceGameTime"));
+				const result = await rebuildSnapshotHistoryForTeam(
+					env.POLYWHALER_DB,
+					teamId,
+					sportTag,
+					{
+						sinceGameTime: Number.isFinite(sinceParam)
+							? sinceParam
+							: undefined,
+					},
+				);
+				return new Response(JSON.stringify({ success: true, result }), {
+					headers: { "Content-Type": "application/json" },
+				});
+			} catch (error) {
+				console.error("[canonical-sync] Rebuild team snapshots error:", error);
 				return new Response(
 					JSON.stringify({ success: false, error: String(error) }),
 					{
