@@ -18,7 +18,40 @@ export interface ShadowReasonSummary {
 	roiPct: number | null;
 	avgClvPct: number | null;
 	avgMinutesToStart: number | null;
+	/**
+	 * Sole-blocker cohort: rows where every gate in gates_json passes except
+	 * the one that fired (pass=null counts as NOT passing). Only rows with a
+	 * gate vector (2026-08-06+, migration 0027) qualify — this is the clean
+	 * "what would loosening this one gate recover" population.
+	 */
+	cleanTotal: number;
+	cleanWins: number;
+	cleanLosses: number;
+	cleanUnits: number | null;
+	cleanRoiPct: number | null;
 }
+
+/**
+ * A row is a sole-blocker reject when every vector gate passes except the
+ * gate its reject_reason maps to. Gates without a vector entry (timing,
+ * microstructure, sport policies) get no exemption — for them "clean" means
+ * all five vector gates pass. json_extract returns NULL for pass=null
+ * (input unavailable at record time), which fails the =1 test: unknown is
+ * never counted as a pass.
+ */
+const SOLE_BLOCKER_SQL = `(
+	gates_json IS NOT NULL
+	AND (json_extract(gates_json,'$.price_edge.pass') = 1
+	     OR reject_reason = 'price_edge_below_floor')
+	AND (json_extract(gates_json,'$.edge_rating.pass') = 1
+	     OR reject_reason IN ('edge_rating_saturation','edge_rating_dead_zone','edge_rating_below_floor'))
+	AND (json_extract(gates_json,'$.signal_score.pass') = 1
+	     OR reject_reason = 'signal_score_saturation')
+	AND (json_extract(gates_json,'$.score_differential.pass') = 1
+	     OR reject_reason = 'low_score_differential')
+	AND (json_extract(gates_json,'$.grade_vs_base.pass') = 1
+	     OR reject_reason = 'below_policy_grade')
+)`;
 
 export interface ShadowSportSummary {
 	rejectReason: string;
@@ -62,6 +95,10 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			units: number | null;
 			avg_clv: number | null;
 			avg_mins: number | null;
+			clean_total: number;
+			clean_wins: number;
+			clean_losses: number;
+			clean_units: number | null;
 		}>(
 			db,
 			`SELECT reject_reason,
@@ -72,7 +109,11 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'push') AS pushes,
 			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
 			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
-			        AVG(minutes_to_start) AS avg_mins
+			        AVG(minutes_to_start) AS avg_mins,
+			        SUM(${SOLE_BLOCKER_SQL}) AS clean_total,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'win' THEN 1 ELSE 0 END) AS clean_wins,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'loss' THEN 1 ELSE 0 END) AS clean_losses,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN roi END) AS clean_units
 			 FROM shadow_candidates
 			 GROUP BY reject_reason
 			 ORDER BY total DESC`,
@@ -80,6 +121,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 
 		const reasons: ShadowReasonSummary[] = reasonRows.map((r) => {
 			const settled = r.wins + r.losses;
+			const cleanSettled = r.clean_wins + r.clean_losses;
 			return {
 				rejectReason: r.reject_reason,
 				total: r.total,
@@ -92,6 +134,14 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
 				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
 				avgMinutesToStart: r.avg_mins,
+				cleanTotal: r.clean_total,
+				cleanWins: r.clean_wins,
+				cleanLosses: r.clean_losses,
+				cleanUnits: r.clean_units,
+				cleanRoiPct:
+					cleanSettled > 0 && r.clean_units !== null
+						? (r.clean_units / cleanSettled) * 100
+						: null,
 			};
 		});
 

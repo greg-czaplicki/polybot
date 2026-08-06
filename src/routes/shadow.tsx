@@ -152,10 +152,12 @@ function ShadowBookPage() {
 				</h2>
 				<p className="mt-2 text-sm text-amber-500/90">
 					Read with care: a row lands under the FIRST gate that fired, and the
-					chain stops there — so a gate&apos;s ROI mixes in candidates other
-					gates would have rejected anyway, and overstates what loosening that
-					one gate would recover. Rows from 2026-08-06 onward carry a full
-					per-gate pass/fail vector (gates_json); before that, only
+					chain stops there — so a gate&apos;s raw ROI mixes in candidates
+					other gates would have rejected anyway, and overstates what
+					loosening that one gate would recover. The Sole-blocker columns are
+					the clean cohort: rejected by this gate alone, every other gate
+					passing — but only rows from 2026-08-06 onward carry the per-gate
+					vector, so those columns start near-empty. Among older rows only
 					price_edge_below_floor (the last gate in the chain) is a clean
 					single-gate cohort.
 				</p>
@@ -170,7 +172,9 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">Units</th>
 								<th className="pb-2 pr-4">ROI</th>
 								<th className="pb-2 pr-4">Avg CLV</th>
-								<th className="pb-2">Avg mins-to-start</th>
+								<th className="pb-2 pr-4">Avg mins-to-start</th>
+								<th className="pb-2 pr-4">Sole-blocker W-L</th>
+								<th className="pb-2">Sole-blocker ROI</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -199,16 +203,28 @@ function ShadowBookPage() {
 									<td className={`py-2 pr-4 ${roiClass(r.avgClvPct)}`}>
 										{formatRoi(r.avgClvPct)}
 									</td>
-									<td className="py-2 text-ink-55">
+									<td className="py-2 pr-4 text-ink-55">
 										{r.avgMinutesToStart !== null
 											? Math.round(r.avgMinutesToStart)
 											: "—"}
+									</td>
+									<td className="py-2 pr-4">
+										{r.cleanTotal > 0
+											? `${r.cleanWins}-${r.cleanLosses}${
+													r.cleanTotal > r.cleanWins + r.cleanLosses
+														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
+														: ""
+												}`
+											: "—"}
+									</td>
+									<td className={`py-2 ${roiClass(r.cleanRoiPct)}`}>
+										{formatRoi(r.cleanRoiPct)}
 									</td>
 								</tr>
 							))}
 							{reasons.length === 0 && !isLoading ? (
 								<tr>
-									<td colSpan={7} className="py-4 text-ink-55">
+									<td colSpan={9} className="py-4 text-ink-55">
 										No shadow candidates yet.
 									</td>
 								</tr>
