@@ -277,6 +277,12 @@ export async function recordEarlyWindowShadows(
 		const inputs: ShadowCandidateInput[] = [];
 		for (const entry of entries) {
 			if (!entry.eventTime) continue;
+			// Mirror the scan's market-type pre-filter: the scan drops
+			// market_type "other" before any gate fires, so recording those
+			// here would pollute the outside_window counterfactual with
+			// markets the bot would never bet at ANY timing (2026-08-05 deep
+			// dive P2, confirmed live 2026-08-06 via a YRFI prop shadow).
+			if (getMarketTypeLabel(entry.marketTitle) === "other") continue;
 			const eventTimeMs = new Date(entry.eventTime).getTime();
 			if (!Number.isFinite(eventTimeMs)) continue;
 			const minutesToStart = (eventTimeMs - now) / 60_000;
