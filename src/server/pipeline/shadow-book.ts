@@ -15,10 +15,14 @@
  */
 
 import type { SignalScoreBreakdown } from "@/lib/sharp-grade";
+import { computeGateVector } from "@/lib/sharp-grade";
 import { STRATEGY_VERSION } from "@/lib/strategy-version";
 import { fetchGammaMarket, resolvePickResult } from "../api/manual-picks";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
-import { computeSharpMoneyGrades } from "../api/sharp-money";
+import {
+	computePriceEdgeFromEntry,
+	computeSharpMoneyGrades,
+} from "../api/sharp-money";
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
@@ -61,6 +65,17 @@ export interface ShadowCandidateInput {
 	 * outcomes to wallet-CLV skill scores. Serialized to top_holders_json.
 	 */
 	topHolders?: Array<Record<string, unknown>> | null;
+	/**
+	 * Raw values behind the global calibration gates, captured at record time
+	 * regardless of which gate fired. The gate chain early-returns, so without
+	 * these a cohort's "would it have passed the other gates" is unknowable
+	 * (2026-08-06: the price_edge/saturation shadow cohorts could not be
+	 * compared because saturation fires before price edge is ever computed).
+	 */
+	priceEdge?: number | null;
+	fairPrice?: number | null;
+	edgeRating?: number | null;
+	scoreDifferential?: number | null;
 }
 
 function generateId(): string {
@@ -153,6 +168,17 @@ export async function recordShadowCandidates(
 			? Math.floor(new Date(input.eventTime).getTime() / 1000)
 			: null;
 
+		// Evaluated here — after late-grade enrichment has filled signalScore /
+		// grade on pre-filter rejects — so the vector reflects the enriched row.
+		const gateVector = computeGateVector({
+			priceEdge: input.priceEdge,
+			edgeRating: input.edgeRating,
+			signalScore: input.signalScore,
+			scoreDifferential: input.scoreDifferential,
+			grade: input.grade,
+			baseMinGrade: input.baseMinGrade,
+		});
+
 		try {
 			await run(
 				db,
@@ -162,8 +188,9 @@ export async function recordShadowCandidates(
 					base_min_grade, signal_score, market_quality_score,
 					minutes_to_start, event_time, strategy_version, created_at,
 					warnings_json, trend_context_json, signal_components_json,
-					top_holders_json, status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+					top_holders_json, price_edge, fair_price, edge_rating,
+					score_differential, gates_json, status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 				generateId(),
 				input.conditionId,
 				input.rejectReason,
@@ -189,6 +216,11 @@ export async function recordShadowCandidates(
 				input.topHolders && input.topHolders.length > 0
 					? JSON.stringify(input.topHolders)
 					: null,
+				input.priceEdge ?? null,
+				input.fairPrice ?? null,
+				input.edgeRating ?? null,
+				input.scoreDifferential ?? null,
+				JSON.stringify(gateVector),
 			);
 			recorded += 1;
 		} catch (error) {
@@ -237,6 +269,22 @@ export async function recordEarlyWindowShadows(
 			if (!Number.isFinite(eventTimeMs)) continue;
 			const minutesToStart = (eventTimeMs - now) / 60_000;
 			if (minutesToStart <= maxMinutes) continue;
+			const priceEdgeResult =
+				entry.sharpSide === "A" || entry.sharpSide === "B"
+					? computePriceEdgeFromEntry({
+							sharpSide: entry.sharpSide,
+							confidence: entry.confidence,
+							edgeRating: entry.edgeRating,
+							sideA: {
+								sharpScore: entry.sideA.sharpScore,
+								price: entry.sideA.price ?? null,
+							},
+							sideB: {
+								sharpScore: entry.sideB.sharpScore,
+								price: entry.sideB.price ?? null,
+							},
+						})
+					: null;
 			inputs.push({
 				conditionId: entry.conditionId,
 				rejectReason: "outside_window",
@@ -252,6 +300,10 @@ export async function recordEarlyWindowShadows(
 							: null,
 				minutesToStart,
 				eventTime: entry.eventTime,
+				priceEdge: priceEdgeResult?.priceEdge ?? null,
+				fairPrice: priceEdgeResult?.fairPrice ?? null,
+				edgeRating: entry.edgeRating,
+				scoreDifferential: entry.scoreDifferential,
 				topHolders: compactTopHolders(
 					entry.sharpSide === "A"
 						? entry.sideA.topHolders

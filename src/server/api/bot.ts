@@ -1661,6 +1661,25 @@ async function listBotCandidates(
 				: entry.sharpSide === "B"
 					? entry.sideB.topHolders
 					: [];
+		// Gate-vector inputs, captured no matter which gate fired: the chain
+		// early-returns, so the price edge below is computed here even for
+		// rejects that never reached the price-edge gate.
+		const shadowPriceEdge =
+			entry.sharpSide === "A" || entry.sharpSide === "B"
+				? computePriceEdgeFromEntry({
+						sharpSide: entry.sharpSide,
+						confidence: entry.confidence,
+						edgeRating: entry.edgeRating,
+						sideA: {
+							sharpScore: entry.sideA.sharpScore,
+							price: entry.sideA.price ?? null,
+						},
+						sideB: {
+							sharpScore: entry.sideB.sharpScore,
+							price: entry.sideB.price ?? null,
+						},
+					})
+				: null;
 		shadowInputs.push({
 			conditionId: entry.conditionId,
 			rejectReason,
@@ -1683,6 +1702,10 @@ async function listBotCandidates(
 			warnings: context?.grade?.warnings,
 			signalComponents: context?.grade?.signalComponents ?? null,
 			topHolders: compactTopHolders(sharpSideHolders),
+			priceEdge: shadowPriceEdge?.priceEdge ?? null,
+			fairPrice: shadowPriceEdge?.fairPrice ?? null,
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential ?? null,
 		});
 		shadowEntryByConditionId.set(entry.conditionId, entry);
 	};

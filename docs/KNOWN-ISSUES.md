@@ -119,6 +119,22 @@ fixing commit.
   n≈100 re-audit, NOT acted on): v4 picks with zero warnings were 18–8
   (+41.5%, t=2.17) vs break-even with ≥1 warning; `sharpSideValueRatio`
   quartiles showed no gradient.
+- **Shadow rows before 2026-08-06 have no gate vector** (`price_edge`,
+  `fair_price`, `edge_rating`, `score_differential`, `gates_json` = NULL;
+  migration 0027). The gate chain early-returns on the first failing gate,
+  so for those rows "would it have passed the OTHER gates" is unknowable —
+  per-gate shadow ROI on pre-2026-08-06 rows overstates what loosening that
+  single gate would recover. Concretely: `signal_score_saturation` fires
+  before edge-rating/microstructure/price-edge are ever evaluated, so its
+  +20% ROI cohort (n=42 at 2026-08-06) is contaminated with candidates that
+  would have been rejected downstream anyway; `price_edge_below_floor` is
+  the LAST gate, so its cohort (13–3, n=16) is the only clean
+  single-gate-away counterfactual among pre-0027 rows. From 2026-08-06,
+  filter with `json_extract(gates_json, '$.<gate>.pass')` — `pass` is null
+  when the input was unavailable at record time (NOT a pass). `gates_json`
+  evaluates global calibration gates only; per-policy-segment min-grade and
+  microstructure thresholds are not reproduced (`grade_vs_base` compares
+  against the BASE min grade).
 - **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
   band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
   retrospectively on ~160-298 picks across multiple bucketings — in-sample,

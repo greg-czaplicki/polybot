@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	MIN_PRICE_EDGE,
 	SIGNAL_SCORE_SATURATION_FLOOR,
+	computeGateVector,
 	computeSignalScoreFromHistory,
 	gradeWeight,
 	isAcceptablePriceEdge,
@@ -148,5 +149,65 @@ describe("gradeWeight", () => {
 		expect(gradeWeight("B")).toBe(60);
 		expect(gradeWeight("C")).toBe(40);
 		expect(gradeWeight("D")).toBe(20);
+	});
+});
+
+describe("computeGateVector", () => {
+	it("evaluates every gate independently of which one fired", () => {
+		const vector = computeGateVector({
+			priceEdge: 0.18,
+			edgeRating: 85,
+			signalScore: 91,
+			scoreDifferential: 25,
+			grade: "A",
+			baseMinGrade: "B",
+		});
+		expect(vector.price_edge).toEqual({ value: 0.18, pass: false });
+		expect(vector.edge_rating).toEqual({ value: 85, pass: true });
+		expect(vector.signal_score).toEqual({ value: 91, pass: false });
+		expect(vector.score_differential).toEqual({ value: 25, pass: true });
+		expect(vector.grade_vs_base).toEqual({
+			value: "A",
+			threshold: "B",
+			pass: true,
+		});
+	});
+
+	it("marks unavailable inputs as pass: null, never as a pass", () => {
+		const vector = computeGateVector({});
+		expect(vector.price_edge).toEqual({ value: null, pass: null });
+		expect(vector.edge_rating).toEqual({ value: null, pass: null });
+		expect(vector.signal_score).toEqual({ value: null, pass: null });
+		expect(vector.score_differential).toEqual({ value: null, pass: null });
+		expect(vector.grade_vs_base).toEqual({
+			value: null,
+			threshold: null,
+			pass: null,
+		});
+	});
+
+	it("rejects non-finite values and unknown grade labels", () => {
+		const vector = computeGateVector({
+			priceEdge: Number.NaN,
+			edgeRating: Number.POSITIVE_INFINITY,
+			grade: "S",
+			baseMinGrade: "B",
+		});
+		expect(vector.price_edge.pass).toBeNull();
+		expect(vector.edge_rating.pass).toBeNull();
+		expect(vector.grade_vs_base.pass).toBeNull();
+		expect(vector.grade_vs_base.threshold).toBe("B");
+	});
+
+	it("fails grade_vs_base when grade is below the base minimum", () => {
+		const vector = computeGateVector({ grade: "C", baseMinGrade: "B" });
+		expect(vector.grade_vs_base.pass).toBe(false);
+	});
+
+	it("applies the edge-rating band gates (dead zone and saturation)", () => {
+		expect(computeGateVector({ edgeRating: 75 }).edge_rating.pass).toBe(false);
+		expect(computeGateVector({ edgeRating: 92 }).edge_rating.pass).toBe(false);
+		expect(computeGateVector({ edgeRating: 60 }).edge_rating.pass).toBe(false);
+		expect(computeGateVector({ edgeRating: 85 }).edge_rating.pass).toBe(true);
 	});
 });

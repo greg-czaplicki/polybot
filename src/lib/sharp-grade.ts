@@ -305,3 +305,71 @@ export function gradeWeight(grade: GradeLabel): number {
 			return 20;
 	}
 }
+
+/**
+ * Full gate-vector evaluation for shadow-book rows (2026-08-06).
+ *
+ * The bot's gate chain early-returns on the first failing gate, so a shadow
+ * row's reject_reason alone cannot say whether the candidate would have
+ * passed the OTHER gates — which is what "what did this gate cost us" needs:
+ * a candidate rejected by two gates is not admitted by loosening one. This
+ * evaluates every global calibration gate independently from recorded
+ * values; `pass: null` means the input was unavailable at record time, NOT
+ * a pass. Policy-segment gates (per-segment min grade, microstructure
+ * threshold) are not reproducible here; grade is checked against the BASE
+ * min grade and named grade_vs_base to make the approximation explicit.
+ */
+export interface GateCheck {
+	value: number | string | null;
+	pass: boolean | null;
+}
+
+export interface GateVector {
+	price_edge: GateCheck;
+	edge_rating: GateCheck;
+	signal_score: GateCheck;
+	score_differential: GateCheck;
+	grade_vs_base: GateCheck & { threshold: string | null };
+}
+
+const GRADE_LABELS: ReadonlySet<string> = new Set(["A+", "A", "B", "C", "D"]);
+
+export function computeGateVector(input: {
+	priceEdge?: number | null;
+	edgeRating?: number | null;
+	signalScore?: number | null;
+	scoreDifferential?: number | null;
+	grade?: string | null;
+	baseMinGrade?: string | null;
+}): GateVector {
+	const check = (
+		value: number | null | undefined,
+		predicate: (v: number) => boolean,
+	): GateCheck =>
+		typeof value === "number" && Number.isFinite(value)
+			? { value, pass: predicate(value) }
+			: { value: null, pass: null };
+	const gradeKnown =
+		typeof input.grade === "string" && GRADE_LABELS.has(input.grade);
+	const baseKnown =
+		typeof input.baseMinGrade === "string" &&
+		GRADE_LABELS.has(input.baseMinGrade);
+	return {
+		price_edge: check(input.priceEdge, isAcceptablePriceEdge),
+		edge_rating: check(input.edgeRating, isAcceptableEdgeRating),
+		signal_score: check(input.signalScore, isAcceptableSignalScore),
+		score_differential: check(
+			input.scoreDifferential,
+			(v) => v >= MIN_SCORE_DIFFERENTIAL,
+		),
+		grade_vs_base: {
+			value: gradeKnown ? (input.grade as string) : null,
+			threshold: baseKnown ? (input.baseMinGrade as string) : null,
+			pass:
+				gradeKnown && baseKnown
+					? gradeWeight(input.grade as GradeLabel) >=
+						gradeWeight(input.baseMinGrade as GradeLabel)
+					: null,
+		},
+	};
+}
