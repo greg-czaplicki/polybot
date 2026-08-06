@@ -17,6 +17,7 @@ Backfilled rows (picks created before stamping existed, assigned by
 | `v3-calibration-band-pass` | 2026-05-11 22:28 | Calibration round: scoreDiff ≥ 20, edgeRating band-pass [66,72)∪[80,90), rebucketed Quality/PriceEdge, NBA >90-min timing gate. Commits `5922224`..`607584a` (tag `strategy-v3`). |
 | `v4-realized-edge-gates` | 2026-06-25 22:05 | signal_score ≥ 90 hard gate, price_edge ≥ 0.25 floor, grading by realized edge, bot fill reporting. Commits `57696b3`..`cefa752` (tag `strategy-v4`). |
 | `v5-nfl-preseason-gate` | 2026-07-30 | NFL preseason hard gate (`nfl_preseason_excluded`, date-derived: before the Thursday after Labor Day). Snapshot max-age guard (45d) on trend consumption — stale prior-season trends now degrade to "no snapshot" instead of scoring as current. Landed alongside non-era infra: dynamic series discovery + MLS (d7d82f9), full-FBS NCAAF seeding, season/week stamping. Tag `strategy-v5`. |
+| `v6-prop-gate` | 2026-08-06 | Prop-market hard gate (`prop_market_excluded`: BTTS, NRFI/YRFI, draw-no-bet, etc. per `GAME_PROP_KEYWORDS`). Props scored through ML/totals-calibrated machinery with no policy segment of their own; historical BTTS record 5-1 is n=6 from eras v1-v3. Rejects settle in the shadow book (falsifiability contract, same as preseason gate). Shipped ahead of the EPL restart (~Aug 15), which would have resurfaced BTTS markets. Tag `strategy-v6`. |
 
 Era boundaries are **deploy** timestamps, not commit timestamps — early work
 was sometimes deployed before being committed. The one pick created between

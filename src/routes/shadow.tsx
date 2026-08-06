@@ -22,6 +22,7 @@ const REASON_LABELS: Record<string, string> = {
 	nhl_sport_excluded: "NHL gate",
 	nba_timing_excluded: "NBA >90m gate",
 	nfl_preseason_excluded: "NFL preseason gate",
+	prop_market_excluded: "Prop market gate",
 	"0-15m_timing_excluded": "0-15m gate",
 	not_ready: "Not ready",
 	below_policy_grade: "Grade below policy",

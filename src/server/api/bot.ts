@@ -891,6 +891,29 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
+	// Game props (BTTS, NRFI/YRFI, draw-no-bet, ...) score through machinery
+	// calibrated exclusively on moneyline/totals outcomes; the historical
+	// 5-1 BTTS record (eras v1-v3, n=6) predates every current gate. Era v6:
+	// reject and settle in the shadow book — same falsifiability contract as
+	// the NFL preseason gate. Revisit when the prop shadow cohort has n.
+	if (input.marketType === "prop") {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "Prop market excluded",
+				rankingAdjustment: -100,
+				notes: ["prop_excluded"],
+				reject: true,
+				rejectReason: "prop_market_excluded",
+			},
+		);
+	}
+
 	let policy = buildPolicy({
 		...input,
 		timingBucket,
