@@ -150,6 +150,15 @@ function ShadowBookPage() {
 				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
 					Performance by gate
 				</h2>
+				<p className="mt-2 text-sm text-amber-500/90">
+					Read with care: a row lands under the FIRST gate that fired, and the
+					chain stops there — so a gate&apos;s ROI mixes in candidates other
+					gates would have rejected anyway, and overstates what loosening that
+					one gate would recover. Rows from 2026-08-06 onward carry a full
+					per-gate pass/fail vector (gates_json); before that, only
+					price_edge_below_floor (the last gate in the chain) is a clean
+					single-gate cohort.
+				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>

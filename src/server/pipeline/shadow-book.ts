@@ -10,8 +10,17 @@
  * This module records each policy-rejected candidate ONCE per
  * (condition_id, reject_reason) at first sight — the analog of pick time —
  * and settles it through the same Gamma resolution logic as real picks,
- * without betting. Audit query: ROI by reject_reason = what each gate
- * saved or cost.
+ * without betting.
+ *
+ * Reading the results: reject_reason is the FIRST gate that fired, not the
+ * only one — the gate chain early-returns, so ROI GROUP BY reject_reason
+ * answers "how did candidates that first failed here perform," NOT "what
+ * would loosening this gate recover" (a candidate rejected by two gates is
+ * not admitted by loosening one). For the recovery question, filter on
+ * gates_json (migration 0027, populated from 2026-08-06): rows where every
+ * gate EXCEPT the one under study passes. Pre-0027 rows have no vector;
+ * among them only price_edge_below_floor — last in the chain — is a clean
+ * single-gate cohort.
  */
 
 import type { SignalScoreBreakdown } from "@/lib/sharp-grade";
