@@ -23,6 +23,7 @@ export interface ManualPickRow {
 	edge_rating?: number | null;
 	score_differential?: number | null;
 	sharp_side?: string | null;
+	sharp_side_label?: string | null;
 	price?: number | null;
 	confidence?: string | null;
 	fair_price?: number | null;
@@ -90,6 +91,7 @@ export interface ManualPickEntry {
 	edgeRating?: number;
 	scoreDifferential?: number;
 	sharpSide?: string;
+	sharpSideLabel?: string;
 	price?: number;
 	confidence?: string;
 	fairPrice?: number;
@@ -477,6 +479,7 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		edgeRating: row.edge_rating ?? undefined,
 		scoreDifferential: row.score_differential ?? undefined,
 		sharpSide: row.sharp_side ?? undefined,
+		sharpSideLabel: row.sharp_side_label ?? undefined,
 		price: row.price ?? undefined,
 		confidence: row.confidence ?? undefined,
 		fairPrice: row.fair_price ?? undefined,
@@ -553,6 +556,28 @@ export async function createManualPick(
 	}
 	const now = nowUnixSeconds();
 	const id = generateId();
+	// Outcome label of the sharp side ("Over"/"Under"/team name) — sharp_side
+	// 'A'/'B' alone is unreadable for totals. Best-effort: the market is in
+	// sharp_money_cache at pick time in the normal flow; a miss stores NULL.
+	let sharpSideLabel: string | null = null;
+	if (input.sharpSide === "A" || input.sharpSide === "B") {
+		try {
+			const cacheRow = await first<{
+				side_a_label: string | null;
+				side_b_label: string | null;
+			}>(
+				db,
+				`SELECT side_a_label, side_b_label FROM sharp_money_cache WHERE condition_id = ?`,
+				input.conditionId,
+			);
+			sharpSideLabel =
+				(input.sharpSide === "A"
+					? cacheRow?.side_a_label
+					: cacheRow?.side_b_label) ?? null;
+		} catch (error) {
+			console.warn("[manual-picks] side-label lookup failed:", error);
+		}
+	}
 	await run(
 		db,
 		`INSERT INTO manual_picks (
@@ -567,6 +592,7 @@ export async function createManualPick(
       edge_rating,
       score_differential,
       sharp_side,
+      sharp_side_label,
       price,
 	      confidence,
 	      fair_price,
@@ -578,7 +604,7 @@ export async function createManualPick(
 	      decision_snapshot_json,
 	      candidate_computed_at,
 	      status
-	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		input.clientPickId ?? null,
 		input.conditionId,
@@ -590,6 +616,7 @@ export async function createManualPick(
 		input.edgeRating ?? null,
 		input.scoreDifferential ?? null,
 		input.sharpSide ?? null,
+		sharpSideLabel,
 		input.price ?? null,
 		input.confidence ?? null,
 		input.fairPrice ?? null,

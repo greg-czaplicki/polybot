@@ -18,6 +18,7 @@ export interface DashboardPickRow {
 	pickedAt: number;
 	grade: string | null;
 	sharpSide: string | null;
+	sharpSideLabel: string | null;
 	price: number | null;
 	betType: string | null;
 	sportTag: string | null;
@@ -58,8 +59,8 @@ export interface DashboardHealth {
 }
 
 const PICK_COLUMNS = `id, condition_id, market_title, event_time, picked_at,
-	grade, sharp_side, price, bet_type, sport_tag, fill_status, status, roi,
-	clv, settled_at`;
+	grade, sharp_side, sharp_side_label, price, bet_type, sport_tag,
+	fill_status, status, roi, clv, settled_at`;
 
 interface PickRowRaw {
 	id: string;
@@ -69,6 +70,7 @@ interface PickRowRaw {
 	picked_at: number;
 	grade: string | null;
 	sharp_side: string | null;
+	sharp_side_label: string | null;
 	price: number | null;
 	bet_type: string | null;
 	sport_tag: string | null;
@@ -88,6 +90,7 @@ function toPickRow(r: PickRowRaw): DashboardPickRow {
 		pickedAt: r.picked_at,
 		grade: r.grade,
 		sharpSide: r.sharp_side,
+		sharpSideLabel: r.sharp_side_label,
 		price: r.price,
 		betType: r.bet_type,
 		sportTag: r.sport_tag,

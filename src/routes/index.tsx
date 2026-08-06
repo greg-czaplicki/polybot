@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { formatSideLabel } from "@/lib/side-label";
 import {
 	type DashboardEraSummary,
 	type DashboardHealth,
@@ -141,9 +142,14 @@ function buildHealthItems(health: DashboardHealth): HealthItem[] {
 }
 
 function PickSide({ pick }: { pick: DashboardPickRow }) {
+	const sideText = formatSideLabel(
+		pick.sharpSideLabel,
+		pick.sharpSide,
+		pick.marketTitle,
+	);
 	return (
 		<span>
-			<span className="text-ink-95">{pick.sharpSide ?? "—"}</span>
+			<span className="text-ink-95">{sideText ?? pick.sharpSide ?? "—"}</span>
 			{pick.betType ? (
 				<span className="ml-2 text-xs uppercase text-ink-55">
 					{pick.betType}

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { formatSideLabel } from "@/lib/side-label";
 import {
 	getShadowBookSummaryFn,
 	type ShadowReasonSummary,
@@ -50,50 +51,6 @@ function formatRoi(value: number | null): string {
 function roiClass(value: number | null): string {
 	if (value === null || !Number.isFinite(value)) return "text-ink-55";
 	return value >= 0 ? "text-emerald-500" : "text-red-500";
-}
-
-/**
- * Attach the line to the side label so the bet reads without inference:
- * "Under" on "... O/U 8.5" → "Under 8.5"; "Washington Nationals" on
- * "WSH vs PHI: Spread: Philadelphia Phillies (-2.5)" → "Washington
- * Nationals +2.5" (the non-named team takes the opposite sign). Rows
- * without a stored label (pre-migration-0028 settlements) still resolve
- * for totals: sharp-money.ts always sets sideA="Over" / sideB="Under" on
- * O/U markets (same convention the scorer relies on), so A/B alone
- * determines the direction. Falls back to the raw label when the title
- * doesn't parse.
- */
-function formatSideLabel(
-	storedLabel: string | null,
-	sharpSide: string | null,
-	marketTitle: string,
-): string | null {
-	let label = storedLabel;
-	if (!label && /O\/U/i.test(marketTitle)) {
-		label = sharpSide === "A" ? "Over" : sharpSide === "B" ? "Under" : null;
-	}
-	if (!label) return null;
-	const spread = marketTitle.match(
-		/Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)/i,
-	);
-	if (spread) {
-		const line = Number.parseFloat(spread[2]);
-		if (Number.isFinite(line)) {
-			const namedTeam = spread[1].trim().toLowerCase();
-			const side = label.trim().toLowerCase();
-			const isNamedTeam =
-				side === namedTeam ||
-				namedTeam.includes(side) ||
-				side.includes(namedTeam);
-			const signed = isNamedTeam ? line : -line;
-			return `${label} ${signed > 0 ? "+" : ""}${signed}`;
-		}
-	}
-	const total = marketTitle.match(/O\/U\s*(\d+(?:\.\d+)?)/i);
-	if (total && /^(over|under)$/i.test(label.trim())) {
-		return `${label} ${total[1]}`;
-	}
-	return label;
 }
 
 function formatTime(seconds: number | null): string {
