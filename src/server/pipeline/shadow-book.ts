@@ -49,6 +49,8 @@ export interface ShadowCandidateInput {
 	marketType?: string;
 	sportSeriesId?: number;
 	sharpSide?: string;
+	/** Outcome label of the sharp side ("Over", "Under", team name) — sharp_side alone is unreadable for totals. */
+	sharpSideLabel?: string | null;
 	price?: number | null;
 	grade?: string;
 	baseMinGrade?: string;
@@ -193,13 +195,13 @@ export async function recordShadowCandidates(
 				db,
 				`INSERT OR IGNORE INTO shadow_candidates (
 					id, condition_id, reject_reason, market_title, market_type,
-					sport_series_id, sport_tag, sharp_side, price, grade,
-					base_min_grade, signal_score, market_quality_score,
+					sport_series_id, sport_tag, sharp_side, sharp_side_label, price,
+					grade, base_min_grade, signal_score, market_quality_score,
 					minutes_to_start, event_time, strategy_version, created_at,
 					warnings_json, trend_context_json, signal_components_json,
 					top_holders_json, price_edge, fair_price, edge_rating,
 					score_differential, gates_json, status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 				generateId(),
 				input.conditionId,
 				input.rejectReason,
@@ -208,6 +210,7 @@ export async function recordShadowCandidates(
 				input.sportSeriesId ?? null,
 				resolveSportTagFromSeriesId(input.sportSeriesId) ?? null,
 				input.sharpSide,
+				input.sharpSideLabel ?? null,
 				input.price,
 				input.grade ?? null,
 				input.baseMinGrade ?? null,
@@ -301,6 +304,12 @@ export async function recordEarlyWindowShadows(
 				marketType: getMarketTypeLabel(entry.marketTitle),
 				sportSeriesId: entry.sportSeriesId,
 				sharpSide: entry.sharpSide,
+				sharpSideLabel:
+					entry.sharpSide === "A"
+						? entry.sideA.label
+						: entry.sharpSide === "B"
+							? entry.sideB.label
+							: null,
 				price:
 					entry.sharpSide === "A"
 						? (entry.sideA.price ?? null)

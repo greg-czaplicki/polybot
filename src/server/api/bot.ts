@@ -1687,6 +1687,12 @@ async function listBotCandidates(
 			marketType: getMarketTypeLabel(entry.marketTitle),
 			sportSeriesId: entry.sportSeriesId,
 			sharpSide: entry.sharpSide,
+			sharpSideLabel:
+				entry.sharpSide === "A"
+					? entry.sideA.label
+					: entry.sharpSide === "B"
+						? entry.sideB.label
+						: null,
 			price:
 				entry.sharpSide === "A"
 					? (entry.sideA.price ?? null)

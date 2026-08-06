@@ -325,7 +325,20 @@ function ShadowBookPage() {
 									<td className="py-2 pr-4 text-xs text-ink-55">
 										{row.rejectReason}
 									</td>
-									<td className="py-2 pr-4">{row.sharpSide ?? "—"}</td>
+									<td className="py-2 pr-4">
+										{row.sharpSideLabel ? (
+											<>
+												<span className="text-ink-95">
+													{row.sharpSideLabel}
+												</span>
+												<span className="ml-1 text-xs text-ink-55">
+													({row.sharpSide})
+												</span>
+											</>
+										) : (
+											(row.sharpSide ?? "—")
+										)}
+									</td>
 									<td className="py-2 pr-4">
 										{row.price !== null ? row.price.toFixed(2) : "—"}
 									</td>

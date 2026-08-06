@@ -70,6 +70,7 @@ export interface ShadowRowSummary {
 	marketTitle: string;
 	rejectReason: string;
 	sharpSide: string | null;
+	sharpSideLabel: string | null;
 	price: number | null;
 	grade: string | null;
 	minutesToStart: number | null;
@@ -192,6 +193,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			market_title: string;
 			reject_reason: string;
 			sharp_side: string | null;
+			sharp_side_label: string | null;
 			price: number | null;
 			grade: string | null;
 			minutes_to_start: number | null;
@@ -203,9 +205,9 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			warnings_json: string | null;
 		}>(
 			db,
-			`SELECT market_title, reject_reason, sharp_side, price, grade,
-			        minutes_to_start, status, roi, strategy_version, created_at,
-			        event_time, warnings_json
+			`SELECT market_title, reject_reason, sharp_side, sharp_side_label,
+			        price, grade, minutes_to_start, status, roi, strategy_version,
+			        created_at, event_time, warnings_json
 			 FROM shadow_candidates
 			 ORDER BY created_at DESC
 			 LIMIT 100`,
@@ -215,6 +217,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			marketTitle: r.market_title,
 			rejectReason: r.reject_reason,
 			sharpSide: r.sharp_side,
+			sharpSideLabel: r.sharp_side_label,
 			price: r.price,
 			grade: r.grade,
 			minutesToStart: r.minutes_to_start,
