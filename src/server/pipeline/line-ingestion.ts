@@ -64,7 +64,17 @@ const GAME_PROP_KEYWORDS = [
 	// "Will there be a run scored in the first inning?: Twins vs. Royals"
 	"first inning",
 	"1st inning",
+	// "Seahawks Team Total: O/U 25.5" contains "total"/"o/u", so without
+	// this it reads as the game total.
+	"team total",
 ];
+
+// Period/derivative markets — "Seahawks vs. Patriots: 1H O/U 23.5",
+// "1H Spread: Seahawks (-3.5)", "Miami vs. Indiana: 1H Moneyline". These
+// carry full-game keywords and would score through full-game models
+// (a 1H line vs a full-game totals model) if classified by those keywords.
+const PERIOD_MARKET_PATTERN =
+	/\b(?:[12]h|[1-4]q|(?:1st|first) half|(?:2nd|second) half|(?:1st|2nd|3rd|4th) quarter|halftime)\b/i;
 
 /**
  * Classifies a market title into a bet type. Shared by the candidate scan
@@ -74,6 +84,15 @@ export function getMarketTypeLabel(
 	marketTitle: string,
 ): "total" | "spread" | "moneyline" | "prop" | "other" {
 	const lower = marketTitle.toLowerCase();
+	// Prop patterns must win over the core-type keywords: team totals and
+	// period markets contain "total"/"o/u"/"spread"/"moneyline" and would
+	// otherwise classify as pickable full-game markets (era v7).
+	if (
+		GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw)) ||
+		PERIOD_MARKET_PATTERN.test(marketTitle)
+	) {
+		return "prop";
+	}
 	const plainMatchup =
 		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
 	if (
@@ -86,7 +105,6 @@ export function getMarketTypeLabel(
 	if (lower.includes("spread")) return "spread";
 	if (plainMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
-	if (GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw))) return "prop";
 	return "other";
 }
 

@@ -148,7 +148,10 @@ fixing commit.
   counting the prop cohort for the v6 revisit, filter by
   `market_type='prop'`, not `reject_reason='prop_market_excluded'` — the
   timing pre-filters (`too_close_to_start`, `outside_window`) run before the
-  policy gate and will claim some prop rows.
+  policy gate and will claim some prop rows. Era v7 (2026-08-07) widened
+  `prop` to team totals and 1H/2H/quarter period markets — which until then
+  classified as pickable `total`/`moneyline` — and moved 1H spreads from the
+  `spread` cohort to `prop`; segment prop-cohort analyses by era.
 - **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
   band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
   retrospectively on ~160-298 picks across multiple bucketings — in-sample,

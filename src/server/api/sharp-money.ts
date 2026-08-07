@@ -401,7 +401,10 @@ function getEventSlug(market: GammaMarket): string | undefined {
 function isPlayerPropTitle(title: string): boolean {
 	const normalized = title.toLowerCase();
 	if (!normalized.includes(":")) return false;
-	return /:\s*(points|rebounds|assists|threes|three pointers|goals|shots|saves|strikeouts|hits|rbis|home runs|yards|touchdowns|completions|passing|rushing|receiving)\b/i.test(
+	// "anytime"/"first touchdown" cover scorer props ("Kenneth Walker III:
+	// Anytime Touchdown"), which previously fell through this regex and were
+	// dropped only because their titles happen to lack vs/at/@.
+	return /:\s*(points|rebounds|assists|threes|three pointers|goals|shots|saves|strikeouts|hits|rbis|home runs|yards|touchdowns|touchdown|anytime|first touchdown|last touchdown|completions|passing|rushing|receiving)\b/i.test(
 		title,
 	);
 }
