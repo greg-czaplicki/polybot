@@ -60,6 +60,10 @@ const GAME_PROP_KEYWORDS = [
 	"first goal",
 	"clean sheet",
 	"double result",
+	// Polymarket titles NRFI/YRFI markets as a question, not an abbreviation:
+	// "Will there be a run scored in the first inning?: Twins vs. Royals"
+	"first inning",
+	"1st inning",
 ];
 
 /**

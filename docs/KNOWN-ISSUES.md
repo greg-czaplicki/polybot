@@ -135,6 +135,20 @@ fixing commit.
   evaluates global calibration gates only; per-policy-segment min-grade and
   microstructure thresholds are not reproduced (`grade_vs_base` compares
   against the BASE min grade).
+- **The v6 prop shadow cohort starts ~2026-08-07 for MLB first-inning
+  markets.** Era v6 (2026-08-06) added the `prop_market_excluded` gate, but
+  `getMarketTypeLabel` only knew abbreviation/bookmaker keywords ("nrfi",
+  "btts", ...) while Polymarket titles NRFI/YRFI as a question ("Will there
+  be a run scored in the first inning?: Twins vs. Royals"), so those markets
+  classified as `other` and were dropped silently — no shadow row under ANY
+  reason. At least 6 first-inning markets seen 2026-08-05→06 in
+  `sharp_money_history` have no shadow record. Fixed by adding "first
+  inning"/"1st inning" to `GAME_PROP_KEYWORDS`. BTTS titles ("... : Both
+  Teams to Score") always matched, so the BTTS cohort has no gap. When
+  counting the prop cohort for the v6 revisit, filter by
+  `market_type='prop'`, not `reject_reason='prop_market_excluded'` — the
+  timing pre-filters (`too_close_to_start`, `outside_window`) run before the
+  policy gate and will claim some prop rows.
 - **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
   band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
   retrospectively on ~160-298 picks across multiple bucketings — in-sample,
