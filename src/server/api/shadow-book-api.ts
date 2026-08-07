@@ -66,6 +66,40 @@ export interface ShadowSportSummary {
 	avgClvPct: number | null;
 }
 
+export interface ShadowPropSummary {
+	subtype: string;
+	total: number;
+	pending: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	units: number | null;
+	roiPct: number | null;
+	avgClvPct: number | null;
+}
+
+/**
+ * Prop subtype from the market title. The promotion decision is per-subtype
+ * (BTTS vs NRFI vs team totals vs period markets are different bets), and
+ * prop rows scatter across reject reasons (timing pre-filters fire before
+ * the prop gate), so the cohort is defined by market_type + title, not by
+ * reject_reason.
+ */
+const PROP_SUBTYPE_SQL = `CASE
+	WHEN lower(market_title) LIKE '%first inning%'
+	  OR lower(market_title) LIKE '%1st inning%'
+	  OR lower(market_title) LIKE '%nrfi%'
+	  OR lower(market_title) LIKE '%yrfi%' THEN 'first_inning'
+	WHEN lower(market_title) LIKE '%both teams to score%'
+	  OR lower(market_title) LIKE '%btts%' THEN 'btts'
+	WHEN lower(market_title) LIKE '%team total%' THEN 'team_total'
+	WHEN lower(market_title) LIKE '%1h%'
+	  OR lower(market_title) LIKE '%2h%'
+	  OR lower(market_title) LIKE '%half%'
+	  OR lower(market_title) LIKE '%quarter%' THEN 'period'
+	ELSE 'other_prop'
+END`;
+
 export interface ShadowRowSummary {
 	marketTitle: string;
 	rejectReason: string;
@@ -189,6 +223,47 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
+		const propRows = await all<{
+			subtype: string;
+			total: number;
+			pending: number;
+			wins: number;
+			losses: number;
+			pushes: number;
+			units: number | null;
+			avg_clv: number | null;
+		}>(
+			db,
+			`SELECT ${PROP_SUBTYPE_SQL} AS subtype,
+			        COUNT(*) AS total,
+			        SUM(status = 'pending') AS pending,
+			        SUM(status = 'win') AS wins,
+			        SUM(status = 'loss') AS losses,
+			        SUM(status = 'push') AS pushes,
+			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv
+			 FROM shadow_candidates
+			 WHERE market_type = 'prop'
+			 GROUP BY subtype
+			 ORDER BY total DESC`,
+		);
+
+		const props: ShadowPropSummary[] = propRows.map((r) => {
+			const settled = r.wins + r.losses;
+			return {
+				subtype: r.subtype,
+				total: r.total,
+				pending: r.pending,
+				wins: r.wins,
+				losses: r.losses,
+				pushes: r.pushes,
+				units: r.units,
+				roiPct:
+					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
+				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
+			};
+		});
+
 		const recentRows = await all<{
 			market_title: string;
 			reject_reason: string;
@@ -233,6 +308,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			computedAt: Math.floor(Date.now() / 1000),
 			reasons,
 			bySport,
+			props,
 			recent,
 		};
 	},

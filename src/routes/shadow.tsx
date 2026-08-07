@@ -5,6 +5,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { formatSideLabel } from "@/lib/side-label";
 import {
 	getShadowBookSummaryFn,
+	type ShadowPropSummary,
 	type ShadowReasonSummary,
 	type ShadowRowSummary,
 	type ShadowSportSummary,
@@ -54,6 +55,32 @@ function roiClass(value: number | null): string {
 	return value >= 0 ? "text-emerald-500" : "text-red-500";
 }
 
+/**
+ * Below this many settled rows, ROI/CLV cells render dimmed: the number is
+ * still shown, but the color no longer vouches for it (multiple-comparisons
+ * guard — with a dozen gates, some small cell is always at ±60%).
+ */
+const MIN_SETTLED_FOR_EMPHASIS = 20;
+
+function roiCellClass(value: number | null, settled: number): string {
+	if (settled < MIN_SETTLED_FOR_EMPHASIS) return "text-ink-40 opacity-70";
+	return roiClass(value);
+}
+
+function smallSampleTitle(settled: number): string | undefined {
+	return settled < MIN_SETTLED_FOR_EMPHASIS
+		? `n=${settled} settled — too small to color`
+		: undefined;
+}
+
+const PROP_SUBTYPE_LABELS: Record<string, string> = {
+	first_inning: "First inning (NRFI/YRFI)",
+	btts: "Both teams to score",
+	team_total: "Team total",
+	period: "Period (1H/2H/quarter)",
+	other_prop: "Other prop",
+};
+
 function formatTime(seconds: number | null): string {
 	if (!seconds) return "—";
 	return new Date(seconds * 1000).toLocaleString(undefined, {
@@ -67,6 +94,7 @@ function formatTime(seconds: number | null): string {
 function ShadowBookPage() {
 	const [reasons, setReasons] = useState<ShadowReasonSummary[]>([]);
 	const [bySport, setBySport] = useState<ShadowSportSummary[]>([]);
+	const [props, setProps] = useState<ShadowPropSummary[]>([]);
 	const [recent, setRecent] = useState<ShadowRowSummary[]>([]);
 	const [computedAt, setComputedAt] = useState<number | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -79,6 +107,7 @@ function ShadowBookPage() {
 			const result = await getShadowBookSummaryFn();
 			setReasons(result.reasons);
 			setBySport(result.bySport);
+			setProps(result.props);
 			setRecent(result.recent);
 			setComputedAt(result.computedAt);
 		} catch (err) {
@@ -161,7 +190,9 @@ function ShadowBookPage() {
 					passing — but only rows from 2026-08-06 onward carry the per-gate
 					vector, so those columns start near-empty. Among older rows only
 					price_edge_below_floor (the last gate in the chain) is a clean
-					single-gate cohort.
+					single-gate cohort. Dimmed cells have fewer than{" "}
+					{MIN_SETTLED_FOR_EMPHASIS} settled rows — the number is shown but
+					the sample is too small to color.
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
@@ -196,13 +227,22 @@ function ShadowBookPage() {
 										{r.wins}-{r.losses}
 										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
 									</td>
-									<td className={`py-2 pr-4 ${roiClass(r.units)}`}>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatUnits(r.units)}
 									</td>
-									<td className={`py-2 pr-4 ${roiClass(r.roiPct)}`}>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatRoi(r.roiPct)}
 									</td>
-									<td className={`py-2 pr-4 ${roiClass(r.avgClvPct)}`}>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatRoi(r.avgClvPct)}
 									</td>
 									<td className="py-2 pr-4 text-ink-55">
@@ -219,7 +259,10 @@ function ShadowBookPage() {
 												}`
 											: "—"}
 									</td>
-									<td className={`py-2 ${roiClass(r.cleanRoiPct)}`}>
+									<td
+										className={`py-2 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
+										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
+									>
 										{formatRoi(r.cleanRoiPct)}
 									</td>
 								</tr>
@@ -228,6 +271,79 @@ function ShadowBookPage() {
 								<tr>
 									<td colSpan={9} className="py-4 text-ink-55">
 										No shadow candidates yet.
+									</td>
+								</tr>
+							) : null}
+						</tbody>
+					</table>
+				</div>
+
+				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
+					Prop cohort — promotion watch
+				</h2>
+				<p className="mt-1 text-xs text-ink-55">
+					All prop-typed shadows regardless of which gate claimed them
+					(timing pre-filters fire before the prop gate, so reject reason
+					under-counts the cohort). Accumulating since 2026-08-07 (era v7).
+					A subtype earns a promotion review on sustained n with positive
+					ROI and CLV — per-subtype, with its own scoring path, never by
+					unmuting the full-game machinery.
+				</p>
+				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
+					<table className="min-w-full text-left text-sm text-ink-85">
+						<thead>
+							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+								<th className="pb-2 pr-4">Subtype</th>
+								<th className="pb-2 pr-4">Total</th>
+								<th className="pb-2 pr-4">Pending</th>
+								<th className="pb-2 pr-4">W-L</th>
+								<th className="pb-2 pr-4">Units</th>
+								<th className="pb-2 pr-4">ROI</th>
+								<th className="pb-2">Avg CLV</th>
+							</tr>
+						</thead>
+						<tbody>
+							{props.map((r) => (
+								<tr key={r.subtype} className="border-t border-ink-10">
+									<td className="py-2 pr-4">
+										<span className="text-ink-95">
+											{PROP_SUBTYPE_LABELS[r.subtype] ?? r.subtype}
+										</span>
+										<span className="ml-2 text-xs text-ink-55">
+											{r.subtype}
+										</span>
+									</td>
+									<td className="py-2 pr-4">{r.total}</td>
+									<td className="py-2 pr-4">{r.pending}</td>
+									<td className="py-2 pr-4">
+										{r.wins}-{r.losses}
+										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
+									</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
+										{formatUnits(r.units)}
+									</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
+										{formatRoi(r.roiPct)}
+									</td>
+									<td
+										className={`py-2 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
+										{formatRoi(r.avgClvPct)}
+									</td>
+								</tr>
+							))}
+							{props.length === 0 && !isLoading ? (
+								<tr>
+									<td colSpan={7} className="py-4 text-ink-55">
+										No prop shadows yet — they accumulate as BTTS, NRFI/YRFI,
+										team-total, and period markets hit the gates.
 									</td>
 								</tr>
 							) : null}
@@ -275,13 +391,22 @@ function ShadowBookPage() {
 										{r.wins}-{r.losses}
 										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
 									</td>
-									<td className={`py-2 pr-4 ${roiClass(r.units)}`}>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatUnits(r.units)}
 									</td>
-									<td className={`py-2 pr-4 ${roiClass(r.roiPct)}`}>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatRoi(r.roiPct)}
 									</td>
-									<td className={`py-2 ${roiClass(r.avgClvPct)}`}>
+									<td
+										className={`py-2 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
+										title={smallSampleTitle(r.wins + r.losses)}
+									>
 										{formatRoi(r.avgClvPct)}
 									</td>
 								</tr>
