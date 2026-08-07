@@ -84,9 +84,18 @@ found and cleaned in the same pass.
 
 ## Follow-ups
 
-- The `as_of_time = game start` half of the recon timing finding is still
+- ~~The `as_of_time = game start` half of the recon timing finding is still
   open (mid-game as-of reads can see that game's result) — tracked in
-  KNOWN-ISSUES.
+  KNOWN-ISSUES.~~ **CLOSED 2026-08-07 (`9d5e1ef`):**
+  `getTeamTrendSnapshotAsOf` shifts snapshot availability by a
+  conservative per-sport game duration (NBA/NCAAB/soccer 3h, NHL 3.5h,
+  else 4h) — a snapshot stamped with a game's start time becomes readable
+  only after that game plausibly ended. Retrospective impact measured on
+  remote D1: 2 of 299 team-linked picks re-resolve to the prior snapshot
+  (`pick_1777230097840_gj3ssnb`, `pick_1778107266215_yykjr68` — both MLB
+  Rockies/Mets, picked 81/211 min after a prior same-team game's start).
+  Live scoring unaffected: it reads `getLatestTeamTrendSnapshot`, and a
+  snapshot physically exists only after its game's result was ingested.
 - The contamination scan used here is a useful periodic check but only
   valid for snapshots written by pre-`06d798a` code; don't re-run it
   naively against rebuilt rows.

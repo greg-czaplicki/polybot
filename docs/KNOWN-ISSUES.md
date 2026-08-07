@@ -221,16 +221,10 @@ Still open, in rough fix order:
    already-picked exclusion in /api/bot/candidates as defense-in-depth.
 2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
-3. Trend-snapshot timing (recon P2s): the late-processing lookahead was
-   FIXED 2026-08-05 (`06d798a` — windows bounded at `as_of_time`, plus a
-   repair pass that recomputes newer snapshots when a late game lands).
-   Remaining half: as_of_time is game START, so an as-of lookup timed
-   between a game's start and its end can read that game's final result
-   (only bites picks placed while a prior game is in progress — rare).
-4. Scoring-behavior findings needing an era decision (do NOT fix casually):
+3. Scoring-behavior findings needing an era decision (do NOT fix casually):
    empty-side sharpScore=50 inflation; edgeRating "volume bonus" computed
    from liquidity. Both change picking behavior → strategy era bump.
-5. Remaining P2/P3s tracked in docs/audits/2026-07-23-agent-recon.md
+4. Remaining P2/P3s tracked in docs/audits/2026-07-23-agent-recon.md
    (canonical-sync reversed-order spread signs, games dedup race, summary
    label/unit nits, wentToOt hardcoded, DO tick cooldown jitter).
 
