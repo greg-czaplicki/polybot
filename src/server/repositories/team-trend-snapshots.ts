@@ -246,15 +246,21 @@ export async function getTeamTrendSnapshotAtGame(
 }
 
 /**
- * Get the most recent trend snapshot for a team at or before a given time.
+ * Get the most recent trend snapshot for a team KNOWABLE at a given time.
  * This is the canonical lookup for attaching trend context to picks —
  * it finds the snapshot that was current when a pick was made.
  *
- * SQL: snapshot_type = ? AND as_of_time < ? ORDER BY as_of_time DESC LIMIT 1
+ * Snapshots are stamped `as_of_time` = the START time of the last game they
+ * include, but that game's result only becomes knowable when it ENDS. A
+ * plain `as_of_time < ?` read timed mid-game (e.g. a pick placed during the
+ * opener of a doubleheader) would see the in-progress game's final result —
+ * the second half of the recon-audit lookahead (first half fixed 06d798a:
+ * snapshot windows bounded at as_of_time). So availability is shifted by a
+ * conservative per-sport game duration. Erring long hides a just-finished
+ * game briefly (freshness cost, safe); erring short re-opens the lookahead.
  *
- * Strictly-before comparison: snapshots are stamped with the game time of the
- * last game they INCLUDE, so an equal timestamp would hand back a snapshot
- * containing that game's own result.
+ * Live scoring is unaffected: it reads getLatestTeamTrendSnapshot, and a
+ * snapshot physically exists only after its game's result was ingested.
  */
 export async function getTeamTrendSnapshotAsOf(
 	db: Db,
@@ -265,7 +271,14 @@ export async function getTeamTrendSnapshotAsOf(
 	const row = await first<TeamTrendSnapshotRow>(
 		db,
 		`SELECT * FROM team_trend_snapshots
-		WHERE team_id = ? AND snapshot_type = ? AND as_of_time < ?
+		WHERE team_id = ? AND snapshot_type = ?
+			AND as_of_time + CASE sport_tag
+				WHEN 'nba' THEN 10800
+				WHEN 'ncaab' THEN 10800
+				WHEN 'soccer' THEN 10800
+				WHEN 'nhl' THEN 12600
+				ELSE 14400
+			END < ?
 		ORDER BY as_of_time DESC
 		LIMIT 1`,
 		teamId,
