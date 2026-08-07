@@ -1644,6 +1644,17 @@ async function listBotCandidates(
 	const recentlyPickedConditionIds = new Set(
 		recentlyPickedRows.map((row) => row.condition_id),
 	);
+	// One-pick-per-market-group (era v7): group keys (event × market type)
+	// that already contain a recent pick. Alternate lines of a picked market
+	// (CFB lists O/U 46.5..50.5 as separate condition_ids) resolve to the
+	// same key; the picked market itself is still in the cache, which is
+	// where its key comes from.
+	const pickedMarketGroupKeys = new Set<string>();
+	for (const entry of entries) {
+		if (recentlyPickedConditionIds.has(entry.conditionId)) {
+			pickedMarketGroupKeys.add(getMarketGroupKey(entry));
+		}
+	}
 	const debug: BotCandidatesDebug = {
 		totalEntries: entries.length,
 		upcomingEntries: 0,
@@ -1849,8 +1860,28 @@ async function listBotCandidates(
 					reason: "outside_window",
 				};
 			}
+			return false;
 		}
-		return inWindow;
+		// Checked last so it only claims bet-eligible rows: a sibling line
+		// outside the timing window keeps its timing reason, and the picked
+		// market itself was already removed by already_picked above. Hold,
+		// don't churn — the shadow row makes hold-vs-upgrade measurable.
+		if (pickedMarketGroupKeys.has(getMarketGroupKey(entry))) {
+			incrementCounter(debug.excluded, "market_group_already_picked");
+			pushShadowCandidate(entry, "market_group_already_picked", {
+				minutesToStart,
+			});
+			if (inspectConditionId && entry.conditionId === inspectConditionId) {
+				debug.inspect = {
+					conditionId: inspectConditionId,
+					foundInEntries: true,
+					stage: "filtered_pre",
+					reason: "market_group_already_picked",
+				};
+			}
+			return false;
+		}
+		return true;
 	});
 	debug.upcomingEntries = upcomingEntries.length;
 	const canonicalScoreCache: CanonicalScoreCache = {
@@ -2366,9 +2397,29 @@ async function listBotCandidates(
 			}),
 		)
 	).filter((candidate) => candidate !== null);
-	await recordShadowBook();
 	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
+	// Shadow the same-scan dedup losers (alternate lines that graded worse
+	// than a sibling): they passed every gate, so settling them measures
+	// what the one-line-per-group rule leaves on the table.
+	const fullEntryByConditionId = new Map(
+		upcomingEntries.map((entry) => [entry.conditionId, entry]),
+	);
+	const shadowDedupLoser = (loser: (typeof candidates)[number]) => {
+		if (!loser) return;
+		const fullEntry = fullEntryByConditionId.get(loser.entry.conditionId);
+		if (!fullEntry) return;
+		pushShadowCandidate(fullEntry, "alt_line_deduped", {
+			minutesToStart: getCandidateMinutesToStart(loser),
+			grade: {
+				grade: loser.grade.grade,
+				signalScore: loser.grade.signalScore,
+				signalComponents: loser.grade.signalComponents ?? undefined,
+				microstructureScore: loser.grade.microstructureScore,
+				warnings: loser.grade.warnings,
+			},
+		});
+	};
 	const deduped = new Map<string, (typeof candidates)[number]>();
 	for (const candidate of candidates) {
 		if (!candidate) continue;
@@ -2394,12 +2445,14 @@ async function listBotCandidates(
 		if (comparison < 0) {
 			debug.dedupDropped += 1;
 			incrementCounter(debug.dedupReasons, "candidate_priority");
+			shadowDedupLoser(existing);
 			deduped.set(key, candidate);
 			continue;
 		}
 		if (comparison > 0) {
 			debug.dedupDropped += 1;
 			incrementCounter(debug.dedupReasons, "candidate_priority");
+			shadowDedupLoser(candidate);
 			if (
 				inspectConditionId &&
 				candidate.entry.conditionId === inspectConditionId
@@ -2415,6 +2468,8 @@ async function listBotCandidates(
 			}
 		}
 	}
+	// After the dedup loop so alt_line_deduped rows land in the same batch.
+	await recordShadowBook();
 	const dedupedCandidates = [...deduped.values()].sort((left, right) =>
 		compareBotCandidates(left, right),
 	);

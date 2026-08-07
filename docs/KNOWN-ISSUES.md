@@ -152,6 +152,15 @@ fixing commit.
   `prop` to team totals and 1H/2H/quarter period markets — which until then
   classified as pickable `total`/`moneyline` — and moved 1H spreads from the
   `spread` cohort to `prop`; segment prop-cohort analyses by era.
+- **One-pick-per-market-group rule (era v7, 2026-08-07) leans on the sharp
+  cache.** The cross-scan guard derives the picked market's group key
+  (event × market type) from its `sharp_money_cache` row; if that row is
+  evicted while sibling alternate lines remain listed, the guard lapses for
+  that game. Shadow reasons: `market_group_already_picked` (bet-eligible
+  sibling of a picked line), `alt_line_deduped` (lost same-scan dedup to a
+  better-graded sibling; recorded only from 2026-08-07 — earlier dedup
+  losers were dropped silently, so the hold-vs-upgrade question has no
+  pre-v7 data).
 - **Gate-threshold epistemics**: every gate value (90-min window, edgeRating
   band-pass, `MIN_PRICE_EDGE` 0.25, signalScore saturation 90) was fitted
   retrospectively on ~160-298 picks across multiple bucketings — in-sample,
