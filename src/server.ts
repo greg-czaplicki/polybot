@@ -4,6 +4,7 @@ import {
 } from "@tanstack/react-start/server";
 import { handleBotRequest } from "./server/api/bot";
 import { handleBotControlRequest } from "./server/api/bot-control";
+import { handleShadowDigestRequest } from "./server/api/shadow-digest";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import type { Env, RequestContext } from "./server/env";
@@ -45,6 +46,11 @@ const serverEntry = {
 		const botControlResponse = await handleBotControlRequest(request, env);
 		if (botControlResponse) {
 			return botControlResponse;
+		}
+
+		const shadowDigestResponse = await handleShadowDigestRequest(request, env);
+		if (shadowDigestResponse) {
+			return shadowDigestResponse;
 		}
 
 		// Trigger background sharp pipeline refresh
