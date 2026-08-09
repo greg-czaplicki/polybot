@@ -282,10 +282,13 @@ function ShadowBookPage() {
 					Prop cohort — promotion watch
 				</h2>
 				<p className="mt-1 text-xs text-ink-55">
-					All prop-typed shadows regardless of which gate claimed them
-					(timing pre-filters fire before the prop gate, so reject reason
-					under-counts the cohort). Accumulating since 2026-08-07 (era v7).
-					A subtype earns a promotion review on sustained n with positive
+					All prop-typed shadows regardless of which gate claimed them (timing
+					pre-filters fire before the prop gate, so reject reason under-counts
+					the cohort). Accumulating since 2026-08-07 (era v7). The Clean columns
+					count only rows where the prop gate was the sole blocker — every other
+					gate passing — which is the number the promotion decision reads; the
+					raw columns mix in props other gates would have rejected anyway. A
+					subtype earns a promotion review on sustained clean n with positive
 					ROI and CLV — per-subtype, with its own scoring path, never by
 					unmuting the full-game machinery.
 				</p>
@@ -299,7 +302,10 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">W-L</th>
 								<th className="pb-2 pr-4">Units</th>
 								<th className="pb-2 pr-4">ROI</th>
-								<th className="pb-2">Avg CLV</th>
+								<th className="pb-2 pr-4">Avg CLV</th>
+								<th className="pb-2 pr-4">Clean W-L</th>
+								<th className="pb-2 pr-4">Clean ROI</th>
+								<th className="pb-2">Clean CLV</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -332,16 +338,37 @@ function ShadowBookPage() {
 										{formatRoi(r.roiPct)}
 									</td>
 									<td
-										className={`py-2 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
+										className={`py-2 pr-4 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
 										title={smallSampleTitle(r.wins + r.losses)}
 									>
 										{formatRoi(r.avgClvPct)}
+									</td>
+									<td className="py-2 pr-4">
+										{r.cleanTotal > 0
+											? `${r.cleanWins}-${r.cleanLosses}${
+													r.cleanTotal > r.cleanWins + r.cleanLosses
+														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
+														: ""
+												}`
+											: "—"}
+									</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
+										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
+									>
+										{formatRoi(r.cleanRoiPct)}
+									</td>
+									<td
+										className={`py-2 ${roiCellClass(r.cleanAvgClvPct, r.cleanWins + r.cleanLosses)}`}
+										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
+									>
+										{formatRoi(r.cleanAvgClvPct)}
 									</td>
 								</tr>
 							))}
 							{props.length === 0 && !isLoading ? (
 								<tr>
-									<td colSpan={7} className="py-4 text-ink-55">
+									<td colSpan={10} className="py-4 text-ink-55">
 										No prop shadows yet — they accumulate as BTTS, NRFI/YRFI,
 										team-total, and period markets hit the gates.
 									</td>

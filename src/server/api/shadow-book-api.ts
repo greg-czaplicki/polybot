@@ -6,6 +6,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { all } from "../db/client";
 import { getDb } from "../env";
+import {
+	PROP_CLEAN_SQL,
+	PROP_SUBTYPE_SQL,
+	SOLE_BLOCKER_SQL,
+} from "./shadow-sql";
 
 export interface ShadowReasonSummary {
 	rejectReason: string;
@@ -31,28 +36,6 @@ export interface ShadowReasonSummary {
 	cleanRoiPct: number | null;
 }
 
-/**
- * A row is a sole-blocker reject when every vector gate passes except the
- * gate its reject_reason maps to. Gates without a vector entry (timing,
- * microstructure, sport policies) get no exemption — for them "clean" means
- * all five vector gates pass. json_extract returns NULL for pass=null
- * (input unavailable at record time), which fails the =1 test: unknown is
- * never counted as a pass.
- */
-const SOLE_BLOCKER_SQL = `(
-	gates_json IS NOT NULL
-	AND (json_extract(gates_json,'$.price_edge.pass') = 1
-	     OR reject_reason = 'price_edge_below_floor')
-	AND (json_extract(gates_json,'$.edge_rating.pass') = 1
-	     OR reject_reason IN ('edge_rating_saturation','edge_rating_dead_zone','edge_rating_below_floor'))
-	AND (json_extract(gates_json,'$.signal_score.pass') = 1
-	     OR reject_reason = 'signal_score_saturation')
-	AND (json_extract(gates_json,'$.score_differential.pass') = 1
-	     OR reject_reason = 'low_score_differential')
-	AND (json_extract(gates_json,'$.grade_vs_base.pass') = 1
-	     OR reject_reason = 'below_policy_grade')
-)`;
-
 export interface ShadowSportSummary {
 	rejectReason: string;
 	sportTag: string;
@@ -76,29 +59,19 @@ export interface ShadowPropSummary {
 	units: number | null;
 	roiPct: number | null;
 	avgClvPct: number | null;
+	/**
+	 * Prop-gate-sole-blocker cohort (PROP_CLEAN_SQL): rejected by the prop
+	 * gate itself with all five vector gates passing — the only rows that
+	 * answer "what would betting this subtype have returned". The raw
+	 * columns above mix in props other gates would have rejected anyway.
+	 */
+	cleanTotal: number;
+	cleanWins: number;
+	cleanLosses: number;
+	cleanUnits: number | null;
+	cleanRoiPct: number | null;
+	cleanAvgClvPct: number | null;
 }
-
-/**
- * Prop subtype from the market title. The promotion decision is per-subtype
- * (BTTS vs NRFI vs team totals vs period markets are different bets), and
- * prop rows scatter across reject reasons (timing pre-filters fire before
- * the prop gate), so the cohort is defined by market_type + title, not by
- * reject_reason.
- */
-const PROP_SUBTYPE_SQL = `CASE
-	WHEN lower(market_title) LIKE '%first inning%'
-	  OR lower(market_title) LIKE '%1st inning%'
-	  OR lower(market_title) LIKE '%nrfi%'
-	  OR lower(market_title) LIKE '%yrfi%' THEN 'first_inning'
-	WHEN lower(market_title) LIKE '%both teams to score%'
-	  OR lower(market_title) LIKE '%btts%' THEN 'btts'
-	WHEN lower(market_title) LIKE '%team total%' THEN 'team_total'
-	WHEN lower(market_title) LIKE '%1h%'
-	  OR lower(market_title) LIKE '%2h%'
-	  OR lower(market_title) LIKE '%half%'
-	  OR lower(market_title) LIKE '%quarter%' THEN 'period'
-	ELSE 'other_prop'
-END`;
 
 export interface ShadowRowSummary {
 	marketTitle: string;
@@ -232,6 +205,11 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			pushes: number;
 			units: number | null;
 			avg_clv: number | null;
+			clean_total: number;
+			clean_wins: number;
+			clean_losses: number;
+			clean_units: number | null;
+			clean_avg_clv: number | null;
 		}>(
 			db,
 			`SELECT ${PROP_SUBTYPE_SQL} AS subtype,
@@ -241,7 +219,12 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'loss') AS losses,
 			        SUM(status = 'push') AS pushes,
 			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
-			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
+			        SUM(${PROP_CLEAN_SQL}) AS clean_total,
+			        SUM(CASE WHEN ${PROP_CLEAN_SQL} AND status = 'win' THEN 1 ELSE 0 END) AS clean_wins,
+			        SUM(CASE WHEN ${PROP_CLEAN_SQL} AND status = 'loss' THEN 1 ELSE 0 END) AS clean_losses,
+			        SUM(CASE WHEN ${PROP_CLEAN_SQL} AND status IN ('win','loss') THEN roi END) AS clean_units,
+			        AVG(CASE WHEN ${PROP_CLEAN_SQL} AND status IN ('win','loss') THEN clv END) AS clean_avg_clv
 			 FROM shadow_candidates
 			 WHERE market_type = 'prop'
 			 GROUP BY subtype
@@ -250,6 +233,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 
 		const props: ShadowPropSummary[] = propRows.map((r) => {
 			const settled = r.wins + r.losses;
+			const cleanSettled = r.clean_wins + r.clean_losses;
 			return {
 				subtype: r.subtype,
 				total: r.total,
@@ -261,6 +245,15 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 				roiPct:
 					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
 				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
+				cleanTotal: r.clean_total,
+				cleanWins: r.clean_wins,
+				cleanLosses: r.clean_losses,
+				cleanUnits: r.clean_units,
+				cleanRoiPct:
+					cleanSettled > 0 && r.clean_units !== null
+						? (r.clean_units / cleanSettled) * 100
+						: null,
+				cleanAvgClvPct: r.clean_avg_clv !== null ? r.clean_avg_clv * 100 : null,
 			};
 		});
 
