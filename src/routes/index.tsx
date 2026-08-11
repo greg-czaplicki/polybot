@@ -64,6 +64,16 @@ function formatPct(value: number | null, digits = 1): string {
 	return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+/**
+ * CLV average with its sample size — an average over thin coverage reads
+ * as authoritative without the n (book CLV was shown for weeks while
+ * backed by 10 picks). "— (n=0)" collapses to a bare dash.
+ */
+function formatClvWithN(value: number | null, n: number): string {
+	if (n === 0) return "—";
+	return `${formatPct(value, 2)} (n=${n})`;
+}
+
 function signClass(value: number | null): string {
 	if (value === null || !Number.isFinite(value)) return "text-ink-55";
 	return value >= 0 ? "text-signal-pos" : "text-signal-bad";
@@ -458,9 +468,10 @@ function DashboardPage() {
 										</span>
 									</div>
 									<p className="mt-1 text-xs text-ink-55">
-										CLV {formatPct(era.avgClvPct, 2)} · book CLV{" "}
-										{formatPct(era.avgBookClvPct, 2)} · {settled} settled ·{" "}
-										{era.pending} pending
+										CLV {formatClvWithN(era.avgClvPct, era.clvN)} · DK{" "}
+										{formatClvWithN(era.avgBookClvPct, era.bookClvN)} · Pin{" "}
+										{formatClvWithN(era.avgPinClvPct, era.pinClvN)} · {settled}{" "}
+										settled · {era.pending} pending
 									</p>
 								</div>
 							);

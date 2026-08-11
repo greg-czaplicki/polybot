@@ -48,6 +48,11 @@ export interface DashboardEraSummary {
 	roiPct: number | null;
 	avgClvPct: number | null;
 	avgBookClvPct: number | null;
+	avgPinClvPct: number | null;
+	/** Settled picks behind each CLV average — averages over thin coverage mislead */
+	clvN: number;
+	bookClvN: number;
+	pinClvN: number;
 }
 
 export interface DashboardHealth {
@@ -110,6 +115,10 @@ interface EraAggRow {
 	units: number | null;
 	avg_clv: number | null;
 	avg_book_clv: number | null;
+	avg_pin_clv: number | null;
+	clv_n: number | null;
+	book_clv_n: number | null;
+	pin_clv_n: number | null;
 }
 
 function toEraSummary(label: string, r: EraAggRow): DashboardEraSummary {
@@ -127,6 +136,10 @@ function toEraSummary(label: string, r: EraAggRow): DashboardEraSummary {
 		roiPct: settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
 		avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
 		avgBookClvPct: r.avg_book_clv !== null ? r.avg_book_clv * 100 : null,
+		avgPinClvPct: r.avg_pin_clv !== null ? r.avg_pin_clv * 100 : null,
+		clvN: r.clv_n ?? 0,
+		bookClvN: r.book_clv_n ?? 0,
+		pinClvN: r.pin_clv_n ?? 0,
 	};
 }
 
@@ -137,7 +150,11 @@ const ERA_AGG = `SELECT
 	SUM(status = 'pending') AS pending,
 	SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
 	AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
-	AVG(CASE WHEN status IN ('win','loss') THEN book_clv END) AS avg_book_clv
+	AVG(CASE WHEN status IN ('win','loss') THEN book_clv END) AS avg_book_clv,
+	AVG(CASE WHEN status IN ('win','loss') THEN pin_clv END) AS avg_pin_clv,
+	SUM(status IN ('win','loss') AND clv IS NOT NULL) AS clv_n,
+	SUM(status IN ('win','loss') AND book_clv IS NOT NULL) AS book_clv_n,
+	SUM(status IN ('win','loss') AND pin_clv IS NOT NULL) AS pin_clv_n
  FROM manual_picks`;
 
 export const getDashboardFn = createServerFn({ method: "GET" }).handler(
