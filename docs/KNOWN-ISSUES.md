@@ -81,10 +81,21 @@ fixing commit.
   (`book_source = 'espn_draftkings'`); a `game_lines` fallback is tagged
   `'game_lines_stale'` with the row's own `recorded_at` — filter on source
   when staleness matters. `book_fair_prob`/`book_ev`/`book_clv` are
-  moneyline-picks-only (two-way multiplicative de-vig of the DraftKings ML);
-  totals/spread picks carry only the book's line numbers. `book_clv` =
-  de-vigged book close − pick price (positive = beat the close); the
-  fill-price variant is derivable as `book_close_fair_prob − fill_price`.
+  moneyline-picks-only (two-way multiplicative de-vig of the DraftKings ML)
+  until 2026-08-11; from migration 0030 totals picks also de-vig side-aware
+  (pickcenter over/under prices), but ONLY when the book's total line equals
+  the pick market's line — line-mismatch rows keep raw odds with NULL fair
+  prob, and that selection is non-random (lines diverge more on
+  volatile-total games), so filter consciously. Spread picks still carry
+  only line numbers. `book_clv` = de-vigged book close − pick price
+  (positive = beat the close); the fill-price variant is derivable as
+  `book_close_fair_prob − fill_price`.
+- **Pinnacle columns (`pin_*`) exist from 2026-08-11** (migration 0030,
+  The Odds API, env-gated on `ODDS_API_KEY` — rows stay NULL until the
+  secret is set). `pin_close_*` is a close PROXY (last capture in a window
+  opening 10 min before start), not a frozen closing line; `pin_captured_at`
+  set with NULL prices means the sweep ran but Pinnacle had no matching
+  listing (or, for rows stamped at window expiry, the capture was missed).
 - **Canonical game data was frozen 2026-08-05 → 2026-08-11** (ESPN 403
   outage, docs/audits/2026-08-11-espn-403-outage.md): no finals, no fact
   computation, no trend refresh for six days, invisible because fetch
