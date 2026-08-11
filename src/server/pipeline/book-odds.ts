@@ -12,10 +12,11 @@
  *    post-game fetch is a true book close.
  *
  * De-vig is two-way multiplicative: fair = implied(side) / (implied(side) +
- * implied(opp)). fair-prob/EV/CLV fields are only populated for moneyline
- * picks with a home/away venue role — an ML fair prob says nothing about a
- * totals or spread pick's side. Totals and spread picks still get the book's
- * line numbers for line-movement analysis.
+ * implied(opp)). fair-prob/EV/CLV fields populate for (a) moneyline picks
+ * with a home/away venue role and (b) totals picks with an Over/Under side
+ * label WHEN the book prices the same total line as the pick's market
+ * (from 2026-08-11, migration 0030 — pickcenter overOdds/underOdds).
+ * Spread picks still get only the book's line numbers.
  *
  * book_clv = book_close_fair_prob − entry price: positive means the price we
  * paid was below the de-vigged book close (same sign convention as clv).
@@ -49,6 +50,53 @@ interface BookOdds {
 	totalLine: number | null;
 	homeMoneyline: number | null;
 	awayMoneyline: number | null;
+	overOdds: number | null;
+	underOdds: number | null;
+}
+
+/**
+ * Parses the pick MARKET's total line from a Polymarket title
+ * ("Houston Astros vs. San Diego Padres: O/U 9.5" → 9.5). Distinct from
+ * the book's own total line: fair-prob comparison across books is only
+ * valid when both price the same number.
+ */
+export function parseMarketTotalLine(title: string): number | null {
+	const m = /O\/U\s+(\d+(?:\.\d+)?)/i.exec(title);
+	if (!m) return null;
+	const line = Number.parseFloat(m[1]);
+	return Number.isFinite(line) ? line : null;
+}
+
+/**
+ * Orients the book's over/under prices to the pick's side. Returns null
+ * unless the book prices the SAME total line as the pick's market (a
+ * de-vigged Over 8.5 fair prob is not comparable to a market on 7.5).
+ */
+export function mapTotalsToPick(
+	odds: BookOdds,
+	sideLabel: string | null | undefined,
+	marketTotalLine: number | null,
+): { mlSide: number; mlOpp: number } | null {
+	const label = sideLabel?.toLowerCase();
+	if (label !== "over" && label !== "under") return null;
+	if (
+		marketTotalLine === null ||
+		odds.totalLine === null ||
+		Math.abs(odds.totalLine - marketTotalLine) > 0.01
+	) {
+		return null;
+	}
+	if (
+		odds.overOdds === null ||
+		odds.underOdds === null ||
+		odds.overOdds === 0 ||
+		odds.underOdds === 0
+	) {
+		return null;
+	}
+	return label === "over"
+		? { mlSide: odds.overOdds, mlOpp: odds.underOdds }
+		: { mlSide: odds.underOdds, mlOpp: odds.overOdds };
 }
 
 function toFiniteOrNull(value: number | null | undefined): number | null {
@@ -69,6 +117,8 @@ function oddsFromPickcenter(entry: EspnPickcenterEntry): BookOdds {
 		totalLine: toFiniteOrNull(entry.overUnder),
 		homeMoneyline: toFiniteOrNull(entry.homeTeamOdds?.moneyLine),
 		awayMoneyline: toFiniteOrNull(entry.awayTeamOdds?.moneyLine),
+		overOdds: toFiniteOrNull(entry.overOdds),
+		underOdds: toFiniteOrNull(entry.underOdds),
 	};
 }
 
@@ -94,6 +144,8 @@ export interface BookAnchor {
 	ev: number | null;
 	spreadLine: number | null;
 	totalLine: number | null;
+	overOdds: number | null;
+	underOdds: number | null;
 }
 
 export async function captureBookAnchorForGame(
@@ -103,6 +155,10 @@ export async function captureBookAnchorForGame(
 		venueRole: string | null;
 		betType: string | null;
 		entryPrice: number | null;
+		/** Over/Under for totals picks (sharp_side_label) */
+		sideLabel?: string | null;
+		/** The pick MARKET's total line (from the title), not the book's */
+		marketTotalLine?: number | null;
 	},
 ): Promise<BookAnchor | null> {
 	const game = await first<{
@@ -150,6 +206,9 @@ export async function captureBookAnchorForGame(
 			totalLine: toFiniteOrNull(row.total_line),
 			homeMoneyline: toFiniteOrNull(row.home_moneyline),
 			awayMoneyline: toFiniteOrNull(row.away_moneyline),
+			// game_lines does not store totals prices
+			overOdds: null,
+			underOdds: null,
 		};
 		source = "game_lines_stale";
 		capturedAt = row.recorded_at ?? capturedAt;
@@ -158,7 +217,13 @@ export async function captureBookAnchorForGame(
 	const mapped =
 		input.betType === "moneyline"
 			? mapMoneylinesToPick(odds, input.venueRole)
-			: null;
+			: input.betType === "total"
+				? mapTotalsToPick(
+						odds,
+						input.sideLabel ?? null,
+						input.marketTotalLine ?? null,
+					)
+				: null;
 	const fairProb = mapped ? devigTwoWay(mapped.mlSide, mapped.mlOpp) : null;
 	const ev =
 		fairProb !== null && input.entryPrice !== null && input.entryPrice > 0
@@ -168,12 +233,16 @@ export async function captureBookAnchorForGame(
 	return {
 		source,
 		capturedAt,
-		mlSide: mapped?.mlSide ?? null,
-		mlOpp: mapped?.mlOpp ?? null,
+		// ml columns stay moneyline-only; totals raw prices live in
+		// overOdds/underOdds and fairProb is side-aware via sideLabel
+		mlSide: input.betType === "moneyline" ? (mapped?.mlSide ?? null) : null,
+		mlOpp: input.betType === "moneyline" ? (mapped?.mlOpp ?? null) : null,
 		fairProb,
 		ev,
 		spreadLine: odds.homeSpread,
 		totalLine: odds.totalLine,
+		overOdds: odds.overOdds,
+		underOdds: odds.underOdds,
 	};
 }
 
@@ -199,13 +268,16 @@ export async function captureBookClosesForPicks(
 		price: number | null;
 		venue_role: string | null;
 		bet_type: string | null;
+		sharp_side_label: string | null;
+		market_title: string;
 		status: string;
 		picked_at: number;
 		espn_event_id: string;
 		sport_tag: string;
 	}>(
 		db,
-		`SELECT p.id, p.price, p.venue_role, p.bet_type, p.status, p.picked_at,
+		`SELECT p.id, p.price, p.venue_role, p.bet_type, p.sharp_side_label,
+		        p.market_title, p.status, p.picked_at,
 		        g.espn_event_id, g.sport_tag
 		 FROM manual_picks p
 		 JOIN games g ON g.id = p.game_id
@@ -254,7 +326,13 @@ export async function captureBookClosesForPicks(
 		const mapped =
 			row.bet_type === "moneyline"
 				? mapMoneylinesToPick(odds, row.venue_role)
-				: null;
+				: row.bet_type === "total"
+					? mapTotalsToPick(
+							odds,
+							row.sharp_side_label,
+							parseMarketTotalLine(row.market_title),
+						)
+					: null;
 		const closeFairProb = mapped
 			? devigTwoWay(mapped.mlSide, mapped.mlOpp)
 			: null;
@@ -274,15 +352,19 @@ export async function captureBookClosesForPicks(
 				book_close_fair_prob = ?,
 				book_close_spread_line = ?,
 				book_close_total_line = ?,
+				book_close_total_over_odds = ?,
+				book_close_total_under_odds = ?,
 				book_clv = ?
 			 WHERE id = ?`,
 			now,
 			bookSourceForEntry(entry),
-			mapped?.mlSide ?? null,
-			mapped?.mlOpp ?? null,
+			row.bet_type === "moneyline" ? (mapped?.mlSide ?? null) : null,
+			row.bet_type === "moneyline" ? (mapped?.mlOpp ?? null) : null,
 			closeFairProb,
 			odds.homeSpread,
 			odds.totalLine,
+			odds.overOdds,
+			odds.underOdds,
 			bookClv,
 			row.id,
 		);

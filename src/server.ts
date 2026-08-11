@@ -9,6 +9,7 @@ import { warmSeriesRegistry } from "./server/api/series-registry";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
+import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
 import {
 	getCanonicalFreshness,
 	persistSyncRun,
@@ -313,6 +314,18 @@ const serverEntry = {
 					if (result.updated > 0) {
 						console.log(
 							`[book-odds] Captured book closes for ${result.updated}/${result.checked} picks`,
+						);
+					}
+				})
+				.then(() =>
+					// Pinnacle benchmark (no-op without ODDS_API_KEY; ≤1 Odds API
+					// fetch per sport per sweep, only when eligible picks exist).
+					capturePinnacleOddsForPicks(env.POLYWHALER_DB, env.ODDS_API_KEY),
+				)
+				.then((result) => {
+					if (result.anchors > 0 || result.closes > 0) {
+						console.log(
+							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes (${result.checked} eligible)`,
 						);
 					}
 				})

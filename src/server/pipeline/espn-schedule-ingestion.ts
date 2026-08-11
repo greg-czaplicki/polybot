@@ -78,6 +78,9 @@ export interface EspnPickcenterEntry {
 	provider: { id: string; name: string; priority: number };
 	spread: number;
 	overUnder: number;
+	/** American prices on the total (present on MLB at least; verified live 2026-08-11) */
+	overOdds?: number;
+	underOdds?: number;
 	homeTeamOdds?: {
 		favorite: boolean;
 		moneyLine: number;

@@ -18,6 +18,7 @@ import {
 import {
 	type BookAnchor,
 	captureBookAnchorForGame,
+	parseMarketTotalLine,
 } from "../pipeline/book-odds";
 import {
 	parseTeamsFromTitle,
@@ -603,6 +604,14 @@ export async function enrichPickInline(
 					input.price > 0
 						? input.price
 						: null,
+				// Totals picks: side + the market's own line so the anchor can
+				// de-vig side-aware (only when the book prices the same line)
+				sideLabel:
+					input.sharpSide ??
+					snapshot?.sharpSideLabel ??
+					snapshot?.selectedOutcome ??
+					null,
+				marketTotalLine: parseMarketTotalLine(title),
 			});
 		} catch {
 			result.failureReasons.push("book_anchor_failed");
@@ -641,6 +650,16 @@ export async function enrichPickInline(
 		addField("book_ev", bookAnchor.ev, "book_ev");
 		addField("book_spread_line", bookAnchor.spreadLine, "book_spread_line");
 		addField("book_total_line", bookAnchor.totalLine, "book_total_line");
+		addField(
+			"book_total_over_odds",
+			bookAnchor.overOdds,
+			"book_total_over_odds",
+		);
+		addField(
+			"book_total_under_odds",
+			bookAnchor.underOdds,
+			"book_total_under_odds",
+		);
 	}
 
 	if (updates.length === 0) {

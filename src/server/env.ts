@@ -9,6 +9,8 @@ export interface Env {
 	APP_AUTH_SECRET?: string
 	// Bot API auth
 	BOT_API_KEY?: string
+	// The Odds API (Pinnacle benchmark capture); sweep is a no-op when unset
+	ODDS_API_KEY?: string
 	// Bot control proxy
 	BOT_CONTROL_URL?: string
 	BOT_CONTROL_TOKEN?: string
