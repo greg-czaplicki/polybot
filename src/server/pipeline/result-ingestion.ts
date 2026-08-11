@@ -17,6 +17,7 @@ import type { Db } from "../db/client";
 import { updateGameResult } from "../repositories/games";
 import { getTeamById } from "../repositories/teams";
 import type { Game, Team } from "../types/canonical";
+import { ESPN_FETCH_HEADERS } from "./espn-schedule-ingestion";
 import { listUnfinalizedGames } from "./game-ingestion";
 
 // ---------------------------------------------------------------------------
@@ -107,11 +108,20 @@ async function fetchEspnScoreboard(
 	if (!mapping) return null;
 
 	// Without an explicit limit ESPN truncates busy slates (NCAAB weekdays run
-	// 300+ games) with no error or cursor.
-	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=1000`;
+	// 300+ games) with no error or cursor — but limit>500 silently flips
+	// college scoreboards to the curated Top-25 view (see the same fix in
+	// espn-schedule-ingestion.ts, live-verified 2026-08-05). Keep limit at
+	// 500 and pass the all-games groups param for college feeds.
+	const groups =
+		mapping.league === "college-football"
+			? "&groups=80"
+			: mapping.league === "mens-college-basketball"
+				? "&groups=50"
+				: "";
+	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=500${groups}`;
 
 	try {
-		const res = await fetch(url);
+		const res = await fetch(url, { headers: ESPN_FETCH_HEADERS });
 		if (!res.ok) {
 			console.warn(
 				`[result-ingestion] ESPN API returned ${res.status} for ${sportTag} on ${dateStr}`,

@@ -24,6 +24,16 @@ import { upsertGameLine } from "../repositories/game-lines";
 import { createGame, updateGameResult } from "../repositories/games";
 import type { TeamRow } from "../types/canonical";
 
+/**
+ * ESPN's WAF started rejecting requests without a User-Agent around
+ * 2026-08-06 (403 on every call — the outage that froze game finalization
+ * and book closes for six days). Workers' fetch sends no UA by default.
+ * Live-verified 2026-08-11: plain HTTP-client UAs (curl/*, python-requests/*,
+ * okhttp/*) pass; empty, partial ("Mozilla/5.0", "node"), and
+ * browser-imitation UAs without full browser headers are rejected.
+ */
+export const ESPN_FETCH_HEADERS = { "User-Agent": "curl/8.5.0" } as const;
+
 // ---------------------------------------------------------------------------
 // ESPN API types (subset of scoreboard response)
 // ---------------------------------------------------------------------------
@@ -170,7 +180,7 @@ async function fetchEspnScoreboard(
 	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}&limit=500${groups}`;
 
 	try {
-		const res = await fetch(url);
+		const res = await fetch(url, { headers: ESPN_FETCH_HEADERS });
 		if (!res.ok) {
 			console.warn(
 				`[espn-schedule] ESPN API returned ${res.status} for ${sportTag} on ${dateStr}`,
@@ -197,7 +207,7 @@ export async function fetchEspnSummary(
 	const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/summary?event=${eventId}`;
 
 	try {
-		const res = await fetch(url);
+		const res = await fetch(url, { headers: ESPN_FETCH_HEADERS });
 		if (!res.ok) {
 			console.warn(
 				`[espn-schedule] ESPN summary returned ${res.status} for ${sportTag} event ${eventId}`,
@@ -527,7 +537,14 @@ export async function ingestEspnSchedule(
 			const scoreboard = await fetchEspnScoreboard(sportTag, dateStr);
 			result.espnFetches++;
 
-			if (!scoreboard?.events) continue;
+			// null = fetch/HTTP failure — count it so an ESPN-side outage shows
+			// up in sync-run counts instead of reporting success with zeros
+			// (the 2026-08-06 403 outage ran silent for six days this way).
+			if (!scoreboard) {
+				result.errors++;
+				continue;
+			}
+			if (!scoreboard.events) continue;
 
 			for (const event of scoreboard.events) {
 				// Skip preseason/exhibition games (type 1 = preseason, 2 = regular, 3 = postseason)
