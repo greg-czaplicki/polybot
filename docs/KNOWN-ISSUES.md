@@ -70,8 +70,14 @@ fixing commit.
 - **`strategy_version` on picks made before 2026-07-20 is a backfill**
   (`+backfill` suffix) assigned from `picked_at` vs deploy timestamps — see
   docs/STRATEGY.md.
-- **Book anchor columns (`book_*`) are valid only from 2026-07-23 onward**
-  (migration 0018). Pick-time fields come from a live ESPN fetch at creation
+- **Book anchor columns (`book_*`) have real coverage only from 2026-08-11**
+  (schema from 2026-07-23, migration 0018; only 10 of 148 ML picks before
+  then ever got values). Two compounding causes, both fixed (see
+  docs/audits/2026-08-11-espn-403-outage.md): picks before 8/5 attached to
+  Polymarket-created duplicate game rows without `espn_event_id`
+  (`findGameForPick` didn't prefer ESPN-linked rows until `b2ea470`), and
+  8/6–8/11 every ESPN call 403'd (UA-less requests; fixed `e26c852`).
+  Pick-time fields come from a live ESPN fetch at creation
   (`book_source = 'espn_draftkings'`); a `game_lines` fallback is tagged
   `'game_lines_stale'` with the row's own `recorded_at` — filter on source
   when staleness matters. `book_fair_prob`/`book_ev`/`book_clv` are
@@ -79,6 +85,15 @@ fixing commit.
   totals/spread picks carry only the book's line numbers. `book_clv` =
   de-vigged book close − pick price (positive = beat the close); the
   fill-price variant is derivable as `book_close_fair_prob − fill_price`.
+- **Canonical game data was frozen 2026-08-05 → 2026-08-11** (ESPN 403
+  outage, docs/audits/2026-08-11-espn-403-outage.md): no finals, no fact
+  computation, no trend refresh for six days, invisible because fetch
+  failures counted as success. Finals self-healed post-fix via the 14-day
+  result-ingestion window, but (a) trend context stamped on picks/shadow
+  rows made 8/5–8/11 reflects finals frozen at 8/4 — treat trend-bucket
+  analyses over that window as stale; (b) games of 8/5–8/7 permanently
+  lack `espn_event_id` (outside the 3-day schedule lookback at fix time),
+  so picks on those games can never get book closes.
 - **`game_lines` `snapshot_type='close'` rows are TRUE closes only from
   2026-07-30** (first-observed before that; discovered 2026-07-23): odds
   ingestion used to write once and never revisit, freezing the value at
