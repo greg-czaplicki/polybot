@@ -5,6 +5,22 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Pinnacle `pin_*` coverage starts 2026-08-12 evening, not 2026-08-11.**
+  The sweep shipped 2026-08-11 (migration 0030) but captured nothing:
+  `manual_picks.event_time` is ISO text and the sweep compared it as unix
+  seconds — SQLite's TEXT>INTEGER affinity made the anchor filter
+  always-true while the string coerced to NaN in the JS window checks, so
+  every selected row was skipped. Fixed `d62d2c2` (unixepoch() in
+  select + where). The four 2026-08-11 picks are permanently pin-NULL.
+- **`close_signal_*` coverage starts 2026-08-12 evening** (migration 0031,
+  `9a9a75e`): live signal state (sharp side, score differential, edge
+  rating, warnings, concentration, slimmed holder books) frozen ~10 min
+  before start for pending picks, via the same `analyzeMarketSharpness`
+  path used at pick time. Record-only — no picking/holding behavior
+  change. NOT covered: the pipeline-layer gate vector (signal_score with
+  novelty, price_edge vs fair price) is not recomputed at close. Rows may
+  instead hold `{"error": ...}` when the analysis failed through the whole
+  capture window.
 - **Sport coverage gaps before 2026-07-30.** Series IDs were hardcoded and
   Polymarket mints a new Gamma series per season (`nfl-2025` → `nfl-2026`,
   `premier-league-2025`, ...), so the pipeline was structurally blind to (a)
