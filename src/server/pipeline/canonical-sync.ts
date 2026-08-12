@@ -206,12 +206,24 @@ async function getLineInputsFromCache(db: Db): Promise<MarketLineInput[]> {
 		if (!Number.isFinite(eventTimeMs)) continue;
 		const eventTimeUnix = Math.floor(eventTimeMs / 1000);
 
-		// Resolve teams from market title — skip if we can't identify both teams
-		const resolved = await resolveTeamFromMarketTitle(
-			db,
-			toCanonicalSportTag(sportTag),
-			row.market_title,
-		);
+		// Resolve teams from market title — skip if we can't identify both
+		// teams. One unresolvable row must not kill the whole step (a thrown
+		// alias lookup took line-ingestion down for every game whenever a
+		// prop-style title sat in the cache, 2026-04 → 2026-08).
+		let resolved: Awaited<ReturnType<typeof resolveTeamFromMarketTitle>>;
+		try {
+			resolved = await resolveTeamFromMarketTitle(
+				db,
+				toCanonicalSportTag(sportTag),
+				row.market_title,
+			);
+		} catch (err) {
+			console.warn(
+				`[canonical-sync] team resolve failed for "${row.market_title}":`,
+				err instanceof Error ? err.message : err,
+			);
+			continue;
+		}
 		if (!resolved) continue;
 
 		const { homeTeam, awayTeam } = resolved;

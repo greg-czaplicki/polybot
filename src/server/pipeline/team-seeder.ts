@@ -2781,6 +2781,20 @@ export function parseTeamsFromTitle(
 	title: string,
 	sportTag?: string,
 ): { away: string; home: string } | null {
+	// Titles can carry a colon-separated wrapper on either side of the
+	// matchup ("Will there be a run scored in the first inning?: A vs. B",
+	// "A vs. B: O/U 9.5") — parse only the segment holding the matchup.
+	// Without this, everything before "vs." becomes a 60+ char "team name",
+	// whose alias LIKE pattern exceeds D1's limit and THROWS downstream.
+	const colonIdx = title.indexOf(":");
+	if (colonIdx > 0) {
+		const before = title.slice(0, colonIdx);
+		const after = title.slice(colonIdx + 1).trim();
+		const hasMatchup = (s: string) => /\s(?:vs\.?|at|@)\s/i.test(s);
+		if (hasMatchup(before)) title = before;
+		else if (hasMatchup(after)) title = after;
+	}
+
 	// Try "Team A at/@ Team B" (away @ home in every sport)
 	const atMatch = title.match(/^(.+?)\s+(?:at|@)\s+(.+)/i);
 	if (atMatch) {

@@ -126,6 +126,11 @@ export async function findTeamByAlias(
 	// Search aliases (JSON array contains check)
 	// Escape SQL LIKE wildcards (%, _) in the alias before using in LIKE pattern
 	const escapedAlias = normalizedAlias.replace(/[%_]/g, "\\$&");
+	// D1 caps LIKE pattern length and an oversized pattern THROWS
+	// ("LIKE or GLOB pattern too complex"), killing the caller's whole
+	// step. No legitimate team alias approaches this length — only
+	// unparsed title fragments do.
+	if (escapedAlias.length > 40) return null;
 	const rows = await all<TeamRow>(
 		db,
 		`SELECT * FROM teams WHERE sport_tag = ? AND aliases_json LIKE ? ESCAPE '\\'`,
