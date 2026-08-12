@@ -1,6 +1,10 @@
 import { all } from "../db/client";
 import type { Env } from "../env";
-import { PROP_CLEAN_SQL, PROP_SUBTYPE_SQL } from "./shadow-sql";
+import {
+	PROP_CLEAN_SQL,
+	PROP_SUBTYPE_SQL,
+	SOLE_BLOCKER_SQL,
+} from "./shadow-sql";
 
 /**
  * Public read-only aggregate view of the shadow book, consumed by the
@@ -55,18 +59,22 @@ export async function handleShadowDigestRequest(
 
 	const db = env.POLYWHALER_DB;
 	const weekAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
-	const [perGate, cleanPerGate, propCohort, propCohortClean] =
+	const [perGate, soleBlockerPerGate, propCohort, propCohortClean] =
 		await Promise.all([
 			all<GateSummaryRow>(
 				db,
 				`${GATE_SUMMARY_SQL} GROUP BY reject_reason ORDER BY n DESC`,
 				weekAgo,
 			),
-			// gates_json marks rows with the full gate vector (migration 0027,
-			// 2026-08-06) — the only rows valid for per-gate causal reads.
+			// Promotion-read cohort, same semantics as the /shadow page's
+			// Sole-blocker columns: this gate alone fired, every other vector
+			// gate passing. A bare gates_json filter is NOT sufficient — rows
+			// still land under the FIRST gate that fired, so that cut mixes in
+			// candidates other gates would have rejected anyway (this digest
+			// served exactly that cut as "cleanPerGate" until 2026-08-12).
 			all<GateSummaryRow>(
 				db,
-				`${GATE_SUMMARY_SQL} WHERE gates_json IS NOT NULL
+				`${GATE_SUMMARY_SQL} WHERE ${SOLE_BLOCKER_SQL}
 				GROUP BY reject_reason ORDER BY n DESC`,
 				weekAgo,
 			),
@@ -99,12 +107,13 @@ export async function handleShadowDigestRequest(
 		{
 			generatedAt: new Date().toISOString(),
 			perGate,
-			cleanPerGate,
+			soleBlockerPerGate,
 			propCohort,
 			propCohortClean,
 			notes: [
 				"roi/clv are fractions (0.05 = +5%), settled rows only",
-				"perGate rows before 2026-08-06 are contaminated by the gate chain's early-return; use cleanPerGate for per-gate reads",
+				"perGate attributes each row to the FIRST gate that fired — contaminated for per-gate causal reads; soleBlockerPerGate (this gate alone failed, all others passed) is the ONLY cohort valid for gate-promotion decisions, and the pre-registered n>=50 checkpoint counts ITS rows",
+				"the former cleanPerGate field (bare gate-vector filter, still first-fired attribution) was removed 2026-08-12 — it overstated cohort sizes and nearly false-fired the checkpoint",
 				"propCohort accumulates BTTS/NRFI/team-total/period markets from 2026-08-07 (era v7)",
 				"propCohortClean is the promotion-read cohort: prop gate sole blocker, all other gates passing — use it, not propCohort, for would-betting-props-pay reads",
 			],
