@@ -253,10 +253,14 @@ export async function capturePinnacleOddsForPicks(
 			: 25;
 	const now = nowUnixSeconds();
 
+	// manual_picks.event_time is ISO-8601 TEXT, not unix seconds: compare and
+	// select it via unixepoch(), or TEXT-vs-INTEGER affinity makes every
+	// comparison silently wrong (TEXT > INTEGER is always true in SQLite, and
+	// the raw string coerces to NaN in JS).
 	const rows = await all<SweepPickRow>(
 		db,
 		`SELECT p.id, p.price, p.bet_type, p.venue_role, p.sharp_side_label,
-		        p.market_title, p.event_time, g.sport_tag,
+		        p.market_title, unixepoch(p.event_time) AS event_time, g.sport_tag,
 		        ht.name AS home_name, at2.name AS away_name,
 		        p.pin_captured_at, p.pin_close_captured_at
 		 FROM manual_picks p
@@ -267,10 +271,10 @@ export async function capturePinnacleOddsForPicks(
 		   AND (
 		     (p.pin_captured_at IS NULL
 		      AND p.picked_at > ?
-		      AND p.event_time > ?)
+		      AND unixepoch(p.event_time) > ?)
 		     OR
 		     (p.pin_close_captured_at IS NULL
-		      AND p.event_time BETWEEN ? AND ?)
+		      AND unixepoch(p.event_time) BETWEEN ? AND ?)
 		   )
 		 ORDER BY p.event_time ASC
 		 LIMIT ?`,
