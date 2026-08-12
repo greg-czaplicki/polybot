@@ -73,6 +73,28 @@ export interface ShadowPropSummary {
 	cleanAvgClvPct: number | null;
 }
 
+/**
+ * Timing-gate shadows paired with a REAL pick on the same market: a direct
+ * measurement of what the 60-180m window boundary does to entry price.
+ * Drift is signed as (chronologically later price − earlier price) on the
+ * SAME side, in probability points: for outside_window the shadow sighting
+ * (>180m) comes first and the pick later; for too_close_to_start the pick
+ * comes first and the shadow sighting (<60m) later. Positive drift =
+ * market moved toward the sharp side between the two sightings.
+ */
+export interface ShadowTimingPairSummary {
+	rejectReason: string;
+	pairs: number;
+	sideMatched: number;
+	sideFlipped: number;
+	avgDriftPct: number | null;
+	medianDriftPct: number | null;
+	movedTowardSide: number;
+	movedAway: number;
+	pickWins: number;
+	pickLosses: number;
+}
+
 export interface ShadowRowSummary {
 	marketTitle: string;
 	rejectReason: string;
@@ -257,6 +279,71 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
+		const pairRows = await all<{
+			reject_reason: string;
+			shadow_label: string | null;
+			shadow_price: number | null;
+			pick_label: string | null;
+			pick_price: number | null;
+			pick_status: string;
+		}>(
+			db,
+			`SELECT s.reject_reason,
+			        s.sharp_side_label AS shadow_label,
+			        s.price AS shadow_price,
+			        p.sharp_side_label AS pick_label,
+			        p.price AS pick_price,
+			        p.status AS pick_status
+			 FROM shadow_candidates s
+			 JOIN manual_picks p ON p.condition_id = s.condition_id
+			 WHERE s.reject_reason IN ('outside_window','too_close_to_start')
+			 ORDER BY p.picked_at DESC
+			 LIMIT 500`,
+		);
+
+		const timingPairs: ShadowTimingPairSummary[] = [
+			"outside_window",
+			"too_close_to_start",
+		].map((reason) => {
+			const rows = pairRows.filter((r) => r.reject_reason === reason);
+			const matched = rows.filter(
+				(r) =>
+					r.shadow_label !== null &&
+					r.pick_label !== null &&
+					r.shadow_label.toLowerCase() === r.pick_label.toLowerCase(),
+			);
+			const drifts = matched
+				.filter((r) => r.shadow_price !== null && r.pick_price !== null)
+				.map((r) => {
+					const shadow = r.shadow_price as number;
+					const pick = r.pick_price as number;
+					// Later sighting minus earlier, on the same side.
+					return reason === "outside_window" ? pick - shadow : shadow - pick;
+				})
+				.sort((a, b) => a - b);
+			const median =
+				drifts.length === 0
+					? null
+					: drifts.length % 2 === 1
+						? drifts[(drifts.length - 1) / 2]
+						: (drifts[drifts.length / 2 - 1] + drifts[drifts.length / 2]) / 2;
+			return {
+				rejectReason: reason,
+				pairs: rows.length,
+				sideMatched: matched.length,
+				sideFlipped: rows.length - matched.length,
+				avgDriftPct:
+					drifts.length > 0
+						? (drifts.reduce((s, d) => s + d, 0) / drifts.length) * 100
+						: null,
+				medianDriftPct: median !== null ? median * 100 : null,
+				movedTowardSide: drifts.filter((d) => d > 0.005).length,
+				movedAway: drifts.filter((d) => d < -0.005).length,
+				pickWins: matched.filter((r) => r.pick_status === "win").length,
+				pickLosses: matched.filter((r) => r.pick_status === "loss").length,
+			};
+		});
+
 		const recentRows = await all<{
 			market_title: string;
 			reject_reason: string;
@@ -302,6 +389,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			reasons,
 			bySport,
 			props,
+			timingPairs,
 			recent,
 		};
 	},

@@ -9,6 +9,7 @@ import {
 	type ShadowReasonSummary,
 	type ShadowRowSummary,
 	type ShadowSportSummary,
+	type ShadowTimingPairSummary,
 } from "../server/api/shadow-book-api";
 
 export const Route = createFileRoute("/shadow")({
@@ -95,6 +96,9 @@ function ShadowBookPage() {
 	const [reasons, setReasons] = useState<ShadowReasonSummary[]>([]);
 	const [bySport, setBySport] = useState<ShadowSportSummary[]>([]);
 	const [props, setProps] = useState<ShadowPropSummary[]>([]);
+	const [timingPairs, setTimingPairs] = useState<ShadowTimingPairSummary[]>(
+		[],
+	);
 	const [recent, setRecent] = useState<ShadowRowSummary[]>([]);
 	const [computedAt, setComputedAt] = useState<number | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -108,6 +112,7 @@ function ShadowBookPage() {
 			setReasons(result.reasons);
 			setBySport(result.bySport);
 			setProps(result.props);
+			setTimingPairs(result.timingPairs);
 			setRecent(result.recent);
 			setComputedAt(result.computedAt);
 		} catch (err) {
@@ -271,6 +276,79 @@ function ShadowBookPage() {
 								<tr>
 									<td colSpan={9} className="py-4 text-ink-55">
 										No shadow candidates yet.
+									</td>
+								</tr>
+							) : null}
+						</tbody>
+					</table>
+				</div>
+
+				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
+					Paired timing view — window boundary drift
+				</h2>
+				<p className="mt-1 text-xs text-ink-55">
+					Timing-gate shadows paired with a real pick on the SAME market —
+					the direct measurement of the 60–180m window. Drift = later price −
+					earlier price on the same side (probability points): the early row
+					measures what waiting from first sighting (&gt;180m) into the
+					window did to our entry; the late row measures where the price went
+					after our entry, inside the final hour. Positive = market moved
+					toward the sharp side. Side-flipped pairs (sharp side changed
+					between sightings) are excluded from drift.
+				</p>
+				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
+					<table className="min-w-full text-left text-sm text-ink-85">
+						<thead>
+							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+								<th className="pb-2 pr-4">Boundary</th>
+								<th className="pb-2 pr-4">Pairs</th>
+								<th className="pb-2 pr-4">Side matched</th>
+								<th className="pb-2 pr-4">Side flipped</th>
+								<th className="pb-2 pr-4">Avg drift</th>
+								<th className="pb-2 pr-4">Median drift</th>
+								<th className="pb-2 pr-4">Toward / away</th>
+								<th className="pb-2">Paired pick W-L</th>
+							</tr>
+						</thead>
+						<tbody>
+							{timingPairs.map((r) => (
+								<tr key={r.rejectReason} className="border-t border-ink-10">
+									<td className="py-2 pr-4 text-ink-95">
+										{r.rejectReason === "outside_window"
+											? "Early sighting → pick entry"
+											: "Pick entry → final hour"}
+									</td>
+									<td className="py-2 pr-4">{r.pairs}</td>
+									<td className="py-2 pr-4">{r.sideMatched}</td>
+									<td className="py-2 pr-4">{r.sideFlipped}</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.avgDriftPct, r.sideMatched)}`}
+										title={smallSampleTitle(r.sideMatched)}
+									>
+										{r.avgDriftPct !== null
+											? `${r.avgDriftPct >= 0 ? "+" : ""}${r.avgDriftPct.toFixed(1)}pp`
+											: "—"}
+									</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.medianDriftPct, r.sideMatched)}`}
+										title={smallSampleTitle(r.sideMatched)}
+									>
+										{r.medianDriftPct !== null
+											? `${r.medianDriftPct >= 0 ? "+" : ""}${r.medianDriftPct.toFixed(1)}pp`
+											: "—"}
+									</td>
+									<td className="py-2 pr-4">
+										{r.movedTowardSide} / {r.movedAway}
+									</td>
+									<td className="py-2">
+										{r.pickWins}-{r.pickLosses}
+									</td>
+								</tr>
+							))}
+							{timingPairs.every((r) => r.pairs === 0) && !isLoading ? (
+								<tr>
+									<td colSpan={8} className="py-4 text-ink-55">
+										No timing-shadow/pick pairs yet.
 									</td>
 								</tr>
 							) : null}

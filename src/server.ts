@@ -24,6 +24,7 @@ import {
 import {
 	handleSharpQueue,
 	SharpPipeline,
+	type SharpPipelineJob,
 } from "./server/pipeline/sharp-pipeline";
 import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
 import {
@@ -453,7 +454,11 @@ const serverEntry = {
 				}),
 		);
 	},
-	async queue(batch: MessageBatch, env: Env, executionCtx: ExecutionContext) {
+	async queue(
+		batch: MessageBatch<SharpPipelineJob>,
+		env: Env,
+		executionCtx: ExecutionContext,
+	) {
 		await handleSharpQueue(batch, env, executionCtx);
 	},
 };
