@@ -287,16 +287,15 @@ function ShadowBookPage() {
 					Paired timing view — window boundary drift
 				</h2>
 				<p className="mt-1 text-xs text-ink-55">
-					Timing-gate shadows paired with a real pick on the SAME market —
-					the direct measurement of the 60–180m window. Drift = later price −
-					earlier price on the same side (probability points): the early row
-					measures what waiting from first sighting (&gt;180m) into the
-					window did to our entry; the post-pick row measures where the price
-					went after our entry (sourced from market_group_already_picked
-					sightings — once a market is picked, too_close_to_start can no
-					longer fire on it). Positive = market moved toward the sharp side.
-					Side-flipped pairs (sharp side changed between sightings) are
-					excluded from drift.
+					outside_window shadows paired with a real pick on the SAME market —
+					the direct measurement of the window&apos;s early boundary. Drift =
+					pick price − first-sighting price (&gt;180m out) on the same side,
+					in probability points: positive means the market moved toward the
+					sharp side before we were allowed in (waiting cost us entry price —
+					evidence for opening the window earlier); negative means waiting got
+					us a better price. Side-flipped pairs are excluded from drift.
+					Post-entry drift needs no bucket here — that is exactly what CLV
+					measures.
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
