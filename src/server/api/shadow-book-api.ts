@@ -77,13 +77,18 @@ export interface ShadowPropSummary {
  * Timing-gate shadows paired with a REAL pick on the same market: a direct
  * measurement of what the 60-180m window boundary does to entry price.
  * Drift is signed as (chronologically later price − earlier price) on the
- * SAME side, in probability points: for outside_window the shadow sighting
- * (>180m) comes first and the pick later; for too_close_to_start the pick
- * comes first and the shadow sighting (<60m) later. Positive drift =
- * market moved toward the sharp side between the two sightings.
+ * SAME side, in probability points; positive = market moved toward the
+ * sharp side between the two sightings. Two buckets:
+ * - "outside_window": the shadow sighting (>180m) precedes the pick —
+ *   what waiting into the window did to entry.
+ * - "post_pick": the shadow sighting FOLLOWS the pick. Once a market is
+ *   picked, later candidate sightings shadow as market_group_already_picked
+ *   (too_close_to_start can't fire on picked markets), so that reason is
+ *   the post-entry drift source; too_close_to_start is included for
+ *   completeness but stays near-empty by construction.
  */
 export interface ShadowTimingPairSummary {
-	rejectReason: string;
+	bucket: string;
 	pairs: number;
 	sideMatched: number;
 	sideFlipped: number;
@@ -296,16 +301,24 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        p.status AS pick_status
 			 FROM shadow_candidates s
 			 JOIN manual_picks p ON p.condition_id = s.condition_id
-			 WHERE s.reject_reason IN ('outside_window','too_close_to_start')
+			 WHERE s.reject_reason IN
+			   ('outside_window','too_close_to_start','market_group_already_picked')
 			 ORDER BY p.picked_at DESC
 			 LIMIT 500`,
 		);
 
-		const timingPairs: ShadowTimingPairSummary[] = [
-			"outside_window",
-			"too_close_to_start",
-		].map((reason) => {
-			const rows = pairRows.filter((r) => r.reject_reason === reason);
+		const timingBuckets: Array<{ bucket: string; reasons: string[] }> = [
+			{ bucket: "outside_window", reasons: ["outside_window"] },
+			{
+				bucket: "post_pick",
+				reasons: ["market_group_already_picked", "too_close_to_start"],
+			},
+		];
+		const timingPairs: ShadowTimingPairSummary[] = timingBuckets.map(
+			({ bucket, reasons: bucketReasons }) => {
+			const rows = pairRows.filter((r) =>
+				bucketReasons.includes(r.reject_reason),
+			);
 			const matched = rows.filter(
 				(r) =>
 					r.shadow_label !== null &&
@@ -318,7 +331,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 					const shadow = r.shadow_price as number;
 					const pick = r.pick_price as number;
 					// Later sighting minus earlier, on the same side.
-					return reason === "outside_window" ? pick - shadow : shadow - pick;
+					return bucket === "outside_window" ? pick - shadow : shadow - pick;
 				})
 				.sort((a, b) => a - b);
 			const median =
@@ -328,7 +341,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 						? drifts[(drifts.length - 1) / 2]
 						: (drifts[drifts.length / 2 - 1] + drifts[drifts.length / 2]) / 2;
 			return {
-				rejectReason: reason,
+				bucket,
 				pairs: rows.length,
 				sideMatched: matched.length,
 				sideFlipped: rows.length - matched.length,
