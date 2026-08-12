@@ -7,6 +7,7 @@ import {
 import {
 	extractPinnaclePrices,
 	matchOddsApiEvent,
+	parseTitleTeams,
 	type OddsApiEvent,
 } from "./pinnacle-odds";
 
@@ -188,5 +189,32 @@ describe("extractPinnaclePrices", () => {
 			marketTotalLine: null,
 		});
 		expect(prices.fairProb).toBe(null);
+	});
+});
+
+describe("parseTitleTeams", () => {
+	it("parses a plain moneyline title", () => {
+		expect(parseTitleTeams("Houston Astros vs. San Francisco Giants")).toEqual(
+			{ teamA: "Houston Astros", teamB: "San Francisco Giants" },
+		);
+	});
+
+	it("strips the totals suffix after the colon", () => {
+		expect(
+			parseTitleTeams("Colorado Rockies vs. Arizona Diamondbacks: O/U 9.5"),
+		).toEqual({ teamA: "Colorado Rockies", teamB: "Arizona Diamondbacks" });
+	});
+
+	it("keeps the matchup when the colon precedes it (prop-style titles)", () => {
+		expect(
+			parseTitleTeams(
+				"Will there be a run scored in the first inning?: Milwaukee Brewers vs. San Diego Padres",
+			),
+		).toEqual({ teamA: "Milwaukee Brewers", teamB: "San Diego Padres" });
+	});
+
+	it("returns null when there is no matchup", () => {
+		expect(parseTitleTeams("Some unrelated market")).toBe(null);
+		expect(parseTitleTeams("A vs. B vs. C")).toBe(null);
 	});
 });

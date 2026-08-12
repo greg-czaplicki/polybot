@@ -324,9 +324,13 @@ const serverEntry = {
 					capturePinnacleOddsForPicks(env.POLYWHALER_DB, env.ODDS_API_KEY),
 				)
 				.then((result) => {
-					if (result.anchors > 0 || result.closes > 0) {
+					if (
+						result.anchors > 0 ||
+						result.closes > 0 ||
+						result.shadowCloses > 0
+					) {
 						console.log(
-							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes (${result.checked} eligible)`,
+							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes (${result.checked} eligible)`,
 						);
 					}
 				})

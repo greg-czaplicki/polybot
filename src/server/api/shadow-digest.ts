@@ -20,6 +20,8 @@ type GateSummaryRow = {
 	losses: number;
 	avg_roi: number | null;
 	avg_clv: number | null;
+	avg_pin_clv: number | null;
+	pin_clv_n: number;
 	new_7d: number;
 	settled_7d: number;
 };
@@ -43,6 +45,8 @@ const GATE_SUMMARY_SQL = `
 		SUM(status = 'loss') AS losses,
 		ROUND(AVG(CASE WHEN status IN ('win','loss') THEN roi END), 4) AS avg_roi,
 		ROUND(AVG(CASE WHEN status IN ('win','loss') THEN clv END), 4) AS avg_clv,
+		ROUND(AVG(CASE WHEN status IN ('win','loss') THEN pin_clv END), 4) AS avg_pin_clv,
+		SUM(CASE WHEN status IN ('win','loss') AND pin_clv IS NOT NULL THEN 1 ELSE 0 END) AS pin_clv_n,
 		SUM(CASE WHEN created_at > ?1 THEN 1 ELSE 0 END) AS new_7d,
 		SUM(CASE WHEN settled_at > ?1 THEN 1 ELSE 0 END) AS settled_7d
 	FROM shadow_candidates`;
@@ -112,6 +116,7 @@ export async function handleShadowDigestRequest(
 			propCohortClean,
 			notes: [
 				"roi/clv are fractions (0.05 = +5%), settled rows only",
+				"avg_pin_clv is the de-vigged Pinnacle close-proxy benchmark (coverage from 2026-08-12, pin_clv_n = rows carrying it); once pin_clv_n is meaningful prefer it over avg_clv (PM self-close) for the checkpoint's CLV criterion",
 				"perGate attributes each row to the FIRST gate that fired — contaminated for per-gate causal reads; soleBlockerPerGate (this gate alone failed, all others passed) is the ONLY cohort valid for gate-promotion decisions, and the pre-registered n>=50 checkpoint counts ITS rows",
 				"the former cleanPerGate field (bare gate-vector filter, still first-fired attribution) was removed 2026-08-12 — it overstated cohort sizes and nearly false-fired the checkpoint",
 				"propCohort accumulates BTTS/NRFI/team-total/period markets from 2026-08-07 (era v7)",

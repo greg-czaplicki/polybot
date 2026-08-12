@@ -220,6 +220,33 @@ async function fetchOddsApiEvents(
 	}
 }
 
+/**
+ * Extracts the two team names from a Polymarket game-market title
+ * ("Colorado Rockies vs. Arizona Diamondbacks: O/U 9.5" → both teams).
+ * Orientation doesn't matter — matchOddsApiEvent checks both. Pure —
+ * exported for tests.
+ */
+export function parseTitleTeams(
+	marketTitle: string,
+): { teamA: string; teamB: string } | null {
+	// The matchup can sit on either side of a colon: "A vs. B: O/U 9.5"
+	// (totals suffix) or "Will ...?: A vs. B" (prop-style prefix).
+	const colonIdx = marketTitle.indexOf(":");
+	let matchup = marketTitle;
+	if (colonIdx > 0) {
+		const before = marketTitle.slice(0, colonIdx);
+		const after = marketTitle.slice(colonIdx + 1);
+		if (before.includes(" vs. ")) matchup = before;
+		else if (after.includes(" vs. ")) matchup = after;
+	}
+	const parts = matchup.split(" vs. ");
+	if (parts.length !== 2) return null;
+	const teamA = parts[0].trim();
+	const teamB = parts[1].trim();
+	if (!teamA || !teamB) return null;
+	return { teamA, teamB };
+}
+
 interface SweepPickRow {
 	id: string;
 	price: number | null;
@@ -241,12 +268,28 @@ interface SweepPickRow {
  * eligible pick (2 credits each); no eligible picks → zero fetches.
  * No-op when apiKey is empty/undefined.
  */
+interface ShadowCloseRow {
+	id: string;
+	price: number | null;
+	market_type: string;
+	sharp_side_label: string | null;
+	market_title: string;
+	event_time: number;
+	sport_tag: string | null;
+}
+
 export async function capturePinnacleOddsForPicks(
 	db: Db,
 	apiKey: string | undefined,
 	options?: { limit?: number },
-): Promise<{ checked: number; anchors: number; closes: number }> {
-	if (!apiKey) return { checked: 0, anchors: 0, closes: 0 };
+): Promise<{
+	checked: number;
+	anchors: number;
+	closes: number;
+	shadowCloses: number;
+}> {
+	if (!apiKey)
+		return { checked: 0, anchors: 0, closes: 0, shadowCloses: 0 };
 	const limit =
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 50)
@@ -284,12 +327,34 @@ export async function capturePinnacleOddsForPicks(
 		now + CLOSE_WINDOW_BEFORE_SECONDS,
 		limit,
 	);
-	if (rows.length === 0) return { checked: 0, anchors: 0, closes: 0 };
 
-	// One fetch per sport, shared by every eligible pick of that sport.
+	// Shadow candidates: close proxy only (no anchors — shadows are created
+	// all day and anchor captures would fetch on every scan tick).
+	// shadow_candidates.event_time is INTEGER seconds, unlike manual_picks.
+	const shadowRows = await all<ShadowCloseRow>(
+		db,
+		`SELECT id, price, market_type, sharp_side_label, market_title,
+		        event_time, sport_tag
+		 FROM shadow_candidates
+		 WHERE status = 'pending'
+		   AND market_type IN ('moneyline','total')
+		   AND pin_close_captured_at IS NULL
+		   AND event_time BETWEEN ? AND ?
+		 ORDER BY event_time ASC
+		 LIMIT 20`,
+		now - CLOSE_WINDOW_AFTER_SECONDS,
+		now + CLOSE_WINDOW_BEFORE_SECONDS,
+	);
+
+	if (rows.length === 0 && shadowRows.length === 0)
+		return { checked: 0, anchors: 0, closes: 0, shadowCloses: 0 };
+
+	// One fetch per sport, shared by every eligible pick AND shadow of that
+	// sport in this sweep.
 	const eventsBySport = new Map<string, OddsApiEvent[] | null>();
 	let anchors = 0;
 	let closes = 0;
+	let shadowCloses = 0;
 
 	for (const row of rows) {
 		const sportKey = ODDS_API_SPORT_KEYS[row.sport_tag];
@@ -411,5 +476,84 @@ export async function capturePinnacleOddsForPicks(
 			closes += 1;
 		}
 	}
-	return { checked: rows.length, anchors, closes };
+
+	for (const row of shadowRows) {
+		const tag = row.sport_tag;
+		const sportKey = tag ? ODDS_API_SPORT_KEYS[tag] : undefined;
+		if (!tag || !sportKey) {
+			// Untracked sport (e.g. soccer): stamp so the row stops occupying
+			// the sweep; fair prob stays NULL.
+			await run(
+				db,
+				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
+				now,
+				row.id,
+			);
+			continue;
+		}
+		if (!eventsBySport.has(tag)) {
+			eventsBySport.set(tag, await fetchOddsApiEvents(apiKey, sportKey));
+		}
+		const events = eventsBySport.get(tag);
+		// Fetch failure: leave untouched, next sweep retries inside the window.
+		if (!events) continue;
+
+		const teams = parseTitleTeams(row.market_title);
+		const event = teams
+			? matchOddsApiEvent(events, {
+					homeName: teams.teamA,
+					awayName: teams.teamB,
+					eventTime: row.event_time,
+				})
+			: null;
+		if (!event) {
+			// Unparseable title or no Pinnacle listing — stamp so we don't
+			// refetch for this row every 2 minutes.
+			await run(
+				db,
+				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
+				now,
+				row.id,
+			);
+			continue;
+		}
+
+		// ML venue role isn't stored on shadow rows; derive it from which
+		// feed side the sharp label matches.
+		let venueRole: string | null = null;
+		if (row.market_type === "moneyline" && row.sharp_side_label) {
+			if (teamNamesMatch(row.sharp_side_label, event.home_team)) {
+				venueRole = "home";
+			} else if (teamNamesMatch(row.sharp_side_label, event.away_team)) {
+				venueRole = "away";
+			}
+		}
+		const prices = extractPinnaclePrices(event, {
+			betType: row.market_type,
+			venueRole,
+			sideLabel: row.sharp_side_label,
+			marketTotalLine: parseMarketTotalLine(row.market_title),
+		});
+		const entryPrice =
+			typeof row.price === "number" && row.price > 0 ? row.price : null;
+		const pinClv =
+			prices.fairProb !== null && entryPrice !== null
+				? prices.fairProb - entryPrice
+				: null;
+		await run(
+			db,
+			`UPDATE shadow_candidates
+			 SET pin_close_captured_at = ?, pin_close_total_line = ?,
+			     pin_close_fair_prob = ?, pin_clv = ?
+			 WHERE id = ?`,
+			now,
+			prices.totalLine,
+			prices.fairProb,
+			pinClv,
+			row.id,
+		);
+		shadowCloses += 1;
+	}
+
+	return { checked: rows.length + shadowRows.length, anchors, closes, shadowCloses };
 }
