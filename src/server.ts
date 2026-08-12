@@ -9,6 +9,7 @@ import { warmSeriesRegistry } from "./server/api/series-registry";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
+import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
 import {
 	getCanonicalFreshness,
@@ -326,6 +327,20 @@ const serverEntry = {
 					if (result.anchors > 0 || result.closes > 0) {
 						console.log(
 							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes (${result.checked} eligible)`,
+						);
+					}
+				})
+				.then(() =>
+					// Close-signal capture: freeze live signal state ~10 min
+					// pre-start for pending picks (record-only; up to 2 picks
+					// per tick — the analysis fans out per-wallet fetches, so
+					// keep it small inside the shared subrequest budget).
+					captureCloseSignalForPicks(env, { limit: 2 }),
+				)
+				.then((result) => {
+					if (result.captured > 0) {
+						console.log(
+							`[close-signal] Captured close signal for ${result.captured}/${result.checked} picks`,
 						);
 					}
 				})
