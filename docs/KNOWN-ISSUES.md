@@ -5,7 +5,18 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
-- **Pinnacle `pin_*` coverage starts 2026-08-12 evening, not 2026-08-11.**
+- **Line-ingestion silently failed in 1,520 canonical sync runs,
+  2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
+  before "vs." as the away team, so prop-style titles ("Will there be a
+  run scored in the first inning?: A vs. B") produced 60+ char "team
+  names"; `findTeamByAlias` fed them to `aliases_json LIKE '%...%'`,
+  exceeding D1's LIKE pattern length cap, which THROWS — killing the
+  whole line-ingestion step for that run (status `partial`). The failure
+  came and went with whatever titles sat in `sharp_money_cache`, so
+  Polymarket-source `game_lines` close rows have intermittent gaps in
+  that window (the ESPN pickcenter line path was unaffected and covered
+  most games). Fixed `8b4d749` (colon-aware title parsing + length guard
+  before LIKE + per-row try/catch so one bad row can't kill the step).
   The sweep shipped 2026-08-11 (migration 0030) but captured nothing:
   `manual_picks.event_time` is ISO text and the sweep compared it as unix
   seconds — SQLite's TEXT>INTEGER affinity made the anchor filter
