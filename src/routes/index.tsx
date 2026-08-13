@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { formatSideLabel } from "@/lib/side-label";
@@ -65,13 +65,20 @@ function formatPct(value: number | null, digits = 1): string {
 }
 
 /**
- * CLV average with its sample size — an average over thin coverage reads
- * as authoritative without the n (book CLV was shown for weeks while
- * backed by 10 picks). "— (n=0)" collapses to a bare dash.
+ * The three closing-line benchmarks began capture on different dates, so
+ * each era average covers a different subset of picks. The coverage column
+ * (n of settled) must stay next to every average — an average over thin
+ * coverage reads as authoritative without it (book CLV was shown for weeks
+ * while backed by 10 picks).
  */
-function formatClvWithN(value: number | null, n: number): string {
-	if (n === 0) return "—";
-	return `${formatPct(value, 2)} (n=${n})`;
+function eraBenchmarks(
+	era: DashboardEraSummary,
+): { name: string; value: number | null; n: number }[] {
+	return [
+		{ name: "Polymarket", value: era.avgClvPct, n: era.clvN },
+		{ name: "DraftKings", value: era.avgBookClvPct, n: era.bookClvN },
+		{ name: "Pinnacle", value: era.avgPinClvPct, n: era.pinClvN },
+	];
 }
 
 function signClass(value: number | null): string {
@@ -450,9 +457,15 @@ function DashboardPage() {
 									key={era.label}
 									className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
 								>
-									<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-										{era.label}
-									</p>
+									<div className="flex items-baseline justify-between gap-x-3">
+										<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
+											{era.label}
+										</p>
+										<p className="font-mono text-xxs tabular-nums text-ink-40">
+											{settled} settled
+											{era.pending > 0 ? ` · ${era.pending} pending` : ""}
+										</p>
+									</div>
 									<div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
 										<span className="text-lg font-semibold text-ink-95">
 											{era.wins}-{era.losses}
@@ -467,12 +480,32 @@ function DashboardPage() {
 											ROI {formatPct(era.roiPct)}
 										</span>
 									</div>
-									<p className="mt-1 text-xs text-ink-55">
-										CLV {formatClvWithN(era.avgClvPct, era.clvN)} · DK{" "}
-										{formatClvWithN(era.avgBookClvPct, era.bookClvN)} · Pin{" "}
-										{formatClvWithN(era.avgPinClvPct, era.pinClvN)} · {settled}{" "}
-										settled · {era.pending} pending
-									</p>
+									<div className="mt-3 grid grid-cols-[1fr_auto_auto] items-baseline gap-x-5 gap-y-1 border-t border-ink-10 pt-2 text-xs">
+										<span className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+											CLV vs
+										</span>
+										<span className="text-right font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+											avg
+										</span>
+										<span className="text-right font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+											picks
+										</span>
+										{eraBenchmarks(era).map((b) => (
+											<Fragment key={b.name}>
+												<span className="text-ink-70">{b.name}</span>
+												<span
+													className={`text-right font-mono tabular-nums ${
+														b.n > 0 ? signClass(b.value) : "text-ink-40"
+													}`}
+												>
+													{b.n > 0 ? formatPct(b.value, 2) : "—"}
+												</span>
+												<span className="text-right font-mono tabular-nums text-ink-40">
+													{settled > 0 ? `${b.n}/${settled}` : "—"}
+												</span>
+											</Fragment>
+										))}
+									</div>
 								</div>
 							);
 						})}
