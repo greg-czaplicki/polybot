@@ -36,6 +36,11 @@ export interface DashboardRecap {
 	pushes: number;
 	units: number | null;
 	picksPlaced: number;
+	/** Pinnacle-close CLV over the window's settled picks; PM close as fallback */
+	avgPinClvPct: number | null;
+	pinClvN: number;
+	avgClvPct: number | null;
+	clvN: number;
 }
 
 export interface DashboardEraSummary {
@@ -189,12 +194,20 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			losses: number;
 			pushes: number;
 			units: number | null;
+			avg_pin_clv: number | null;
+			pin_clv_n: number | null;
+			avg_clv: number | null;
+			clv_n: number | null;
 		}>(
 			db,
 			`SELECT SUM(status = 'win') AS wins,
 			        SUM(status = 'loss') AS losses,
 			        SUM(status = 'push') AS pushes,
-			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units
+			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
+			        AVG(CASE WHEN status IN ('win','loss') THEN pin_clv END) AS avg_pin_clv,
+			        SUM(status IN ('win','loss') AND pin_clv IS NOT NULL) AS pin_clv_n,
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
+			        SUM(status IN ('win','loss') AND clv IS NOT NULL) AS clv_n
 			 FROM manual_picks
 			 WHERE status IN ('win','loss','push') AND settled_at >= ?`,
 			dayAgo,
@@ -211,6 +224,11 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			pushes: recapRow?.pushes ?? 0,
 			units: recapRow?.units ?? null,
 			picksPlaced: placedRow?.n ?? 0,
+			avgPinClvPct:
+				recapRow?.avg_pin_clv != null ? recapRow.avg_pin_clv * 100 : null,
+			pinClvN: recapRow?.pin_clv_n ?? 0,
+			avgClvPct: recapRow?.avg_clv != null ? recapRow.avg_clv * 100 : null,
+			clvN: recapRow?.clv_n ?? 0,
 		};
 
 		// Current era by prefix (stamps are `${era}+${sha}`); "post-gate live"

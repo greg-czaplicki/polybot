@@ -273,47 +273,53 @@ function DashboardPage() {
 						) : null}
 					</div>
 
-					{/* Overnight recap tiles */}
+					{/* Overnight recap — one strip: record + units + CLV beat, with
+					    placed/active as header meta. Pinnacle CLV preferred (sharpest
+					    reference), PM close as fallback while pin coverage ramps. */}
 					{recap ? (
-						<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-							<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+						<div className="mt-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+							<div className="flex items-baseline justify-between gap-x-3">
 								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Last 24h record
+									Last {recap.windowHours}h
 								</p>
-								<p className="mt-1 text-lg font-semibold text-ink-95">
-									{recapSettled > 0
-										? `${recap.wins}-${recap.losses}${recap.pushes > 0 ? ` (${recap.pushes}p)` : ""}`
-										: "nothing settled"}
+								<p className="font-mono text-xxs tabular-nums text-ink-40">
+									{recap.picksPlaced} placed · {activeBets.length} active
 								</p>
 							</div>
-							<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Last 24h units
+							{recapSettled > 0 ? (
+								<div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+									<span className="text-lg font-semibold text-ink-95">
+										{recap.wins}-{recap.losses}
+										{recap.pushes > 0 ? ` (${recap.pushes}p)` : ""}
+									</span>
+									<span
+										className={`text-lg font-semibold ${signClass(recap.units)}`}
+									>
+										{formatUnits(recap.units)}
+									</span>
+									{recap.pinClvN > 0 ? (
+										<span
+											className={`text-sm ${signClass(recap.avgPinClvPct)}`}
+										>
+											Pin CLV {formatPct(recap.avgPinClvPct, 2)}{" "}
+											<span className="font-mono text-xs tabular-nums text-ink-40">
+												{recap.pinClvN}/{recapSettled}
+											</span>
+										</span>
+									) : recap.clvN > 0 ? (
+										<span className={`text-sm ${signClass(recap.avgClvPct)}`}>
+											CLV {formatPct(recap.avgClvPct, 2)}{" "}
+											<span className="font-mono text-xs tabular-nums text-ink-40">
+												{recap.clvN}/{recapSettled}
+											</span>
+										</span>
+									) : null}
+								</div>
+							) : (
+								<p className="mt-2 text-sm text-ink-55">
+									Nothing settled in the last {recap.windowHours}h.
 								</p>
-								<p
-									className={`mt-1 text-lg font-semibold ${
-										recapSettled > 0 ? signClass(recap.units) : "text-ink-95"
-									}`}
-								>
-									{recapSettled > 0 ? formatUnits(recap.units) : "—"}
-								</p>
-							</div>
-							<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Picks placed 24h
-								</p>
-								<p className="mt-1 text-lg font-semibold text-ink-95">
-									{recap.picksPlaced}
-								</p>
-							</div>
-							<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Active bets
-								</p>
-								<p className="mt-1 text-lg font-semibold text-ink-95">
-									{activeBets.length}
-								</p>
-							</div>
+							)}
 						</div>
 					) : null}
 
