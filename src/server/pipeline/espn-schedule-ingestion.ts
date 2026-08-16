@@ -550,10 +550,14 @@ export async function ingestEspnSchedule(
 			if (!scoreboard.events) continue;
 
 			for (const event of scoreboard.events) {
+				// ESPN can emit null placeholder entries in the events array
+				// (seen 2026-08-15); this loop prefix runs before the per-event
+				// try/catch, so an unguarded read here kills the whole step.
+				if (!event) continue;
 				// Skip preseason/exhibition games (type 1 = preseason, 2 = regular, 3 = postseason)
 				if (event.season?.type === 1) continue;
 
-				const comp = event.competitions[0];
+				const comp = event.competitions?.[0];
 				if (!comp) continue;
 
 				const espnHome = comp.competitors.find((c) => c.homeAway === "home");
