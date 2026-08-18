@@ -5,6 +5,21 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Shadow-only league coverage starts 2026-08-18** (EFL Championship
+  series 10355, ATP 10365, WTA 10366). All three are ingested but every
+  candidate rejects pre-live via the `<tag>_league_probation` gate and
+  settles in the shadow book; promotion goes through the pre-registered
+  sole-blocker checkpoint. Expectations when reading their cohorts:
+  (a) Championship market volume is ~1000x below EPL (max market $25 vs
+  $30k at the same days-out on 2026-08-18) — virtually nothing clears the
+  $10k `MIN_VOLUME_USD` floor, so zero Championship rows is expected, not
+  a pipeline failure; (b) tennis has NO ESPN linkage by design (no
+  canonical games/teams/trends/facts — shadows settle via Gamma
+  resolution only), and the ATP series carries low-liquidity Challenger
+  matches that the volume floor trims; (c) none of the three is in
+  `ODDS_API_SPORT_KEYS`, so like EPL/MLS they get no Pinnacle
+  `pin_clv` — their promotion CLV criterion rests on PM close, unlike the
+  US sports.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a

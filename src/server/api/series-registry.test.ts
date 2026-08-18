@@ -103,8 +103,13 @@ describe("resolveSeriesRegistry", () => {
 		expect(registry.idToTag.get(3)).toBe("mlb");
 		expect(registry.idToTag.get(10470)).toBe("ncaab");
 		expect(registry.targetSeriesIds).toContain(3);
-		// atp/mma are label-only.
-		expect(registry.targetSeriesIds).not.toContain(10365);
+		// Shadow-only leagues (2026-08-18) are fetched: championship/atp/wta.
+		expect(registry.targetSeriesIds).toContain(10355);
+		expect(registry.targetSeriesIds).toContain(10365);
+		expect(registry.targetSeriesIds).toContain(10366);
+		expect(registry.idToTag.get(10355)).toBe("championship");
+		expect(registry.idToTag.get(10366)).toBe("wta");
+		// mma is label-only.
 		expect(registry.targetSeriesIds).not.toContain(38);
 		const probedSlugs = fetchMock.mock.calls.map(
 			(call) => new URL(String(call[0])).searchParams.get("slug") ?? "",

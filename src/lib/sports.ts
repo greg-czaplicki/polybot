@@ -18,6 +18,9 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10346: "nhl",
 	10188: "epl",
 	10189: "mls",
+	10355: "championship", // efl-championship (evergreen slug)
+	10365: "atp",
+	10366: "wta",
 };
 
 interface SportTagDefinition {
@@ -220,6 +223,12 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
 		label: "Premier League",
 		slugMarkers: ["epl-"],
 		keywords: ["premier league", "epl", "english premier"],
+	},
+	{
+		tag: "championship",
+		label: "EFL Championship",
+		slugMarkers: ["efl-championship"],
+		keywords: ["efl championship"],
 	},
 	{
 		tag: "soccer",
@@ -554,10 +563,15 @@ export function getSportLabel(tag?: string | null): string | undefined {
  * Canonical DB sport tag for team/game storage. All soccer leagues share one
  * "soccer" tag: title-based sport detection returns "soccer" for club-name
  * matchups (it can't tell EPL from MLS from a title), so per-league tags
- * would break canonical team resolution.
+ * would break canonical team resolution. Tennis tours likewise share
+ * "tennis" (title detection can't tell ATP from WTA).
  */
 export function toCanonicalSportTag(tag: string): string {
-	return tag === "epl" || tag === "mls" ? "soccer" : tag;
+	if (tag === "epl" || tag === "mls" || tag === "championship") {
+		return "soccer";
+	}
+	if (tag === "atp" || tag === "wta") return "tennis";
+	return tag;
 }
 
 /**

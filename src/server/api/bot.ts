@@ -736,6 +736,17 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 	return resolveSportTagFromSeriesId(sportSeriesId) ?? "default";
 }
 
+// Leagues ingested for the shadow book only (2026-08-18): every candidate is
+// rejected pre-live and settles as a shadow. Promotion to live betting goes
+// through the pre-registered checkpoint rule (docs/STRATEGY.md): sole-blocker
+// rows with n>=50, z>=2, positive CLV.
+const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
+	"championship",
+	"atp",
+	"wta",
+	"tennis",
+]);
+
 function buildPolicy(
 	input: {
 		sportSeriesId?: number;
@@ -911,6 +922,32 @@ export function getBotCandidatePolicy(input: {
 				notes: ["prop_excluded"],
 				reject: true,
 				rejectReason: "prop_market_excluded",
+			},
+		);
+	}
+
+	// League probation: newly-ingested leagues shadow-settle before any live
+	// bet — the sharp signal has never been validated outside the core US
+	// sports + EPL/MLS. Placed AFTER the market-type gates so probation rows
+	// are would-be-bettable market types only (ML/totals): a probation row
+	// whose gates_json passes is then directly "what we would have bet",
+	// giving each league a clean per-gate sole-blocker promotion cohort
+	// (reject_reason is per-league for exactly that reason). "tennis" covers
+	// title-detected tags on markets whose series ID didn't resolve.
+	if (LEAGUE_PROBATION_SPORT_KEYS.has(sportKey)) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: `${sportKey.toUpperCase()} probation`,
+				rankingAdjustment: -100,
+				notes: ["league_probation"],
+				reject: true,
+				rejectReason: `${sportKey}_league_probation`,
 			},
 		);
 	}

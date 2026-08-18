@@ -51,6 +51,31 @@ describe("getMarketTypeLabel", () => {
 			"moneyline",
 		);
 	});
+
+	it("classifies tennis title shapes", () => {
+		// Tournament-prefixed match winner: colon, but the matchup follows it.
+		expect(
+			getMarketTypeLabel("Cincinnati Open: Andrey Rublev vs Nuno Borges"),
+		).toBe("moneyline");
+		expect(getMarketTypeLabel("Cancun: Alexandre Muller vs Coleman Wong")).toBe(
+			"moneyline",
+		);
+		// Will-the-match-finish prop, not the winner.
+		expect(
+			getMarketTypeLabel("Cancun: Completed Match: Alexandre Muller vs Coleman Wong"),
+		).toBe("prop");
+		// Full-match totals stay totals; per-set markets are period props.
+		expect(getMarketTypeLabel("Muller vs. Wong: Total Sets O/U 2.5")).toBe(
+			"total",
+		);
+		expect(getMarketTypeLabel("Muller vs. Wong: Match O/U 21.5")).toBe("total");
+		expect(getMarketTypeLabel("Muller vs. Wong: Set 1 Games O/U 9.5")).toBe(
+			"prop",
+		);
+		expect(getMarketTypeLabel("Muller vs. Wong: Set 2 Games O/U 10.5")).toBe(
+			"prop",
+		);
+	});
 });
 
 describe("identifySpreadTeamPosition", () => {

@@ -63,8 +63,18 @@ export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 	{ tag: "nhl", kind: "seasonal", slugBase: "nhl", fallbackIds: [10346], target: true },
 	{ tag: "epl", kind: "seasonal", slugBase: "premier-league", fallbackIds: [10188], target: true },
 	{ tag: "mls", kind: "seasonal", slugBase: "mls", fallbackIds: [10189], target: true },
+	// EFL Championship uses an evergreen slug (`efl-championship`, no season
+	// suffix — verified 2026-08-18), so it's static, not seasonal. Ingested
+	// for the shadow book only: the {championship,atp,wta} league-probation
+	// gate in api/bot.ts rejects every live pick until the shadow cohort
+	// clears the promotion checkpoint.
+	{ tag: "championship", kind: "static", seriesId: 10355, target: true },
+	// Tennis: per-match markets live under the evergreen atp/wta series (no
+	// per-tournament series; US Open matches flow through these). Shadow-only
+	// via the same league-probation gate.
+	{ tag: "atp", kind: "static", seriesId: 10365, target: true },
+	{ tag: "wta", kind: "static", seriesId: 10366, target: true },
 	// Label-only sports (not fetched by runtime sync).
-	{ tag: "atp", kind: "static", seriesId: 10365, target: false },
 	// Gamma's UFC games series. (The old SPORTS_SERIES_IDS map pointed `mma`
 	// at 10500, which is actually a Netflix stock-price series.)
 	{ tag: "mma", kind: "static", seriesId: 38, target: false },

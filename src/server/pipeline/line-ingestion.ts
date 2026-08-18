@@ -67,14 +67,19 @@ const GAME_PROP_KEYWORDS = [
 	// "Seahawks Team Total: O/U 25.5" contains "total"/"o/u", so without
 	// this it reads as the game total.
 	"team total",
+	// Tennis: "Cancun: Completed Match: Muller vs Wong" — a will-the-match-
+	// finish prop, not the match winner.
+	"completed match",
 ];
 
 // Period/derivative markets — "Seahawks vs. Patriots: 1H O/U 23.5",
 // "1H Spread: Seahawks (-3.5)", "Miami vs. Indiana: 1H Moneyline". These
 // carry full-game keywords and would score through full-game models
 // (a 1H line vs a full-game totals model) if classified by those keywords.
+// "set [1-5]" covers tennis per-set markets ("Set 1 Games O/U 9.5"); the
+// full-match "Total Sets O/U 2.5" says "Sets", so it stays a total.
 const PERIOD_MARKET_PATTERN =
-	/\b(?:[12]h|[1-4]q|(?:1st|first) half|(?:2nd|second) half|(?:1st|2nd|3rd|4th) quarter|halftime)\b/i;
+	/\b(?:[12]h|[1-4]q|(?:1st|first) half|(?:2nd|second) half|(?:1st|2nd|3rd|4th) quarter|halftime|set [1-5])\b/i;
 
 /**
  * Classifies a market title into a bet type. Shared by the candidate scan
@@ -95,6 +100,14 @@ export function getMarketTypeLabel(
 	}
 	const plainMatchup =
 		!marketTitle.includes(":") && /\bvs\.?\b/i.test(marketTitle);
+	// Tennis match winners carry a tournament prefix ("Cancun: Muller vs
+	// Wong"): a colon, but the matchup sits AFTER the last colon. Team-sport
+	// qualifier titles ("Ravens vs. Steelers: Over 47.5") have the matchup
+	// before the colon, so they don't match — and their keywords classify
+	// them above anyway.
+	const prefixedMatchup =
+		marketTitle.includes(":") &&
+		/\bvs\.?\b/i.test(marketTitle.slice(marketTitle.lastIndexOf(":") + 1));
 	if (
 		lower.includes("o/u") ||
 		lower.includes("over/under") ||
@@ -103,7 +116,7 @@ export function getMarketTypeLabel(
 		return "total";
 	}
 	if (lower.includes("spread")) return "spread";
-	if (plainMatchup) return "moneyline";
+	if (plainMatchup || prefixedMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
 	return "other";
 }

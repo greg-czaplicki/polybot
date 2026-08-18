@@ -121,9 +121,20 @@ interface CacheRow {
 }
 
 /** Default sport tags with team seeding support. */
-// epl/mls select the ESPN soccer feeds; their games/teams store under the
-// canonical tag "soccer" (see toCanonicalSportTag).
-const DEFAULT_SPORT_TAGS = ["nfl", "nba", "mlb", "ncaab", "ncaaf", "epl", "mls"];
+// epl/mls/championship select the ESPN soccer feeds; their games/teams store
+// under the canonical tag "soccer" (see toCanonicalSportTag). Tennis (atp/
+// wta) is deliberately absent: no ESPN linkage — those markets are ingested
+// by the runtime sync and settle via Gamma resolution only.
+const DEFAULT_SPORT_TAGS = [
+	"nfl",
+	"nba",
+	"mlb",
+	"ncaab",
+	"ncaaf",
+	"epl",
+	"mls",
+	"championship",
+];
 
 /** Staleness threshold: 6 hours without a successful run = stale. */
 const STALENESS_THRESHOLD_MS = 6 * 60 * 60 * 1000;

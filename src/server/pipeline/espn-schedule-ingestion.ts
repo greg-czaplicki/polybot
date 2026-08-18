@@ -119,10 +119,11 @@ const SPORT_ESPN_MAP: Record<string, { sport: string; league: string }> = {
 	mlb: { sport: "baseball", league: "mlb" },
 	ncaab: { sport: "basketball", league: "mens-college-basketball" },
 	ncaaf: { sport: "football", league: "college-football" },
-	// Both leagues store under canonical sport_tag "soccer" (see
+	// All soccer leagues store under canonical sport_tag "soccer" (see
 	// toCanonicalSportTag); the per-league keys only select the ESPN feed.
 	epl: { sport: "soccer", league: "eng.1" },
 	mls: { sport: "soccer", league: "usa.1" },
+	championship: { sport: "soccer", league: "eng.2" },
 };
 
 /**
