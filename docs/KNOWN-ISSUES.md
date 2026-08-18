@@ -303,6 +303,18 @@ Still open, in rough fix order:
 
 ## Open code issues (deferred, ranked)
 
+0. **Canonical sync runs ~7 min since 2026-08-18 evening (baseline ~12 s).**
+   The 2026-08-18 league deploys triggered a concurrent-run pile-up (the
+   5-min cooldown reads the last COMPLETED run, so one slow run let every
+   2-min tick start another concurrent sync). FIXED with the migration-0033
+   advisory lock (`cca8841`): runs are serialized, succeed, and self-heal
+   via 15-min lock expiry. Still open: even SOLO runs sit at ~7 min — every
+   step is uniformly ~15-30x slower per unit of work (pick-backfill: same 64
+   picks, 4.9 s → 152 s), which points at worker↔D1 roundtrip latency
+   (placement), not workload; ESPN endpoints measure ~100 ms from outside.
+   Harmless while serialized (cadence ~8 min vs 6 target; bot API healthy)
+   but revisit if it persists: batch D1 writes in pick-backfill/espn steps,
+   or investigate worker placement relative to the D1 primary (ENAM/EWR).
 1. **CLV summaries read the persisted `clv` column** (`getManualPicksClvTimingSummary`,
    calibration/bucket/grade summaries). Mostly NULL until post-2026-07-20
    picks accumulate; they self-heal with time. The shadow-window summary
