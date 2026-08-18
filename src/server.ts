@@ -12,8 +12,10 @@ import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
 import {
+	acquireSyncLock,
 	getCanonicalFreshness,
 	persistSyncRun,
+	releaseSyncLock,
 	runCanonicalSync,
 } from "./server/pipeline/canonical-sync";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
@@ -406,16 +408,27 @@ const serverEntry = {
 					) {
 						return;
 					}
-					// Seed teams if none exist yet (one-time bootstrap)
-					const teamCount = await env.POLYWHALER_DB.prepare(
-						"SELECT COUNT(*) as c FROM teams",
-					).first<{ c: number }>();
-					const skipSeeding = (teamCount?.c ?? 0) > 0;
-					return runCanonicalSync(env.POLYWHALER_DB, { skipSeeding })
-						.then((result) => persistSyncRun(env.POLYWHALER_DB, result))
-						.then((id) => {
-							console.log(`[canonical-sync] Scheduled sync complete: ${id}`);
-						});
+					// In-flight guard (migration 0033): the cooldown above reads
+					// the last PERSISTED run, which is written at completion — so
+					// a single slow run used to let every subsequent tick start
+					// another concurrent sync, and the mutual D1 contention kept
+					// all of them slow (2026-08-18 pile-up: ~7-min runs from a
+					// loop that normally takes ~12 s). The lock is claimed
+					// atomically and self-expires after 15 min if a run dies.
+					const locked = await acquireSyncLock(env.POLYWHALER_DB);
+					if (!locked) {
+						return;
+					}
+					// Team seeding is self-checking inside the sync (seeds only
+					// sports whose DB count trails the seed data), so no
+					// bootstrap check is needed here.
+					try {
+						const result = await runCanonicalSync(env.POLYWHALER_DB, {});
+						const id = await persistSyncRun(env.POLYWHALER_DB, result);
+						console.log(`[canonical-sync] Scheduled sync complete: ${id}`);
+					} finally {
+						await releaseSyncLock(env.POLYWHALER_DB);
+					}
 				})
 				.catch((error) => {
 					console.error("[canonical-sync] Scheduled sync failed", error);

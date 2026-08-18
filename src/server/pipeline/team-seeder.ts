@@ -10,6 +10,7 @@
 
 import { toCanonicalSportTag } from "../../lib/sports";
 import type { Db } from "../db/client";
+import { all } from "../db/client";
 import type { UpsertTeamInput } from "../repositories/teams";
 import {
 	findTeamByAlias,
@@ -3454,6 +3455,27 @@ export async function seedAllTeams(db: Db): Promise<SeedResult[]> {
 	for (const sportTag of Object.keys(TEAM_SEEDS)) {
 		const result = await seedTeamsForSport(db, sportTag);
 		results.push(result);
+	}
+	return results;
+}
+
+/**
+ * Seeds only sports whose DB team count is below the seed-array length —
+ * cheap enough (one GROUP BY) to run every sync, so seed entries added in
+ * code reach the DB without a manual trigger. Alias/name EDITS to existing
+ * entries do not change counts and still need a manual full seed
+ * (seedTeamsForSport via the canonical-debug API).
+ */
+export async function seedMissingTeams(db: Db): Promise<SeedResult[]> {
+	const rows = await all<{ sport_tag: string; c: number }>(
+		db,
+		`SELECT sport_tag, COUNT(*) AS c FROM teams GROUP BY sport_tag`,
+	);
+	const counts = new Map(rows.map((row) => [row.sport_tag, row.c]));
+	const results: SeedResult[] = [];
+	for (const [sportTag, seeds] of Object.entries(TEAM_SEEDS)) {
+		if ((counts.get(sportTag) ?? 0) >= seeds.length) continue;
+		results.push(await seedTeamsForSport(db, sportTag));
 	}
 	return results;
 }

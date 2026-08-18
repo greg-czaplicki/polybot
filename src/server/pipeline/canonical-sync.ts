@@ -44,7 +44,7 @@ import {
 	type BatchResultIngestionResult,
 	finalizeCompletedGames,
 } from "./result-ingestion";
-import { resolveTeamFromMarketTitle, seedAllTeams } from "./team-seeder";
+import { resolveTeamFromMarketTitle, seedMissingTeams } from "./team-seeder";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -142,6 +142,35 @@ const DEFAULT_SPORT_TAGS = [
 
 /** Staleness threshold: 6 hours without a successful run = stale. */
 const STALENESS_THRESHOLD_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Advisory-lock expiry (migration 0033). A sync that dies without releasing
+ * the lock stops blocking new runs after this long. Must comfortably exceed
+ * a slow-but-healthy run (~7 min was observed under contention).
+ */
+const SYNC_LOCK_EXPIRY_MS = 15 * 60 * 1000;
+
+/**
+ * Atomically claims the scheduled-sync lock. Returns false when another run
+ * holds it (claimed within the last SYNC_LOCK_EXPIRY_MS). Without this, one
+ * slow run disables the completed-run cooldown and every subsequent cron
+ * tick piles on a concurrent sync (2026-08-18 pile-up: runs pinned at ~7 min
+ * from mutual D1 contention).
+ */
+export async function acquireSyncLock(db: Db): Promise<boolean> {
+	const now = Date.now();
+	const result = await run(
+		db,
+		`UPDATE canonical_sync_lock SET locked_at = ? WHERE id = 1 AND locked_at < ?`,
+		now,
+		now - SYNC_LOCK_EXPIRY_MS,
+	);
+	return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function releaseSyncLock(db: Db): Promise<void> {
+	await run(db, `UPDATE canonical_sync_lock SET locked_at = 0 WHERE id = 1`);
+}
 
 /**
  * Queries sharp_money_cache for sports markets and converts them to
@@ -342,10 +371,14 @@ export async function runCanonicalSync(
 	let factsComputed = 0;
 	let picksBackfilled = 0;
 
-	// Step 1: Team seeding
+	// Step 1: Team seeding. seedMissingTeams self-checks per-sport counts (one
+	// GROUP BY when nothing is missing), so this runs every sync and new seed
+	// data added in code reaches the DB on the next run — the old behavior
+	// (seed only when the teams table was EMPTY, via the scheduled handler's
+	// bootstrap check) silently stranded every later seed addition.
 	if (!options?.skipSeeding) {
 		const seedStep = await runStep("team-seeding", async () => {
-			const results = await seedAllTeams(db);
+			const results = await seedMissingTeams(db);
 			const totalSeeded = results.reduce((sum, r) => sum + r.seeded, 0);
 			const totalTeams = results.reduce((sum, r) => sum + r.total, 0);
 			return {
