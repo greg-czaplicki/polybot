@@ -19,6 +19,11 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10188: "epl",
 	10189: "mls",
 	10355: "championship", // efl-championship (evergreen slug)
+	10193: "laliga", // la-liga-2025
+	10194: "bundesliga", // bundesliga-2025
+	10203: "seriea", // serie-a-2025
+	10195: "ligue1", // ligue-1-2025
+	10204: "ucl", // ucl-2025
 	10365: "atp",
 	10366: "wta",
 };
@@ -230,6 +235,14 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
 		slugMarkers: ["efl-championship"],
 		keywords: ["efl championship"],
 	},
+	// Label-only defs (no markers/keywords): these tags come exclusively from
+	// series-ID resolution; title/slug detection for these leagues stays with
+	// the generic "soccer" definition below.
+	{ tag: "laliga", label: "La Liga" },
+	{ tag: "bundesliga", label: "Bundesliga" },
+	{ tag: "seriea", label: "Serie A" },
+	{ tag: "ligue1", label: "Ligue 1" },
+	{ tag: "ucl", label: "Champions League" },
 	{
 		tag: "soccer",
 		label: "Soccer",
@@ -566,10 +579,19 @@ export function getSportLabel(tag?: string | null): string | undefined {
  * would break canonical team resolution. Tennis tours likewise share
  * "tennis" (title detection can't tell ATP from WTA).
  */
+const SOCCER_LEAGUE_TAGS: ReadonlySet<string> = new Set([
+	"epl",
+	"mls",
+	"championship",
+	"laliga",
+	"bundesliga",
+	"seriea",
+	"ligue1",
+	"ucl",
+]);
+
 export function toCanonicalSportTag(tag: string): string {
-	if (tag === "epl" || tag === "mls" || tag === "championship") {
-		return "soccer";
-	}
+	if (SOCCER_LEAGUE_TAGS.has(tag)) return "soccer";
 	if (tag === "atp" || tag === "wta") return "tennis";
 	return tag;
 }

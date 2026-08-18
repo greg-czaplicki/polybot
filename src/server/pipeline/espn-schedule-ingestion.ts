@@ -124,6 +124,12 @@ const SPORT_ESPN_MAP: Record<string, { sport: string; league: string }> = {
 	epl: { sport: "soccer", league: "eng.1" },
 	mls: { sport: "soccer", league: "usa.1" },
 	championship: { sport: "soccer", league: "eng.2" },
+	laliga: { sport: "soccer", league: "esp.1" },
+	bundesliga: { sport: "soccer", league: "ger.1" },
+	seriea: { sport: "soccer", league: "ita.1" },
+	ligue1: { sport: "soccer", league: "fra.1" },
+	// ucl intentionally absent: no team seeding yet (league-phase field not
+	// drawn); UCL games link only when both clubs are seeded domestically.
 };
 
 /**

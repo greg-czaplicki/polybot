@@ -134,6 +134,10 @@ const DEFAULT_SPORT_TAGS = [
 	"epl",
 	"mls",
 	"championship",
+	"laliga",
+	"bundesliga",
+	"seriea",
+	"ligue1",
 ];
 
 /** Staleness threshold: 6 hours without a successful run = stale. */

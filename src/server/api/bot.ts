@@ -739,9 +739,19 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // Leagues ingested for the shadow book only (2026-08-18): every candidate is
 // rejected pre-live and settles as a shadow. Promotion to live betting goes
 // through the pre-registered checkpoint rule (docs/STRATEGY.md): sole-blocker
-// rows with n>=50, z>=2, positive CLV.
+// rows with n>=50, z>=2, positive CLV. "tennis" and "soccer" cover
+// title-detected tags on markets whose series ID didn't resolve — a market
+// we can't attribute to a validated league is not live-bettable (EPL/MLS
+// always resolve per-league via the registry or the static fallback map, so
+// the generic "soccer" key never fires for them).
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
 	"championship",
+	"laliga",
+	"bundesliga",
+	"seriea",
+	"ligue1",
+	"ucl",
+	"soccer",
 	"atp",
 	"wta",
 	"tennis",

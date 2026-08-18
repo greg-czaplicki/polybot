@@ -69,6 +69,17 @@ export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 	// gate in api/bot.ts rejects every live pick until the shadow cohort
 	// clears the promotion checkpoint.
 	{ tag: "championship", kind: "static", seriesId: 10355, target: true },
+	// European soccer majors (2026-08-18): shadow-only via the same gate.
+	// Seasonal slugs like EPL (la-liga-2025, ...); like EPL, Polymarket has
+	// not minted -2026 slugs — the 2026-27 seasons run on the -2025 series,
+	// which discovery finds via the year-window probe. UCL has no ESPN
+	// linkage or team seeding yet (league-phase field not drawn until late
+	// Aug); its games only link when both clubs are seeded domestically.
+	{ tag: "laliga", kind: "seasonal", slugBase: "la-liga", fallbackIds: [10193], target: true },
+	{ tag: "bundesliga", kind: "seasonal", slugBase: "bundesliga", fallbackIds: [10194], target: true },
+	{ tag: "seriea", kind: "seasonal", slugBase: "serie-a", fallbackIds: [10203], target: true },
+	{ tag: "ligue1", kind: "seasonal", slugBase: "ligue-1", fallbackIds: [10195], target: true },
+	{ tag: "ucl", kind: "seasonal", slugBase: "ucl", fallbackIds: [10204], target: true },
 	// Tennis: per-match markets live under the evergreen atp/wta series (no
 	// per-tournament series; US Open matches flow through these). Shadow-only
 	// via the same league-probation gate.
