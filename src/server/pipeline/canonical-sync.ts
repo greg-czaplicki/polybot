@@ -371,6 +371,25 @@ export async function runCanonicalSync(
 	let factsComputed = 0;
 	let picksBackfilled = 0;
 
+	// Step 0: D1 latency probe. Three sequential trivial queries, so the
+	// durations are pure worker↔D1 roundtrip time. Every other step's cost
+	// scales with this number: the 2026-08-18→20 regression (~4 min runs vs
+	// ~12 s baseline, uniform ~20-50x per-step slowdown at identical work
+	// counts) was invocations running in a colo far from the D1 primary
+	// (ENAM/EWR) paying ~200 ms per query. medianMs > ~20 means the run is
+	// executing far from the primary again.
+	const pingStep = await runStep("d1-ping", async () => {
+		const times: number[] = [];
+		for (let i = 0; i < 3; i++) {
+			const t0 = Date.now();
+			await all(db, "SELECT 1");
+			times.push(Date.now() - t0);
+		}
+		times.sort((a, b) => a - b);
+		return { medianMs: times[1], minMs: times[0], maxMs: times[2] };
+	});
+	steps.push(pingStep);
+
 	// Step 1: Team seeding. seedMissingTeams self-checks per-sport counts (one
 	// GROUP BY when nothing is missing), so this runs every sync and new seed
 	// data added in code reaches the DB on the next run — the old behavior

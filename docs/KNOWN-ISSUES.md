@@ -303,18 +303,28 @@ Still open, in rough fix order:
 
 ## Open code issues (deferred, ranked)
 
-0. **Canonical sync runs ~7 min since 2026-08-18 evening (baseline ~12 s).**
-   The 2026-08-18 league deploys triggered a concurrent-run pile-up (the
-   5-min cooldown reads the last COMPLETED run, so one slow run let every
-   2-min tick start another concurrent sync). FIXED with the migration-0033
-   advisory lock (`cca8841`): runs are serialized, succeed, and self-heal
-   via 15-min lock expiry. Still open: even SOLO runs sit at ~7 min — every
-   step is uniformly ~15-30x slower per unit of work (pick-backfill: same 64
-   picks, 4.9 s → 152 s), which points at worker↔D1 roundtrip latency
-   (placement), not workload; ESPN endpoints measure ~100 ms from outside.
-   Harmless while serialized (cadence ~8 min vs 6 target; bot API healthy)
-   but revisit if it persists: batch D1 writes in pick-backfill/espn steps,
-   or investigate worker placement relative to the D1 primary (ENAM/EWR).
+0. **Canonical sync runs ~3-7 min 2026-08-18 16h UTC → 2026-08-20 (baseline
+   ~12 s).** Two stacked causes. (a) Concurrent-run pile-up: the 5-min
+   cooldown reads the last COMPLETED run, so one slow run let every 2-min
+   tick start another concurrent sync — FIXED with the migration-0033
+   advisory lock (`cca8841`). (b) Even solo runs sat at ~3-4 min around the
+   clock (fast overnight hours never returned; slowdown uniform ~20-50x per
+   step at identical work counts, e.g. line-ingestion with 0 inputs 0.17 s →
+   9.3 s): the 2026-08-18 deploy moved cron invocations to a colo far from
+   the D1 primary (ENAM/EWR), adding ~200 ms RTT to every D1 query. Load was
+   only the minor component (±40% diurnal; sharp_money_history writes 4k →
+   10k/day with the new leagues). FIXED 2026-08-20: the sync now executes in
+   a Durable Object instance pinned via `locationHint: 'enam'`
+   (`getCanonicalSyncStub`, DO name `canonical-sync-enam-v1` — the hint only
+   applies at first instantiation, so bump the suffix if the D1 primary ever
+   moves region). Every run now records a `d1-ping` step (3× `SELECT 1`
+   roundtrip, medianMs) in `steps_json`; median >~20 ms means the run is
+   executing far from the primary again. `/_canonical/trigger` routes
+   through the same DO and now respects the advisory lock (it previously
+   took no lock and could run concurrently with a scheduled sync); it
+   returns 409 `{error:'locked'|'cooldown'}` when refused (force bypasses
+   only the cooldown). Fallback if a regression appears with LOW ping (i.e.
+   genuinely workload): batch D1 writes in pick-backfill/espn steps.
 1. **CLV summaries read the persisted `clv` column** (`getManualPicksClvTimingSummary`,
    calibration/bucket/grade summaries). Mostly NULL until post-2026-07-20
    picks accumulate; they self-heal with time. The shadow-window summary

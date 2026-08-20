@@ -4,6 +4,13 @@ import type { Env } from '../env'
 import { fetchTrendingSportsMarkets } from '../api/sharp-money'
 import { refreshMarketSharpness } from '../api/sharp-money'
 import { pruneSharpMoneyCacheToWindow } from '../repositories/sharp-money'
+import {
+  acquireSyncLock,
+  getCanonicalFreshness,
+  persistSyncRun,
+  releaseSyncLock,
+  runCanonicalSync,
+} from './canonical-sync'
 import { getPipelineStub } from './sharp-pipeline-utils'
 
 export type SharpPipelineJob = {
@@ -70,6 +77,55 @@ export class SharpPipeline extends DurableObject {
       }
       await this.state.storage.put('status', nextStatus)
       return Response.json(nextStatus)
+    }
+
+    if (url.pathname === '/canonical-sync') {
+      // Runs the canonical sync inside this DO so its hundreds of D1
+      // roundtrips execute next to the D1 primary — this route is called on
+      // the ENAM-pinned instance (getCanonicalSyncStub), NOT the queue
+      // pipeline instance. Cron colos are arbitrary: the 2026-08-18→20
+      // regression had scheduled invocations paying ~200 ms per query from a
+      // distant colo (~4 min runs vs ~12 s baseline).
+      const body =
+        request.method === 'POST'
+          ? ((await request.json().catch(() => ({}))) as {
+              force?: boolean
+              skipSeeding?: boolean
+            })
+          : {}
+      const db = this.env.POLYWHALER_DB
+      // Cooldown mirrors the old scheduled-handler branch: skip when the
+      // last persisted run is <5 min old. Manual triggers pass force to
+      // bypass the cooldown, but never the advisory lock below.
+      const COOLDOWN_MS = 5 * 60 * 1000
+      if (!body.force) {
+        const freshness = await getCanonicalFreshness(db)
+        if (
+          freshness.lastRunAt &&
+          Date.now() - freshness.lastRunAt < COOLDOWN_MS
+        ) {
+          return Response.json({ ran: false, reason: 'cooldown' })
+        }
+      }
+      const locked = await acquireSyncLock(db)
+      if (!locked) {
+        return Response.json({ ran: false, reason: 'locked' })
+      }
+      try {
+        const result = await runCanonicalSync(db, {
+          skipSeeding: body.skipSeeding,
+        })
+        const runId = await persistSyncRun(db, result)
+        return Response.json({
+          ran: true,
+          runId,
+          status: result.status,
+          durationMs: result.durationMs,
+          result,
+        })
+      } finally {
+        await releaseSyncLock(db)
+      }
     }
 
     if (url.pathname !== '/tick') {

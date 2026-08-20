@@ -11,13 +11,7 @@ import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
-import {
-	acquireSyncLock,
-	getCanonicalFreshness,
-	persistSyncRun,
-	releaseSyncLock,
-	runCanonicalSync,
-} from "./server/pipeline/canonical-sync";
+import { getCanonicalFreshness } from "./server/pipeline/canonical-sync";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
 import {
 	recordEarlyWindowShadows,
@@ -28,7 +22,10 @@ import {
 	SharpPipeline,
 	type SharpPipelineJob,
 } from "./server/pipeline/sharp-pipeline";
-import { getPipelineStub } from "./server/pipeline/sharp-pipeline-utils";
+import {
+	getCanonicalSyncStub,
+	getPipelineStub,
+} from "./server/pipeline/sharp-pipeline-utils";
 import {
 	backfillMissingSnapshots,
 	rebuildSnapshotHistoryForTeam,
@@ -129,13 +126,44 @@ const serverEntry = {
 				const body = (await request.json().catch(() => ({}))) as {
 					skipSeeding?: boolean;
 				};
-				const result = await runCanonicalSync(env.POLYWHALER_DB, {
-					skipSeeding: body.skipSeeding,
-				});
-				const runId = await persistSyncRun(env.POLYWHALER_DB, result);
-				return new Response(JSON.stringify({ success: true, runId, result }), {
-					headers: { "Content-Type": "application/json" },
-				});
+				// Routed through the D1-primary-pinned DO (same path as the cron
+				// sync). force bypasses the 5-min cooldown but NOT the advisory
+				// lock — the old inline call here took no lock at all and could
+				// run concurrently with a scheduled sync.
+				const response = await getCanonicalSyncStub(env).fetch(
+					"https://sharp-pipeline/canonical-sync",
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							force: true,
+							skipSeeding: body.skipSeeding,
+						}),
+					},
+				);
+				const payload = (await response.json()) as {
+					ran: boolean;
+					reason?: string;
+					runId?: string;
+					result?: unknown;
+				};
+				if (!payload.ran) {
+					return new Response(
+						JSON.stringify({ success: false, error: payload.reason }),
+						{
+							status: 409,
+							headers: { "Content-Type": "application/json" },
+						},
+					);
+				}
+				return new Response(
+					JSON.stringify({
+						success: true,
+						runId: payload.runId,
+						result: payload.result,
+					}),
+					{ headers: { "Content-Type": "application/json" } },
+				);
 			} catch (error) {
 				console.error("[canonical-sync] Trigger error:", error);
 				return new Response(
@@ -398,36 +426,25 @@ const serverEntry = {
 				}),
 		);
 		executionCtx.waitUntil(
-			getCanonicalFreshness(env.POLYWHALER_DB)
-				.then(async (freshness) => {
-					// Cooldown: skip if last run was within 5 minutes
-					const COOLDOWN_MS = 5 * 60 * 1000;
-					if (
-						freshness.lastRunAt &&
-						Date.now() - freshness.lastRunAt < COOLDOWN_MS
-					) {
-						return;
-					}
-					// In-flight guard (migration 0033): the cooldown above reads
-					// the last PERSISTED run, which is written at completion — so
-					// a single slow run used to let every subsequent tick start
-					// another concurrent sync, and the mutual D1 contention kept
-					// all of them slow (2026-08-18 pile-up: ~7-min runs from a
-					// loop that normally takes ~12 s). The lock is claimed
-					// atomically and self-expires after 15 min if a run dies.
-					const locked = await acquireSyncLock(env.POLYWHALER_DB);
-					if (!locked) {
-						return;
-					}
-					// Team seeding is self-checking inside the sync (seeds only
-					// sports whose DB count trails the seed data), so no
-					// bootstrap check is needed here.
-					try {
-						const result = await runCanonicalSync(env.POLYWHALER_DB, {});
-						const id = await persistSyncRun(env.POLYWHALER_DB, result);
-						console.log(`[canonical-sync] Scheduled sync complete: ${id}`);
-					} finally {
-						await releaseSyncLock(env.POLYWHALER_DB);
+			// The sync executes inside a DO pinned near the D1 primary
+			// (getCanonicalSyncStub): cron invocations land in arbitrary colos,
+			// and the 2026-08-18→20 regression showed a distant colo turns ~12 s
+			// of sync into ~4 min of per-query roundtrips. Cooldown + advisory
+			// lock (migration 0033) both live in the DO route; running there
+			// also gives the sync its own subrequest budget instead of sharing
+			// this invocation's with the settle chain above.
+			getCanonicalSyncStub(env)
+				.fetch("https://sharp-pipeline/canonical-sync", { method: "POST" })
+				.then(async (response) => {
+					const payload = (await response.json().catch(() => null)) as {
+						ran?: boolean;
+						runId?: string;
+						durationMs?: number;
+					} | null;
+					if (payload?.ran) {
+						console.log(
+							`[canonical-sync] Scheduled sync complete: ${payload.runId} (${payload.durationMs}ms)`,
+						);
 					}
 				})
 				.catch((error) => {
