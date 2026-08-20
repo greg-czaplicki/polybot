@@ -318,7 +318,10 @@ Still open, in rough fix order:
    (`getCanonicalSyncStub`, DO name `canonical-sync-enam-v1` — the hint only
    applies at first instantiation, so bump the suffix if the D1 primary ever
    moves region). Every run now records a `d1-ping` step (3× `SELECT 1`
-   roundtrip, medianMs) in `steps_json`; median >~20 ms means the run is
+   roundtrip, medianMs) in `steps_json`. Observed values: pinned-DO runs
+   ping ~30 ms median / ~24 s total (verified stable 2026-08-20 12:38Z +
+   12:44Z; the regressed colo implied ~200 ms; pre-regression baseline
+   ~12 s implied single-digit ms). Median >~75 ms means the run is
    executing far from the primary again. `/_canonical/trigger` routes
    through the same DO and now respects the advisory lock (it previously
    took no lock and could run concurrently with a scheduled sync); it
