@@ -70,6 +70,17 @@ const GAME_PROP_KEYWORDS = [
 	// Tennis: "Cancun: Completed Match: Muller vs Wong" — a will-the-match-
 	// finish prop, not the match winner.
 	"completed match",
+	// Soccer derivatives — "Man City vs. Bournemouth: O/U 10.5 Total Corners"
+	// contains "o/u"/"total" and classified as the game total until the EPL
+	// 2026-27 restart surfaced it (era v8). "corner" also covers corner-kick
+	// variants; card markets are listed explicitly because a bare "card"
+	// would match Cardinals moneylines.
+	"corner",
+	"total cards",
+	"yellow card",
+	"red card",
+	"booking",
+	"shots on target",
 ];
 
 // Period/derivative markets — "Seahawks vs. Patriots: 1H O/U 23.5",

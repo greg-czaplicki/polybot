@@ -40,6 +40,35 @@ describe("getMarketTypeLabel", () => {
 		).toBe("prop");
 	});
 
+	it("classifies soccer derivative markets as props, not game totals", () => {
+		expect(
+			getMarketTypeLabel(
+				"Manchester City FC vs. AFC Bournemouth: O/U 10.5 Total Corners",
+			),
+		).toBe("prop");
+		expect(
+			getMarketTypeLabel("Everton FC vs. Crystal Palace FC: O/U 9.5 Total Corners"),
+		).toBe("prop");
+		expect(
+			getMarketTypeLabel("Chelsea FC vs. Arsenal FC: O/U 4.5 Total Cards"),
+		).toBe("prop");
+		expect(
+			getMarketTypeLabel("Chelsea FC vs. Arsenal FC: O/U 60.5 Booking Points"),
+		).toBe("prop");
+		expect(
+			getMarketTypeLabel("Chelsea FC vs. Arsenal FC: O/U 8.5 Shots on Target"),
+		).toBe("prop");
+	});
+
+	it("does not misread Cardinals as a card prop", () => {
+		expect(
+			getMarketTypeLabel("St. Louis Cardinals vs. Chicago Cubs"),
+		).toBe("moneyline");
+		expect(
+			getMarketTypeLabel("St. Louis Cardinals vs. Chicago Cubs: O/U 8.5"),
+		).toBe("total");
+	});
+
 	it("keeps core market types unchanged", () => {
 		expect(
 			getMarketTypeLabel("Yankees vs. Red Sox: O/U 8.5 Total Runs"),
