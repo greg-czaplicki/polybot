@@ -310,11 +310,18 @@ warning — credit-on-settlement still an open design item.
 
 Still open, in rough fix order:
 
-1. Bot follow-ups: bankroll credit-on-settlement (Kelly sizing decays
-   monotonically until then — use BOT_FIXED_STAKE meanwhile). The
-   server-side already-picked exclusion half is DONE (verified
-   2026-08-24): /api/bot/candidates excludes condition_ids picked in the
-   last 7 days (`already_picked` pre-filter) plus the era-v7
+1. Bot follow-ups — both halves closed 2026-08-24:
+   (a) Bankroll credit: SHIPPED as wallet-balance sync (bot `main`
+   commit `d64daf1`; mirror in `bot/`) — Polymarket auto-claims settled
+   winnings to the wallet, so the bot re-syncs `state["bankroll"]` from
+   the live COLLATERAL balance every 15 min (BOT_BANKROLL_SOURCE /
+   _REFRESH_SECONDS / _BALANCE_SCALE envs; paper ledger kept for dry
+   run). PENDING VPS `git pull && systemctl restart polywhaler-bot`;
+   verify the first "[bot] bankroll synced from wallet" log matches the
+   real balance (off by 1e6 → set BOT_BANKROLL_BALANCE_SCALE=1).
+   (b) Server-side already-picked exclusion: verified already
+   implemented — /api/bot/candidates excludes condition_ids picked in
+   the last 7 days (`already_picked` pre-filter) plus the era-v7
    market-group gate behind it.
 2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
