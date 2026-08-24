@@ -479,6 +479,18 @@ export async function capturePinnacleOddsForPicks(
 				if (tourKeys.length === 0) events = [];
 				else if (fetched.some((e) => e !== null))
 					events = fetched.flatMap((e) => e ?? []);
+				// Diagnostic (2026-08-24): tennis went 0-for-113 on first day —
+				// log discovery + a feed sample until capture is verified.
+				console.log(
+					`[pinnacle-odds] tennis ${tag}: keys=${JSON.stringify(tourKeys)}`,
+					`events=${events === null ? "null" : events.length}`,
+					events && events.length > 0
+						? `sample=${events
+								.slice(0, 3)
+								.map((e) => `${e.home_team}|${e.away_team}|${e.commence_time}`)
+								.join(" ; ")}`
+						: "",
+				);
 			}
 		}
 		eventsBySport.set(tag, events);
@@ -604,9 +616,14 @@ export async function capturePinnacleOddsForPicks(
 		const tag = row.sport_tag;
 		const tracked =
 			tag && (ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
-		if (!tag || !tracked) {
-			// Untracked sport: stamp so the row stops occupying the sweep;
-			// fair prob stays NULL.
+		// Draw-question markets ("Will X vs. Y end in a draw?") carry junk
+		// side labels ("Will Fulham FC") that substring-match real team names
+		// and would benchmark a draw price against a team-win fair prob.
+		// Stamp with NULL until they are classified properly.
+		const isDrawQuestion = /end in a draw/i.test(row.market_title);
+		if (!tag || !tracked || isDrawQuestion) {
+			// Untracked sport or unbenchmarkable market: stamp so the row
+			// stops occupying the sweep; fair prob stays NULL.
 			await run(
 				db,
 				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
@@ -628,6 +645,13 @@ export async function capturePinnacleOddsForPicks(
 				})
 			: null;
 		if (!event) {
+			if (TENNIS_TOUR_PREFIXES[tag]) {
+				// Diagnostic pair to the discovery log above.
+				console.log(
+					`[pinnacle-odds] tennis no-match: "${row.market_title}"`,
+					`teams=${JSON.stringify(teams)} event_time=${row.event_time}`,
+				);
+			}
 			// Unparseable title or no Pinnacle listing — stamp so we don't
 			// refetch for this row every 2 minutes.
 			await run(
