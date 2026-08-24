@@ -316,9 +316,11 @@ Still open, in rough fix order:
    winnings to the wallet, so the bot re-syncs `state["bankroll"]` from
    the live COLLATERAL balance every 15 min (BOT_BANKROLL_SOURCE /
    _REFRESH_SECONDS / _BALANCE_SCALE envs; paper ledger kept for dry
-   run). PENDING VPS `git pull && systemctl restart polywhaler-bot`;
-   verify the first "[bot] bankroll synced from wallet" log matches the
-   real balance (off by 1e6 → set BOT_BANKROLL_BALANCE_SCALE=1).
+   run). DEPLOYED+VERIFIED on VPS 2026-08-24 15:47 UTC: first
+   sync logged "bankroll synced from wallet: 0.0 -> 118.02" — the old
+   ledger had decayed to exactly $0 (the failure mode live), scale
+   correct. BOT_FIXED_STAKE=8 still set, so sizing unchanged until the
+   user opts back into Kelly.
    (b) Server-side already-picked exclusion: verified already
    implemented — /api/bot/candidates excludes condition_ids picked in
    the last 7 days (`already_picked` pre-filter) plus the era-v7
