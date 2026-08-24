@@ -51,6 +51,9 @@ class BotConfig:
 	placed_ttl_seconds: int
 	placed_event_grace_seconds: int
 	paper_bankroll: float
+	bankroll_source: str
+	bankroll_refresh_seconds: int
+	bankroll_balance_scale: float
 	kelly_fraction: float
 	max_stake: float
 	min_stake: float
@@ -177,6 +180,20 @@ def load_config() -> BotConfig:
 			os.getenv("BOT_PLACED_EVENT_GRACE_SECONDS", "1800")
 		),
 		paper_bankroll=float(os.getenv("BOT_PAPER_BANKROLL", "1000")),
+		# Live default is the wallet: Polymarket auto-claims settled winnings
+		# back to collateral, so the balance is a self-maintaining bankroll.
+		# Dry run has no wallet — it keeps the paper ledger.
+		bankroll_source=os.getenv(
+			"BOT_BANKROLL_SOURCE", "paper" if dry_run else "wallet"
+		),
+		bankroll_refresh_seconds=int(
+			os.getenv("BOT_BANKROLL_REFRESH_SECONDS", "900")
+		),
+		# CLOB balance/allowance reports micro-USDC (6 decimals). Override if
+		# the deployed client ever returns whole dollars.
+		bankroll_balance_scale=float(
+			os.getenv("BOT_BANKROLL_BALANCE_SCALE", "0.000001")
+		),
 		kelly_fraction=float(os.getenv("BOT_KELLY_FRACTION", "0.25")),
 		max_stake=float(os.getenv("BOT_MAX_STAKE", "50")),
 		min_stake=float(os.getenv("BOT_MIN_STAKE", "1")),
@@ -688,6 +705,46 @@ def get_balance_allowance(
 			return getter(asset_type, token_id)
 		except Exception:
 			return {"error": str(exc)}
+
+def refresh_bankroll_from_wallet(config: BotConfig, state: Dict[str, Any]) -> None:
+	"""Sync the Kelly bankroll to the wallet's live collateral balance.
+
+	Polymarket auto-claims settled winnings back to the wallet, so the
+	balance is a self-maintaining bankroll — no settlement bookkeeping
+	needed. Between refreshes the per-bet debit in place_bet keeps the
+	working number honest. Paper mode (dry run or BOT_BANKROLL_SOURCE=paper)
+	keeps the old debit-only ledger. Failures keep the current ledger and
+	retry on the next eligible cycle; the CLOB call does not count against
+	the worker call budget.
+	"""
+	if config.dry_run or config.bankroll_source != "wallet":
+		return
+	now = time.time()
+	if now - float(state.get("bankrollSyncedAt") or 0) < config.bankroll_refresh_seconds:
+		return
+	try:
+		client = build_clob_client(config)
+		info = get_balance_allowance(client, "COLLATERAL", config)
+		raw = (
+			info.get("balance")
+			if isinstance(info, dict)
+			else getattr(info, "balance", None)
+		)
+		if raw is None or (isinstance(info, dict) and info.get("error")):
+			print("[bot] bankroll sync: no balance in response:", info)
+			return
+		balance = float(raw) * config.bankroll_balance_scale
+	except Exception as exc:
+		print("[bot] bankroll sync failed (keeping ledger):", exc)
+		return
+	if balance < 0 or balance > 10_000_000:
+		print("[bot] bankroll sync: implausible balance, ignoring:", balance)
+		return
+	prev = state.get("bankroll")
+	state["bankroll"] = round(balance, 2)
+	state["bankrollSyncedAt"] = int(now)
+	print("[bot] bankroll synced from wallet:", prev, "->", state["bankroll"])
+
 
 class OrderStateUnknownError(Exception):
 	"""post_order failed AFTER submission was attempted: the exchange may have
@@ -1289,12 +1346,15 @@ def place_bet(
 		)
 	new_bankroll = round(state.get("bankroll", config.paper_bankroll) - stake, 2)
 	if new_bankroll <= 0:
-		# Bankroll is never credited back on wins (no settlement sync yet), so
-		# hitting zero means Kelly sizing would silently stop the bot.
+		# Wallet-sourced bankrolls re-sync from the live balance (settled
+		# winnings auto-claim back), so zero here is a genuinely empty wallet
+		# or intra-refresh drift; paper mode has no settlement credit and
+		# needs BOT_PAPER_BANKROLL reset or fixed staking.
 		print(
 			colorize("[bot]", COLOR_YELLOW),
 			"WARNING: tracked bankroll exhausted — Kelly stakes will be zero"
-			" until BOT_PAPER_BANKROLL is reset or fixed staking is enabled",
+			" until the next wallet sync (paper mode: reset BOT_PAPER_BANKROLL"
+			" or enable fixed staking)",
 		)
 	state["bankroll"] = max(0.0, new_bankroll)
 	return True
@@ -1435,6 +1495,8 @@ def run_loop() -> None:
 				print("[bot] rate cap reached, sleeping", round(sleep_seconds, 1))
 				time.sleep(sleep_seconds)
 				continue
+
+			refresh_bankroll_from_wallet(config, state)
 
 			if backoff > 0:
 				sleep_seconds = apply_jitter(backoff, config.poll_jitter_ratio)
