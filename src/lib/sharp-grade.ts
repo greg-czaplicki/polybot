@@ -89,6 +89,25 @@ export function isAcceptablePriceEdge(priceEdge: number): boolean {
 	return priceEdge >= MIN_PRICE_EDGE;
 }
 
+/**
+ * Minimum sharp-side entry price (era v9). fairPrice is a holder-quality
+ * score RATIO, not a probability: on lopsided-price markets almost no
+ * sharp capital holds the expensive side (single-digit max payoff), so
+ * the cheap side's quality share → ~1 and fair/priceEdge/scoreDiff/grade
+ * all inflate together — phantom edges ("fair 0.97" on Under 0.5 goals
+ * at 9¢), surfaced by the EPL restart's alt lines. Shadow truth
+ * (2026-08-24, all settled rows): price <0.15 went 2-58 while the model
+ * claimed avg pe 0.63; 0.15–0.25 went 4-32; every profitable segment
+ * lives in [0.25, 0.75]. The expensive side cannot generate phantom
+ * positive pe (its fair share deflates), so a floor alone closes the
+ * mechanism. No live pick was ever priced below 0.25 — prospective only.
+ */
+export const MIN_ENTRY_PRICE = 0.25;
+
+export function isAcceptableEntryPrice(price: number): boolean {
+	return price >= MIN_ENTRY_PRICE;
+}
+
 export function isAcceptableEdgeRating(rating: number): boolean {
 	if (rating < MIN_EDGE_RATING) return false;
 	if (rating >= EDGE_RATING_SATURATION_FLOOR) return false;

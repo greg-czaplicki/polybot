@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	MIN_ENTRY_PRICE,
 	MIN_PRICE_EDGE,
 	SIGNAL_SCORE_SATURATION_FLOOR,
 	computeGateVector,
 	computeSignalScoreFromHistory,
 	gradeWeight,
+	isAcceptableEntryPrice,
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 	signalScoreToGradeLabel,
@@ -139,6 +141,19 @@ describe("isAcceptablePriceEdge", () => {
 		expect(isAcceptablePriceEdge(MIN_PRICE_EDGE)).toBe(true);
 		expect(isAcceptablePriceEdge(0.3)).toBe(true);
 		expect(isAcceptablePriceEdge(0.5)).toBe(true);
+	});
+});
+
+describe("isAcceptableEntryPrice", () => {
+	it("rejects phantom-edge tail prices below the floor", () => {
+		expect(isAcceptableEntryPrice(MIN_ENTRY_PRICE - 0.01)).toBe(false);
+		expect(isAcceptableEntryPrice(0.09)).toBe(false);
+		expect(isAcceptableEntryPrice(0.05)).toBe(false);
+	});
+	it("accepts entry price at or above the floor", () => {
+		expect(isAcceptableEntryPrice(MIN_ENTRY_PRICE)).toBe(true);
+		expect(isAcceptableEntryPrice(0.46)).toBe(true);
+		expect(isAcceptableEntryPrice(0.91)).toBe(true);
 	});
 });
 

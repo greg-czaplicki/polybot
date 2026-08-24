@@ -5,6 +5,7 @@ import {
 	EDGE_RATING_DEAD_ZONE_MIN,
 	EDGE_RATING_SATURATION_FLOOR,
 	isAcceptableEdgeRating,
+	isAcceptableEntryPrice,
 	isAcceptablePriceEdge,
 	isAcceptableSignalScore,
 	MIN_SCORE_DIFFERENTIAL,
@@ -2329,6 +2330,51 @@ async function listBotCandidates(
 							foundInEntries: true,
 							stage: "filtered_grade",
 							reason: "below_policy_microstructure",
+						};
+					}
+					return null;
+				}
+				// Era v9: phantom-edge guard. Below MIN_ENTRY_PRICE the fair-price
+				// score ratio is structurally inflated (see sharp-grade.ts), so the
+				// downstream price_edge/grade values are meaningless — reject before
+				// they can outrank sane lines in the same market group. Not part of
+				// the gates_json vector: adding a key would NULL-fail sole-blocker
+				// reads for every pre-v9 shadow row.
+				const entryPrice =
+					entry.sharpSide === "A"
+						? (entry.sideA.price ?? null)
+						: entry.sharpSide === "B"
+							? (entry.sideB.price ?? null)
+							: null;
+				if (
+					typeof entryPrice === "number" &&
+					!isAcceptableEntryPrice(entryPrice)
+				) {
+					incrementCounter(debug.excluded, "entry_price_below_floor");
+					pushShadowCandidate(entry, "entry_price_below_floor", {
+						minutesToStart: policyMinutesToStart,
+						grade,
+					});
+					pushNearMiss(debug, {
+						reason: "entry_price_below_floor",
+						conditionId: entry.conditionId,
+						marketTitle: entry.marketTitle,
+						sportSeriesId: entry.sportSeriesId,
+						marketType: getMarketTypeLabel(entry.marketTitle),
+						sharpSide: entry.sharpSide,
+						sharpSidePrice: entryPrice,
+						grade: grade.grade,
+						policyMinGrade: policy.minGrade,
+						signalScore: grade.signalScore,
+						marketQualityScore: grade.microstructureScore,
+						minutesToStart: policyMinutesToStart,
+					});
+					if (inspectConditionId && entry.conditionId === inspectConditionId) {
+						debug.inspect = {
+							conditionId: inspectConditionId,
+							foundInEntries: true,
+							stage: "filtered_grade",
+							reason: "entry_price_below_floor",
 						};
 					}
 					return null;
