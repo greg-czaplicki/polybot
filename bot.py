@@ -744,6 +744,21 @@ def refresh_bankroll_from_wallet(config: BotConfig, state: Dict[str, Any]) -> No
 	state["bankroll"] = round(balance, 2)
 	state["bankrollSyncedAt"] = int(now)
 	print("[bot] bankroll synced from wallet:", prev, "->", state["bankroll"])
+	# Surface it on the app dashboard. Best-effort: a worker hiccup must not
+	# break the trading loop; the next sync retries the report.
+	try:
+		post_json(
+			f"{config.base_url}/api/bot/status",
+			config.api_key,
+			{
+				"bankroll": state["bankroll"],
+				"bankrollSyncedAt": int(now),
+				"stakeMode": "fixed" if config.fixed_stake > 0 else "kelly",
+				"fixedStake": config.fixed_stake if config.fixed_stake > 0 else None,
+			},
+		)
+	except Exception as exc:
+		print("[bot] bankroll status report failed:", exc)
 
 
 class OrderStateUnknownError(Exception):
