@@ -66,6 +66,11 @@ export interface DashboardHealth {
 	canonicalLastRunAt: number | null;
 	canonicalLastRunStatus: string | null;
 	lastPickAt: number | null;
+	/** Bot-reported wallet bankroll (POST /api/bot/status); null until first report. */
+	bankroll: number | null;
+	bankrollSyncedAt: number | null;
+	stakeMode: string | null;
+	fixedStake: number | null;
 }
 
 const PICK_COLUMNS = `id, condition_id, market_title, event_time, picked_at,
@@ -265,6 +270,24 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		);
 		const cacheStats = await getSharpMoneyCacheStats(db);
 
+		// Table exists from migration 0034; a fresh deploy racing the
+		// migration should degrade to "no bankroll", not a 500.
+		let botStatus: {
+			bankroll?: number;
+			bankrollSyncedAt?: number | null;
+			stakeMode?: string | null;
+			fixedStake?: number | null;
+		} | null = null;
+		try {
+			const statusRow = await first<{ value_json: string }>(
+				db,
+				`SELECT value_json FROM bot_runtime_status WHERE key = 'status'`,
+			);
+			if (statusRow?.value_json) botStatus = JSON.parse(statusRow.value_json);
+		} catch {
+			botStatus = null;
+		}
+
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
 			pipelineNewestAt: cacheStats.newestEntry ?? null,
@@ -274,6 +297,11 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				: null,
 			canonicalLastRunStatus: syncRow?.status ?? null,
 			lastPickAt: lastPickRow?.last ?? null,
+			bankroll:
+				typeof botStatus?.bankroll === "number" ? botStatus.bankroll : null,
+			bankrollSyncedAt: botStatus?.bankrollSyncedAt ?? null,
+			stakeMode: botStatus?.stakeMode ?? null,
+			fixedStake: botStatus?.fixedStake ?? null,
 		};
 
 		return {

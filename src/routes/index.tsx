@@ -155,6 +155,25 @@ function buildHealthItems(health: DashboardHealth): HealthItem[] {
 			tone: health.lastPickAt ? "ok" : "unknown",
 			detail: formatRelativeTime(health.lastPickAt),
 		},
+		{
+			label: "Bankroll",
+			// Bot re-syncs from the wallet every 15 min; a stale report means
+			// the bot stopped posting, not that the money moved.
+			tone:
+				health.bankroll === null
+					? "unknown"
+					: ageTone(health.bankrollSyncedAt, 30 * 60, 2 * 3600),
+			detail:
+				health.bankroll === null
+					? "no report yet"
+					: `$${health.bankroll.toFixed(2)}${
+							health.stakeMode === "fixed" && health.fixedStake
+								? ` · flat $${health.fixedStake}`
+								: health.stakeMode === "kelly"
+									? " · kelly"
+									: ""
+						} · ${formatRelativeTime(health.bankrollSyncedAt)}`,
+		},
 	];
 }
 

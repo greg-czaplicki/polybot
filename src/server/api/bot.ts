@@ -18,7 +18,7 @@ import {
 	warmSeriesRegistry,
 } from "../api/series-registry";
 import type { Db } from "../db/client";
-import { all } from "../db/client";
+import { all, run } from "../db/client";
 import { extractSideFeatures } from "../domain/canonical-features";
 import { scoreOpportunity } from "../domain/opportunity-scoring";
 import type { Env } from "../env";
@@ -2820,6 +2820,45 @@ export async function handleBotRequest(
 			now: nowUnixSeconds(),
 			cacheFreshness,
 		});
+	}
+
+	if (url.pathname === "/api/bot/status") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			bankroll?: number;
+			bankrollSyncedAt?: number;
+			stakeMode?: string;
+			fixedStake?: number;
+		}>(request);
+		if (
+			typeof payload?.bankroll !== "number" ||
+			!Number.isFinite(payload.bankroll)
+		) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const status = {
+			bankroll: payload.bankroll,
+			bankrollSyncedAt:
+				typeof payload.bankrollSyncedAt === "number"
+					? payload.bankrollSyncedAt
+					: null,
+			stakeMode: typeof payload.stakeMode === "string" ? payload.stakeMode : null,
+			fixedStake:
+				typeof payload.fixedStake === "number" ? payload.fixedStake : null,
+		};
+		await run(
+			env.POLYWHALER_DB,
+			`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+			 VALUES ('status', ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET
+			   value_json = excluded.value_json,
+			   updated_at = excluded.updated_at`,
+			JSON.stringify(status),
+			nowUnixSeconds(),
+		);
+		return jsonResponse({ ok: true });
 	}
 
 	if (url.pathname === "/api/bot/cache") {
