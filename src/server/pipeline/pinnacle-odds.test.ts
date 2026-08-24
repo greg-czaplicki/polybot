@@ -181,6 +181,44 @@ describe("extractPinnaclePrices", () => {
 		expect(prices.mlSide).toBe(null);
 		expect(prices.fairProb).toBe(null);
 	});
+	it("de-vigs soccer three-way h2h including the draw", () => {
+		const soccer = pinnacleEvent({
+			home_team: "Arsenal",
+			away_team: "Chelsea",
+			bookmakers: [
+				{
+					key: "pinnacle",
+					markets: [
+						{
+							key: "h2h",
+							outcomes: [
+								{ name: "Arsenal", price: 120 },
+								{ name: "Chelsea", price: 240 },
+								{ name: "Draw", price: 230 },
+							],
+						},
+					],
+				},
+			],
+		});
+		const prices = extractPinnaclePrices(soccer, {
+			betType: "moneyline",
+			venueRole: "home",
+			sideLabel: null,
+			marketTotalLine: null,
+		});
+		expect(prices.mlSide).toBe(120);
+		expect(prices.mlOpp).toBe(240);
+		// implied: side 100/220, opp 100/340, draw 100/330 — normalized share
+		const ps = 100 / 220;
+		const po = 100 / 340;
+		const pd = 100 / 330;
+		expect(prices.fairProb).toBeCloseTo(ps / (ps + po + pd), 10);
+		// and strictly below the draw-blind two-way de-vig
+		expect(prices.fairProb as number).toBeLessThan(
+			devigTwoWay(120, 240) as number,
+		);
+	});
 	it("returns no ML fair prob without a venue role", () => {
 		const prices = extractPinnaclePrices(pinnacleEvent(), {
 			betType: "moneyline",

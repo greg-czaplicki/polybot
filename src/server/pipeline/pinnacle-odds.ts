@@ -32,10 +32,16 @@
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
-import { devigTwoWay, parseMarketTotalLine } from "./book-odds";
+import {
+	americanToImpliedProb,
+	devigTwoWay,
+	parseMarketTotalLine,
+} from "./book-odds";
 
-// The Odds API sport keys for our canonical sport tags. Soccer is absent
-// deliberately: soccer picks carry no game linkage (KNOWN-ISSUES).
+// The Odds API sport keys for our canonical sport tags. NFL preseason is
+// keyed separately upstream (americanfootball_nfl_preseason) and is NOT
+// mapped: preseason is permanently gated from betting, so preseason rows
+// go uncaptured by design (they no-match against the regular-season feed).
 const ODDS_API_SPORT_KEYS: Record<string, string> = {
 	mlb: "baseball_mlb",
 	nba: "basketball_nba",
@@ -43,7 +49,39 @@ const ODDS_API_SPORT_KEYS: Record<string, string> = {
 	ncaaf: "americanfootball_ncaaf",
 	ncaab: "basketball_ncaab",
 	nhl: "icehockey_nhl",
+	epl: "soccer_epl",
+	championship: "soccer_efl_champ",
+	laliga: "soccer_spain_la_liga",
+	bundesliga: "soccer_germany_bundesliga",
+	seriea: "soccer_italy_serie_a",
+	ligue1: "soccer_france_ligue_one",
+	ucl: "soccer_uefa_champs_league",
+	mls: "soccer_usa_mls",
 };
+
+// Tennis has no season-long key upstream — tournaments each get their own
+// (tennis_atp_us_open, ...), so atp/wta resolve dynamically against the
+// /v4/sports index (a zero-credit call) at sweep time.
+const TENNIS_TOUR_PREFIXES: Record<string, string> = {
+	atp: "tennis_atp_",
+	wta: "tennis_wta_",
+};
+/** Concurrent tournaments per tour are fetched up to this cap per sweep. */
+const TENNIS_MAX_TOURNAMENTS_PER_TOUR = 4;
+
+// Live-bettable leagues (mirrors bot.ts policy) always fetch; everything
+// else is a shadow-only benchmark that is skipped when the monthly credit
+// budget runs low, so benchmarking can never starve live-pick capture.
+const LIVE_SPORT_TAGS = new Set([
+	"mlb",
+	"nba",
+	"nfl",
+	"ncaaf",
+	"ncaab",
+	"epl",
+	"mls",
+]);
+const LOW_CREDIT_FLOOR = 100;
 
 /** Close window opens this long before event_time. */
 const CLOSE_WINDOW_BEFORE_SECONDS = 600;
@@ -164,12 +202,24 @@ export function extractPinnaclePrices(
 		const away = h2h.outcomes.find((o) =>
 			teamNamesMatch(o.name, event.away_team),
 		);
+		// Soccer h2h is three-way: the draw must join the overround or the
+		// two-way de-vig overstates both sides' win probabilities.
+		const draw = h2h.outcomes.find((o) => o.name.toLowerCase() === "draw");
 		const side = pick.venueRole === "home" ? home : away;
 		const opp = pick.venueRole === "home" ? away : home;
 		if (side && opp && side.price !== 0 && opp.price !== 0) {
 			out.mlSide = side.price;
 			out.mlOpp = opp.price;
-			out.fairProb = devigTwoWay(side.price, opp.price);
+			if (draw && draw.price !== 0) {
+				const ps = americanToImpliedProb(side.price);
+				const po = americanToImpliedProb(opp.price);
+				const pd = americanToImpliedProb(draw.price);
+				if (ps !== null && po !== null && pd !== null && ps + po + pd > 0) {
+					out.fairProb = ps / (ps + po + pd);
+				}
+			} else {
+				out.fairProb = devigTwoWay(side.price, opp.price);
+			}
 		}
 	} else if (pick.betType === "total") {
 		const label = pick.sideLabel?.toLowerCase();
@@ -191,29 +241,65 @@ export function extractPinnaclePrices(
 	return out;
 }
 
+/** Sweep-scoped credit tracker, fed from x-requests-remaining headers. */
+interface CreditState {
+	remaining: number | null;
+}
+
 async function fetchOddsApiEvents(
 	apiKey: string,
 	sportKey: string,
+	credits: CreditState,
 ): Promise<OddsApiEvent[] | null> {
 	const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${apiKey}&bookmakers=pinnacle&markets=h2h,totals&oddsFormat=american`;
 	try {
 		const res = await fetch(url);
+		const remaining = res.headers.get("x-requests-remaining");
+		if (remaining !== null) {
+			const parsed = Number.parseFloat(remaining);
+			if (Number.isFinite(parsed)) credits.remaining = parsed;
+			if (parsed < 50) {
+				console.warn(
+					`[pinnacle-odds] Odds API credits low: ${remaining} remaining`,
+				);
+			}
+		}
 		if (!res.ok) {
 			console.warn(
 				`[pinnacle-odds] Odds API returned ${res.status} for ${sportKey}`,
 			);
 			return null;
 		}
-		const remaining = res.headers.get("x-requests-remaining");
-		if (remaining !== null && Number.parseFloat(remaining) < 50) {
-			console.warn(
-				`[pinnacle-odds] Odds API credits low: ${remaining} remaining`,
-			);
-		}
 		return (await res.json()) as OddsApiEvent[];
 	} catch (err) {
 		console.warn(
 			`[pinnacle-odds] Odds API fetch failed for ${sportKey}:`,
+			err instanceof Error ? err.message : err,
+		);
+		return null;
+	}
+}
+
+/**
+ * Active sport keys from the /v4/sports index (zero-credit call). Used to
+ * resolve tennis tournament keys. Null on fetch failure.
+ */
+async function fetchActiveSportKeys(apiKey: string): Promise<string[] | null> {
+	const url = `https://api.the-odds-api.com/v4/sports?apiKey=${apiKey}`;
+	try {
+		const res = await fetch(url);
+		if (!res.ok) {
+			console.warn(`[pinnacle-odds] Odds API sports index ${res.status}`);
+			return null;
+		}
+		const sports = (await res.json()) as Array<{
+			key: string;
+			active?: boolean;
+		}>;
+		return sports.filter((s) => s.active !== false).map((s) => s.key);
+	} catch (err) {
+		console.warn(
+			`[pinnacle-odds] Odds API sports index fetch failed:`,
 			err instanceof Error ? err.message : err,
 		);
 		return null;
@@ -352,9 +438,52 @@ export async function capturePinnacleOddsForPicks(
 	// One fetch per sport, shared by every eligible pick AND shadow of that
 	// sport in this sweep.
 	const eventsBySport = new Map<string, OddsApiEvent[] | null>();
+	const credits: CreditState = { remaining: null };
+	let activeSportKeys: string[] | null | undefined;
 	let anchors = 0;
 	let closes = 0;
 	let shadowCloses = 0;
+
+	// Null result = fetch failed or skipped: rows stay untouched and retry
+	// next sweep. Empty array = feed answered with no listing: rows stamp.
+	const eventsForTag = async (tag: string): Promise<OddsApiEvent[] | null> => {
+		const cached = eventsBySport.get(tag);
+		if (cached !== undefined) return cached;
+		if (
+			!LIVE_SPORT_TAGS.has(tag) &&
+			credits.remaining !== null &&
+			credits.remaining < LOW_CREDIT_FLOOR
+		) {
+			// Benchmark-only league on a dry budget: skip without caching so a
+			// later sweep (or credit reset) can still capture in-window rows.
+			return null;
+		}
+		let events: OddsApiEvent[] | null = null;
+		const staticKey = ODDS_API_SPORT_KEYS[tag];
+		const tennisPrefix = TENNIS_TOUR_PREFIXES[tag];
+		if (staticKey) {
+			events = await fetchOddsApiEvents(apiKey, staticKey, credits);
+		} else if (tennisPrefix) {
+			if (activeSportKeys === undefined) {
+				activeSportKeys = await fetchActiveSportKeys(apiKey);
+			}
+			if (activeSportKeys !== null) {
+				const tourKeys = activeSportKeys
+					.filter((k) => k.startsWith(tennisPrefix))
+					.slice(0, TENNIS_MAX_TOURNAMENTS_PER_TOUR);
+				const fetched = await Promise.all(
+					tourKeys.map((k) => fetchOddsApiEvents(apiKey, k, credits)),
+				);
+				// All-failed (with tournaments listed) stays null so rows retry;
+				// no active tournament resolves to an empty, stampable feed.
+				if (tourKeys.length === 0) events = [];
+				else if (fetched.some((e) => e !== null))
+					events = fetched.flatMap((e) => e ?? []);
+			}
+		}
+		eventsBySport.set(tag, events);
+		return events;
+	};
 
 	for (const row of rows) {
 		const sportKey = ODDS_API_SPORT_KEYS[row.sport_tag];
@@ -382,13 +511,7 @@ export async function capturePinnacleOddsForPicks(
 		}
 		if (!wantsAnchor && !inCloseWindow) continue;
 
-		if (!eventsBySport.has(row.sport_tag)) {
-			eventsBySport.set(
-				row.sport_tag,
-				await fetchOddsApiEvents(apiKey, sportKey),
-			);
-		}
-		const events = eventsBySport.get(row.sport_tag);
+		const events = await eventsForTag(row.sport_tag);
 		// Fetch failure: leave untouched, next sweep retries.
 		if (!events) continue;
 
@@ -479,10 +602,11 @@ export async function capturePinnacleOddsForPicks(
 
 	for (const row of shadowRows) {
 		const tag = row.sport_tag;
-		const sportKey = tag ? ODDS_API_SPORT_KEYS[tag] : undefined;
-		if (!tag || !sportKey) {
-			// Untracked sport (e.g. soccer): stamp so the row stops occupying
-			// the sweep; fair prob stays NULL.
+		const tracked =
+			tag && (ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
+		if (!tag || !tracked) {
+			// Untracked sport: stamp so the row stops occupying the sweep;
+			// fair prob stays NULL.
 			await run(
 				db,
 				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
@@ -491,10 +615,7 @@ export async function capturePinnacleOddsForPicks(
 			);
 			continue;
 		}
-		if (!eventsBySport.has(tag)) {
-			eventsBySport.set(tag, await fetchOddsApiEvents(apiKey, sportKey));
-		}
-		const events = eventsBySport.get(tag);
+		const events = await eventsForTag(tag);
 		// Fetch failure: leave untouched, next sweep retries inside the window.
 		if (!events) continue;
 

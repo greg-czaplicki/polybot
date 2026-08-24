@@ -21,10 +21,31 @@ fixing commit.
   Challenger matches that the volume floor trims; (c) UCL has no ESPN
   linkage or team seeding either (league-phase field not drawn at ship
   time) — UCL games link only when both clubs are seeded via their
-  domestic league; (d) none of these leagues is in
-  `ODDS_API_SPORT_KEYS`, so like EPL/MLS they get no Pinnacle
-  `pin_clv` — their promotion CLV criterion rests on PM close, unlike the
-  US sports.
+  domestic league; (d) before 2026-08-24 none of these leagues was in
+  `ODDS_API_SPORT_KEYS`, so like EPL/MLS they got no Pinnacle `pin_clv`
+  and their promotion CLV criterion rested on PM close — soccer + tennis
+  capture starts 2026-08-24 (see the pin-CLV coverage caveat below).
+- **Pinnacle `pin_clv` coverage is NOT end-to-end; know these bounds
+  before using it as a promotion criterion.** (a) `pin_close_captured_at
+  IS NOT NULL` means "swept", not "captured": the sweep also stamps it as
+  a give-up marker for untracked sports, expired windows, and events with
+  no Pinnacle listing — always test `pin_clv`/`pin_close_fair_prob`, never
+  the timestamp. (b) Soccer (EPL, MLS, La Liga, Bundesliga, Serie A,
+  Ligue 1, UCL, Championship) and tennis (ATP/WTA, tournament keys
+  resolved dynamically) accrue only from 2026-08-24; every earlier
+  soccer/tennis row is a give-up stamp with NULL data. Soccer ML fair
+  probs use three-way de-vig (draw in the overround) from day one.
+  (c) Totals `pin_clv` computes only when Pinnacle's closing total line
+  exactly matches the Polymarket line — ~32% of MLB totals — and that
+  subsample is biased toward book/PM line agreement; treat totals pin CLV
+  as supporting evidence, not a hard gate. MLB moneylines are the only
+  cohort with ~99% coverage. (d) NFL preseason rows are 0% by design:
+  The Odds API keys preseason separately (`americanfootball_nfl_preseason`,
+  unmapped since preseason is permanently gated from betting); verify
+  regular-season NFL capture at week 1. (e) Probation-league fetches are
+  skipped when remaining Odds API credits drop below 100 (live leagues
+  keep fetching), so shadow coverage can have credit-driven gaps that
+  live-pick coverage does not.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a
