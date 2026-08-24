@@ -47,8 +47,13 @@ fixing commit.
   keep fetching), so shadow coverage can have credit-driven gaps that
   live-pick coverage does not. (f) Tennis day one (2026-08-24) was
   0-for-113: PM tennis titles use bare " vs " (no period), which the
-  title parser didn't split — fixed same day, so real tennis coverage
-  starts 2026-08-25. Tennis `pin_close_*` is ALSO a weaker proxy than
+  title parser didn't split — fixed same day. Post-fix diagnosis (worker
+  logs, 22:5x UTC): parsing/matching now work, but The Odds API's active
+  index lists ZERO tennis tournament keys this week (keys=[] — no
+  Winston-Salem, Monterrey, or even tennis_atp_us_open yet); the
+  provider carries majors and activates keys when main-draw odds post.
+  Tennis pin coverage therefore starts when the US Open main-draw key
+  activates (~2026-08-31); smaller tournaments may never be covered. Tennis `pin_close_*` is ALSO a weaker proxy than
   other sports: PM stamps the session start (all quals "15:00"), not the
   match slot, so the sweep captures Pinnacle at PM's stamped time (up to
   ~6h before the actual match) — treat tennis pin_clv as
