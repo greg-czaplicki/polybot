@@ -2292,11 +2292,11 @@ export async function analyzeMarketSharpness(
 			}
 		}
 
-		// The API returns holders grouped by token, but limit applies to total across all tokens
-		// Sort holders within each token group by amount (descending) and take top 50 per token
+		// Both holder endpoints cap at 20 rows (limit=20), so this slice is a
+		// guard, not a working truncation; the sort is what matters downstream.
 		for (const tokenData of holdersData) {
 			tokenData.holders.sort((a, b) => b.amount - a.amount);
-			tokenData.holders = tokenData.holders.slice(0, 50); // Take top 50 per token
+			tokenData.holders = tokenData.holders.slice(0, 20);
 		}
 
 		// Step 2: Group holders by outcomeIndex (0 or 1) for consistent assignment
@@ -2384,12 +2384,17 @@ export async function analyzeMarketSharpness(
 		);
 
 		// Fetch uncached wallets in batches with a mix of full-period and ALL-only requests.
-		// We have 2 subrequests used for market data (holders + CLOB).
+		// Market data used 2 subrequests (market-level holders + CLOB) plus one
+		// per-token holder re-fetch — previously uncounted, which overdrew the
+		// budget by ~2 on the 50-subrequest plan.
+		const marketDataSubrequests = 2 + tokenIds.length;
 		const FULL_PNL_WALLET_COUNT = 6;
 		const ALL_PNL_WALLET_COUNT = 20;
 		const maxWalletsByBudget =
-			Math.max(0, MAX_SUBREQUESTS - 2 - FULL_PNL_WALLET_COUNT * 4) +
-			FULL_PNL_WALLET_COUNT;
+			Math.max(
+				0,
+				MAX_SUBREQUESTS - marketDataSubrequests - FULL_PNL_WALLET_COUNT * 4,
+			) + FULL_PNL_WALLET_COUNT;
 		const totalWalletsToFetch = Math.min(
 			walletsToFetch.length,
 			ALL_PNL_WALLET_COUNT,
@@ -2582,7 +2587,7 @@ export async function analyzeMarketSharpness(
 
 		const unitSizeBudget = Math.max(
 			0,
-			MAX_SUBREQUESTS - 2 - pnlSubrequestsUsed,
+			MAX_SUBREQUESTS - marketDataSubrequests - pnlSubrequestsUsed,
 		);
 		const walletsMissingUnitSize = walletsWithPnlAll.filter(
 			(wallet) => !cachedUnitWallets.has(wallet),

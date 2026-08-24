@@ -311,8 +311,11 @@ warning — credit-on-settlement still an open design item.
 Still open, in rough fix order:
 
 1. Bot follow-ups: bankroll credit-on-settlement (Kelly sizing decays
-   monotonically until then — use BOT_FIXED_STAKE meanwhile); server-side
-   already-picked exclusion in /api/bot/candidates as defense-in-depth.
+   monotonically until then — use BOT_FIXED_STAKE meanwhile). The
+   server-side already-picked exclusion half is DONE (verified
+   2026-08-24): /api/bot/candidates excludes condition_ids picked in the
+   last 7 days (`already_picked` pre-filter) plus the era-v7
+   market-group gate behind it.
 2. Shadow-window summary silently limited to picks with surviving
    sharp_money_history (~7-day retention) — misleading beyond that horizon.
 3. Scoring-behavior findings needing an era decision (do NOT fix casually):
@@ -365,17 +368,22 @@ Still open, in rough fix order:
    average slippage (currently ~0, occasionally ±200–400bps at $2 stakes).
    `fill_slippage_bps` sign convention audited 2026-07-21: positive =
    adverse fill (`(fill - price)/price * 10000`, bot.py ~line 804).
-4. **No dead-letter queue on `sharp-pipeline`** — a message that exhausts
-   `max_retries: 3` is deleted, so a persistently-failing market loses its
-   forensic trail. Needs `wrangler queues create sharp-pipeline-dlq` + config.
-5. **Subrequest budget miscount in `analyzeSharpMoney`** — ~2 per-token holder
-   re-fetches aren't counted against `MAX_SUBREQUESTS`; only matters on the
-   50-subrequest free plan.
-6. **Dead code**: holders `slice(0, 50)` is a no-op (Data API caps at 20) with
-   a misleading comment; market-level holder fallback can skew per-side counts.
-7. **`canonical_sync_runs` grows unbounded** (no prune; ~12 rows/hour). Note
-   its timestamps are **milliseconds** while `manual_picks` uses **seconds** —
-   a recurring audit-query footgun.
+4. **No dead-letter queue on `sharp-pipeline`** — FIXED 2026-08-24:
+   `sharp-pipeline-dlq` created (14-day retention, no consumer — inspect
+   via dashboard or `wrangler queues`), `dead_letter_queue` wired on both
+   consumer blocks in wrangler.jsonc.
+5. **Subrequest budget miscount in `analyzeSharpMoney`** — FIXED
+   2026-08-24: per-token holder re-fetches now counted
+   (`marketDataSubrequests = 2 + tokenIds.length`) in both the PnL and
+   unit-size budgets.
+6. **Dead code**: holders `slice(0, 50)` no-op — FIXED 2026-08-24 (slice
+   matches the API's 20-row cap, comment now honest). Still open:
+   market-level holder fallback can skew per-side counts (behavior
+   change to fix — leave for an era decision).
+7. **`canonical_sync_runs` grows unbounded** — FIXED 2026-08-24:
+   `persistSyncRun` prunes rows older than 90 days after each insert.
+   Note its timestamps are **milliseconds** while `manual_picks` uses
+   **seconds** — a recurring audit-query footgun.
 8. **Duplicate migration ordinal `0008`** (two files). Cosmetic.
 
 ## Operational notes

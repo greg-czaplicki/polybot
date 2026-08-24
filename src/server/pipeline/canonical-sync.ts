@@ -600,6 +600,14 @@ export async function persistSyncRun(
 		result.picksBackfilled,
 		result.errorSummary ?? null,
 	);
+	// Retention: ~12 rows/hour grows unbounded otherwise. 90 days keeps a
+	// full season-transition window for duration/error forensics (timestamps
+	// here are MILLISECONDS, unlike manual_picks).
+	await run(
+		db,
+		`DELETE FROM canonical_sync_runs WHERE started_at < ?`,
+		Date.now() - 90 * 24 * 60 * 60 * 1000,
+	);
 	return id;
 }
 
