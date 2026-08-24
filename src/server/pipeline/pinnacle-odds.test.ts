@@ -255,4 +255,33 @@ describe("parseTitleTeams", () => {
 		expect(parseTitleTeams("Some unrelated market")).toBe(null);
 		expect(parseTitleTeams("A vs. B vs. C")).toBe(null);
 	});
+
+	it("parses tennis titles with bare ' vs ' and a tournament prefix", () => {
+		expect(
+			parseTitleTeams("US Open, Qualification ATP: Alex Bolt vs Pablo Llamas Ruiz"),
+		).toEqual({ teamA: "Alex Bolt", teamB: "Pablo Llamas Ruiz" });
+		expect(parseTitleTeams("Monterrey Open: Clara Tauson vs Renata Zarazua")).toEqual(
+			{ teamA: "Clara Tauson", teamB: "Renata Zarazua" },
+		);
+	});
+});
+
+describe("matchOddsApiEvent maxGapSeconds", () => {
+	it("honors a widened gap for session-timed tennis events", () => {
+		const threeHoursOff = pinnacleEvent({
+			commence_time: iso(T0 + 3 * 3600),
+			home_team: "Alex Bolt",
+			away_team: "Pablo Llamas Ruiz",
+		});
+		const game = {
+			homeName: "Alex Bolt",
+			awayName: "Pablo Llamas Ruiz",
+			eventTime: T0,
+		};
+		expect(matchOddsApiEvent([threeHoursOff], game)).toBe(null);
+		expect(
+			matchOddsApiEvent([threeHoursOff], { ...game, maxGapSeconds: 6 * 3600 })
+				?.id,
+		).toBe("ev1");
+	});
 });

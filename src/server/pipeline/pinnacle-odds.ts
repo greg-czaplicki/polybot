@@ -125,15 +125,24 @@ function teamNamesMatch(a: string, b: string): boolean {
  */
 export function matchOddsApiEvent(
 	events: OddsApiEvent[],
-	game: { homeName: string; awayName: string; eventTime: number },
+	game: {
+		homeName: string;
+		awayName: string;
+		eventTime: number;
+		/** Override the 45-min commence gap (tennis: PM stamps the session
+		 * start, not the match slot, so a pairing needs hours of tolerance —
+		 * safe because a pairing is unique within a tournament day). */
+		maxGapSeconds?: number;
+	},
 ): OddsApiEvent | null {
+	const maxGap = game.maxGapSeconds ?? 45 * 60;
 	let best: OddsApiEvent | null = null;
 	let bestGap = Number.POSITIVE_INFINITY;
 	for (const event of events) {
 		const commence = Math.floor(Date.parse(event.commence_time) / 1000);
 		if (!Number.isFinite(commence)) continue;
 		const gap = Math.abs(commence - game.eventTime);
-		if (gap > 45 * 60) continue;
+		if (gap > maxGap) continue;
 		const straight =
 			teamNamesMatch(event.home_team, game.homeName) &&
 			teamNamesMatch(event.away_team, game.awayName);
@@ -316,16 +325,20 @@ export function parseTitleTeams(
 	marketTitle: string,
 ): { teamA: string; teamB: string } | null {
 	// The matchup can sit on either side of a colon: "A vs. B: O/U 9.5"
-	// (totals suffix) or "Will ...?: A vs. B" (prop-style prefix).
+	// (totals suffix), "Will ...?: A vs. B" (prop-style prefix), or
+	// "US Open, Qualification ATP: A vs B" (tournament prefix). Tennis
+	// titles separate with bare " vs " — no period.
+	const hasVs = (s: string) => s.includes(" vs. ") || s.includes(" vs ");
 	const colonIdx = marketTitle.indexOf(":");
 	let matchup = marketTitle;
 	if (colonIdx > 0) {
 		const before = marketTitle.slice(0, colonIdx);
 		const after = marketTitle.slice(colonIdx + 1);
-		if (before.includes(" vs. ")) matchup = before;
-		else if (after.includes(" vs. ")) matchup = after;
+		if (hasVs(before)) matchup = before;
+		else if (hasVs(after)) matchup = after;
 	}
-	const parts = matchup.split(" vs. ");
+	const sep = matchup.includes(" vs. ") ? " vs. " : " vs ";
+	const parts = matchup.split(sep);
 	if (parts.length !== 2) return null;
 	const teamA = parts[0].trim();
 	const teamB = parts[1].trim();
@@ -642,6 +655,7 @@ export async function capturePinnacleOddsForPicks(
 					homeName: teams.teamA,
 					awayName: teams.teamB,
 					eventTime: row.event_time,
+					maxGapSeconds: TENNIS_TOUR_PREFIXES[tag] ? 6 * 3600 : undefined,
 				})
 			: null;
 		if (!event) {

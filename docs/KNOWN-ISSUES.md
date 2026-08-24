@@ -45,7 +45,18 @@ fixing commit.
   regular-season NFL capture at week 1. (e) Probation-league fetches are
   skipped when remaining Odds API credits drop below 100 (live leagues
   keep fetching), so shadow coverage can have credit-driven gaps that
-  live-pick coverage does not.
+  live-pick coverage does not. (f) Tennis day one (2026-08-24) was
+  0-for-113: PM tennis titles use bare " vs " (no period), which the
+  title parser didn't split — fixed same day, so real tennis coverage
+  starts 2026-08-25. Tennis `pin_close_*` is ALSO a weaker proxy than
+  other sports: PM stamps the session start (all quals "15:00"), not the
+  match slot, so the sweep captures Pinnacle at PM's stamped time (up to
+  ~6h before the actual match) — treat tennis pin_clv as
+  "vs Pinnacle-at-session-time", not a true close. (g) Draw-question
+  markets ("Will X vs. Y end in a draw?") are NULL-stamped, never
+  benchmarked: their junk side labels ("Will Fulham FC") substring-match
+  team names and mis-benchmarked 4 rows on 2026-08-24 (scrubbed).
+  Era-review candidate: classify draw-question markets as props.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a
