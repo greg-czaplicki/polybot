@@ -58,8 +58,9 @@ export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 	{ tag: "ncaaf", kind: "seasonal", slugBase: "cfb", fallbackIds: [10210], target: true },
 	{ tag: "ncaab", kind: "static", seriesId: 10470, target: true },
 	{ tag: "mlb", kind: "static", seriesId: 3, target: true },
-	// NHL is fetched but rejected at pick-policy level (nhl_sport_excluded);
-	// keep ingesting so the planned seasonal revisit has data.
+	// NHL shadow-settles behind nhl_league_probation (2026-08-25; was a hard
+	// nhl_sport_excluded reject from 2026-03-19) so the 2026-27 season builds
+	// a would-have-bet cohort under current gates.
 	{ tag: "nhl", kind: "seasonal", slugBase: "nhl", fallbackIds: [10346], target: true },
 	{ tag: "epl", kind: "seasonal", slugBase: "premier-league", fallbackIds: [10188], target: true },
 	{ tag: "mls", kind: "seasonal", slugBase: "mls", fallbackIds: [10189], target: true },
@@ -304,7 +305,7 @@ let inflightWarm: Promise<SeriesRegistry> | null = null;
  * `maxWaitMs`. Without this, isolates that serve /api/bot/candidates or
  * pick creation without ever running the pipeline sync label new-season
  * series IDs as unknown, so sport-keyed policy gates (nfl_preseason_
- * excluded, nhl_sport_excluded) silently don't fire. The bounded wait
+ * excluded, nhl_league_probation) silently don't fire. The bounded wait
  * keeps a Gamma outage from stalling bot requests: on timeout the caller
  * proceeds with the best-effort snapshot while discovery finishes and
  * benefits the next request on this isolate. Concurrent callers share one

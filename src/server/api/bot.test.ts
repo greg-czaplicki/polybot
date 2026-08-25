@@ -101,6 +101,31 @@ describe("getBotCandidatePolicy", () => {
 		expect(mlbTotal.notes).toContain("mlb_total_preferred");
 	});
 
+	it("shadow-settles NHL behind league probation, after the market-type gates", () => {
+		// 10346 is the NHL fallback series ID (series-registry.ts).
+		const ml = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10346,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(ml.reject).toBe(true);
+		expect(ml.rejectReason).toBe("nhl_league_probation");
+
+		// A puck-line (spread) must hit the spread gate first: probation rows
+		// are would-be-bettable market types only, so the cohort stays clean.
+		const puckLine = getBotCandidatePolicy({
+			marketType: "spread",
+			sportSeriesId: 10346,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(puckLine.reject).toBe(true);
+		expect(puckLine.rejectReason).toBe("spread_market_excluded");
+	});
+
 	it("rejects NFL preseason games by event date", () => {
 		// 2026 Labor Day is Sep 7; kickoff Thursday is Sep 10.
 		const preseason = getBotCandidatePolicy({

@@ -7,7 +7,11 @@ fixing commit.
 
 - **Shadow-only league coverage starts 2026-08-18** (EFL Championship
   10355; La Liga 10193, Bundesliga 10194, Serie A 10203, Ligue 1 10195,
-  UCL 10204 — same evening; ATP 10365, WTA 10366). All are ingested but
+  UCL 10204 — same evening; ATP 10365, WTA 10366; **NHL from 2026-08-25**
+  — moved off a hard `nhl_sport_excluded` reject dated 2026-03-19 whose
+  evidence predates `manual_picks` (table starts 2026-04-13), so NHL has
+  NO recorded history under any calibrated era; its probation cohort
+  starts at the 2026-27 opening night, ~Oct 7). All are ingested but
   every candidate rejects pre-live via the `<tag>_league_probation` gate
   and settles in the shadow book; promotion goes through the
   pre-registered sole-blocker checkpoint. Expectations when reading their

@@ -26,7 +26,7 @@ const REASON_LABELS: Record<string, string> = {
 	too_close_to_start: "Later than window (<60m)",
 	spread_market_excluded: "Spread gate",
 	ncaab_spread_excluded: "NCAAB spread gate",
-	nhl_sport_excluded: "NHL gate",
+	nhl_league_probation: "NHL probation",
 	nba_timing_excluded: "NBA >90m gate",
 	nfl_preseason_excluded: "NFL preseason gate",
 	prop_market_excluded: "Prop market gate",

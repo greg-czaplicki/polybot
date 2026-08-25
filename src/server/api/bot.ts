@@ -745,7 +745,16 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // we can't attribute to a validated league is not live-bettable (EPL/MLS
 // always resolve per-league via the registry or the static fallback map, so
 // the generic "soccer" key never fires for them).
+//
+// NHL (2026-08-25): moved here from a hard `nhl_sport_excluded` reject that
+// dated from 2026-03-19 — a pre-calibration era whose picks aren't even in
+// manual_picks (the table starts 2026-04-13), so the exclusion rested on
+// evidence the current system never recorded. Probation gives NHL a clean
+// would-have-bet cohort under today's gates from the 2026-27 opening night,
+// which is what "finding NHL's gates" needs; nothing goes live until the
+// checkpoint says so.
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
+	"nhl",
 	"championship",
 	"laliga",
 	"bundesliga",
@@ -830,24 +839,6 @@ export function getBotCandidatePolicy(input: {
 				notes: ["preseason_excluded"],
 				reject: true,
 				rejectReason: "nfl_preseason_excluded",
-			},
-		);
-	}
-
-	if (sportKey === "nhl") {
-		return buildPolicy(
-			{
-				...input,
-				timingBucket,
-			},
-			{
-				minGrade: "A",
-				marketQualityThreshold: 1,
-				segmentLabel: "NHL excluded",
-				rankingAdjustment: -100,
-				notes: ["sport_excluded"],
-				reject: true,
-				rejectReason: "nhl_sport_excluded",
 			},
 		);
 	}
