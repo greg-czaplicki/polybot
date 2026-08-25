@@ -358,10 +358,11 @@ const serverEntry = {
 					if (
 						result.anchors > 0 ||
 						result.closes > 0 ||
-						result.shadowCloses > 0
+						result.shadowCloses > 0 ||
+						result.shadowAnchors > 0
 					) {
 						console.log(
-							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes (${result.checked} eligible)`,
+							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes, ${result.shadowAnchors} shadow anchors (${result.checked} eligible; credits ${result.creditsRemaining ?? "n/a"})`,
 						);
 					}
 				})

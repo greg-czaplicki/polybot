@@ -28,6 +28,18 @@ was sometimes deployed before being committed. The one pick created between
 the two Jun 25 deploys (ss=94.3 straggler, 20:31 UTC) is classified `v3`
 because it predates the gate going live.
 
+## Pre-registered tests (open)
+
+Hypotheses written down BEFORE their data exists, so the read is mechanical
+when n arrives. Each names its cohort, its criterion, and its n. Reading a
+test early, or on a different cut, does not count.
+
+| test | registered | cohort | criterion | read at |
+|---|---|---|---|---|
+| **Pinnacle price edge as a gate** (`pin_edge = pin_fair_prob − price` on shadow anchors, migration 0035). Second, holder-independent signal: "the Polymarket price beats Pinnacle's devigged number at sighting". | 2026-08-25 | Per sport: settled shadow rows with `pin_fair_prob` non-null, `price ≥ 0.25`, non-timing reject, deduped by market+side. Two sub-cuts: (a) alone — `pin_edge ≥ 0.03` vs `< 0.03`; (b) combined — probation/all-vector-pass rows split the same way. | (a) ROI(pin_edge≥3¢) − ROI(<3¢) > 0 with z ≥ 2 AND `pin_clv` of the ≥3¢ bucket > 0. Passing (a) in a sport earns `pin_edge` a place in that sport's gate vector (era bump); passing (b) in a probation sport is grounds to promote that sport on the combined rule. | n ≥ 100 anchored settled rows in the sport (MLB ~2 weeks; tennis/soccer TBD by coverage) |
+| **WTA fade** — the holder signal inverts in WTA (2026-08-25 read: every vector gate's pass side ≤ fail side, all-pass rows −17..−60%). Hypothesis: betting the OPPOSITE side of the sharp signal in WTA is +EV. | 2026-08-25 | WTA shadow rows that pass all five vector gates (would-have-bet cohort), deduped, `price ≥ 0.25`; ROI recomputed as if the other side were bet at `1 − price`. | Fade ROI > 0 with z ≥ 2 AND fade `pin_clv` > 0 (computed against the fade side's Pinnacle prob). If met, a `wta_fade` policy is designed and shadow-run for a further n ≥ 50 before any live bet. | n ≥ 100 would-have-bet WTA rows (≈ mid-Oct at current volume) |
+| **Tennis sharp-signal verdict** (from 2026-08-23 diagnosis). | 2026-08-23 | ATP and WTA separately: all-vector-pass probation rows. | The standard promotion rule (n ≥ 50 sole-blocker, z ≥ 2, pin_clv > 0) via the /shadow verdict. | n ≈ 200 total tennis rows (~mid-Sept) |
+
 ## Bumping
 
 1. Update `STRATEGY_VERSION` in `src/lib/strategy-version.ts`.

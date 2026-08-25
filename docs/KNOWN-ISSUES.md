@@ -66,6 +66,21 @@ fixing commit.
   benchmarked: their junk side labels ("Will Fulham FC") substring-match
   team names and mis-benchmarked 4 rows on 2026-08-24 (scrubbed).
   Era-review candidate: classify draw-question markets as props.
+- **Shadow Pinnacle ANCHORS (`shadow_candidates.pin_captured_at` /
+  `pin_fair_prob` / `pin_ev`) start 2026-08-25 evening** (migration 0035).
+  Read with these bounds: (a) the anchor is "Pinnacle within ~20 min of
+  sighting", not at-sighting — shadow anchors read a per-sport feed cache
+  (`pinnacle_feed_cache`, TTL 20 min) and only refetch when stale, to keep
+  Odds API spend bounded (`pin_feed_at` records the feed time; `pin_captured_at
+  − pin_feed_at` is the staleness). Live-pick anchors still fetch fresh.
+  (b) Timing-reject rows (`outside_window`, `too_close_to_start`,
+  `not_ready`) are never anchored — they were not a would-have-bet at
+  that sighting. (c) Shadow anchors stop refetching below 500 remaining
+  credits (closes keep the 100 floor), so anchor coverage thins before
+  close coverage does near month-end. (d) Same match/line caveats as
+  `pin_clv`: MLB ML near-complete, totals exact-line-only, soccer
+  quarter-lines never match, tennis only while a tournament key is active.
+  Purpose: the pre-registered `pin_edge` gate test in docs/STRATEGY.md.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a
