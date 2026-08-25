@@ -48,6 +48,18 @@ describe("gateVerdict", () => {
 		expect(v.verdict).toBe("watch");
 	});
 
+	it("holds, not watches, when Pinnacle CLV is negative however hot the ROI", () => {
+		// 8/25 MLB below_policy_grade: 24-22 (+17%), z≈1, pin_clv −0.9% on 18 rows
+		const v = gateVerdict({
+			...cohort(24, 22, 1.2),
+			avgPinClv: -0.009,
+			pinN: 18,
+			avgClv: -0.004,
+		});
+		expect(v.verdict).toBe("hold");
+		expect(v.clvSource).toBe("pinnacle");
+	});
+
 	it("is ready only with n>=50, z>=2 and positive CLV", () => {
 		const base = { ...cohort(40, 20), avgClv: 0.002 };
 		expect(gateVerdict({ ...base, avgPinClv: 0.004, pinN: 30 }).verdict).toBe(

@@ -8,8 +8,10 @@
  * CLV means Pinnacle close (pin_clv) once enough rows carry it; the
  * Polymarket self-close clv is the fallback while pin coverage is thin.
  *
- * Anything short of that is HOLD. WATCH is informational only — the cohort
- * is moving toward the bar, keep collecting — and never authorises action.
+ * Anything short of that is HOLD. WATCH is informational only — CLV is
+ * already positive and ROI is trending up, so only sample size/significance
+ * is short; keep collecting — and never authorises action. A cohort the
+ * sharp book prices as negative-CLV is HOLD no matter how hot its ROI.
  * Raw first-fired stats are deliberately NOT an input: they mix in rows
  * other gates would have rejected anyway (the twice-made mistake).
  */
@@ -96,7 +98,9 @@ export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
 		z !== null &&
 		z >= WATCH_MIN_Z &&
 		roi !== null &&
-		roi > 0;
+		roi > 0 &&
+		clv !== null &&
+		clv > 0;
 	return {
 		verdict: watching ? "watch" : "hold",
 		z,
