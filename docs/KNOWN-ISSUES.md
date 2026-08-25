@@ -66,29 +66,31 @@ fixing commit.
   benchmarked: their junk side labels ("Will Fulham FC") substring-match
   team names and mis-benchmarked 4 rows on 2026-08-24 (scrubbed).
   Era-review candidate: classify draw-question markets as props.
-- **Shadow Pinnacle ANCHORS (`shadow_candidates.pin_captured_at` /
-  `pin_fair_prob` / `pin_ev`) start 2026-08-25 evening** (migration 0035).
-  Read with these bounds: (a) the anchor is "Pinnacle within ~20 min of
-  sighting", not at-sighting — shadow anchors read a per-sport feed cache
-  (`pinnacle_feed_cache`, TTL 20 min) and only refetch when stale, to keep
-  Odds API spend bounded (`pin_feed_at` records the feed time; `pin_captured_at
-  − pin_feed_at` is the staleness). Live-pick anchors still fetch fresh.
-  (b) Timing-reject rows (`outside_window`, `too_close_to_start`,
-  `not_ready`) are never anchored — they were not a would-have-bet at
-  that sighting. (c) Shadow anchors stop refetching below 500 remaining
-  credits (closes keep the 100 floor), so anchor coverage thins before
-  close coverage does near month-end. (d) Same match/line caveats as
-  `pin_clv`: MLB ML near-complete, totals exact-line-only, soccer
-  quarter-lines never match, tennis only while a tournament key is active.
-  Purpose: the pre-registered `pin_edge` gate test in docs/STRATEGY.md.
-- **`nba_timing_excluded` shadow rows are ML/totals-only from 2026-08-25**
-  (gate moved below the spread/prop gates; before that an NBA spread or
-  prop at >90 min would have carried this reason). No NBA rows exist in the
-  shadow book before the 2026-27 season anyway (book started 2026-07-30,
-  after the 2025-26 season), so the cohort is clean from opening night.
-  Fade tests (docs/charters/fade-inversion.md) derive `fade_roi` from the
-  signal-side result and `fade_pin_clv = −pin_clv`; both identities hold
-  only on two-way markets, which is why the cohort is restricted.
+- **Pinnacle capture runs on The Odds API FREE tier from 2026-08-25
+  (decision: no paid plan)** — 500 credits/month, 2 per sport fetch, so
+  the whole system gets `DAILY_FETCH_CAP = 8` fetches/day across all
+  sports (+4 reserve only live-pick closes may spend), counted in
+  `pinnacle_fetch_log`. Consequences for every pin_* / pin_close_* read:
+  (a) ONE per-sport feed cache (`pinnacle_feed_cache`) serves pick anchors,
+  pick closes, shadow anchors and shadow closes; a "close" is Pinnacle
+  within ≤15 min (live picks) / ≤30 min (shadows) of the close window, an
+  "anchor" within ≤30 min of sighting — or, when the day's budget is
+  spent, any pre-T feed up to 3 h old. Staleness is a column on every row
+  (`pin_feed_at`, `pin_close_feed_at` on both tables; `captured_at −
+  feed_at`); filter on it when precision matters. (b) When the cap is hit,
+  closes are simply NOT captured (no stale close is ever written) — so
+  coverage drops on heavy slates, biased toward events early in the UTC
+  day. (c) Tennis fetches at most one tournament per tour per sweep, Grand
+  Slam preferred, so a second concurrent tournament is uncovered. (d)
+  Benchmark leagues stop below 20 credits, live sports below 2; the
+  balance on 2026-08-25 evening was 40, so coverage is thin until the
+  monthly reset. (e) Timing-reject shadow rows are never anchored; draw-
+  question markets never benchmarked. (f) Same match/line caveats as
+  `pin_clv` above (MLB ML near-complete, totals exact-line-only, soccer
+  quarter-lines, tennis only while a key is active). Shadow anchors exist
+  from 2026-08-25 13:17Z (migration 0035); the budget design from the
+  same evening (migration 0037). Purpose: the pre-registered `pin_edge`
+  and fade tests in docs/STRATEGY.md / docs/charters/.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a

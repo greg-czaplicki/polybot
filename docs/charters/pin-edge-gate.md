@@ -45,10 +45,15 @@ T = sighting (`created_at`). Horizon = market settlement (hours to a day).
 Feature legality at T:
 - `price` — Polymarket price at sighting. Legal.
 - `pin_fair_prob` — Pinnacle de-vigged probability from a feed fetched at
-  `pin_feed_at ≤ T`, at most `SHADOW_ANCHOR_FEED_TTL_SECONDS` (20 min) old.
-  Legal (pre-T, staleness recorded per row). A feed fetched AFTER T is not
-  possible by construction (the sweep only anchors rows created before it
-  runs, and reads a cache written at or before the sweep).
+  `pin_feed_at ≤ T`. Legal (pre-T, staleness recorded per row). A feed
+  fetched AFTER T is not possible by construction (the sweep only anchors
+  rows created before it runs, and reads a cache written at or before the
+  sweep). **Amendment v1.1 (2026-08-25 evening, 7 rows existed, no read
+  taken):** max feed age is 30 min under normal budget and up to 3 h when
+  the daily fetch cap is spent (free-tier design, migration 0037); the
+  original text said 20 min. The population therefore adds the filter
+  `pin_captured_at − pin_feed_at ≤ 1800` for the primary read, with the
+  stale-anchor rows reported as a separate diagnostic slice.
 - gate vector (`gates_json`), `reject_reason` — computed at T. Legal.
 - `pin_clv`, `pin_close_fair_prob`, `roi`, `resolved_outcome` — post-T.
   Evaluation only; never a feature.
@@ -97,7 +102,8 @@ threshold, bucket, or population change after a read (see `failure_and_stop`).
 - Anchor coverage ≥ 50% of eligible sightings in that sport (anchored ÷
   eligible); below that the read is `inconclusive — coverage`, not a result,
   because the matched subsample is biased toward book/PM agreement.
-- Median `pin_captured_at − pin_feed_at` ≤ 20 min (TTL honoured).
+- Primary read uses rows with `pin_captured_at − pin_feed_at ≤ 30 min`;
+  stale-anchor rows (≤ 3 h, budget fallback) are a diagnostic slice only.
 - Provenance: Pinnacle via The Odds API (`bookmakers=pinnacle`,
   `markets=h2h,totals`), de-vigged by `extractPinnaclePrices` (proportional
   for two-way, three-way incl. draw for soccer); totals matched on exact

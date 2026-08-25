@@ -22,11 +22,20 @@
  * total line as the pick's market. pin_clv = pin_close_fair_prob − pick
  * price (same sign convention as clv/book_clv).
  *
- * Credit budget: cost = 2 credits per sport fetch (h2h+totals, one
- * bookmaker region). Fetches happen only when a sweep finds eligible
- * picks, so daily cost ≈ 2 × (picks × 2 captures) worst case, typically
- * well under the free 500/month at current pick volume; the $30 tier
- * (20K) removes the ceiling for football season.
+ * Credit budget (free tier, 500/month, decided 2026-08-25 — no paid
+ * plan): cost = 2 credits per sport fetch (h2h+totals, one bookmaker
+ * region), so the whole system gets ~8 fetches/day. The sweep therefore:
+ *   - shares ONE per-sport feed cache (pinnacle_feed_cache) across pick
+ *     anchors, pick closes, shadow anchors and shadow closes, with a
+ *     per-role max age (live close ≤15 min, everything else ≤30 min);
+ *   - spends against a hard DAILY_FETCH_CAP counted in pinnacle_fetch_log,
+ *     with a small reserve only live-pick closes may use;
+ *   - lets anchors fall back to a stale feed (still pre-T, staleness
+ *     recorded in pin_feed_at) instead of fetching, while closes never
+ *     use a feed older than their max age;
+ *   - fetches at most one tennis tournament per tour per sweep.
+ * "Close" is therefore "Pinnacle within ≤15/30 min of the window", and
+ * every capture records the feed time so the staleness is auditable.
  */
 
 import type { Db } from "../db/client";
@@ -66,12 +75,18 @@ const TENNIS_TOUR_PREFIXES: Record<string, string> = {
 	atp: "tennis_atp_",
 	wta: "tennis_wta_",
 };
-/** Concurrent tournaments per tour are fetched up to this cap per sweep. */
-const TENNIS_MAX_TOURNAMENTS_PER_TOUR = 4;
+/** Tournaments per tour fetched per sweep (each is its own request). On
+ * the free tier that is ONE, preferring a Grand Slam key when active. */
+const TENNIS_MAX_TOURNAMENTS_PER_TOUR = 1;
+const TENNIS_PREFERRED_KEY_MARKERS = [
+	"us_open",
+	"wimbledon",
+	"french_open",
+	"aus_open",
+];
 
-// Live-bettable leagues (mirrors bot.ts policy) always fetch; everything
-// else is a shadow-only benchmark that is skipped when the monthly credit
-// budget runs low, so benchmarking can never starve live-pick capture.
+// Live-bettable leagues (mirrors bot.ts policy) get priority on the
+// budget; everything else is a shadow-only benchmark.
 const LIVE_SPORT_TAGS = new Set([
 	"mlb",
 	"nba",
@@ -81,7 +96,14 @@ const LIVE_SPORT_TAGS = new Set([
 	"epl",
 	"mls",
 ]);
-const LOW_CREDIT_FLOOR = 100;
+/** Benchmark-only leagues don't fetch below this many remaining credits;
+ * live sports keep fetching down to LIVE_MIN_CREDITS. */
+const BENCHMARK_MIN_CREDITS = 20;
+const LIVE_MIN_CREDITS = 2;
+/** Sport fetches per UTC day, all sports combined (2 credits each →
+ * ~480/month). Live-pick CLOSES may additionally spend the reserve. */
+const DAILY_FETCH_CAP = 8;
+const LIVE_CLOSE_FETCH_RESERVE = 4;
 
 /** Close window opens this long before event_time. */
 const CLOSE_WINDOW_BEFORE_SECONDS = 600;
@@ -90,16 +112,18 @@ const CLOSE_WINDOW_AFTER_SECONDS = 1800;
 /** Anchor capture only for picks created within this window. */
 const ANCHOR_MAX_AGE_SECONDS = 2 * 3600;
 
-// Shadow anchors (migration 0035). Shadows are created on every bot poll,
-// so their anchor reads the per-sport feed cache (pinnacle_feed_cache)
-// while it is younger than this TTL and only refetches when stale: cost is
-// bounded by active hours / TTL per sport, not by the 2-minute sweep.
-// "Pinnacle within ~20 min of sighting" is an adequate entry benchmark;
-// pin_feed_at makes the actual staleness auditable per row.
-const SHADOW_ANCHOR_FEED_TTL_SECONDS = 20 * 60;
-/** Shadow anchors never refetch below this many credits (closes keep the
- * lower LOW_CREDIT_FLOOR) so the new benchmark can't starve close capture. */
-const SHADOW_ANCHOR_CREDIT_FLOOR = 500;
+// Feed reuse per capture role (seconds). A cached per-sport feed younger
+// than the role's max age is used without a fetch. Closes never use an
+// older feed; anchors may fall back to one up to ANCHOR_STALE_MAX_SECONDS
+// old when the daily budget is spent (still pre-T; pin_feed_at records it).
+type FeedRole = "live-anchor" | "live-close" | "shadow-anchor" | "shadow-close";
+const FEED_MAX_AGE_SECONDS: Record<FeedRole, number> = {
+	"live-close": 15 * 60,
+	"live-anchor": 30 * 60,
+	"shadow-close": 30 * 60,
+	"shadow-anchor": 30 * 60,
+};
+const ANCHOR_STALE_MAX_SECONDS = 3 * 3600;
 const SHADOW_ANCHOR_LIMIT = 40;
 /** Rows rejected on timing alone would never have been bet at that sighting;
  * their anchor is not a would-have-bet benchmark, so they are skipped. */
@@ -442,6 +466,11 @@ async function writeFeedCache(
 	);
 }
 
+interface Feed {
+	events: OddsApiEvent[];
+	fetchedAt: number;
+}
+
 export async function capturePinnacleOddsForPicks(
 	db: Db,
 	apiKey: string | undefined,
@@ -452,17 +481,21 @@ export async function capturePinnacleOddsForPicks(
 	closes: number;
 	shadowCloses: number;
 	shadowAnchors: number;
+	fetches: number;
+	fetchesToday: number;
 	creditsRemaining: number | null;
 }> {
-	if (!apiKey)
-		return {
-			checked: 0,
-			anchors: 0,
-			closes: 0,
-			shadowCloses: 0,
-			shadowAnchors: 0,
-			creditsRemaining: null,
-		};
+	const empty = {
+		checked: 0,
+		anchors: 0,
+		closes: 0,
+		shadowCloses: 0,
+		shadowAnchors: 0,
+		fetches: 0,
+		fetchesToday: 0,
+		creditsRemaining: null,
+	};
+	if (!apiKey) return empty;
 	const limit =
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 50)
@@ -501,8 +534,6 @@ export async function capturePinnacleOddsForPicks(
 		limit,
 	);
 
-	// Shadow candidates: close proxy (fresh fetch inside the close window)
-	// plus a cache-backed anchor (see SHADOW_ANCHOR_FEED_TTL_SECONDS).
 	// shadow_candidates.event_time is INTEGER seconds, unlike manual_picks.
 	const shadowRows = await all<ShadowCloseRow>(
 		db,
@@ -544,21 +575,19 @@ export async function capturePinnacleOddsForPicks(
 		shadowRows.length === 0 &&
 		shadowAnchorRows.length === 0
 	)
-		return {
-			checked: 0,
-			anchors: 0,
-			closes: 0,
-			shadowCloses: 0,
-			shadowAnchors: 0,
-			creditsRemaining: null,
-		};
+		return empty;
 
-	// One fetch per sport, shared by every eligible pick AND shadow of that
-	// sport in this sweep. Seed the credit tracker from the last persisted
-	// value (migration 0036): the floors compare against credits.remaining,
-	// which was NULL until this sweep's first fetch — so the first
-	// benchmark-league fetch of every sweep bypassed them.
-	const eventsBySport = new Map<string, OddsApiEvent[] | null>();
+	// ---- Budget state -------------------------------------------------
+	const dayStart = now - (now % 86400);
+	const todayRow = await first<{ n: number }>(
+		db,
+		`SELECT COUNT(*) AS n FROM pinnacle_fetch_log WHERE fetched_at >= ?`,
+		dayStart,
+	);
+	let fetchesToday = todayRow?.n ?? 0;
+	let fetches = 0;
+	// Seed the credit tracker from the last persisted balance so the floors
+	// apply from the first fetch of the sweep, not the second.
 	const lastCredits = await first<{ credits_remaining: number | null }>(
 		db,
 		`SELECT credits_remaining FROM pinnacle_feed_cache
@@ -568,89 +597,125 @@ export async function capturePinnacleOddsForPicks(
 	const credits: CreditState = {
 		remaining: lastCredits?.credits_remaining ?? null,
 	};
-	let activeSportKeys: string[] | null | undefined;
-	let anchors = 0;
-	let closes = 0;
-	let shadowCloses = 0;
-	let shadowAnchors = 0;
 
-	// Null result = fetch failed or skipped: rows stay untouched and retry
-	// next sweep. Empty array = feed answered with no listing: rows stamp.
-	const eventsForTag = async (tag: string): Promise<OddsApiEvent[] | null> => {
-		const cached = eventsBySport.get(tag);
-		if (cached !== undefined) return cached;
+	// This sweep's fresh feeds (null = fetched and failed) and cache reads.
+	const fresh = new Map<string, OddsApiEvent[] | null>();
+	const cacheReads = new Map<string, Feed | null>();
+	let activeSportKeys: string[] | null | undefined;
+
+	const canSpend = (tag: string, role: FeedRole): boolean => {
+		const live = LIVE_SPORT_TAGS.has(tag);
 		if (
-			!LIVE_SPORT_TAGS.has(tag) &&
 			credits.remaining !== null &&
-			credits.remaining < LOW_CREDIT_FLOOR
+			credits.remaining < (live ? LIVE_MIN_CREDITS : BENCHMARK_MIN_CREDITS)
 		) {
-			// Benchmark-only league on a dry budget: skip without caching so a
-			// later sweep (or credit reset) can still capture in-window rows.
-			return null;
+			return false;
 		}
+		const cap =
+			role === "live-close"
+				? DAILY_FETCH_CAP + LIVE_CLOSE_FETCH_RESERVE
+				: DAILY_FETCH_CAP;
+		return fetchesToday < cap;
+	};
+
+	const logFetch = async (sportKey: string): Promise<void> => {
+		fetchesToday += 1;
+		fetches += 1;
+		await run(
+			db,
+			`INSERT INTO pinnacle_fetch_log (fetched_at, sport_key, credits_remaining)
+			 VALUES (?, ?, ?)`,
+			now,
+			sportKey,
+			credits.remaining,
+		);
+	};
+
+	// Fresh fetch for a tag: one request for static keys; for tennis, the
+	// active tournament keys for the tour (capped, Grand Slam preferred).
+	// Null = fetch failed (rows retry next sweep). Empty array = feed
+	// answered with no listing (rows stamp).
+	const fetchFresh = async (tag: string): Promise<OddsApiEvent[] | null> => {
 		let events: OddsApiEvent[] | null = null;
 		const staticKey = ODDS_API_SPORT_KEYS[tag];
 		const tennisPrefix = TENNIS_TOUR_PREFIXES[tag];
 		if (staticKey) {
 			events = await fetchOddsApiEvents(apiKey, staticKey, credits);
+			await logFetch(staticKey);
 		} else if (tennisPrefix) {
 			if (activeSportKeys === undefined) {
 				activeSportKeys = await fetchActiveSportKeys(apiKey);
 			}
 			if (activeSportKeys !== null) {
-				const tourKeys = activeSportKeys
-					.filter((k) => k.startsWith(tennisPrefix))
-					.slice(0, TENNIS_MAX_TOURNAMENTS_PER_TOUR);
-				const fetched = await Promise.all(
-					tourKeys.map((k) => fetchOddsApiEvents(apiKey, k, credits)),
+				const tourKeys = activeSportKeys.filter((k) =>
+					k.startsWith(tennisPrefix),
 				);
-				// All-failed (with tournaments listed) stays null so rows retry;
-				// no active tournament resolves to an empty, stampable feed.
-				if (tourKeys.length === 0) events = [];
-				else if (fetched.some((e) => e !== null))
-					events = fetched.flatMap((e) => e ?? []);
-				// Diagnostic (2026-08-24): tennis went 0-for-113 on first day —
-				// log discovery + a feed sample until capture is verified.
+				const preferred = tourKeys.filter((k) =>
+					TENNIS_PREFERRED_KEY_MARKERS.some((m) => k.includes(m)),
+				);
+				const chosen = [
+					...preferred,
+					...tourKeys.filter((k) => !preferred.includes(k)),
+				].slice(0, TENNIS_MAX_TOURNAMENTS_PER_TOUR);
+				if (chosen.length === 0) {
+					events = [];
+				} else {
+					const fetched: Array<OddsApiEvent[] | null> = [];
+					for (const k of chosen) {
+						fetched.push(await fetchOddsApiEvents(apiKey, k, credits));
+						await logFetch(k);
+					}
+					if (fetched.some((e) => e !== null))
+						events = fetched.flatMap((e) => e ?? []);
+				}
 				console.log(
-					`[pinnacle-odds] tennis ${tag}: keys=${JSON.stringify(tourKeys)}`,
-					`events=${events === null ? "null" : events.length}`,
-					events && events.length > 0
-						? `sample=${events
-								.slice(0, 3)
-								.map((e) => `${e.home_team}|${e.away_team}|${e.commence_time}`)
-								.join(" ; ")}`
-						: "",
+					`[pinnacle-odds] tennis ${tag}: keys=${JSON.stringify(chosen)} events=${events === null ? "null" : events.length}`,
 				);
 			}
 		}
-		eventsBySport.set(tag, events);
+		fresh.set(tag, events);
 		if (events !== null)
 			await writeFeedCache(db, tag, now, events, credits.remaining);
 		return events;
 	};
 
-	// Shadow anchors: this sweep's fresh feed if one was fetched, else the
-	// cached feed while younger than the TTL, else a fresh fetch (subject to
-	// the higher shadow-anchor credit floor). Null = nothing usable now.
-	const eventsForShadowAnchor = async (
-		tag: string,
-	): Promise<{ events: OddsApiEvent[]; fetchedAt: number } | null> => {
-		const fresh = eventsBySport.get(tag);
-		if (fresh) return { events: fresh, fetchedAt: now };
-		const cached = await readFeedCache(db, tag);
-		if (cached && now - cached.fetchedAt <= SHADOW_ANCHOR_FEED_TTL_SECONDS) {
+	// The feed for a tag under a role's freshness rule: this sweep's fresh
+	// fetch → cache within max age → fetch if the budget allows → for
+	// anchors only, a stale cache up to ANCHOR_STALE_MAX_SECONDS → null.
+	const getFeed = async (tag: string, role: FeedRole): Promise<Feed | null> => {
+		if (fresh.has(tag)) {
+			const events = fresh.get(tag);
+			return events ? { events, fetchedAt: now } : null;
+		}
+		let cached = cacheReads.get(tag);
+		if (cached === undefined) {
+			cached = await readFeedCache(db, tag);
+			cacheReads.set(tag, cached);
+		}
+		if (cached && now - cached.fetchedAt <= FEED_MAX_AGE_SECONDS[role]) {
 			return cached;
 		}
-		if (
-			credits.remaining !== null &&
-			credits.remaining < SHADOW_ANCHOR_CREDIT_FLOOR
-		) {
-			return null;
+		if (canSpend(tag, role)) {
+			const events = await fetchFresh(tag);
+			return events ? { events, fetchedAt: now } : null;
 		}
-		const events = await eventsForTag(tag);
-		return events ? { events, fetchedAt: now } : null;
+		const anchorRole = role === "live-anchor" || role === "shadow-anchor";
+		if (
+			anchorRole &&
+			cached &&
+			now - cached.fetchedAt <= ANCHOR_STALE_MAX_SECONDS
+		) {
+			return cached;
+		}
+		return null;
 	};
 
+	let anchors = 0;
+	let closes = 0;
+	let shadowCloses = 0;
+	let shadowAnchors = 0;
+
+	// ---- Live picks ----------------------------------------------------
 	for (const row of rows) {
 		const sportKey = ODDS_API_SPORT_KEYS[row.sport_tag];
 		if (!sportKey) continue;
@@ -664,7 +729,7 @@ export async function capturePinnacleOddsForPicks(
 			row.pin_close_captured_at === null &&
 			now > row.event_time + CLOSE_WINDOW_AFTER_SECONDS;
 
-		// Window passed without a capture (outage, event never matched):
+		// Window passed without a capture (outage, budget, never matched):
 		// stamp so the row stops occupying the sweep LIMIT forever.
 		if (closeExpired && !wantsAnchor) {
 			await run(
@@ -677,30 +742,35 @@ export async function capturePinnacleOddsForPicks(
 		}
 		if (!wantsAnchor && !inCloseWindow) continue;
 
-		const events = await eventsForTag(row.sport_tag);
-		// Fetch failure: leave untouched, next sweep retries.
-		if (!events) continue;
+		const feed = await getFeed(
+			row.sport_tag,
+			wantsAnchor ? "live-anchor" : "live-close",
+		);
+		// No usable feed (failure / budget): leave untouched, next sweep retries.
+		if (!feed) continue;
 
-		const event = matchOddsApiEvent(events, {
+		const event = matchOddsApiEvent(feed.events, {
 			homeName: row.home_name,
 			awayName: row.away_name,
 			eventTime: row.event_time,
 		});
 		if (!event) {
 			// No Pinnacle listing for this game — stamp whichever capture was
-			// due so we don't refetch for it every 2 minutes.
+			// due so we don't retry for it every sweep.
 			if (wantsAnchor) {
 				await run(
 					db,
-					`UPDATE manual_picks SET pin_captured_at = ? WHERE id = ?`,
+					`UPDATE manual_picks SET pin_captured_at = ?, pin_feed_at = ? WHERE id = ?`,
 					now,
+					feed.fetchedAt,
 					row.id,
 				);
 			} else {
 				await run(
 					db,
-					`UPDATE manual_picks SET pin_close_captured_at = ? WHERE id = ?`,
+					`UPDATE manual_picks SET pin_close_captured_at = ?, pin_close_feed_at = ? WHERE id = ?`,
 					now,
+					feed.fetchedAt,
 					row.id,
 				);
 			}
@@ -724,11 +794,12 @@ export async function capturePinnacleOddsForPicks(
 			await run(
 				db,
 				`UPDATE manual_picks SET
-					pin_captured_at = ?, pin_ml_side = ?, pin_ml_opp = ?,
+					pin_captured_at = ?, pin_feed_at = ?, pin_ml_side = ?, pin_ml_opp = ?,
 					pin_total_line = ?, pin_total_over_odds = ?,
 					pin_total_under_odds = ?, pin_fair_prob = ?, pin_ev = ?
 				 WHERE id = ?`,
 				now,
+				feed.fetchedAt,
 				prices.mlSide,
 				prices.mlOpp,
 				prices.totalLine,
@@ -747,12 +818,13 @@ export async function capturePinnacleOddsForPicks(
 			await run(
 				db,
 				`UPDATE manual_picks SET
-					pin_close_captured_at = ?, pin_close_ml_side = ?,
+					pin_close_captured_at = ?, pin_close_feed_at = ?, pin_close_ml_side = ?,
 					pin_close_ml_opp = ?, pin_close_total_line = ?,
 					pin_close_total_over_odds = ?, pin_close_total_under_odds = ?,
 					pin_close_fair_prob = ?, pin_clv = ?
 				 WHERE id = ?`,
 				now,
+				feed.fetchedAt,
 				prices.mlSide,
 				prices.mlOpp,
 				prices.totalLine,
@@ -766,49 +838,40 @@ export async function capturePinnacleOddsForPicks(
 		}
 	}
 
-	for (const row of shadowRows) {
-		const tag = row.sport_tag;
-		const tracked =
-			tag && (ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
-		// Draw-question markets ("Will X vs. Y end in a draw?") carry junk
-		// side labels ("Will Fulham FC") that substring-match real team names
-		// and would benchmark a draw price against a team-win fair prob.
-		// Stamp with NULL until they are classified properly.
-		const isDrawQuestion = /end in a draw/i.test(row.market_title);
-		if (!tag || !tracked || isDrawQuestion) {
-			// Untracked sport or unbenchmarkable market: stamp so the row
-			// stops occupying the sweep; fair prob stays NULL.
-			await run(
-				db,
-				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
-				now,
-				row.id,
-			);
-			continue;
-		}
-		const events = await eventsForTag(tag);
-		// Fetch failure: leave untouched, next sweep retries inside the window.
-		if (!events) continue;
-
+	// ---- Shadow helpers ------------------------------------------------
+	const shadowVenueRole = (
+		row: ShadowCloseRow,
+		event: OddsApiEvent,
+	): string | null => {
+		// ML venue role isn't stored on shadow rows; derive it from which
+		// feed side the sharp label matches.
+		if (row.market_type !== "moneyline" || !row.sharp_side_label) return null;
+		if (teamNamesMatch(row.sharp_side_label, event.home_team)) return "home";
+		if (teamNamesMatch(row.sharp_side_label, event.away_team)) return "away";
+		return null;
+	};
+	const shadowTracked = (tag: string | null): tag is string =>
+		!!tag && !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
+	// Draw-question markets ("Will X vs. Y end in a draw?") carry junk side
+	// labels that substring-match real team names and would benchmark a
+	// draw price against a team-win fair prob. Stamp with NULL fair prob.
+	const isDrawQuestion = (title: string) => /end in a draw/i.test(title);
+	const matchShadow = (row: ShadowCloseRow, tag: string, feed: Feed) => {
 		const teams = parseTitleTeams(row.market_title);
-		const event = teams
-			? matchOddsApiEvent(events, {
+		return teams
+			? matchOddsApiEvent(feed.events, {
 					homeName: teams.teamA,
 					awayName: teams.teamB,
 					eventTime: row.event_time,
 					maxGapSeconds: TENNIS_TOUR_PREFIXES[tag] ? 6 * 3600 : undefined,
 				})
 			: null;
-		if (!event) {
-			if (TENNIS_TOUR_PREFIXES[tag]) {
-				// Diagnostic pair to the discovery log above.
-				console.log(
-					`[pinnacle-odds] tennis no-match: "${row.market_title}"`,
-					`teams=${JSON.stringify(teams)} event_time=${row.event_time}`,
-				);
-			}
-			// Unparseable title or no Pinnacle listing — stamp so we don't
-			// refetch for this row every 2 minutes.
+	};
+
+	// ---- Shadow closes -------------------------------------------------
+	for (const row of shadowRows) {
+		const tag = row.sport_tag;
+		if (!shadowTracked(tag) || isDrawQuestion(row.market_title)) {
 			await run(
 				db,
 				`UPDATE shadow_candidates SET pin_close_captured_at = ? WHERE id = ?`,
@@ -817,20 +880,26 @@ export async function capturePinnacleOddsForPicks(
 			);
 			continue;
 		}
-
-		// ML venue role isn't stored on shadow rows; derive it from which
-		// feed side the sharp label matches.
-		let venueRole: string | null = null;
-		if (row.market_type === "moneyline" && row.sharp_side_label) {
-			if (teamNamesMatch(row.sharp_side_label, event.home_team)) {
-				venueRole = "home";
-			} else if (teamNamesMatch(row.sharp_side_label, event.away_team)) {
-				venueRole = "away";
-			}
+		const feed = await getFeed(tag, "shadow-close");
+		// No usable feed inside the window: leave untouched; the window's
+		// expiry stamps it via the next eligible sweep's close-expired path
+		// (shadow rows are only selected inside the window, so an unserved
+		// row simply drops out of the query once the window passes).
+		if (!feed) continue;
+		const event = matchShadow(row, tag, feed);
+		if (!event) {
+			await run(
+				db,
+				`UPDATE shadow_candidates SET pin_close_captured_at = ?, pin_close_feed_at = ? WHERE id = ?`,
+				now,
+				feed.fetchedAt,
+				row.id,
+			);
+			continue;
 		}
 		const prices = extractPinnaclePrices(event, {
 			betType: row.market_type,
-			venueRole,
+			venueRole: shadowVenueRole(row, event),
 			sideLabel: row.sharp_side_label,
 			marketTotalLine: parseMarketTotalLine(row.market_title),
 		});
@@ -843,10 +912,11 @@ export async function capturePinnacleOddsForPicks(
 		await run(
 			db,
 			`UPDATE shadow_candidates
-			 SET pin_close_captured_at = ?, pin_close_total_line = ?,
+			 SET pin_close_captured_at = ?, pin_close_feed_at = ?, pin_close_total_line = ?,
 			     pin_close_fair_prob = ?, pin_clv = ?
 			 WHERE id = ?`,
 			now,
+			feed.fetchedAt,
 			prices.totalLine,
 			prices.fairProb,
 			pinClv,
@@ -855,12 +925,10 @@ export async function capturePinnacleOddsForPicks(
 		shadowCloses += 1;
 	}
 
+	// ---- Shadow anchors ------------------------------------------------
 	for (const row of shadowAnchorRows) {
 		const tag = row.sport_tag;
-		const tracked =
-			tag && (ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
-		const isDrawQuestion = /end in a draw/i.test(row.market_title);
-		if (!tag || !tracked || isDrawQuestion) {
+		if (!shadowTracked(tag) || isDrawQuestion(row.market_title)) {
 			await run(
 				db,
 				`UPDATE shadow_candidates SET pin_captured_at = ? WHERE id = ?`,
@@ -869,20 +937,11 @@ export async function capturePinnacleOddsForPicks(
 			);
 			continue;
 		}
-		const feed = await eventsForShadowAnchor(tag);
-		// No usable feed (fetch failed / credit floor): leave untouched; the
-		// row retries while inside ANCHOR_MAX_AGE, then simply never anchors.
+		const feed = await getFeed(tag, "shadow-anchor");
+		// No usable feed (even stale): leave untouched; the row retries while
+		// inside ANCHOR_MAX_AGE, then simply never anchors.
 		if (!feed) continue;
-
-		const teams = parseTitleTeams(row.market_title);
-		const event = teams
-			? matchOddsApiEvent(feed.events, {
-					homeName: teams.teamA,
-					awayName: teams.teamB,
-					eventTime: row.event_time,
-					maxGapSeconds: TENNIS_TOUR_PREFIXES[tag] ? 6 * 3600 : undefined,
-				})
-			: null;
+		const event = matchShadow(row, tag, feed);
 		if (!event) {
 			await run(
 				db,
@@ -893,17 +952,9 @@ export async function capturePinnacleOddsForPicks(
 			);
 			continue;
 		}
-		let venueRole: string | null = null;
-		if (row.market_type === "moneyline" && row.sharp_side_label) {
-			if (teamNamesMatch(row.sharp_side_label, event.home_team)) {
-				venueRole = "home";
-			} else if (teamNamesMatch(row.sharp_side_label, event.away_team)) {
-				venueRole = "away";
-			}
-		}
 		const prices = extractPinnaclePrices(event, {
 			betType: row.market_type,
-			venueRole,
+			venueRole: shadowVenueRole(row, event),
 			sideLabel: row.sharp_side_label,
 			marketTotalLine: parseMarketTotalLine(row.market_title),
 		});
@@ -935,6 +986,8 @@ export async function capturePinnacleOddsForPicks(
 		closes,
 		shadowCloses,
 		shadowAnchors,
+		fetches,
+		fetchesToday,
 		creditsRemaining: credits.remaining,
 	};
 }

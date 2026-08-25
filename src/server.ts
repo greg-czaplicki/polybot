@@ -362,7 +362,7 @@ const serverEntry = {
 						result.shadowAnchors > 0
 					) {
 						console.log(
-							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes, ${result.shadowAnchors} shadow anchors (${result.checked} eligible; credits ${result.creditsRemaining ?? "n/a"})`,
+							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes, ${result.shadowAnchors} shadow anchors (${result.checked} eligible; ${result.fetches} fetches, ${result.fetchesToday} today; credits ${result.creditsRemaining ?? "n/a"})`,
 						);
 					}
 				})
