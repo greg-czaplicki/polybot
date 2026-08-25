@@ -554,9 +554,20 @@ export async function capturePinnacleOddsForPicks(
 		};
 
 	// One fetch per sport, shared by every eligible pick AND shadow of that
-	// sport in this sweep.
+	// sport in this sweep. Seed the credit tracker from the last persisted
+	// value (migration 0036): the floors compare against credits.remaining,
+	// which was NULL until this sweep's first fetch — so the first
+	// benchmark-league fetch of every sweep bypassed them.
 	const eventsBySport = new Map<string, OddsApiEvent[] | null>();
-	const credits: CreditState = { remaining: null };
+	const lastCredits = await first<{ credits_remaining: number | null }>(
+		db,
+		`SELECT credits_remaining FROM pinnacle_feed_cache
+		 WHERE credits_remaining IS NOT NULL
+		 ORDER BY fetched_at DESC LIMIT 1`,
+	);
+	const credits: CreditState = {
+		remaining: lastCredits?.credits_remaining ?? null,
+	};
 	let activeSportKeys: string[] | null | undefined;
 	let anchors = 0;
 	let closes = 0;
