@@ -2,6 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import {
+	type GateVerdict,
+	PROMOTION_MIN_N,
+	PROMOTION_MIN_Z,
+} from "@/lib/gate-verdict";
 import { formatSideLabel } from "@/lib/side-label";
 import {
 	getShadowBookSummaryFn,
@@ -72,6 +77,56 @@ function smallSampleTitle(settled: number): string | undefined {
 	return settled < MIN_SETTLED_FOR_EMPHASIS
 		? `n=${settled} settled — too small to color`
 		: undefined;
+}
+
+const VERDICT_STYLE: Record<GateVerdict, { label: string; className: string }> = {
+	ready: {
+		label: "READY",
+		className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/40",
+	},
+	watch: {
+		label: "WATCH",
+		className: "bg-amber-500/15 text-amber-500 border-amber-500/40",
+	},
+	hold: {
+		label: "HOLD",
+		className: "bg-ink-05 text-ink-55 border-ink-15",
+	},
+};
+
+/**
+ * The verdict badge is the only thing on this page that answers "do I need
+ * to do anything": HOLD = no; WATCH = no, but the cohort is moving toward
+ * the bar; READY = the pre-registered promotion criteria are all met and
+ * the gate earns a review. Hover shows which criteria are still unmet.
+ */
+function VerdictBadge({
+	verdict,
+	reason,
+	clvSource,
+}: {
+	verdict: GateVerdict;
+	reason: string;
+	clvSource: "pinnacle" | "polymarket" | "none";
+}) {
+	const style = VERDICT_STYLE[verdict];
+	const title =
+		verdict === "ready"
+			? `All criteria met (n≥${PROMOTION_MIN_N}, z≥${PROMOTION_MIN_Z}, ${clvSource} CLV>0)`
+			: `Unmet: ${reason} (CLV source: ${clvSource})`;
+	return (
+		<span
+			title={title}
+			className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.15em] ${style.className}`}
+		>
+			{style.label}
+		</span>
+	);
+}
+
+function formatZ(value: number | null): string {
+	if (value === null || !Number.isFinite(value)) return "—";
+	return value.toFixed(1);
 }
 
 const PROP_SUBTYPE_LABELS: Record<string, string> = {
@@ -183,6 +238,74 @@ function ShadowBookPage() {
 					))}
 				</div>
 
+				{/* Decision banner — the answer to "do I need to do anything?" */}
+				{(() => {
+					const actionable = [
+						...reasons.map((r) => ({
+							key: r.rejectReason,
+							label: `${reasonLabel(r.rejectReason)} (all sports)`,
+							verdict: r.verdict,
+							reason: r.verdictReason,
+							clvSource: r.verdictClvSource,
+						})),
+						...bySport.map((r) => ({
+							key: `${r.rejectReason}-${r.sportTag}`,
+							label: `${reasonLabel(r.rejectReason)} · ${r.sportTag.toUpperCase()}`,
+							verdict: r.verdict,
+							reason: r.verdictReason,
+							clvSource: r.verdictClvSource,
+						})),
+					].filter((r) => r.verdict !== "hold");
+					const ready = actionable.filter((r) => r.verdict === "ready");
+					const watch = actionable.filter((r) => r.verdict === "watch");
+					return (
+						<div
+							className={`mt-6 rounded-md border p-4 ${
+								ready.length > 0
+									? "border-emerald-500/40 bg-emerald-500/10"
+									: "border-ink-15 bg-ink-00"
+							}`}
+						>
+							<p className="text-xs uppercase tracking-[0.2em] text-ink-55">
+								Decision
+							</p>
+							<p className="mt-1 text-base font-semibold text-ink-95">
+								{isLoading && reasons.length === 0
+									? "Loading…"
+									: ready.length > 0
+										? `${ready.length} gate${ready.length === 1 ? "" : "s"} ready for promotion review`
+										: "Nothing to do — every gate is HOLD"}
+							</p>
+							<p className="mt-1 text-xs text-ink-55">
+								A gate earns a review only when its sole-blocker cohort reaches
+								n≥{PROMOTION_MIN_N} settled, z≥{PROMOTION_MIN_Z} on ROI, and
+								CLV&gt;0 (Pinnacle once ≥10 rows carry it). Raw W-L and ROI
+								columns are context, never the trigger.
+							</p>
+							{ready.length > 0 ? (
+								<ul className="mt-2 space-y-1 text-sm text-ink-85">
+									{ready.map((r) => (
+										<li key={r.key} className="flex items-center gap-2">
+											<VerdictBadge
+												verdict={r.verdict}
+												reason={r.reason}
+												clvSource={r.clvSource}
+											/>
+											{r.label}
+										</li>
+									))}
+								</ul>
+							) : null}
+							{watch.length > 0 ? (
+								<p className="mt-2 text-xs text-ink-55">
+									Watching (moving toward the bar, no action):{" "}
+									{watch.map((r) => `${r.label} — ${r.reason}`).join("; ")}
+								</p>
+							) : null}
+						</div>
+					);
+				})()}
+
 				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
 					Performance by gate
 				</h2>
@@ -212,7 +335,10 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">Avg CLV</th>
 								<th className="pb-2 pr-4">Avg mins-to-start</th>
 								<th className="pb-2 pr-4">Sole-blocker W-L</th>
-								<th className="pb-2">Sole-blocker ROI</th>
+								<th className="pb-2 pr-4">Sole-blocker ROI</th>
+								<th className="pb-2 pr-4">SB z</th>
+								<th className="pb-2 pr-4">SB Pin CLV</th>
+								<th className="pb-2">Verdict</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -265,10 +391,27 @@ function ShadowBookPage() {
 											: "—"}
 									</td>
 									<td
-										className={`py-2 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
+										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
 										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
 									>
 										{formatRoi(r.cleanRoiPct)}
+									</td>
+									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
+										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
+									>
+										{formatRoi(r.cleanAvgPinClvPct)}
+										{r.cleanPinN > 0 ? (
+											<span className="ml-1 text-xs text-ink-40">n={r.cleanPinN}</span>
+										) : null}
+									</td>
+									<td className="py-2">
+										<VerdictBadge
+											verdict={r.verdict}
+											reason={r.verdictReason}
+											clvSource={r.verdictClvSource}
+										/>
 									</td>
 								</tr>
 							))}
@@ -461,8 +604,12 @@ function ShadowBookPage() {
 					Performance by gate × sport
 				</h2>
 				<p className="mt-1 text-xs text-ink-55">
-					The same gate can be right for one sport and wrong for another
-					(e.g. football spreads vs. MLB spreads). Sport comes from the
+					The same gate can be right for one sport and wrong for another —
+					the verdict is per gate × sport for that reason. The Sole-blocker
+					columns are what the verdict reads (this gate alone fired, every
+					other gate passing); the dimmed Raw columns count every row that
+					landed under the gate first, including ones another gate would
+					have rejected anyway, and are context only. Sport comes from the
 					series registry; soccer shows per-league (epl/mls).
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
@@ -471,12 +618,15 @@ function ShadowBookPage() {
 							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Gate</th>
 								<th className="pb-2 pr-4">Sport</th>
-								<th className="pb-2 pr-4">Total</th>
-								<th className="pb-2 pr-4">Pending</th>
-								<th className="pb-2 pr-4">W-L</th>
-								<th className="pb-2 pr-4">Units</th>
-								<th className="pb-2 pr-4">ROI</th>
-								<th className="pb-2">Avg CLV</th>
+								<th className="pb-2 pr-4">Verdict</th>
+								<th className="pb-2 pr-4">Sole-blocker W-L</th>
+								<th className="pb-2 pr-4">SB ROI</th>
+								<th className="pb-2 pr-4">SB z</th>
+								<th className="pb-2 pr-4">SB Pin CLV</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw units</th>
+								<th className="pb-2 text-ink-40">Raw ROI</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -491,35 +641,55 @@ function ShadowBookPage() {
 									<td className="py-2 pr-4 uppercase text-ink-95">
 										{r.sportTag}
 									</td>
-									<td className="py-2 pr-4">{r.total}</td>
-									<td className="py-2 pr-4">{r.pending}</td>
 									<td className="py-2 pr-4">
+										<VerdictBadge
+											verdict={r.verdict}
+											reason={r.verdictReason}
+											clvSource={r.verdictClvSource}
+										/>
+									</td>
+									<td className="py-2 pr-4">
+										{r.cleanTotal > 0
+											? `${r.cleanWins}-${r.cleanLosses}${
+													r.cleanTotal > r.cleanWins + r.cleanLosses
+														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
+														: ""
+												}`
+											: "—"}
+									</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
+										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
+									>
+										{formatRoi(r.cleanRoiPct)}
+									</td>
+									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
+									<td
+										className={`py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
+										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
+									>
+										{formatRoi(r.cleanAvgPinClvPct)}
+										{r.cleanPinN > 0 ? (
+											<span className="ml-1 text-xs text-ink-40">n={r.cleanPinN}</span>
+										) : null}
+									</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{r.total}
+										{r.pending > 0 ? (
+											<span className="ml-1 text-xs">({r.pending} pending)</span>
+										) : null}
+									</td>
+									<td className="py-2 pr-4 text-ink-40">
 										{r.wins}-{r.losses}
 										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
 									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatUnits(r.units)}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.roiPct)}
-									</td>
-									<td
-										className={`py-2 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.avgClvPct)}
-									</td>
+									<td className="py-2 pr-4 text-ink-40">{formatUnits(r.units)}</td>
+									<td className="py-2 text-ink-40">{formatRoi(r.roiPct)}</td>
 								</tr>
 							))}
 							{bySport.length === 0 && !isLoading ? (
 								<tr>
-									<td colSpan={8} className="py-4 text-ink-55">
+									<td colSpan={11} className="py-4 text-ink-55">
 										No shadow candidates yet.
 									</td>
 								</tr>

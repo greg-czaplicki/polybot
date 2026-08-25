@@ -4,6 +4,7 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
+import { type GateVerdict, gateVerdict } from "../../lib/gate-verdict";
 import { all } from "../db/client";
 import { getDb } from "../env";
 import {
@@ -12,7 +13,91 @@ import {
 	SOLE_BLOCKER_SQL,
 } from "./shadow-sql";
 
-export interface ShadowReasonSummary {
+/**
+ * Promotion-read fields shared by the per-gate and gate×sport rows. All of
+ * them describe the SOLE-BLOCKER cohort (SOLE_BLOCKER_SQL): the verdict is
+ * the pre-registered rule from src/lib/gate-verdict.ts applied to it.
+ */
+export interface ShadowPromotionRead {
+	cleanTotal: number;
+	cleanWins: number;
+	cleanLosses: number;
+	cleanUnits: number | null;
+	cleanRoiPct: number | null;
+	/** ROI z-score on the sole-blocker cohort (mean / SE). */
+	cleanZ: number | null;
+	/** Mean Pinnacle-close CLV (%) on sole-blocker rows carrying it. */
+	cleanAvgPinClvPct: number | null;
+	cleanPinN: number;
+	/** Mean Polymarket self-close CLV (%) on sole-blocker rows. */
+	cleanAvgClvPct: number | null;
+	verdict: GateVerdict;
+	/** Which criteria are still unmet, e.g. "n=34/50, z=0.9/2". */
+	verdictReason: string;
+	verdictClvSource: "pinnacle" | "polymarket" | "none";
+}
+
+/** SQL fragments for the sole-blocker cohort, appended to a GROUP BY select. */
+const CLEAN_COLUMNS_SQL = `
+			        SUM(${SOLE_BLOCKER_SQL}) AS clean_total,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'win' THEN 1 ELSE 0 END) AS clean_wins,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'loss' THEN 1 ELSE 0 END) AS clean_losses,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN roi END) AS clean_units,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN roi * roi END) AS clean_sumsq,
+			        AVG(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN clv END) AS clean_avg_clv,
+			        AVG(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN pin_clv END) AS clean_avg_pin_clv,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') AND pin_clv IS NOT NULL THEN 1 ELSE 0 END) AS clean_pin_n`;
+
+interface CleanRow {
+	clean_total: number;
+	clean_wins: number;
+	clean_losses: number;
+	clean_units: number | null;
+	clean_sumsq: number | null;
+	clean_avg_clv: number | null;
+	clean_avg_pin_clv: number | null;
+	clean_pin_n: number;
+}
+
+function promotionRead(r: CleanRow): ShadowPromotionRead {
+	const cleanSettled = r.clean_wins + r.clean_losses;
+	const v = gateVerdict({
+		settled: cleanSettled,
+		units: r.clean_units,
+		sumSq: r.clean_sumsq,
+		avgPinClv: r.clean_avg_pin_clv,
+		pinN: r.clean_pin_n,
+		avgClv: r.clean_avg_clv,
+	});
+	return {
+		cleanTotal: r.clean_total,
+		cleanWins: r.clean_wins,
+		cleanLosses: r.clean_losses,
+		cleanUnits: r.clean_units,
+		cleanRoiPct:
+			cleanSettled > 0 && r.clean_units !== null
+				? (r.clean_units / cleanSettled) * 100
+				: null,
+		cleanZ: v.z,
+		cleanAvgPinClvPct:
+			r.clean_avg_pin_clv !== null ? r.clean_avg_pin_clv * 100 : null,
+		cleanPinN: r.clean_pin_n,
+		cleanAvgClvPct: r.clean_avg_clv !== null ? r.clean_avg_clv * 100 : null,
+		verdict: v.verdict,
+		verdictReason: v.reason,
+		verdictClvSource: v.clvSource,
+	};
+}
+
+/**
+ * Sole-blocker cohort (the clean* fields, via ShadowPromotionRead): rows
+ * where every gate in gates_json passes except the one that fired
+ * (pass=null counts as NOT passing). Only rows with a gate vector
+ * (2026-08-06+, migration 0027) qualify — this is the clean "what would
+ * loosening this one gate recover" population, and the ONLY one the
+ * verdict reads.
+ */
+export interface ShadowReasonSummary extends ShadowPromotionRead {
 	rejectReason: string;
 	total: number;
 	pending: number;
@@ -23,20 +108,9 @@ export interface ShadowReasonSummary {
 	roiPct: number | null;
 	avgClvPct: number | null;
 	avgMinutesToStart: number | null;
-	/**
-	 * Sole-blocker cohort: rows where every gate in gates_json passes except
-	 * the one that fired (pass=null counts as NOT passing). Only rows with a
-	 * gate vector (2026-08-06+, migration 0027) qualify — this is the clean
-	 * "what would loosening this one gate recover" population.
-	 */
-	cleanTotal: number;
-	cleanWins: number;
-	cleanLosses: number;
-	cleanUnits: number | null;
-	cleanRoiPct: number | null;
 }
 
-export interface ShadowSportSummary {
+export interface ShadowSportSummary extends ShadowPromotionRead {
 	rejectReason: string;
 	sportTag: string;
 	total: number;
@@ -129,11 +203,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			units: number | null;
 			avg_clv: number | null;
 			avg_mins: number | null;
-			clean_total: number;
-			clean_wins: number;
-			clean_losses: number;
-			clean_units: number | null;
-		}>(
+		} & CleanRow>(
 			db,
 			`SELECT reject_reason,
 			        COUNT(*) AS total,
@@ -143,11 +213,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'push') AS pushes,
 			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
 			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
-			        AVG(minutes_to_start) AS avg_mins,
-			        SUM(${SOLE_BLOCKER_SQL}) AS clean_total,
-			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'win' THEN 1 ELSE 0 END) AS clean_wins,
-			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status = 'loss' THEN 1 ELSE 0 END) AS clean_losses,
-			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN roi END) AS clean_units
+			        AVG(minutes_to_start) AS avg_mins,${CLEAN_COLUMNS_SQL}
 			 FROM shadow_candidates
 			 GROUP BY reject_reason
 			 ORDER BY total DESC`,
@@ -155,8 +221,8 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 
 		const reasons: ShadowReasonSummary[] = reasonRows.map((r) => {
 			const settled = r.wins + r.losses;
-			const cleanSettled = r.clean_wins + r.clean_losses;
 			return {
+				...promotionRead(r),
 				rejectReason: r.reject_reason,
 				total: r.total,
 				pending: r.pending,
@@ -168,14 +234,6 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 					settled > 0 && r.units !== null ? (r.units / settled) * 100 : null,
 				avgClvPct: r.avg_clv !== null ? r.avg_clv * 100 : null,
 				avgMinutesToStart: r.avg_mins,
-				cleanTotal: r.clean_total,
-				cleanWins: r.clean_wins,
-				cleanLosses: r.clean_losses,
-				cleanUnits: r.clean_units,
-				cleanRoiPct:
-					cleanSettled > 0 && r.clean_units !== null
-						? (r.clean_units / cleanSettled) * 100
-						: null,
 			};
 		});
 
@@ -189,7 +247,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			pushes: number;
 			units: number | null;
 			avg_clv: number | null;
-		}>(
+		} & CleanRow>(
 			db,
 			`SELECT reject_reason,
 			        sport_tag,
@@ -199,7 +257,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        SUM(status = 'loss') AS losses,
 			        SUM(status = 'push') AS pushes,
 			        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
-			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv
+			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,${CLEAN_COLUMNS_SQL}
 			 FROM shadow_candidates
 			 GROUP BY reject_reason, sport_tag
 			 ORDER BY reject_reason ASC, total DESC`,
@@ -208,6 +266,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 		const bySport: ShadowSportSummary[] = sportRows.map((r) => {
 			const settled = r.wins + r.losses;
 			return {
+				...promotionRead(r),
 				rejectReason: r.reject_reason,
 				sportTag: r.sport_tag ?? "unknown",
 				total: r.total,
