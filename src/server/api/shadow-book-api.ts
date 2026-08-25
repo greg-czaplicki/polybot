@@ -260,7 +260,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,${CLEAN_COLUMNS_SQL}
 			 FROM shadow_candidates
 			 GROUP BY reject_reason, sport_tag
-			 ORDER BY reject_reason ASC, total DESC`,
+			 ORDER BY (clean_wins + clean_losses) DESC, total DESC, reject_reason ASC`,
 		);
 
 		const bySport: ShadowSportSummary[] = sportRows.map((r) => {

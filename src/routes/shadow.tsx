@@ -313,32 +313,31 @@ function ShadowBookPage() {
 					Read with care: a row lands under the FIRST gate that fired, and the
 					chain stops there — so a gate&apos;s raw ROI mixes in candidates
 					other gates would have rejected anyway, and overstates what
-					loosening that one gate would recover. The Sole-blocker columns are
-					the clean cohort: rejected by this gate alone, every other gate
-					passing — but only rows from 2026-08-06 onward carry the per-gate
-					vector, so those columns start near-empty. Among older rows only
-					price_edge_below_floor (the last gate in the chain) is a clean
-					single-gate cohort. Dimmed cells have fewer than{" "}
+					loosening that one gate would recover. The Sole-blocker columns (which
+					the Verdict reads) are the clean cohort: rejected by this gate
+					alone, every other gate passing — only rows from 2026-08-06 onward
+					carry the per-gate vector. The dimmed Raw columns are context only.
+					Dimmed cells have fewer than{" "}
 					{MIN_SETTLED_FOR_EMPHASIS} settled rows — the number is shown but
 					the sample is too small to color.
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>
-							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Gate</th>
-								<th className="pb-2 pr-4">Total</th>
-								<th className="pb-2 pr-4">Pending</th>
-								<th className="pb-2 pr-4">W-L</th>
-								<th className="pb-2 pr-4">Units</th>
-								<th className="pb-2 pr-4">ROI</th>
-								<th className="pb-2 pr-4">Avg CLV</th>
-								<th className="pb-2 pr-4">Avg mins-to-start</th>
+								<th className="pb-2 pr-4">Verdict</th>
 								<th className="pb-2 pr-4">Sole-blocker W-L</th>
-								<th className="pb-2 pr-4">Sole-blocker ROI</th>
+								<th className="pb-2 pr-4">SB ROI</th>
 								<th className="pb-2 pr-4">SB z</th>
 								<th className="pb-2 pr-4">SB Pin CLV</th>
-								<th className="pb-2">Verdict</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
+								<th className="pb-2 pr-4 text-ink-40">Pending</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw units</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw ROI</th>
+								<th className="pb-2 pr-4 text-ink-40">Raw CLV</th>
+								<th className="pb-2 text-ink-40">Avg mins-to-start</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -352,34 +351,12 @@ function ShadowBookPage() {
 											{r.rejectReason}
 										</span>
 									</td>
-									<td className="py-2 pr-4">{r.total}</td>
-									<td className="py-2 pr-4">{r.pending}</td>
 									<td className="py-2 pr-4">
-										{r.wins}-{r.losses}
-										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatUnits(r.units)}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.roiPct)}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.avgClvPct)}
-									</td>
-									<td className="py-2 pr-4 text-ink-55">
-										{r.avgMinutesToStart !== null
-											? Math.round(r.avgMinutesToStart)
-											: "—"}
+										<VerdictBadge
+											verdict={r.verdict}
+											reason={r.verdictReason}
+											clvSource={r.verdictClvSource}
+										/>
 									</td>
 									<td className="py-2 pr-4">
 										{r.cleanTotal > 0
@@ -398,7 +375,7 @@ function ShadowBookPage() {
 									</td>
 									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
 									<td
-										className={`py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
+										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
 										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
 									>
 										{formatRoi(r.cleanAvgPinClvPct)}
@@ -406,12 +383,19 @@ function ShadowBookPage() {
 											<span className="ml-1 text-xs text-ink-40">n={r.cleanPinN}</span>
 										) : null}
 									</td>
-									<td className="py-2">
-										<VerdictBadge
-											verdict={r.verdict}
-											reason={r.verdictReason}
-											clvSource={r.verdictClvSource}
-										/>
+									<td className="py-2 pr-4 text-ink-40">{r.total}</td>
+									<td className="py-2 pr-4 text-ink-40">{r.pending}</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{r.wins}-{r.losses}
+										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
+									</td>
+									<td className="py-2 pr-4 text-ink-40">{formatUnits(r.units)}</td>
+									<td className="py-2 pr-4 text-ink-40">{formatRoi(r.roiPct)}</td>
+									<td className="py-2 pr-4 text-ink-40">{formatRoi(r.avgClvPct)}</td>
+									<td className="py-2 text-ink-40">
+										{r.avgMinutesToStart !== null
+											? Math.round(r.avgMinutesToStart)
+											: "—"}
 									</td>
 								</tr>
 							))}
@@ -443,7 +427,7 @@ function ShadowBookPage() {
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>
-							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Boundary</th>
 								<th className="pb-2 pr-4">Pairs</th>
 								<th className="pb-2 pr-4">Side matched</th>
@@ -517,7 +501,7 @@ function ShadowBookPage() {
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>
-							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Subtype</th>
 								<th className="pb-2 pr-4">Total</th>
 								<th className="pb-2 pr-4">Pending</th>
@@ -615,7 +599,7 @@ function ShadowBookPage() {
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>
-							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Gate</th>
 								<th className="pb-2 pr-4">Sport</th>
 								<th className="pb-2 pr-4">Verdict</th>
@@ -665,7 +649,7 @@ function ShadowBookPage() {
 									</td>
 									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
 									<td
-										className={`py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
+										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
 										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
 									>
 										{formatRoi(r.cleanAvgPinClvPct)}
@@ -704,7 +688,7 @@ function ShadowBookPage() {
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
 						<thead>
-							<tr className="text-xs uppercase tracking-[0.15em] text-ink-55">
+							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
 								<th className="pb-2 pr-4">Market</th>
 								<th className="pb-2 pr-4">Gate</th>
 								<th className="pb-2 pr-4">Side</th>
