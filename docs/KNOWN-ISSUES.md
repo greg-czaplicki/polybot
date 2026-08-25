@@ -81,6 +81,14 @@ fixing commit.
   `pin_clv`: MLB ML near-complete, totals exact-line-only, soccer
   quarter-lines never match, tennis only while a tournament key is active.
   Purpose: the pre-registered `pin_edge` gate test in docs/STRATEGY.md.
+- **`nba_timing_excluded` shadow rows are ML/totals-only from 2026-08-25**
+  (gate moved below the spread/prop gates; before that an NBA spread or
+  prop at >90 min would have carried this reason). No NBA rows exist in the
+  shadow book before the 2026-27 season anyway (book started 2026-07-30,
+  after the 2025-26 season), so the cohort is clean from opening night.
+  Fade tests (docs/charters/fade-inversion.md) derive `fade_roi` from the
+  signal-side result and `fade_pin_clv = −pin_clv`; both identities hold
+  only on two-way markets, which is why the cohort is restricted.
 - **Line-ingestion silently failed in 1,520 canonical sync runs,
   2026-04-12 → 2026-08-12.** `parseTeamsFromTitle` treated everything
   before "vs." as the away team, so prop-style titles ("Will there be a

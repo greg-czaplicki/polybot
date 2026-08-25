@@ -843,31 +843,6 @@ export function getBotCandidatePolicy(input: {
 		);
 	}
 
-	// NBA: our 1-3h sharp signal is anti-correlated with outcome — 27 of 33
-	// historical NBA picks landed in the 90+min window with -22% to -100% ROI.
-	// The 60-90min slice was roughly break-even. Tighten NBA to <=90 min only.
-	if (
-		sportKey === "nba" &&
-		input.minutesToStart !== null &&
-		input.minutesToStart > 90
-	) {
-		return buildPolicy(
-			{
-				...input,
-				timingBucket,
-			},
-			{
-				minGrade: "A",
-				marketQualityThreshold: 1,
-				segmentLabel: "NBA >90m excluded",
-				rankingAdjustment: -100,
-				notes: ["nba_timing_excluded"],
-				reject: true,
-				rejectReason: "nba_timing_excluded",
-			},
-		);
-	}
-
 	if (sportKey === "ncaab" && input.marketType === "spread") {
 		return buildPolicy(
 			{
@@ -924,6 +899,35 @@ export function getBotCandidatePolicy(input: {
 				notes: ["prop_excluded"],
 				reject: true,
 				rejectReason: "prop_market_excluded",
+			},
+		);
+	}
+
+	// NBA: our 1-3h sharp signal is anti-correlated with outcome — 27 of 33
+	// historical NBA picks landed in the 90+min window with -22% to -100% ROI.
+	// The 60-90min slice was roughly break-even. Tighten NBA to <=90 min only.
+	// Placed AFTER the market-type gates (moved 2026-08-25) so the
+	// nba_timing_excluded shadow cohort is ML/totals only — it is the
+	// would-have-bet population for the pre-registered NBA fade test
+	// (docs/charters/fade-inversion.md), which needs two-way markets.
+	if (
+		sportKey === "nba" &&
+		input.minutesToStart !== null &&
+		input.minutesToStart > 90
+	) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NBA >90m excluded",
+				rankingAdjustment: -100,
+				notes: ["nba_timing_excluded"],
+				reject: true,
+				rejectReason: "nba_timing_excluded",
 			},
 		);
 	}

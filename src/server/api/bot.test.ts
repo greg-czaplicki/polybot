@@ -126,6 +126,39 @@ describe("getBotCandidatePolicy", () => {
 		expect(puckLine.rejectReason).toBe("spread_market_excluded");
 	});
 
+	it("shadow-settles NBA >90m behind the timing gate, after the market-type gates", () => {
+		// 10345 is the NBA fallback series ID (series-registry.ts).
+		const ml = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10345,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(ml.reject).toBe(true);
+		expect(ml.rejectReason).toBe("nba_timing_excluded");
+
+		// Spreads hit the spread gate first so the NBA fade cohort stays
+		// two-way (ML/totals) only.
+		const spread = getBotCandidatePolicy({
+			marketType: "spread",
+			sportSeriesId: 10345,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(spread.rejectReason).toBe("spread_market_excluded");
+
+		const inWindow = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10345,
+			minutesToStart: 75,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(inWindow.reject).toBeUndefined();
+	});
+
 	it("rejects NFL preseason games by event date", () => {
 		// 2026 Labor Day is Sep 7; kickoff Thursday is Sep 10.
 		const preseason = getBotCandidatePolicy({
