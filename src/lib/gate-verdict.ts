@@ -50,12 +50,15 @@ export interface GateVerdictResult {
 	reason: string;
 }
 
+/** Below this many rows the sample variance is noise and z is meaningless. */
+export const Z_MIN_N = 5;
+
 export function roiZScore(
 	settled: number,
 	units: number | null,
 	sumSq: number | null,
 ): number | null {
-	if (settled < 2 || units === null || sumSq === null) return null;
+	if (settled < Z_MIN_N || units === null || sumSq === null) return null;
 	const mean = units / settled;
 	const variance = Math.max(0, sumSq / settled - mean * mean);
 	if (variance === 0) return null;

@@ -11,8 +11,10 @@ function cohort(wins: number, losses: number, w = 0.9) {
 }
 
 describe("roiZScore", () => {
-	it("is null with <2 rows or zero variance", () => {
+	it("is null below Z_MIN_N rows or with zero variance", () => {
 		expect(roiZScore(1, 0.9, 0.81)).toBeNull();
+		// 2-0 at slightly different prices: variance ≈ 0 → z would be ~70
+		expect(roiZScore(2, 2.36, 2.79)).toBeNull();
 		expect(roiZScore(5, 4.5, 4.05)).toBeNull(); // five identical wins
 	});
 	it("matches mean/SE", () => {
