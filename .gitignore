@@ -17,3 +17,6 @@ __pycache__/
 *.pyc
 *.pyo
 .codex
+
+# Local Claude Code permission settings (per-machine)
+.claude/settings.local.json

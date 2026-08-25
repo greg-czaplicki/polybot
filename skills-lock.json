@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "calibration-check": {
+      "source": "WalrusQuant/sports-analytic-skills",
+      "sourceType": "github",
+      "skillPath": "skills/calibration-check/SKILL.md",
+      "computedHash": "cf811a57989207b161b7b66bdc895e5689ba5c5cf459ad1610b1d186fdea1357"
+    },
+    "feature-rules": {
+      "source": "WalrusQuant/sports-analytic-skills",
+      "sourceType": "github",
+      "skillPath": "skills/feature-rules/SKILL.md",
+      "computedHash": "2194a880393891c180a3e3cb399cc301daaed70075ea0f208f4dfde341cf6603"
+    },
+    "leakage-audit": {
+      "source": "WalrusQuant/sports-analytic-skills",
+      "sourceType": "github",
+      "skillPath": "skills/leakage-audit/SKILL.md",
+      "computedHash": "0b6b542e5723eedcc6e94cd4e8400605cd5500d8020d07855f64d0d15a848fe8"
+    },
+    "sports-modeling-doctrine": {
+      "source": "WalrusQuant/sports-analytic-skills",
+      "sourceType": "github",
+      "skillPath": "skills/sports-modeling-doctrine/SKILL.md",
+      "computedHash": "a966a67e4c0961f5cc7b5c0284842ece5ec68cd35490755094ff57a85282c7ff"
+    },
+    "validation-design": {
+      "source": "WalrusQuant/sports-analytic-skills",
+      "sourceType": "github",
+      "skillPath": "skills/validation-design/SKILL.md",
+      "computedHash": "79830a2569461678044393e3866c67a424fe1611df96c5cd5a2f17a5b5984944"
+    }
+  }
+}
