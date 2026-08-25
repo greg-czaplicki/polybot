@@ -426,16 +426,19 @@ async function writeFeedCache(
 	tag: string,
 	fetchedAt: number,
 	events: OddsApiEvent[],
+	creditsRemaining: number | null,
 ): Promise<void> {
 	await run(
 		db,
-		`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json)
-		 VALUES (?, ?, ?)
+		`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(sport_tag) DO UPDATE SET
-		   fetched_at = excluded.fetched_at, events_json = excluded.events_json`,
+		   fetched_at = excluded.fetched_at, events_json = excluded.events_json,
+		   credits_remaining = excluded.credits_remaining`,
 		tag,
 		fetchedAt,
 		JSON.stringify(events),
+		creditsRemaining,
 	);
 }
 
@@ -610,7 +613,8 @@ export async function capturePinnacleOddsForPicks(
 			}
 		}
 		eventsBySport.set(tag, events);
-		if (events !== null) await writeFeedCache(db, tag, now, events);
+		if (events !== null)
+			await writeFeedCache(db, tag, now, events, credits.remaining);
 		return events;
 	};
 
