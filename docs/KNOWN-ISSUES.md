@@ -66,8 +66,43 @@ fixing commit.
   benchmarked: their junk side labels ("Will Fulham FC") substring-match
   team names and mis-benchmarked 4 rows on 2026-08-24 (scrubbed).
   Era-review candidate: classify draw-question markets as props.
-- **Pinnacle capture runs on The Odds API FREE tier from 2026-08-25
-  (decision: no paid plan)** — 500 credits/month, 2 per sport fetch, so
+- **Pinnacle provider switched to pinnapi (pinnapi.com) on 2026-08-26
+  (~12:40Z); The Odds API is now the fallback** (`PINNAPI_KEY` primary,
+  `ODDS_API_KEY` used only when it is unset). pinnapi is a Pinnacle-native
+  relay: one request returns every prematch fixture for a SPORT (all
+  leagues, full total ladder, decimal odds), free tier 100 requests/day,
+  no balance header. Consequences for pin_* / pin_close_* reads that
+  straddle 2026-08-26: (a) **Totals now de-vig on the ladder line that
+  matches the Polymarket line, not only Pinnacle's main line** — totals
+  `pin_clv` coverage jumps from ~32% to near-complete for MLB, and the
+  pre-8/26 totals subsample (main-line agreement only) is NOT the same
+  population as the post-8/26 one; split totals reads at the boundary.
+  Alt-line prices are genuine Pinnacle prices for that exact line, so the
+  post-8/26 read is the better one. ML fair probs are unchanged in
+  meaning (decimal → American at one decimal place; three-way incl. the
+  draw for soccer). `pin_ml_side` / `pin_ml_opp` remain American odds.
+  (b) Tennis coverage no longer depends on a provider key index: the
+  sport-2 feed carries every ATP/WTA tournament (incl. qualifiers,
+  Challengers, 125Ks; doubles excluded), so ATP coverage starts 8/26 —
+  the "US Open key ~8/31" caveat below is void. The session-time proxy
+  caveat still applies. (c) Budget is a ROLLING 24-hour window (no UTC-
+  midnight reset, so the "biased toward events early in the UTC day"
+  caveat below is void from 8/26): shadow roles ≤ 56, live anchors ≤ 64,
+  live closes ≤ 80 fetches / 24h, ≤ 40 per sport; feed max ages unchanged
+  (15/30 min; anchors ≤ 3 h stale fallback). `pinnacle_fetch_log.sport_key`
+  is `pinnapi:<sport_id>` (6 MLB, 1 soccer, 2 tennis, 5 football, 3
+  basketball, 4 hockey) — one fetch serves every league of that sport;
+  `credits_remaining` is NULL on pinnapi rows. (d) League labels verified
+  2026-08-26 for MLB, the eight soccer leagues (UCL = "UEFA - Champions
+  League" and "... Qualifiers"; Corners/Bookings boards excluded), ATP/WTA
+  and NFL/NCAA football; **NBA/NHL/NCAAB labels are assumed ("NBA", "NHL",
+  "NCAA") — VERIFY at opening night** (a wrong label = 0% coverage, not
+  bad data). (e) pinnapi is a small third-party vendor (Pinnacle closed
+  its public API 2025-07); if it disappears, unsetting `PINNAPI_KEY`
+  reverts to The Odds API pacing below with no code change.
+- **Pinnacle capture ran on The Odds API FREE tier 2026-08-25 → 08-26
+  (decision: no paid plan; superseded by pinnapi above, mechanics kept as
+  the fallback)** — 500 credits/month, 2 per sport fetch, so
   the whole system gets `DAILY_FETCH_CAP = 8` fetches/day across all
   sports (+4 reserve only live-pick closes may spend), counted in
   `pinnacle_fetch_log`. Consequences for every pin_* / pin_close_* read:

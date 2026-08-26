@@ -108,6 +108,14 @@ threshold, bucket, or population change after a read (see `failure_and_stop`).
   `markets=h2h,totals`), de-vigged by `extractPinnaclePrices` (proportional
   for two-way, three-way incl. draw for soccer); totals matched on exact
   line only — a documented biased subsample (docs/KNOWN-ISSUES.md).
+  **Amendment v1.2 (2026-08-26, before any read):** provider is pinnapi
+  (Pinnacle-native, sport-level feed, full total ladder); totals now match
+  the Polymarket line anywhere on the ladder, so the totals subsample is
+  no longer main-line-biased from 2026-08-26 on. Rows anchored under The
+  Odds API (2026-08-25 13:17Z → 08-26 ~12:40Z, ≤ ~60 rows) are reported
+  as a separate provenance slice, not pooled into the primary totals read.
+  Budget is a rolling 24h cap (no UTC-day boundary); max feed ages and the
+  ≤ 30 min primary-read filter are unchanged.
 
 ## uncertainty_plan
 Per-row ROI variance → SE → z, reported with n per bucket and per block.

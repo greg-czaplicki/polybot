@@ -4,15 +4,15 @@ import {
 } from "@tanstack/react-start/server";
 import { handleBotRequest } from "./server/api/bot";
 import { handleBotControlRequest } from "./server/api/bot-control";
-import { handleShadowDigestRequest } from "./server/api/shadow-digest";
-import { warmSeriesRegistry } from "./server/api/series-registry";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
+import { warmSeriesRegistry } from "./server/api/series-registry";
+import { handleShadowDigestRequest } from "./server/api/shadow-digest";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
-import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
-import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
 import { getCanonicalFreshness } from "./server/pipeline/canonical-sync";
+import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
+import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
 import {
 	recordEarlyWindowShadows,
 	settleShadowCandidates,
@@ -250,9 +250,7 @@ const serverEntry = {
 					teamId,
 					sportTag,
 					{
-						sinceGameTime: Number.isFinite(sinceParam)
-							? sinceParam
-							: undefined,
+						sinceGameTime: Number.isFinite(sinceParam) ? sinceParam : undefined,
 					},
 				);
 				return new Response(JSON.stringify({ success: true, result }), {
@@ -350,9 +348,13 @@ const serverEntry = {
 					}
 				})
 				.then(() =>
-					// Pinnacle benchmark (no-op without ODDS_API_KEY; ≤1 Odds API
-					// fetch per sport per sweep, only when eligible picks exist).
-					capturePinnacleOddsForPicks(env.POLYWHALER_DB, env.ODDS_API_KEY),
+					// Pinnacle benchmark (pinnapi primary, The Odds API fallback;
+					// no-op without either key; ≤1 fetch per sport per sweep, only
+					// when eligible picks exist).
+					capturePinnacleOddsForPicks(env.POLYWHALER_DB, {
+						pinnapiKey: env.PINNAPI_KEY,
+						oddsApiKey: env.ODDS_API_KEY,
+					}),
 				)
 				.then((result) => {
 					if (
@@ -362,7 +364,7 @@ const serverEntry = {
 						result.shadowAnchors > 0
 					) {
 						console.log(
-							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes, ${result.shadowAnchors} shadow anchors (${result.checked} eligible; ${result.fetches} fetches, ${result.fetchesToday} today; credits ${result.creditsRemaining ?? "n/a"})`,
+							`[pinnacle-odds] Captured ${result.anchors} anchors, ${result.closes} closes, ${result.shadowCloses} shadow closes, ${result.shadowAnchors} shadow anchors (${result.checked} eligible; ${result.provider}: ${result.fetches} fetches, ${result.fetches24h} in 24h; credits ${result.creditsRemaining ?? "n/a"})`,
 						);
 					}
 				})

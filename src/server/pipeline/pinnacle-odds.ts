@@ -1,5 +1,5 @@
 /**
- * Pinnacle benchmark capture via The Odds API (the-odds-api.com).
+ * Pinnacle benchmark capture.
  *
  * Why Pinnacle: it is the sharp-book reference — beating Polymarket's own
  * close only proves we beat THIS market's price discovery; beating the
@@ -7,35 +7,47 @@
  * edge. DraftKings (via ESPN pickcenter, book-odds.ts) stays as the soft-
  * book anchor; FanDuel adds no information beyond DK and is skipped.
  *
- * Runs inside the scheduled cron (env-gated on ODDS_API_KEY — absent key
- * means the sweep is a no-op). Two capture kinds per pick, both from the
- * same per-sport odds fetch:
+ * Providers (env-gated; absent keys make the sweep a no-op):
+ *   - pinnapi (pinnapi.com, PINNAPI_KEY) — PRIMARY since 2026-08-26. A
+ *     Pinnacle-native relay: one request returns every prematch fixture
+ *     for a SPORT (all leagues, all periods, full total/spread ladders,
+ *     decimal odds). Free tier = 100 requests/day. Events are filtered to
+ *     the leagues we track and converted into the OddsApiEvent shape
+ *     below (American odds, one "pinnacle" bookmaker, h2h + every total
+ *     line) so matching / extraction / caching / tests are provider-
+ *     agnostic.
+ *   - The Odds API (the-odds-api.com, ODDS_API_KEY) — FALLBACK when
+ *     PINNAPI_KEY is unset. One request per league key, 2 credits each,
+ *     500 credits/month free (~8 fetches/day); tennis keys are per-
+ *     tournament and resolved against the /v4/sports index.
+ *
+ * Runs inside the scheduled cron. Two capture kinds per pick, both from
+ * the same per-tag feed:
  *   - anchor (pin_*): first sweep after pick creation (≤ ~2-4 min lag).
  *   - close (pin_close_*): first sweep inside the close window, which
  *     opens CLOSE_WINDOW_BEFORE_SECONDS before event_time. This is a
- *     close PROXY (Pinnacle ~10 min pre-start), not a frozen closing
- *     line — The Odds API's historical endpoint (true closes) is a paid
- *     tier we can add later if the proxy proves noisy.
+ *     close PROXY (Pinnacle ~10 min pre-start), not a frozen closing line.
  *
  * De-vig and line-match semantics mirror book-odds.ts: two-way
- * multiplicative; totals fair prob only when Pinnacle prices the SAME
- * total line as the pick's market. pin_clv = pin_close_fair_prob − pick
- * price (same sign convention as clv/book_clv).
+ * multiplicative (three-way incl. the draw for soccer); totals fair prob
+ * only when Pinnacle prices the SAME total line as the pick's market —
+ * with pinnapi that is any line on the ladder, with The Odds API only the
+ * main line. pin_clv = pin_close_fair_prob − pick price (same sign
+ * convention as clv/book_clv).
  *
- * Credit budget (free tier, 500/month, decided 2026-08-25 — no paid
- * plan): cost = 2 credits per sport fetch (h2h+totals, one bookmaker
- * region), so the whole system gets ~8 fetches/day. The sweep therefore:
- *   - shares ONE per-sport feed cache (pinnacle_feed_cache) across pick
+ * Budget pacing (both providers): the sweep
+ *   - shares ONE per-tag feed cache (pinnacle_feed_cache) across pick
  *     anchors, pick closes, shadow anchors and shadow closes, with a
  *     per-role max age (live close ≤15 min, everything else ≤30 min);
- *   - spends against a hard DAILY_FETCH_CAP counted in pinnacle_fetch_log,
- *     with a small reserve only live-pick closes may use;
+ *   - spends against a hard ROLLING-24H fetch cap counted in
+ *     pinnacle_fetch_log (rolling, not calendar-day, so an evening slate
+ *     never straddles a budget reset and no fixed 24h window can exceed
+ *     the provider's daily limit), with a reserve only live-pick closes
+ *     may use and a per-sport share so one sport cannot starve the rest;
  *   - lets anchors fall back to a stale feed (still pre-T, staleness
  *     recorded in pin_feed_at) instead of fetching, while closes never
- *     use a feed older than their max age;
- *   - fetches at most one tennis tournament per tour per sweep.
- * "Close" is therefore "Pinnacle within ≤15/30 min of the window", and
- * every capture records the feed time so the staleness is auditable.
+ *     use a feed older than their max age.
+ * Every capture records the feed time so the staleness is auditable.
  */
 
 import type { Db } from "../db/client";
@@ -67,6 +79,58 @@ const ODDS_API_SPORT_KEYS: Record<string, string> = {
 	ucl: "soccer_uefa_champs_league",
 	mls: "soccer_usa_mls",
 };
+
+// pinnapi sport ids (stable integers, see pinnapi.com/docs "Sport IDs").
+// One fetch per SPORT serves every tag mapped to it.
+const PINNAPI_SPORT_IDS: Record<string, number> = {
+	mlb: 6,
+	nba: 3,
+	ncaab: 3,
+	nfl: 5,
+	ncaaf: 5,
+	nhl: 4,
+	epl: 1,
+	championship: 1,
+	laliga: 1,
+	bundesliga: 1,
+	seriea: 1,
+	ligue1: 1,
+	ucl: 1,
+	mls: 1,
+	atp: 2,
+	wta: 2,
+};
+// pinnapi league_name → our tag. Exact matches deliberately exclude the
+// derivative boards Pinnacle lists as separate leagues ("Spain - La Liga
+// Corners", "... Bookings") and tennis doubles. NFL preseason ("NFL Pre
+// Season") stays unmapped (see ODDS_API_SPORT_KEYS). Labels verified
+// 2026-08-26 for MLB/soccer/tennis/NFL/NCAA football; NBA/NHL/NCAAB
+// assumed by analogy — VERIFY at season open.
+const PINNAPI_LEAGUE_MATCHERS: Record<string, (league: string) => boolean> = {
+	mlb: (l) => l === "MLB",
+	nba: (l) => l === "NBA",
+	ncaab: (l) => l === "NCAA",
+	nfl: (l) => l === "NFL",
+	ncaaf: (l) => l === "NCAA",
+	nhl: (l) => l === "NHL",
+	epl: (l) => l === "England - Premier League",
+	championship: (l) => l === "England - Championship",
+	laliga: (l) => l === "Spain - La Liga",
+	bundesliga: (l) => l === "Germany - Bundesliga",
+	seriea: (l) => l === "Italy - Serie A",
+	ligue1: (l) => l === "France - Ligue 1",
+	ucl: (l) =>
+		l === "UEFA - Champions League" ||
+		l === "UEFA - Champions League Qualifiers",
+	mls: (l) => l === "USA - Major League Soccer",
+	atp: (l) => l.startsWith("ATP ") && !/doubles/i.test(l),
+	wta: (l) => l.startsWith("WTA ") && !/doubles/i.test(l),
+};
+/** Pure — exported for tests. */
+export function pinnapiLeagueMatches(tag: string, league: string): boolean {
+	const m = PINNAPI_LEAGUE_MATCHERS[tag];
+	return m ? m(league) : false;
+}
 
 // Tennis has no season-long key upstream — tournaments each get their own
 // (tennis_atp_us_open, ...), so atp/wta resolve dynamically against the
@@ -100,10 +164,31 @@ const LIVE_SPORT_TAGS = new Set([
  * live sports keep fetching down to LIVE_MIN_CREDITS. */
 const BENCHMARK_MIN_CREDITS = 20;
 const LIVE_MIN_CREDITS = 2;
-/** Sport fetches per UTC day, all sports combined (2 credits each →
- * ~480/month). Live-pick CLOSES may additionally spend the reserve. */
-const DAILY_FETCH_CAP = 8;
-const LIVE_CLOSE_FETCH_RESERVE = 4;
+/** Rolling-24h fetch caps per provider. `shadow` bounds benchmark-only
+ * roles, `liveAnchor` live-pick anchors, `liveClose` live-pick closes (the
+ * highest — its headroom over the others is the live-close reserve), and
+ * `perSport` bounds any single sport so MLB's all-day slate cannot starve
+ * an evening soccer/tennis close. pinnapi trial = 100 requests/day (hard
+ * 429 beyond); The Odds API = 500 credits/month at 2 per fetch. */
+interface FetchCaps {
+	shadow: number;
+	liveAnchor: number;
+	liveClose: number;
+	perSport: number;
+}
+const PINNAPI_CAPS: FetchCaps = {
+	shadow: 56,
+	liveAnchor: 64,
+	liveClose: 80,
+	perSport: 40,
+};
+const ODDS_API_CAPS: FetchCaps = {
+	shadow: 8,
+	liveAnchor: 8,
+	liveClose: 12,
+	perSport: 12,
+};
+const FETCH_WINDOW_SECONDS = 24 * 3600;
 
 /** Close window opens this long before event_time. */
 const CLOSE_WINDOW_BEFORE_SECONDS = 600;
@@ -148,6 +233,95 @@ export interface OddsApiEvent {
 		key: string;
 		markets: Array<{ key: string; outcomes: OddsApiOutcome[] }>;
 	}>;
+}
+
+// ---- pinnapi feed shape (subset we read) ------------------------------
+interface PinnapiLine {
+	home?: number | null;
+	away?: number | null;
+	over?: number | null;
+	under?: number | null;
+	points?: number | null;
+}
+export interface PinnapiEvent {
+	event_id: number;
+	league_name: string;
+	starts: string;
+	home: string;
+	away: string;
+	is_have_odds?: boolean;
+	periods?: {
+		num_0?: {
+			money_line?: {
+				home?: number | null;
+				away?: number | null;
+				draw?: number | null;
+			} | null;
+			totals?: Record<string, PinnapiLine> | null;
+		};
+	};
+}
+
+/** Decimal → American, one decimal place (2.08 → 108, 1.8547 → −117). */
+export function decimalToAmerican(decimal: number): number | null {
+	if (!Number.isFinite(decimal) || decimal <= 1) return null;
+	const raw = decimal >= 2 ? (decimal - 1) * 100 : -100 / (decimal - 1);
+	return Math.round(raw * 10) / 10;
+}
+
+/**
+ * Converts a pinnapi prematch event into the provider-agnostic feed
+ * shape: full-game (num_0) moneyline (+ draw when priced) and EVERY
+ * total line on the ladder, as one "pinnacle" bookmaker. Null when the
+ * event carries no full-game prices. Pure — exported for tests.
+ */
+export function pinnapiToOddsApiEvent(e: PinnapiEvent): OddsApiEvent | null {
+	const p0 = e.periods?.num_0;
+	if (!p0 || !e.home || !e.away || !e.starts) return null;
+	const markets: OddsApiEvent["bookmakers"][number]["markets"] = [];
+	const ml = p0.money_line;
+	const home = ml?.home != null ? decimalToAmerican(ml.home) : null;
+	const away = ml?.away != null ? decimalToAmerican(ml.away) : null;
+	if (home !== null && away !== null) {
+		const outcomes: OddsApiOutcome[] = [
+			{ name: e.home, price: home },
+			{ name: e.away, price: away },
+		];
+		const draw = ml?.draw != null ? decimalToAmerican(ml.draw) : null;
+		if (draw !== null) outcomes.push({ name: "Draw", price: draw });
+		markets.push({ key: "h2h", outcomes });
+	}
+	const totals = p0.totals;
+	if (totals) {
+		const outcomes: OddsApiOutcome[] = [];
+		const lines = Object.values(totals)
+			.filter((l) => l && typeof l.points === "number")
+			.sort((a, b) => (a.points as number) - (b.points as number));
+		for (const line of lines) {
+			const over = line.over != null ? decimalToAmerican(line.over) : null;
+			const under = line.under != null ? decimalToAmerican(line.under) : null;
+			if (over === null || under === null) continue;
+			outcomes.push({
+				name: "Over",
+				price: over,
+				point: line.points as number,
+			});
+			outcomes.push({
+				name: "Under",
+				price: under,
+				point: line.points as number,
+			});
+		}
+		if (outcomes.length > 0) markets.push({ key: "totals", outcomes });
+	}
+	if (markets.length === 0) return null;
+	return {
+		id: String(e.event_id),
+		commence_time: e.starts,
+		home_team: e.home,
+		away_team: e.away,
+		bookmakers: [{ key: "pinnacle", markets }],
+	};
 }
 
 function normalizeTeamName(name: string): string {
@@ -239,11 +413,49 @@ export function extractPinnaclePrices(
 	const totals = book.markets.find((m) => m.key === "totals");
 
 	if (totals) {
-		const over = totals.outcomes.find((o) => o.name.toLowerCase() === "over");
-		const under = totals.outcomes.find((o) => o.name.toLowerCase() === "under");
-		out.totalLine = over?.point ?? under?.point ?? null;
-		out.overOdds = over?.price ?? null;
-		out.underOdds = under?.price ?? null;
+		// The feed may carry one line (Odds API main line) or the whole
+		// ladder (pinnapi). Prefer the line the pick's market is priced on;
+		// otherwise report the main line = the most balanced pair.
+		const byLine = new Map<number, { over?: number; under?: number }>();
+		for (const o of totals.outcomes) {
+			const key = typeof o.point === "number" ? o.point : Number.NaN;
+			const slot = byLine.get(key) ?? {};
+			const name = o.name.toLowerCase();
+			if (name === "over") slot.over = o.price;
+			else if (name === "under") slot.under = o.price;
+			byLine.set(key, slot);
+		}
+		let chosen: { line: number; over?: number; under?: number } | null = null;
+		if (pick.betType === "total" && pick.marketTotalLine !== null) {
+			for (const [line, slot] of byLine) {
+				if (Math.abs(line - pick.marketTotalLine) <= 0.01) {
+					chosen = { line, ...slot };
+					break;
+				}
+			}
+		}
+		if (!chosen) {
+			let bestSkew = Number.POSITIVE_INFINITY;
+			for (const [line, slot] of byLine) {
+				const po =
+					slot.over !== undefined ? americanToImpliedProb(slot.over) : null;
+				const pu =
+					slot.under !== undefined ? americanToImpliedProb(slot.under) : null;
+				const skew =
+					po !== null && pu !== null
+						? Math.abs(po - pu)
+						: Number.POSITIVE_INFINITY;
+				if (chosen === null || skew < bestSkew) {
+					chosen = { line, ...slot };
+					bestSkew = skew;
+				}
+			}
+		}
+		if (chosen) {
+			out.totalLine = Number.isNaN(chosen.line) ? null : chosen.line;
+			out.overOdds = chosen.over ?? null;
+			out.underOdds = chosen.under ?? null;
+		}
 	}
 
 	if (pick.betType === "moneyline" && h2h) {
@@ -352,6 +564,35 @@ async function fetchActiveSportKeys(apiKey: string): Promise<string[] | null> {
 	} catch (err) {
 		console.warn(
 			`[pinnacle-odds] Odds API sports index fetch failed:`,
+			err instanceof Error ? err.message : err,
+		);
+		return null;
+	}
+}
+
+/**
+ * One pinnapi request: every prematch fixture for a sport. Null on any
+ * failure (429 included — the rolling cap should keep us well under the
+ * provider's own daily limit, so a 429 is logged loudly).
+ */
+async function fetchPinnapiSport(
+	apiKey: string,
+	sportId: number,
+): Promise<PinnapiEvent[] | null> {
+	const url = `https://pinnapi.com/kit/v1/prematch/fixtures?sport_id=${sportId}`;
+	try {
+		const res = await fetch(url, { headers: { "x-portal-apikey": apiKey } });
+		if (!res.ok) {
+			console.warn(
+				`[pinnacle-odds] pinnapi returned ${res.status} for sport ${sportId}${res.status === 429 ? " (RATE LIMITED — cap breached?)" : ""}`,
+			);
+			return null;
+		}
+		const body = (await res.json()) as { events?: PinnapiEvent[] };
+		return Array.isArray(body.events) ? body.events : [];
+	} catch (err) {
+		console.warn(
+			`[pinnacle-odds] pinnapi fetch failed for sport ${sportId}:`,
 			err instanceof Error ? err.message : err,
 		);
 		return null;
@@ -471,9 +712,16 @@ interface Feed {
 	fetchedAt: number;
 }
 
+export type PinnacleProvider = "pinnapi" | "odds-api";
+
+export interface PinnacleKeys {
+	pinnapiKey?: string;
+	oddsApiKey?: string;
+}
+
 export async function capturePinnacleOddsForPicks(
 	db: Db,
-	apiKey: string | undefined,
+	keys: PinnacleKeys | string | undefined,
 	options?: { limit?: number },
 ): Promise<{
 	checked: number;
@@ -482,8 +730,10 @@ export async function capturePinnacleOddsForPicks(
 	shadowCloses: number;
 	shadowAnchors: number;
 	fetches: number;
-	fetchesToday: number;
+	/** Fetches in the rolling 24h window after this sweep (cap basis). */
+	fetches24h: number;
 	creditsRemaining: number | null;
+	provider: PinnacleProvider | null;
 }> {
 	const empty = {
 		checked: 0,
@@ -492,10 +742,33 @@ export async function capturePinnacleOddsForPicks(
 		shadowCloses: 0,
 		shadowAnchors: 0,
 		fetches: 0,
-		fetchesToday: 0,
+		fetches24h: 0,
 		creditsRemaining: null,
+		provider: null,
 	};
-	if (!apiKey) return empty;
+	// A bare string is the legacy Odds API key.
+	const resolved: PinnacleKeys =
+		typeof keys === "string" ? { oddsApiKey: keys } : (keys ?? {});
+	const provider: PinnacleProvider | null = resolved.pinnapiKey
+		? "pinnapi"
+		: resolved.oddsApiKey
+			? "odds-api"
+			: null;
+	if (provider === null) return empty;
+	const apiKey = (
+		provider === "pinnapi" ? resolved.pinnapiKey : resolved.oddsApiKey
+	) as string;
+	const caps = provider === "pinnapi" ? PINNAPI_CAPS : ODDS_API_CAPS;
+	const tracked = (tag: string): boolean =>
+		provider === "pinnapi"
+			? PINNAPI_SPORT_IDS[tag] !== undefined
+			: !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
+	// Fetch-log key per tag: pinnapi spends per SPORT (one fetch serves
+	// every tag of that sport), The Odds API per league key.
+	const sportLogKey = (tag: string): string =>
+		provider === "pinnapi"
+			? `pinnapi:${PINNAPI_SPORT_IDS[tag]}`
+			: (ODDS_API_SPORT_KEYS[tag] ?? TENNIS_TOUR_PREFIXES[tag] ?? tag);
 	const limit =
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 50)
@@ -577,26 +850,34 @@ export async function capturePinnacleOddsForPicks(
 	)
 		return empty;
 
-	// ---- Budget state -------------------------------------------------
-	const dayStart = now - (now % 86400);
-	const todayRow = await first<{ n: number }>(
+	// ---- Budget state (rolling 24h) --------------------------------------
+	const windowStart = now - FETCH_WINDOW_SECONDS;
+	const windowRows = await all<{ sport_key: string; n: number }>(
 		db,
-		`SELECT COUNT(*) AS n FROM pinnacle_fetch_log WHERE fetched_at >= ?`,
-		dayStart,
+		`SELECT sport_key, COUNT(*) AS n FROM pinnacle_fetch_log
+		 WHERE fetched_at > ? GROUP BY sport_key`,
+		windowStart,
 	);
-	let fetchesToday = todayRow?.n ?? 0;
+	const perSport = new Map<string, number>();
+	let fetchesInWindow = 0;
+	for (const r of windowRows) {
+		perSport.set(r.sport_key, r.n);
+		fetchesInWindow += r.n;
+	}
 	let fetches = 0;
-	// Seed the credit tracker from the last persisted balance so the floors
-	// apply from the first fetch of the sweep, not the second.
-	const lastCredits = await first<{ credits_remaining: number | null }>(
-		db,
-		`SELECT credits_remaining FROM pinnacle_feed_cache
-		 WHERE credits_remaining IS NOT NULL
-		 ORDER BY fetched_at DESC LIMIT 1`,
-	);
-	const credits: CreditState = {
-		remaining: lastCredits?.credits_remaining ?? null,
-	};
+	// Odds API only: seed the credit tracker from the last persisted balance
+	// so the floors apply from the first fetch of the sweep, not the second.
+	// pinnapi exposes no balance (its limit is the request cap above).
+	const credits: CreditState = { remaining: null };
+	if (provider === "odds-api") {
+		const lastCredits = await first<{ credits_remaining: number | null }>(
+			db,
+			`SELECT credits_remaining FROM pinnacle_feed_cache
+			 WHERE credits_remaining IS NOT NULL
+			 ORDER BY fetched_at DESC LIMIT 1`,
+		);
+		credits.remaining = lastCredits?.credits_remaining ?? null;
+	}
 
 	// This sweep's fresh feeds (null = fetched and failed) and cache reads.
 	const fresh = new Map<string, OddsApiEvent[] | null>();
@@ -613,13 +894,17 @@ export async function capturePinnacleOddsForPicks(
 		}
 		const cap =
 			role === "live-close"
-				? DAILY_FETCH_CAP + LIVE_CLOSE_FETCH_RESERVE
-				: DAILY_FETCH_CAP;
-		return fetchesToday < cap;
+				? caps.liveClose
+				: role === "live-anchor"
+					? caps.liveAnchor
+					: caps.shadow;
+		if (fetchesInWindow >= cap) return false;
+		return (perSport.get(sportLogKey(tag)) ?? 0) < caps.perSport;
 	};
 
 	const logFetch = async (sportKey: string): Promise<void> => {
-		fetchesToday += 1;
+		fetchesInWindow += 1;
+		perSport.set(sportKey, (perSport.get(sportKey) ?? 0) + 1);
 		fetches += 1;
 		await run(
 			db,
@@ -631,11 +916,46 @@ export async function capturePinnacleOddsForPicks(
 		);
 	};
 
-	// Fresh fetch for a tag: one request for static keys; for tennis, the
-	// active tournament keys for the tour (capped, Grand Slam preferred).
+	// pinnapi: raw per-SPORT feeds fetched this sweep (null = failed).
+	const pinnapiSportFeeds = new Map<number, PinnapiEvent[] | null>();
+
+	// Fresh fetch for a tag. pinnapi: one request per SPORT, then every tag
+	// of that sport is filtered/converted, marked fresh and cached at once.
+	// Odds API: one request for static keys; for tennis, the active
+	// tournament keys for the tour (capped, Grand Slam preferred).
 	// Null = fetch failed (rows retry next sweep). Empty array = feed
 	// answered with no listing (rows stamp).
 	const fetchFresh = async (tag: string): Promise<OddsApiEvent[] | null> => {
+		if (provider === "pinnapi") {
+			const sportId = PINNAPI_SPORT_IDS[tag];
+			let raw = pinnapiSportFeeds.get(sportId);
+			if (raw === undefined) {
+				raw = await fetchPinnapiSport(apiKey, sportId);
+				await logFetch(`pinnapi:${sportId}`);
+				pinnapiSportFeeds.set(sportId, raw);
+				if (raw !== null) {
+					for (const [t, sid] of Object.entries(PINNAPI_SPORT_IDS)) {
+						if (sid !== sportId) continue;
+						const events: OddsApiEvent[] = [];
+						for (const e of raw) {
+							if (!pinnapiLeagueMatches(t, e.league_name ?? "")) continue;
+							const converted = pinnapiToOddsApiEvent(e);
+							if (converted) events.push(converted);
+						}
+						fresh.set(t, events);
+						await writeFeedCache(db, t, now, events, null);
+					}
+					console.log(
+						`[pinnacle-odds] pinnapi sport ${sportId}: ${raw.length} events, ${tag}=${fresh.get(tag)?.length ?? 0}`,
+					);
+				}
+			}
+			if (raw === null) {
+				fresh.set(tag, null);
+				return null;
+			}
+			return fresh.get(tag) ?? [];
+		}
 		let events: OddsApiEvent[] | null = null;
 		const staticKey = ODDS_API_SPORT_KEYS[tag];
 		const tennisPrefix = TENNIS_TOUR_PREFIXES[tag];
@@ -717,8 +1037,7 @@ export async function capturePinnacleOddsForPicks(
 
 	// ---- Live picks ----------------------------------------------------
 	for (const row of rows) {
-		const sportKey = ODDS_API_SPORT_KEYS[row.sport_tag];
-		if (!sportKey) continue;
+		if (!tracked(row.sport_tag)) continue;
 
 		const wantsAnchor = row.pin_captured_at === null && row.event_time > now;
 		const inCloseWindow =
@@ -851,7 +1170,7 @@ export async function capturePinnacleOddsForPicks(
 		return null;
 	};
 	const shadowTracked = (tag: string | null): tag is string =>
-		!!tag && !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
+		!!tag && tracked(tag);
 	// Draw-question markets ("Will X vs. Y end in a draw?") carry junk side
 	// labels that substring-match real team names and would benchmark a
 	// draw price against a team-win fair prob. Stamp with NULL fair prob.
@@ -987,7 +1306,8 @@ export async function capturePinnacleOddsForPicks(
 		shadowCloses,
 		shadowAnchors,
 		fetches,
-		fetchesToday,
+		fetches24h: fetchesInWindow,
 		creditsRemaining: credits.remaining,
+		provider,
 	};
 }
