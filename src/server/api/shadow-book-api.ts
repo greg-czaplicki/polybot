@@ -29,6 +29,13 @@ export interface ShadowPromotionRead {
 	/** Mean Pinnacle-close CLV (%) on sole-blocker rows carrying it. */
 	cleanAvgPinClvPct: number | null;
 	cleanPinN: number;
+	/** Mean Pinnacle MOVEMENT (%) = Pinnacle close − Pinnacle anchor on
+	 * sole-blocker rows carrying both (anchors from 2026-08-25). Diagnostic
+	 * only — NOT a verdict input. Unlike pin_clv it is free of the PM
+	 * spread offset (PM prices sum to ~1.005, a de-vigged book sums to 1,
+	 * so pin_clv carries ≈ −0.3%/side that is not line movement). */
+	cleanAvgPinMovePct: number | null;
+	cleanPinMoveN: number;
 	/** Mean Polymarket self-close CLV (%) on sole-blocker rows. */
 	cleanAvgClvPct: number | null;
 	verdict: GateVerdict;
@@ -46,7 +53,9 @@ const CLEAN_COLUMNS_SQL = `
 			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN roi * roi END) AS clean_sumsq,
 			        AVG(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN clv END) AS clean_avg_clv,
 			        AVG(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') THEN pin_clv END) AS clean_avg_pin_clv,
-			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') AND pin_clv IS NOT NULL THEN 1 ELSE 0 END) AS clean_pin_n`;
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') AND pin_clv IS NOT NULL THEN 1 ELSE 0 END) AS clean_pin_n,
+			        AVG(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') AND pin_fair_prob IS NOT NULL THEN pin_close_fair_prob - pin_fair_prob END) AS clean_avg_pin_move,
+			        SUM(CASE WHEN ${SOLE_BLOCKER_SQL} AND status IN ('win','loss') AND pin_fair_prob IS NOT NULL AND pin_close_fair_prob IS NOT NULL THEN 1 ELSE 0 END) AS clean_pin_move_n`;
 
 interface CleanRow {
 	clean_total: number;
@@ -57,6 +66,8 @@ interface CleanRow {
 	clean_avg_clv: number | null;
 	clean_avg_pin_clv: number | null;
 	clean_pin_n: number;
+	clean_avg_pin_move: number | null;
+	clean_pin_move_n: number;
 }
 
 function promotionRead(r: CleanRow): ShadowPromotionRead {
@@ -82,6 +93,9 @@ function promotionRead(r: CleanRow): ShadowPromotionRead {
 		cleanAvgPinClvPct:
 			r.clean_avg_pin_clv !== null ? r.clean_avg_pin_clv * 100 : null,
 		cleanPinN: r.clean_pin_n,
+		cleanAvgPinMovePct:
+			r.clean_avg_pin_move !== null ? r.clean_avg_pin_move * 100 : null,
+		cleanPinMoveN: r.clean_pin_move_n,
 		cleanAvgClvPct: r.clean_avg_clv !== null ? r.clean_avg_clv * 100 : null,
 		verdict: v.verdict,
 		verdictReason: v.reason,
@@ -193,17 +207,19 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 	async ({ context }) => {
 		const db = getDb(context);
 
-		const reasonRows = await all<{
-			reject_reason: string;
-			total: number;
-			pending: number;
-			wins: number;
-			losses: number;
-			pushes: number;
-			units: number | null;
-			avg_clv: number | null;
-			avg_mins: number | null;
-		} & CleanRow>(
+		const reasonRows = await all<
+			{
+				reject_reason: string;
+				total: number;
+				pending: number;
+				wins: number;
+				losses: number;
+				pushes: number;
+				units: number | null;
+				avg_clv: number | null;
+				avg_mins: number | null;
+			} & CleanRow
+		>(
 			db,
 			`SELECT reject_reason,
 			        COUNT(*) AS total,
@@ -237,17 +253,19 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
-		const sportRows = await all<{
-			reject_reason: string;
-			sport_tag: string | null;
-			total: number;
-			pending: number;
-			wins: number;
-			losses: number;
-			pushes: number;
-			units: number | null;
-			avg_clv: number | null;
-		} & CleanRow>(
+		const sportRows = await all<
+			{
+				reject_reason: string;
+				sport_tag: string | null;
+				total: number;
+				pending: number;
+				wins: number;
+				losses: number;
+				pushes: number;
+				units: number | null;
+				avg_clv: number | null;
+			} & CleanRow
+		>(
 			db,
 			`SELECT reject_reason,
 			        sport_tag,
@@ -366,42 +384,43 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 
 		const timingPairs: ShadowTimingPairSummary[] = ["outside_window"].map(
 			(bucket) => {
-			const rows = pairRows;
-			const matched = rows.filter(
-				(r) =>
-					r.shadow_label !== null &&
-					r.pick_label !== null &&
-					r.shadow_label.toLowerCase() === r.pick_label.toLowerCase(),
-			);
-			const drifts = matched
-				.filter((r) => r.shadow_price !== null && r.pick_price !== null)
-				.map((r) => {
-					// Later sighting (pick) minus earlier (shadow), same side.
-					return (r.pick_price as number) - (r.shadow_price as number);
-				})
-				.sort((a, b) => a - b);
-			const median =
-				drifts.length === 0
-					? null
-					: drifts.length % 2 === 1
-						? drifts[(drifts.length - 1) / 2]
-						: (drifts[drifts.length / 2 - 1] + drifts[drifts.length / 2]) / 2;
-			return {
-				bucket,
-				pairs: rows.length,
-				sideMatched: matched.length,
-				sideFlipped: rows.length - matched.length,
-				avgDriftPct:
-					drifts.length > 0
-						? (drifts.reduce((s, d) => s + d, 0) / drifts.length) * 100
-						: null,
-				medianDriftPct: median !== null ? median * 100 : null,
-				movedTowardSide: drifts.filter((d) => d > 0.005).length,
-				movedAway: drifts.filter((d) => d < -0.005).length,
-				pickWins: matched.filter((r) => r.pick_status === "win").length,
-				pickLosses: matched.filter((r) => r.pick_status === "loss").length,
-			};
-		});
+				const rows = pairRows;
+				const matched = rows.filter(
+					(r) =>
+						r.shadow_label !== null &&
+						r.pick_label !== null &&
+						r.shadow_label.toLowerCase() === r.pick_label.toLowerCase(),
+				);
+				const drifts = matched
+					.filter((r) => r.shadow_price !== null && r.pick_price !== null)
+					.map((r) => {
+						// Later sighting (pick) minus earlier (shadow), same side.
+						return (r.pick_price as number) - (r.shadow_price as number);
+					})
+					.sort((a, b) => a - b);
+				const median =
+					drifts.length === 0
+						? null
+						: drifts.length % 2 === 1
+							? drifts[(drifts.length - 1) / 2]
+							: (drifts[drifts.length / 2 - 1] + drifts[drifts.length / 2]) / 2;
+				return {
+					bucket,
+					pairs: rows.length,
+					sideMatched: matched.length,
+					sideFlipped: rows.length - matched.length,
+					avgDriftPct:
+						drifts.length > 0
+							? (drifts.reduce((s, d) => s + d, 0) / drifts.length) * 100
+							: null,
+					medianDriftPct: median !== null ? median * 100 : null,
+					movedTowardSide: drifts.filter((d) => d > 0.005).length,
+					movedAway: drifts.filter((d) => d < -0.005).length,
+					pickWins: matched.filter((r) => r.pick_status === "win").length,
+					pickLosses: matched.filter((r) => r.pick_status === "loss").length,
+				};
+			},
+		);
 
 		const recentRows = await all<{
 			market_title: string;

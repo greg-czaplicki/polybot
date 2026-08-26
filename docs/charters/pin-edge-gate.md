@@ -116,6 +116,14 @@ threshold, bucket, or population change after a read (see `failure_and_stop`).
   as a separate provenance slice, not pooled into the primary totals read.
   Budget is a rolling 24h cap (no UTC-day boundary); max feed ages and the
   ≤ 30 min primary-read filter are unchanged.
+  **Amendment v1.3 (2026-08-26, before any read):** `pin_ev` and
+  `pin_clv` are measured against the Polymarket price, which carries a
+  structural ≈ −0.3%/side offset versus any de-vigged book (PM two-side
+  sum ≈ 1.005; see docs/KNOWN-ISSUES.md). The primary `pin_edge` read
+  keeps that convention (it IS the price you pay). The evaluation section
+  additionally reports `pin_move = pin_close_fair_prob − pin_fair_prob`
+  (offset-free sharp-line movement after sighting) as a secondary
+  diagnostic; it is not an acceptance criterion.
 
 ## uncertainty_plan
 Per-row ROI variance → SE → z, reported with n per bucket and per block.

@@ -66,6 +66,28 @@ fixing commit.
   benchmarked: their junk side labels ("Will Fulham FC") substring-match
   team names and mis-benchmarked 4 rows on 2026-08-24 (scrubbed).
   Era-review candidate: classify draw-question markets as props.
+- **`pin_clv` (and `book_clv`) carry a structural ≈ −0.3%/side offset that
+  is not line movement; `clv` (PM self-close) does not.** Audited
+  2026-08-26: `pin_clv = pin_close_fair_prob − price`, and a de-vigged
+  book's two sides sum to exactly 1 while Polymarket's two prices sum to
+  ~1.005 (98 MLB ML markets with both sides sighted: mean sum 1.0052;
+  live picks at entry sit 0.29% above Pinnacle fair and 0.34% above DK
+  fair). So every side inherits ≈ −0.26% before anything moves, which is
+  why settled MLB ML shadows show `pin_clv` ≈ −0.3…−0.8% in EVERY price
+  bucket while `clv` ≈ 0 in every bucket. Consequences: (a) `pin_clv > 0`
+  means "beat Pinnacle's close net of the PM spread" — the right bar for a
+  betting decision, stricter than "the sharp line moved our way"; (b) the
+  verdict's fallback from `pin_clv` (n<10) to `clv` silently switches
+  between a spread-inclusive and a spread-free measure (~0.3% jump) —
+  tolerated, documented here, rule unchanged; (c) the offset-free
+  movement read is `pin_move = pin_close_fair_prob − pin_fair_prob`
+  (anchors from 2026-08-25), shown on /shadow and in the digest as a
+  DIAGNOSTIC — not a verdict input, no rule change mid-stream. Same-day
+  read on it: MLB ML movement −0.46% (n=32); `below_policy_grade` −0.40%
+  (n=23); `signal_score_saturation` −0.23% (n=12) — still ≤ 0. Also noted:
+  `signal_score_saturation`'s +33% sole-blocker ROI is 11-1 on the 12
+  Pinnacle-covered rows vs 6-10 on the 16 earlier rows — a hot streak,
+  not a CLV story.
 - **Pinnacle provider switched to pinnapi (pinnapi.com) on 2026-08-26
   (~12:40Z); The Odds API is now the fallback** (`PINNAPI_KEY` primary,
   `ODDS_API_KEY` used only when it is unset). pinnapi is a Pinnacle-native

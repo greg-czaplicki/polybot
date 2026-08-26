@@ -22,6 +22,8 @@ type GateSummaryRow = {
 	avg_clv: number | null;
 	avg_pin_clv: number | null;
 	pin_clv_n: number;
+	avg_pin_move: number | null;
+	pin_move_n: number;
 	new_7d: number;
 	settled_7d: number;
 };
@@ -47,6 +49,8 @@ const GATE_SUMMARY_SQL = `
 		ROUND(AVG(CASE WHEN status IN ('win','loss') THEN clv END), 4) AS avg_clv,
 		ROUND(AVG(CASE WHEN status IN ('win','loss') THEN pin_clv END), 4) AS avg_pin_clv,
 		SUM(CASE WHEN status IN ('win','loss') AND pin_clv IS NOT NULL THEN 1 ELSE 0 END) AS pin_clv_n,
+		ROUND(AVG(CASE WHEN status IN ('win','loss') AND pin_fair_prob IS NOT NULL THEN pin_close_fair_prob - pin_fair_prob END), 4) AS avg_pin_move,
+		SUM(CASE WHEN status IN ('win','loss') AND pin_fair_prob IS NOT NULL AND pin_close_fair_prob IS NOT NULL THEN 1 ELSE 0 END) AS pin_move_n,
 		SUM(CASE WHEN created_at > ?1 THEN 1 ELSE 0 END) AS new_7d,
 		SUM(CASE WHEN settled_at > ?1 THEN 1 ELSE 0 END) AS settled_7d
 	FROM shadow_candidates`;
@@ -74,35 +78,35 @@ export async function handleShadowDigestRequest(
 		runStats,
 		lastRunRows,
 	] = await Promise.all([
-			all<GateSummaryRow>(
-				db,
-				`${GATE_SUMMARY_SQL} GROUP BY reject_reason ORDER BY n DESC`,
-				weekAgo,
-			),
-			// Promotion-read cohort, same semantics as the /shadow page's
-			// Sole-blocker columns: this gate alone fired, every other vector
-			// gate passing. A bare gates_json filter is NOT sufficient — rows
-			// still land under the FIRST gate that fired, so that cut mixes in
-			// candidates other gates would have rejected anyway (this digest
-			// served exactly that cut as "cleanPerGate" until 2026-08-12).
-			all<GateSummaryRow>(
-				db,
-				`${GATE_SUMMARY_SQL} WHERE ${SOLE_BLOCKER_SQL}
+		all<GateSummaryRow>(
+			db,
+			`${GATE_SUMMARY_SQL} GROUP BY reject_reason ORDER BY n DESC`,
+			weekAgo,
+		),
+		// Promotion-read cohort, same semantics as the /shadow page's
+		// Sole-blocker columns: this gate alone fired, every other vector
+		// gate passing. A bare gates_json filter is NOT sufficient — rows
+		// still land under the FIRST gate that fired, so that cut mixes in
+		// candidates other gates would have rejected anyway (this digest
+		// served exactly that cut as "cleanPerGate" until 2026-08-12).
+		all<GateSummaryRow>(
+			db,
+			`${GATE_SUMMARY_SQL} WHERE ${SOLE_BLOCKER_SQL}
 				GROUP BY reject_reason ORDER BY n DESC`,
-				weekAgo,
-			),
-			all<GateSummaryRow>(
-				db,
-				`${GATE_SUMMARY_SQL} WHERE market_type = 'prop'
+			weekAgo,
+		),
+		all<GateSummaryRow>(
+			db,
+			`${GATE_SUMMARY_SQL} WHERE market_type = 'prop'
 				GROUP BY reject_reason ORDER BY n DESC`,
-				weekAgo,
-			),
-			// Promotion-read cohort: prop gate was the sole blocker (all other
-			// gates pass). The raw propCohort mixes in props other gates would
-			// have rejected anyway.
-			all<PropCleanRow>(
-				db,
-				`SELECT
+			weekAgo,
+		),
+		// Promotion-read cohort: prop gate was the sole blocker (all other
+		// gates pass). The raw propCohort mixes in props other gates would
+		// have rejected anyway.
+		all<PropCleanRow>(
+			db,
+			`SELECT
 					${PROP_SUBTYPE_SQL} AS subtype,
 					COUNT(*) AS n,
 					SUM(status = 'pending') AS pending,
@@ -113,15 +117,15 @@ export async function handleShadowDigestRequest(
 				FROM shadow_candidates
 				WHERE market_type = 'prop' AND ${PROP_CLEAN_SQL}
 				GROUP BY subtype ORDER BY n DESC`,
-			),
-			// Chronic same-error detector: the project's two worst incidents
-			// (4-month line-ingestion death, 6-day ESPN 403 freeze) both showed
-			// as the SAME error_summary repeating across partial runs with
-			// nothing alarming on it. Three repeats in 24h of 6-min runs is
-			// already far outside normal (a transient hits 1-2 runs).
-			all<{ error: string; runs: number; last_seen_ms: number }>(
-				db,
-				`SELECT error_summary AS error, COUNT(*) AS runs,
+		),
+		// Chronic same-error detector: the project's two worst incidents
+		// (4-month line-ingestion death, 6-day ESPN 403 freeze) both showed
+		// as the SAME error_summary repeating across partial runs with
+		// nothing alarming on it. Three repeats in 24h of 6-min runs is
+		// already far outside normal (a transient hits 1-2 runs).
+		all<{ error: string; runs: number; last_seen_ms: number }>(
+			db,
+			`SELECT error_summary AS error, COUNT(*) AS runs,
 				        MAX(started_at) AS last_seen_ms
 				 FROM canonical_sync_runs
 				 WHERE started_at > ?1 AND status != 'success'
@@ -129,27 +133,27 @@ export async function handleShadowDigestRequest(
 				 GROUP BY error_summary
 				 HAVING COUNT(*) >= 3
 				 ORDER BY runs DESC LIMIT 10`,
-				dayAgoMs,
-			),
-			all<{
-				total: number;
-				success: number;
-				partial: number;
-				failed: number;
-			}>(
-				db,
-				`SELECT COUNT(*) AS total, SUM(status = 'success') AS success,
+			dayAgoMs,
+		),
+		all<{
+			total: number;
+			success: number;
+			partial: number;
+			failed: number;
+		}>(
+			db,
+			`SELECT COUNT(*) AS total, SUM(status = 'success') AS success,
 				        SUM(status = 'partial') AS partial,
 				        SUM(status = 'failed') AS failed
 				 FROM canonical_sync_runs WHERE started_at > ?1`,
-				dayAgoMs,
-			),
-			all<{ started_at: number; status: string; duration_ms: number }>(
-				db,
-				`SELECT started_at, status, duration_ms FROM canonical_sync_runs
+			dayAgoMs,
+		),
+		all<{ started_at: number; status: string; duration_ms: number }>(
+			db,
+			`SELECT started_at, status, duration_ms FROM canonical_sync_runs
 				 ORDER BY started_at DESC LIMIT 1`,
-			),
-		]);
+		),
+	]);
 
 	const lastRun = lastRunRows[0] ?? null;
 	const lastRunAgeMinutes = lastRun
@@ -191,6 +195,7 @@ export async function handleShadowDigestRequest(
 				"health.alert=true means the pipeline needs attention NOW — lead the digest with it: chronicErrors24h lists error_summary values repeating >=3x across 24h of sync runs (the failure shape of the two worst past incidents: a 4-month silent line-ingestion death and a 6-day ESPN freeze), and alert also fires when the last sync run is >30 min old (cron is 6-min) or >=20% of 24h runs are non-success",
 				"roi/clv are fractions (0.05 = +5%), settled rows only",
 				"avg_pin_clv is the de-vigged Pinnacle close-proxy benchmark (coverage from 2026-08-12, pin_clv_n = rows carrying it); once pin_clv_n is meaningful prefer it over avg_clv (PM self-close) for the checkpoint's CLV criterion",
+				"avg_pin_clv = Pinnacle close − PM entry price, so it carries a structural ≈ −0.3%/side offset that is NOT line movement (PM prices across both sides sum to ~1.005; a de-vigged book sums to 1; audited 2026-08-26 on 98 MLB ML markets). avg_clv (PM self-close) has no such offset — the two are not on the same footing. avg_pin_move = Pinnacle close − Pinnacle anchor (pin_move_n rows, anchors from 2026-08-25) is the offset-free movement read; DIAGNOSTIC ONLY, the pre-registered verdict rule still uses avg_pin_clv > 0",
 				"perGate attributes each row to the FIRST gate that fired — contaminated for per-gate causal reads; soleBlockerPerGate (this gate alone failed, all others passed) is the ONLY cohort valid for gate-promotion decisions, and the pre-registered n>=50 checkpoint counts ITS rows",
 				"the former cleanPerGate field (bare gate-vector filter, still first-fired attribution) was removed 2026-08-12 — it overstated cohort sizes and nearly false-fired the checkpoint",
 				"propCohort accumulates BTTS/NRFI/team-total/period markets from 2026-08-07 (era v7)",

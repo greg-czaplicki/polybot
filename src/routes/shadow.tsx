@@ -79,20 +79,21 @@ function smallSampleTitle(settled: number): string | undefined {
 		: undefined;
 }
 
-const VERDICT_STYLE: Record<GateVerdict, { label: string; className: string }> = {
-	ready: {
-		label: "READY",
-		className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/40",
-	},
-	watch: {
-		label: "WATCH",
-		className: "bg-amber-500/15 text-amber-500 border-amber-500/40",
-	},
-	hold: {
-		label: "HOLD",
-		className: "bg-ink-05 text-ink-55 border-ink-15",
-	},
-};
+const VERDICT_STYLE: Record<GateVerdict, { label: string; className: string }> =
+	{
+		ready: {
+			label: "READY",
+			className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/40",
+		},
+		watch: {
+			label: "WATCH",
+			className: "bg-amber-500/15 text-amber-500 border-amber-500/40",
+		},
+		hold: {
+			label: "HOLD",
+			className: "bg-ink-05 text-ink-55 border-ink-15",
+		},
+	};
 
 /**
  * The verdict badge is the only thing on this page that answers "do I need
@@ -151,9 +152,7 @@ function ShadowBookPage() {
 	const [reasons, setReasons] = useState<ShadowReasonSummary[]>([]);
 	const [bySport, setBySport] = useState<ShadowSportSummary[]>([]);
 	const [props, setProps] = useState<ShadowPropSummary[]>([]);
-	const [timingPairs, setTimingPairs] = useState<ShadowTimingPairSummary[]>(
-		[],
-	);
+	const [timingPairs, setTimingPairs] = useState<ShadowTimingPairSummary[]>([]);
 	const [recent, setRecent] = useState<ShadowRowSummary[]>([]);
 	const [computedAt, setComputedAt] = useState<number | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -193,9 +192,9 @@ function ShadowBookPage() {
 						<h1 className="text-xl font-semibold text-ink-95">Shadow Book</h1>
 						<p className="mt-1 text-sm text-ink-55">
 							Gate-rejected candidates settled without betting — what each
-							filter saved or cost. Recording started 2026-07-30; ROI assumes
-							1u at the first-sighting price (ignores slippage). Small samples
-							lie: judge gates on n, not vibes.
+							filter saved or cost. Recording started 2026-07-30; ROI assumes 1u
+							at the first-sighting price (ignores slippage). Small samples lie:
+							judge gates on n, not vibes.
 						</p>
 					</div>
 					<button
@@ -216,7 +215,14 @@ function ShadowBookPage() {
 
 				<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
 					{[
-						{ label: "Shadow candidates", value: String(settledTotal + pendingTotal + reasons.reduce((s, r) => s + r.pushes, 0)) },
+						{
+							label: "Shadow candidates",
+							value: String(
+								settledTotal +
+									pendingTotal +
+									reasons.reduce((s, r) => s + r.pushes, 0),
+							),
+						},
 						{ label: "Settled", value: String(settledTotal) },
 						{ label: "Pending", value: String(pendingTotal) },
 						{
@@ -224,10 +230,7 @@ function ShadowBookPage() {
 							value: formatUnits(settledTotal > 0 ? unitsTotal : null),
 						},
 					].map((tile) => (
-						<div
-							key={tile.label}
-							className="rounded-md bg-ink-00 p-4"
-						>
+						<div key={tile.label} className="rounded-md bg-ink-00 p-4">
 							<p className="text-xs uppercase tracking-[0.2em] text-ink-55">
 								{tile.label}
 							</p>
@@ -311,15 +314,14 @@ function ShadowBookPage() {
 				</h2>
 				<p className="mt-2 text-sm text-amber-500/90">
 					Read with care: a row lands under the FIRST gate that fired, and the
-					chain stops there — so a gate&apos;s raw ROI mixes in candidates
-					other gates would have rejected anyway, and overstates what
-					loosening that one gate would recover. The Sole-blocker columns (which
-					the Verdict reads) are the clean cohort: rejected by this gate
-					alone, every other gate passing — only rows from 2026-08-06 onward
-					carry the per-gate vector. The dimmed Raw columns are context only.
-					Dimmed cells have fewer than{" "}
-					{MIN_SETTLED_FOR_EMPHASIS} settled rows — the number is shown but
-					the sample is too small to color.
+					chain stops there — so a gate&apos;s raw ROI mixes in candidates other
+					gates would have rejected anyway, and overstates what loosening that
+					one gate would recover. The Sole-blocker columns (which the Verdict
+					reads) are the clean cohort: rejected by this gate alone, every other
+					gate passing — only rows from 2026-08-06 onward carry the per-gate
+					vector. The dimmed Raw columns are context only. Dimmed cells have
+					fewer than {MIN_SETTLED_FOR_EMPHASIS} settled rows — the number is
+					shown but the sample is too small to color.
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
@@ -331,6 +333,12 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">SB ROI</th>
 								<th className="pb-2 pr-4">SB z</th>
 								<th className="pb-2 pr-4">SB Pin CLV</th>
+								<th
+									className="pb-2 pr-4"
+									title="Pinnacle close − Pinnacle anchor (movement only, offset-free). Diagnostic, not a verdict input."
+								>
+									SB Pin move
+								</th>
 								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
 								<th className="pb-2 pr-4 text-ink-40">Pending</th>
 								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
@@ -380,7 +388,20 @@ function ShadowBookPage() {
 									>
 										{formatRoi(r.cleanAvgPinClvPct)}
 										{r.cleanPinN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">n={r.cleanPinN}</span>
+											<span className="ml-1 text-xs text-ink-40">
+												n={r.cleanPinN}
+											</span>
+										) : null}
+									</td>
+									<td
+										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinMovePct, r.cleanPinMoveN)}`}
+										title={`Pinnacle close − Pinnacle anchor on n=${r.cleanPinMoveN} sole-blocker rows carrying both (anchors from 2026-08-25). Diagnostic only — not a verdict input. Free of the ~−0.3% PM-spread offset baked into Pin CLV.`}
+									>
+										{formatRoi(r.cleanAvgPinMovePct)}
+										{r.cleanPinMoveN > 0 ? (
+											<span className="ml-1 text-xs text-ink-40">
+												n={r.cleanPinMoveN}
+											</span>
 										) : null}
 									</td>
 									<td className="py-2 pr-4 text-ink-40">{r.total}</td>
@@ -389,9 +410,15 @@ function ShadowBookPage() {
 										{r.wins}-{r.losses}
 										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
 									</td>
-									<td className="py-2 pr-4 text-ink-40">{formatUnits(r.units)}</td>
-									<td className="py-2 pr-4 text-ink-40">{formatRoi(r.roiPct)}</td>
-									<td className="py-2 pr-4 text-ink-40">{formatRoi(r.avgClvPct)}</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{formatUnits(r.units)}
+									</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{formatRoi(r.roiPct)}
+									</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{formatRoi(r.avgClvPct)}
+									</td>
 									<td className="py-2 text-ink-40">
 										{r.avgMinutesToStart !== null
 											? Math.round(r.avgMinutesToStart)
@@ -416,13 +443,12 @@ function ShadowBookPage() {
 				<p className="mt-1 text-xs text-ink-55">
 					outside_window shadows paired with a real pick on the SAME market —
 					the direct measurement of the window&apos;s early boundary. Drift =
-					pick price − first-sighting price (&gt;180m out) on the same side,
-					in probability points: positive means the market moved toward the
-					sharp side before we were allowed in (waiting cost us entry price —
-					evidence for opening the window earlier); negative means waiting got
-					us a better price. Side-flipped pairs are excluded from drift.
-					Post-entry drift needs no bucket here — that is exactly what CLV
-					measures.
+					pick price − first-sighting price (&gt;180m out) on the same side, in
+					probability points: positive means the market moved toward the sharp
+					side before we were allowed in (waiting cost us entry price — evidence
+					for opening the window earlier); negative means waiting got us a
+					better price. Side-flipped pairs are excluded from drift. Post-entry
+					drift needs no bucket here — that is exactly what CLV measures.
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
@@ -588,13 +614,13 @@ function ShadowBookPage() {
 					Performance by gate × sport
 				</h2>
 				<p className="mt-1 text-xs text-ink-55">
-					The same gate can be right for one sport and wrong for another —
-					the verdict is per gate × sport for that reason. The Sole-blocker
-					columns are what the verdict reads (this gate alone fired, every
-					other gate passing); the dimmed Raw columns count every row that
-					landed under the gate first, including ones another gate would
-					have rejected anyway, and are context only. Sport comes from the
-					series registry; soccer shows per-league (epl/mls).
+					The same gate can be right for one sport and wrong for another — the
+					verdict is per gate × sport for that reason. The Sole-blocker columns
+					are what the verdict reads (this gate alone fired, every other gate
+					passing); the dimmed Raw columns count every row that landed under the
+					gate first, including ones another gate would have rejected anyway,
+					and are context only. Sport comes from the series registry; soccer
+					shows per-league (epl/mls).
 				</p>
 				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
 					<table className="min-w-full text-left text-sm text-ink-85">
@@ -607,6 +633,12 @@ function ShadowBookPage() {
 								<th className="pb-2 pr-4">SB ROI</th>
 								<th className="pb-2 pr-4">SB z</th>
 								<th className="pb-2 pr-4">SB Pin CLV</th>
+								<th
+									className="pb-2 pr-4"
+									title="Pinnacle close − Pinnacle anchor (movement only, offset-free). Diagnostic, not a verdict input."
+								>
+									SB Pin move
+								</th>
 								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
 								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
 								<th className="pb-2 pr-4 text-ink-40">Raw units</th>
@@ -654,20 +686,37 @@ function ShadowBookPage() {
 									>
 										{formatRoi(r.cleanAvgPinClvPct)}
 										{r.cleanPinN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">n={r.cleanPinN}</span>
+											<span className="ml-1 text-xs text-ink-40">
+												n={r.cleanPinN}
+											</span>
+										) : null}
+									</td>
+									<td
+										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinMovePct, r.cleanPinMoveN)}`}
+										title={`Pinnacle close − Pinnacle anchor on n=${r.cleanPinMoveN} sole-blocker rows carrying both (anchors from 2026-08-25). Diagnostic only — not a verdict input. Free of the ~−0.3% PM-spread offset baked into Pin CLV.`}
+									>
+										{formatRoi(r.cleanAvgPinMovePct)}
+										{r.cleanPinMoveN > 0 ? (
+											<span className="ml-1 text-xs text-ink-40">
+												n={r.cleanPinMoveN}
+											</span>
 										) : null}
 									</td>
 									<td className="py-2 pr-4 text-ink-40">
 										{r.total}
 										{r.pending > 0 ? (
-											<span className="ml-1 text-xs">({r.pending} pending)</span>
+											<span className="ml-1 text-xs">
+												({r.pending} pending)
+											</span>
 										) : null}
 									</td>
 									<td className="py-2 pr-4 text-ink-40">
 										{r.wins}-{r.losses}
 										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
 									</td>
-									<td className="py-2 pr-4 text-ink-40">{formatUnits(r.units)}</td>
+									<td className="py-2 pr-4 text-ink-40">
+										{formatUnits(r.units)}
+									</td>
 									<td className="py-2 text-ink-40">{formatRoi(r.roiPct)}</td>
 								</tr>
 							))}
