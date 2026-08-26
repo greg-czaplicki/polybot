@@ -92,7 +92,15 @@ fixing commit.
   (15/30 min; anchors ≤ 3 h stale fallback). `pinnacle_fetch_log.sport_key`
   is `pinnapi:<sport_id>` (6 MLB, 1 soccer, 2 tennis, 5 football, 3
   basketball, 4 hockey) — one fetch serves every league of that sport;
-  `credits_remaining` is NULL on pinnapi rows. (d) League labels verified
+  `credits_remaining` is NULL on pinnapi rows. Failed pinnapi requests are
+  logged as `pinnapi-fail:<http status>` (0 = network) and are NOT spend:
+  they drive a 10-min backoff, and a 401/403 flips the sweep to The Odds
+  API fallback for 30 min. **Incident 2026-08-26 19:32Z → ~21:10Z:** the
+  pinnapi key started returning `401 invalid_key` (worked 12:32–19:02Z);
+  the first build had no backoff, so the cron retried every 2 min (~40
+  failed fetches, relabelled `pinnapi-fail:401` in the log) and, with
+  `PINNAPI_KEY` set, never fell back — no Pinnacle captures at all in that
+  window (two live MLB picks missed their pin close; DK close unaffected). (d) League labels verified
   2026-08-26 for MLB, the eight soccer leagues (UCL = "UEFA - Champions
   League" and "... Qualifiers"; Corners/Bookings boards excluded), ATP/WTA
   and NFL/NCAA football; **NBA/NHL/NCAAB labels are assumed ("NBA", "NHL",

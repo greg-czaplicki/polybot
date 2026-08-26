@@ -189,6 +189,16 @@ const ODDS_API_CAPS: FetchCaps = {
 	perSport: 12,
 };
 const FETCH_WINDOW_SECONDS = 24 * 3600;
+/** After any pinnapi request fails (auth, 429, 5xx, network) no pinnapi
+ * request is made for this long — a failed fetch caches nothing, so
+ * without a backoff the 2-minute cron would retry every sweep. */
+const PINNAPI_FAIL_BACKOFF_SECONDS = 10 * 60;
+/** After a pinnapi AUTH failure (401/403) the sweep runs on The Odds API
+ * fallback (when ODDS_API_KEY is set) for this long, then re-tries pinnapi. */
+const PINNAPI_AUTH_FALLBACK_SECONDS = 30 * 60;
+/** pinnacle_fetch_log.sport_key prefix for failed pinnapi requests; these
+ * rows drive the backoff and are NOT counted toward the fetch caps. */
+const PINNAPI_FAIL_KEY_PREFIX = "pinnapi-fail:";
 
 /** Close window opens this long before event_time. */
 const CLOSE_WINDOW_BEFORE_SECONDS = 600;
@@ -578,24 +588,25 @@ async function fetchActiveSportKeys(apiKey: string): Promise<string[] | null> {
 async function fetchPinnapiSport(
 	apiKey: string,
 	sportId: number,
-): Promise<PinnapiEvent[] | null> {
+): Promise<{ events: PinnapiEvent[] } | { failed: number }> {
 	const url = `https://pinnapi.com/kit/v1/prematch/fixtures?sport_id=${sportId}`;
 	try {
 		const res = await fetch(url, { headers: { "x-portal-apikey": apiKey } });
 		if (!res.ok) {
+			const body = (await res.text().catch(() => "")).slice(0, 120);
 			console.warn(
-				`[pinnacle-odds] pinnapi returned ${res.status} for sport ${sportId}${res.status === 429 ? " (RATE LIMITED — cap breached?)" : ""}`,
+				`[pinnacle-odds] pinnapi returned ${res.status} for sport ${sportId}: ${body}${res.status === 429 ? " (RATE LIMITED — cap breached?)" : ""}`,
 			);
-			return null;
+			return { failed: res.status };
 		}
 		const body = (await res.json()) as { events?: PinnapiEvent[] };
-		return Array.isArray(body.events) ? body.events : [];
+		return { events: Array.isArray(body.events) ? body.events : [] };
 	} catch (err) {
 		console.warn(
 			`[pinnacle-odds] pinnapi fetch failed for sport ${sportId}:`,
 			err instanceof Error ? err.message : err,
 		);
-		return null;
+		return { failed: 0 };
 	}
 }
 
@@ -749,16 +760,12 @@ export async function capturePinnacleOddsForPicks(
 	// A bare string is the legacy Odds API key.
 	const resolved: PinnacleKeys =
 		typeof keys === "string" ? { oddsApiKey: keys } : (keys ?? {});
-	const provider: PinnacleProvider | null = resolved.pinnapiKey
+	let provider: PinnacleProvider | null = resolved.pinnapiKey
 		? "pinnapi"
 		: resolved.oddsApiKey
 			? "odds-api"
 			: null;
 	if (provider === null) return empty;
-	const apiKey = (
-		provider === "pinnapi" ? resolved.pinnapiKey : resolved.oddsApiKey
-	) as string;
-	const caps = provider === "pinnapi" ? PINNAPI_CAPS : ODDS_API_CAPS;
 	const tracked = (tag: string): boolean =>
 		provider === "pinnapi"
 			? PINNAPI_SPORT_IDS[tag] !== undefined
@@ -852,18 +859,50 @@ export async function capturePinnacleOddsForPicks(
 
 	// ---- Budget state (rolling 24h) --------------------------------------
 	const windowStart = now - FETCH_WINDOW_SECONDS;
-	const windowRows = await all<{ sport_key: string; n: number }>(
+	const windowRows = await all<{
+		sport_key: string;
+		n: number;
+		last_at: number;
+	}>(
 		db,
-		`SELECT sport_key, COUNT(*) AS n FROM pinnacle_fetch_log
-		 WHERE fetched_at > ? GROUP BY sport_key`,
+		`SELECT sport_key, COUNT(*) AS n, MAX(fetched_at) AS last_at
+		 FROM pinnacle_fetch_log WHERE fetched_at > ? GROUP BY sport_key`,
 		windowStart,
 	);
 	const perSport = new Map<string, number>();
 	let fetchesInWindow = 0;
+	let lastFailAt = 0;
+	let lastFailStatus = 0;
 	for (const r of windowRows) {
+		if (r.sport_key.startsWith(PINNAPI_FAIL_KEY_PREFIX)) {
+			if (r.last_at > lastFailAt) {
+				lastFailAt = r.last_at;
+				lastFailStatus = Number.parseInt(
+					r.sport_key.slice(PINNAPI_FAIL_KEY_PREFIX.length),
+					10,
+				);
+			}
+			continue;
+		}
 		perSport.set(r.sport_key, r.n);
 		fetchesInWindow += r.n;
 	}
+	let pinnapiBackoff = now - lastFailAt < PINNAPI_FAIL_BACKOFF_SECONDS;
+	if (
+		provider === "pinnapi" &&
+		(lastFailStatus === 401 || lastFailStatus === 403) &&
+		now - lastFailAt < PINNAPI_AUTH_FALLBACK_SECONDS &&
+		resolved.oddsApiKey
+	) {
+		console.warn(
+			`[pinnacle-odds] pinnapi auth failed ${lastFailStatus} at ${lastFailAt}; using The Odds API fallback this sweep`,
+		);
+		provider = "odds-api";
+	}
+	const apiKey = (
+		provider === "pinnapi" ? resolved.pinnapiKey : resolved.oddsApiKey
+	) as string;
+	const caps = provider === "pinnapi" ? PINNAPI_CAPS : ODDS_API_CAPS;
 	let fetches = 0;
 	// Odds API only: seed the credit tracker from the last persisted balance
 	// so the floors apply from the first fetch of the sweep, not the second.
@@ -898,8 +937,21 @@ export async function capturePinnacleOddsForPicks(
 				: role === "live-anchor"
 					? caps.liveAnchor
 					: caps.shadow;
+		if (provider === "pinnapi" && pinnapiBackoff) return false;
 		if (fetchesInWindow >= cap) return false;
 		return (perSport.get(sportLogKey(tag)) ?? 0) < caps.perSport;
+	};
+
+	// Failed pinnapi request: recorded for the backoff, not counted as spend.
+	const logPinnapiFailure = async (status: number): Promise<void> => {
+		pinnapiBackoff = true;
+		await run(
+			db,
+			`INSERT INTO pinnacle_fetch_log (fetched_at, sport_key, credits_remaining)
+			 VALUES (?, ?, NULL)`,
+			now,
+			`${PINNAPI_FAIL_KEY_PREFIX}${status}`,
+		);
 	};
 
 	const logFetch = async (sportKey: string): Promise<void> => {
@@ -930,8 +982,14 @@ export async function capturePinnacleOddsForPicks(
 			const sportId = PINNAPI_SPORT_IDS[tag];
 			let raw = pinnapiSportFeeds.get(sportId);
 			if (raw === undefined) {
-				raw = await fetchPinnapiSport(apiKey, sportId);
-				await logFetch(`pinnapi:${sportId}`);
+				const result = await fetchPinnapiSport(apiKey, sportId);
+				if ("failed" in result) {
+					await logPinnapiFailure(result.failed);
+					raw = null;
+				} else {
+					await logFetch(`pinnapi:${sportId}`);
+					raw = result.events;
+				}
 				pinnapiSportFeeds.set(sportId, raw);
 				if (raw !== null) {
 					for (const [t, sid] of Object.entries(PINNAPI_SPORT_IDS)) {
