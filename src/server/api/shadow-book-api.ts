@@ -4,7 +4,11 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
-import { type GateVerdict, gateVerdict } from "../../lib/gate-verdict";
+import {
+	clusterRoiZ,
+	type GateVerdict,
+	gateVerdict,
+} from "../../lib/gate-verdict";
 import { all } from "../db/client";
 import { getDb } from "../env";
 import {
@@ -24,8 +28,16 @@ export interface ShadowPromotionRead {
 	cleanLosses: number;
 	cleanUnits: number | null;
 	cleanRoiPct: number | null;
-	/** ROI z-score on the sole-blocker cohort (mean / SE). */
+	/**
+	 * The z the verdict used: EVENT-CLUSTERED (one observation per game —
+	 * sibling markets of one game co-move; 2026-08-28 amendment). Null when
+	 * clusters < 5, which fails the z criterion rather than falling back.
+	 */
 	cleanZ: number | null;
+	/** Per-row (naive) z, display-only — overstates on correlated rows. */
+	cleanRowZ: number | null;
+	/** Distinct game/event clusters behind cleanZ. */
+	cleanClusters: number;
 	/** Mean Pinnacle-close CLV (%) on sole-blocker rows carrying it. */
 	cleanAvgPinClvPct: number | null;
 	cleanPinN: number;
@@ -70,7 +82,55 @@ interface CleanRow {
 	clean_pin_move_n: number;
 }
 
-function promotionRead(r: CleanRow): ShadowPromotionRead {
+interface ClusterStats {
+	z: number | null;
+	count: number;
+}
+
+const EMPTY_CLUSTERS: ClusterStats = { z: null, count: 0 };
+
+/**
+ * Event key for clustering: sport + matchup (title before ":", which strips
+ * the market qualifier — "Seahawks vs. Titans" and "Seahawks vs. Titans:
+ * O/U 42.5" share a key) + exact event time. One game = one cluster.
+ */
+function eventClusterKey(row: {
+	sport_series_id: number | null;
+	sport_tag: string | null;
+	market_title: string;
+	event_time: number | null;
+}): string {
+	const matchup = row.market_title.split(":", 1)[0].trim().toLowerCase();
+	return `${row.sport_series_id ?? row.sport_tag ?? "na"}|${matchup}|${row.event_time ?? "na"}`;
+}
+
+/** Cluster rows by event and compute the clustered z over cluster means. */
+function computeClusterStats(
+	rows: Array<{
+		sport_series_id: number | null;
+		sport_tag: string | null;
+		market_title: string;
+		event_time: number | null;
+		roi: number;
+	}>,
+): ClusterStats {
+	if (rows.length === 0) return EMPTY_CLUSTERS;
+	const byEvent = new Map<string, { sum: number; n: number }>();
+	for (const row of rows) {
+		const key = eventClusterKey(row);
+		const agg = byEvent.get(key) ?? { sum: 0, n: 0 };
+		agg.sum += row.roi;
+		agg.n += 1;
+		byEvent.set(key, agg);
+	}
+	const means = Array.from(byEvent.values(), (a) => a.sum / a.n);
+	return { z: clusterRoiZ(means), count: means.length };
+}
+
+function promotionRead(
+	r: CleanRow,
+	clusters?: ClusterStats,
+): ShadowPromotionRead {
 	const cleanSettled = r.clean_wins + r.clean_losses;
 	const v = gateVerdict({
 		settled: cleanSettled,
@@ -79,6 +139,8 @@ function promotionRead(r: CleanRow): ShadowPromotionRead {
 		avgPinClv: r.clean_avg_pin_clv,
 		pinN: r.clean_pin_n,
 		avgClv: r.clean_avg_clv,
+		clusteredZ: clusters ? clusters.z : undefined,
+		clusterCount: clusters?.count,
 	});
 	return {
 		cleanTotal: r.clean_total,
@@ -90,6 +152,8 @@ function promotionRead(r: CleanRow): ShadowPromotionRead {
 				? (r.clean_units / cleanSettled) * 100
 				: null,
 		cleanZ: v.z,
+		cleanRowZ: v.rowZ,
+		cleanClusters: clusters?.count ?? 0,
 		cleanAvgPinClvPct:
 			r.clean_avg_pin_clv !== null ? r.clean_avg_pin_clv * 100 : null,
 		cleanPinN: r.clean_pin_n,
@@ -235,10 +299,43 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			 ORDER BY total DESC`,
 		);
 
+		// Row-level sole-blocker rows for event clustering (2026-08-28
+		// amendment): sibling markets of one game are one observation in the
+		// verdict's z, not two.
+		const soleBlockerRows = await all<{
+			reject_reason: string;
+			sport_tag: string | null;
+			sport_series_id: number | null;
+			market_title: string;
+			event_time: number | null;
+			roi: number;
+		}>(
+			db,
+			`SELECT reject_reason, sport_tag, sport_series_id, market_title,
+			        event_time, roi
+			 FROM shadow_candidates
+			 WHERE status IN ('win','loss') AND roi IS NOT NULL
+			   AND ${SOLE_BLOCKER_SQL}`,
+		);
+		const rowsByReason = new Map<string, typeof soleBlockerRows>();
+		const rowsByReasonSport = new Map<string, typeof soleBlockerRows>();
+		for (const row of soleBlockerRows) {
+			const byReason = rowsByReason.get(row.reject_reason) ?? [];
+			byReason.push(row);
+			rowsByReason.set(row.reject_reason, byReason);
+			const sportKey = `${row.reject_reason}|${row.sport_tag ?? "unknown"}`;
+			const bySport = rowsByReasonSport.get(sportKey) ?? [];
+			bySport.push(row);
+			rowsByReasonSport.set(sportKey, bySport);
+		}
+
 		const reasons: ShadowReasonSummary[] = reasonRows.map((r) => {
 			const settled = r.wins + r.losses;
 			return {
-				...promotionRead(r),
+				...promotionRead(
+					r,
+					computeClusterStats(rowsByReason.get(r.reject_reason) ?? []),
+				),
 				rejectReason: r.reject_reason,
 				total: r.total,
 				pending: r.pending,
@@ -284,7 +381,14 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 		const bySport: ShadowSportSummary[] = sportRows.map((r) => {
 			const settled = r.wins + r.losses;
 			return {
-				...promotionRead(r),
+				...promotionRead(
+					r,
+					computeClusterStats(
+						rowsByReasonSport.get(
+							`${r.reject_reason}|${r.sport_tag ?? "unknown"}`,
+						) ?? [],
+					),
+				),
 				rejectReason: r.reject_reason,
 				sportTag: r.sport_tag ?? "unknown",
 				total: r.total,

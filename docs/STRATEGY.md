@@ -29,6 +29,16 @@ was sometimes deployed before being committed. The one pick created between
 the two Jun 25 deploys (ss=94.3 straggler, 20:31 UTC) is classified `v3`
 because it predates the gate going live.
 
+**Promotion-rule amendment (2026-08-28, external-review triage; every
+verdict was HOLD at the time, so nothing changed retroactively):** the z in
+the checkpoint rule (n ≥ 50 sole-blocker, z ≥ 2, CLV > 0) is
+**event-clustered** — sibling markets of one game (ML + total) are one
+observation, because per-row z overstates significance on correlated rows.
+Implemented in `src/lib/gate-verdict.ts` (`clusterRoiZ`) +
+`shadow-book-api.ts`; fewer than 5 game clusters fails the z criterion
+rather than falling back to the per-row z. The per-row z stays visible as a
+diagnostic (`cleanRowZ`).
+
 ## Pre-registered tests (open)
 
 Hypotheses written down BEFORE their data exists, so the read is mechanical

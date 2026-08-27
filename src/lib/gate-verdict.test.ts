@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gateVerdict, roiZScore } from "./gate-verdict";
+import { clusterRoiZ, gateVerdict, roiZScore } from "./gate-verdict";
 
 /** Build sums for `wins` rows at +w and `losses` rows at -1. */
 function cohort(wins: number, losses: number, w = 0.9) {
@@ -85,5 +85,42 @@ describe("gateVerdict", () => {
 			avgClv: 0.01,
 		});
 		expect(v.verdict).toBe("hold");
+	});
+});
+
+describe("event-clustered z (2026-08-28 amendment)", () => {
+	it("computes z over cluster means", () => {
+		// 6 clusters, mean +0.5, some spread
+		const z = clusterRoiZ([0.9, 0.4, 0.6, 0.2, 0.8, 0.1]);
+		expect(z).toBeGreaterThan(2);
+		expect(clusterRoiZ([0.5, 0.5])).toBeNull(); // < Z_MIN_N clusters
+	});
+
+	it("verdict uses clustered z when supplied and fails closed on too few clusters", () => {
+		const base = {
+			settled: 60,
+			units: 30,
+			sumSq: 60,
+			avgPinClv: 0.02,
+			pinN: 20,
+			avgClv: 0.02,
+		};
+		// Per-row z alone would be strong; clustered z null (too few clusters)
+		// must fail the z criterion.
+		const failedClosed = gateVerdict({
+			...base,
+			clusteredZ: null,
+			clusterCount: 3,
+		});
+		expect(failedClosed.verdict).toBe("hold");
+		expect(failedClosed.z).toBeNull();
+		expect(failedClosed.rowZ).toBeGreaterThan(2);
+		// Clustered z supplied and strong -> ready
+		const ready = gateVerdict({ ...base, clusteredZ: 2.4, clusterCount: 40 });
+		expect(ready.verdict).toBe("ready");
+		expect(ready.z).toBe(2.4);
+		// No cluster info at all -> per-row fallback (legacy callers)
+		const legacy = gateVerdict(base);
+		expect(legacy.z).toBe(legacy.rowZ);
 	});
 });

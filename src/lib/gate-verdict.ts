@@ -14,6 +14,13 @@
  * sharp book prices as negative-CLV is HOLD no matter how hot its ROI.
  * Raw first-fired stats are deliberately NOT an input: they mix in rows
  * other gates would have rejected anyway (the twice-made mistake).
+ *
+ * Amendment 2026-08-28 (external-review triage; every verdict was HOLD, so
+ * nothing changes retroactively): the z criterion uses an EVENT-CLUSTERED
+ * z when the caller supplies one — sibling markets of the same game (ML +
+ * total) are one observation, not two, because per-row z overstates
+ * significance on correlated rows. Too few clusters fails the criterion
+ * rather than falling back to the per-row z.
  */
 
 export type GateVerdict = "ready" | "watch" | "hold";
@@ -37,12 +44,25 @@ export interface GateVerdictInput {
 	pinN: number;
 	/** Mean Polymarket self-close clv over settled rows (fallback). */
 	avgClv: number | null;
+	/**
+	 * Event-clustered ROI z (one observation per game/event). When provided
+	 * (clusterCount !== undefined) it REPLACES the per-row z in the criteria;
+	 * null with a defined clusterCount means "insufficient clusters" and
+	 * fails the z criterion (conservative — no per-row fallback).
+	 */
+	clusteredZ?: number | null;
+	clusterCount?: number;
 }
 
 export interface GateVerdictResult {
 	verdict: GateVerdict;
-	/** ROI z-score (mean / standard error); null when undefined. */
+	/**
+	 * The z the criteria actually used: event-clustered when supplied,
+	 * per-row otherwise; null when undefined.
+	 */
 	z: number | null;
+	/** Per-row (naive) z, for display beside the clustered one. */
+	rowZ: number | null;
 	/** Which CLV benchmark the verdict used. */
 	clvSource: "pinnacle" | "polymarket" | "none";
 	clv: number | null;
@@ -66,8 +86,25 @@ export function roiZScore(
 	return mean / se;
 }
 
+/**
+ * Event-clustered z: one observation per cluster (the cluster's mean ROI),
+ * z = mean of cluster means / SE across cluster means. Sibling markets of
+ * one game co-move; treating them as independent rows overstates z.
+ */
+export function clusterRoiZ(clusterMeans: number[]): number | null {
+	const n = clusterMeans.length;
+	if (n < Z_MIN_N) return null;
+	const mean = clusterMeans.reduce((s, v) => s + v, 0) / n;
+	const variance =
+		clusterMeans.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+	if (variance === 0) return null;
+	return mean / Math.sqrt(variance / n);
+}
+
 export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
-	const z = roiZScore(input.settled, input.units, input.sumSq);
+	const rowZ = roiZScore(input.settled, input.units, input.sumSq);
+	const z =
+		input.clusterCount !== undefined ? (input.clusteredZ ?? null) : rowZ;
 	let clvSource: GateVerdictResult["clvSource"] = "none";
 	let clv: number | null = null;
 	if (input.pinN >= PIN_CLV_MIN_N && input.avgPinClv !== null) {
@@ -90,7 +127,14 @@ export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
 	}
 
 	if (missing.length === 0) {
-		return { verdict: "ready", z, clvSource, clv, reason: "all criteria met" };
+		return {
+			verdict: "ready",
+			z,
+			rowZ,
+			clvSource,
+			clv,
+			reason: "all criteria met",
+		};
 	}
 	const roi =
 		input.settled > 0 && input.units !== null
@@ -107,6 +151,7 @@ export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
 	return {
 		verdict: watching ? "watch" : "hold",
 		z,
+		rowZ,
 		clvSource,
 		clv,
 		reason: missing.join(", "),
