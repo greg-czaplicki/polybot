@@ -753,8 +753,17 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // would-have-bet cohort under today's gates from the 2026-27 opening night,
 // which is what "finding NHL's gates" needs; nothing goes live until the
 // checkpoint says so.
+//
+// NCAAF (2026-08-28, era v10): season opens 08-29 with ZERO recorded NCAAF
+// rows ever — the gates it would go live under are MLB-derived, and every
+// sport examined per-sport so far has needed its own corrections (tennis and
+// WTA invert outright, NBA inverts on favorites, MLB itself is HOLD on the
+// gate review). A sport now earns live status on its own shadow evidence via
+// the standard sole-blocker checkpoint instead of inheriting another sport's
+// calibration.
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
 	"nhl",
+	"ncaaf",
 	"championship",
 	"laliga",
 	"bundesliga",

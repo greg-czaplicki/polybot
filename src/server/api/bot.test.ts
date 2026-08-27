@@ -126,6 +126,19 @@ describe("getBotCandidatePolicy", () => {
 		expect(puckLine.rejectReason).toBe("spread_market_excluded");
 	});
 
+	it("shadow-settles NCAAF behind league probation (era v10)", () => {
+		// 10210 is the NCAAF fallback series ID (series-registry.ts).
+		const ml = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10210,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(ml.reject).toBe(true);
+		expect(ml.rejectReason).toBe("ncaaf_league_probation");
+	});
+
 	it("shadow-settles NBA >90m behind the timing gate, after the market-type gates", () => {
 		// 10345 is the NBA fallback series ID (series-registry.ts).
 		const ml = getBotCandidatePolicy({
