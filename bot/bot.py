@@ -59,6 +59,8 @@ class BotConfig:
 	min_stake: float
 	fixed_stake: float
 	trade_log_path: str
+	daily_notional_cap: float
+	kill_switch_path: str
 
 
 def _prompt_missing(value: str, label: str, secret: bool = False) -> str:
@@ -199,6 +201,13 @@ def load_config() -> BotConfig:
 		min_stake=float(os.getenv("BOT_MIN_STAKE", "1")),
 		fixed_stake=float(os.getenv("BOT_FIXED_STAKE", "0")),
 		trade_log_path=os.getenv("BOT_TRADE_LOG", "bot/trades.jsonl"),
+		# Rolling-24h LIVE notional ceiling (max possible daily loss). The
+		# normal day sits far below it; it exists to stop runaway placement
+		# (duplicate-order loops, a broken candidates feed). 0 disables.
+		daily_notional_cap=float(os.getenv("BOT_DAILY_NOTIONAL_CAP", "80")),
+		# Touch this file to halt live trading without stopping the process:
+		# candidates keep logging, orders stop. Remove it to resume.
+		kill_switch_path=os.getenv("BOT_KILL_SWITCH_PATH", "KILL"),
 	)
 
 
@@ -1224,6 +1233,41 @@ def place_bet(
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
 		return False
 
+	if not config.dry_run:
+		# Kill switch: halt live orders without stopping the process.
+		if os.path.exists(config.kill_switch_path):
+			print(
+				colorize("[bot]", COLOR_RED),
+				"KILL SWITCH present — refusing live trade:",
+				config.kill_switch_path,
+			)
+			log_event("kill_switch_active", path=config.kill_switch_path)
+			return False
+		# Rolling-24h live notional cap = max possible daily loss. Runaway
+		# placement (duplicate loops, broken feed) stops here.
+		if config.daily_notional_cap > 0:
+			now_ts = int(time.time())
+			recent = [
+				t
+				for t in state.get("liveNotional", [])
+				if now_ts - int(t.get("ts", 0)) < 86400
+			]
+			state["liveNotional"] = recent
+			spent = sum(float(t.get("stake") or 0) for t in recent)
+			if spent + stake > config.daily_notional_cap:
+				print(
+					colorize("[bot]", COLOR_RED),
+					f"DAILY NOTIONAL CAP: {spent:.2f} placed in 24h + {stake:.2f}",
+					f"> {config.daily_notional_cap} — refusing live trade",
+				)
+				log_event(
+					"daily_notional_cap_hit",
+					spent24h=round(spent, 2),
+					stake=round(stake, 2),
+					cap=config.daily_notional_cap,
+				)
+				return False
+
 	# Generated BEFORE the order so the pick POST is idempotent: the server
 	# dedupes on client_pick_id, letting the outbox retry safely.
 	client_pick_id = f"bot-{uuid.uuid4().hex}"
@@ -1392,6 +1436,12 @@ def place_bet(
 				"createdAt": int(time.time()),
 				"attempts": 0,
 			}
+		)
+	if not config.dry_run:
+		# Count toward the rolling-24h notional cap (unknown fills included —
+		# the order may hold). Persisted by the caller's placed-marker save.
+		state.setdefault("liveNotional", []).append(
+			{"ts": int(time.time()), "stake": round(stake, 2)}
 		)
 	new_bankroll = round(state.get("bankroll", config.paper_bankroll) - stake, 2)
 	if new_bankroll <= 0:
