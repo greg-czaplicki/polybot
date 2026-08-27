@@ -6,6 +6,7 @@ import { formatSideLabel } from "@/lib/side-label";
 import {
 	type DashboardEraSummary,
 	type DashboardHealth,
+	type DashboardLiveBook,
 	type DashboardPickRow,
 	type DashboardRecap,
 	getDashboardFn,
@@ -201,6 +202,7 @@ function DashboardPage() {
 	const [recentSettled, setRecentSettled] = useState<DashboardPickRow[]>([]);
 	const [recap, setRecap] = useState<DashboardRecap | null>(null);
 	const [eras, setEras] = useState<DashboardEraSummary[]>([]);
+	const [liveBook, setLiveBook] = useState<DashboardLiveBook | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -214,6 +216,7 @@ function DashboardPage() {
 			setRecentSettled(result.recentSettled);
 			setRecap(result.recap);
 			setEras(result.eras);
+			setLiveBook(result.liveBook);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load");
 		} finally {
@@ -291,6 +294,57 @@ function DashboardPage() {
 							</p>
 						) : null}
 					</div>
+
+					{/* Live-book stake ladder — pre-registered 2026-08-27
+					    (docs/STRATEGY.md). Each trigger is a fact the day it fires;
+					    until then the strip shows progress toward it. */}
+					{liveBook ? (
+						<div className="mt-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+							<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
+									Live book · stake ladder (out-of-sample since 2026-07-20)
+								</p>
+								<p className="font-mono text-xxs text-ink-55">
+									all {liveBook.all.wins}-{liveBook.all.losses}
+									{liveBook.all.units !== null && liveBook.all.settled > 0
+										? ` · ${((liveBook.all.units / liveBook.all.settled) * 100).toFixed(1)}%`
+										: ""}
+									{" · totals "}
+									{liveBook.totals.wins}-{liveBook.totals.losses}
+									{" · ML "}
+									{liveBook.moneyline.wins}-{liveBook.moneyline.losses}
+								</p>
+							</div>
+							<div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+								{liveBook.triggers.map((t) => (
+									<div
+										key={t.key}
+										title={`When met: ${t.action}`}
+										className="flex items-start gap-2.5 rounded-md bg-ink-10 px-3 py-2 ring-1 ring-inset ring-ink-15"
+									>
+										<span
+											className={`mt-1.5 h-2 w-2 flex-shrink-0 rounded-full ${
+												t.met
+													? t.key === "stop"
+														? TONE_DOT.bad
+														: TONE_DOT.ok
+													: TONE_DOT.unknown
+											}`}
+										/>
+										<div className="min-w-0">
+											<p className="text-sm text-ink-85">
+												{t.label}
+												<span className="ml-2 font-mono text-xxs uppercase tracking-[0.15em] text-ink-55">
+													{t.met ? "MET" : "not yet"}
+												</span>
+											</p>
+											<p className="text-xs text-ink-55">{t.detail}</p>
+										</div>
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
 
 					{/* Overnight recap — one strip: record + units + CLV beat, with
 					    placed/active as header meta. Pinnacle CLV preferred (sharpest

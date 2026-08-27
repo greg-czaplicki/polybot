@@ -5,6 +5,12 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
+import {
+	evaluateLiveLadder,
+	LIVE_OOS_SINCE,
+	type LiveCohortInput,
+	type LiveTrigger,
+} from "@/lib/live-verdict";
 import { STRATEGY_VERSION } from "../../lib/strategy-version";
 import { all, first } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
@@ -41,6 +47,15 @@ export interface DashboardRecap {
 	pinClvN: number;
 	avgClvPct: number | null;
 	clvN: number;
+}
+
+export interface DashboardLiveBook {
+	/** Unix seconds — start of the out-of-sample cohort. */
+	since: number;
+	all: LiveCohortInput & { wins: number; losses: number };
+	totals: LiveCohortInput & { wins: number; losses: number };
+	moneyline: LiveCohortInput & { wins: number; losses: number };
+	triggers: LiveTrigger[];
 }
 
 export interface DashboardEraSummary {
@@ -255,6 +270,75 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		if (postGateRow)
 			eras.push(toEraSummary("Post-gate live (v4+v5)", postGateRow));
 
+		// Live-book stake ladder (pre-registered 2026-08-27, docs/STRATEGY.md):
+		// post-gate out-of-sample cohort, overall / by bet type / trailing 100.
+		const LIVE_AGG = `SELECT COUNT(*) AS settled,
+		        SUM(status = 'win') AS wins, SUM(status = 'loss') AS losses,
+		        SUM(roi) AS units, SUM(roi * roi) AS sumsq,
+		        SUM(pin_fair_prob IS NOT NULL AND pin_close_fair_prob IS NOT NULL) AS pin_move_n,
+		        AVG(CASE WHEN pin_fair_prob IS NOT NULL THEN pin_close_fair_prob - pin_fair_prob END) AS avg_pin_move
+		 FROM manual_picks
+		 WHERE status IN ('win','loss') AND picked_at > ?`;
+		type LiveRow = {
+			settled: number;
+			wins: number;
+			losses: number;
+			units: number | null;
+			sumsq: number | null;
+			pin_move_n: number;
+			avg_pin_move: number | null;
+		};
+		const toCohort = (r: LiveRow | null) => ({
+			settled: r?.settled ?? 0,
+			wins: r?.wins ?? 0,
+			losses: r?.losses ?? 0,
+			units: r?.units ?? null,
+			sumSq: r?.sumsq ?? null,
+			pinMoveN: r?.pin_move_n ?? 0,
+			avgPinMove: r?.avg_pin_move ?? null,
+		});
+		const liveAll = toCohort(
+			await first<LiveRow>(db, LIVE_AGG, LIVE_OOS_SINCE),
+		);
+		const liveTotals = toCohort(
+			await first<LiveRow>(
+				db,
+				`${LIVE_AGG} AND bet_type = 'total'`,
+				LIVE_OOS_SINCE,
+			),
+		);
+		const liveMl = toCohort(
+			await first<LiveRow>(
+				db,
+				`${LIVE_AGG} AND bet_type = 'moneyline'`,
+				LIVE_OOS_SINCE,
+			),
+		);
+		const liveTrailing = toCohort(
+			await first<LiveRow>(
+				db,
+				`SELECT COUNT(*) AS settled, SUM(status = 'win') AS wins,
+				        SUM(status = 'loss') AS losses, SUM(roi) AS units,
+				        SUM(roi * roi) AS sumsq, 0 AS pin_move_n, NULL AS avg_pin_move
+				 FROM (SELECT status, roi FROM manual_picks
+				       WHERE status IN ('win','loss') AND picked_at > ?
+				       ORDER BY settled_at DESC LIMIT 100)`,
+				LIVE_OOS_SINCE,
+			),
+		);
+		const liveBook: DashboardLiveBook = {
+			since: LIVE_OOS_SINCE,
+			all: liveAll,
+			totals: liveTotals,
+			moneyline: liveMl,
+			triggers: evaluateLiveLadder({
+				all: liveAll,
+				totals: liveTotals,
+				moneyline: liveMl,
+				trailing100: liveTrailing,
+			}),
+		};
+
 		const botRow = await first<{ last: number | null }>(
 			db,
 			`SELECT MAX(created_at) AS last FROM bot_candidate_snapshots`,
@@ -311,6 +395,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			recentSettled,
 			recap,
 			eras,
+			liveBook,
 		};
 	},
 );
