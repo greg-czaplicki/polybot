@@ -213,9 +213,16 @@ def load_state(path: str) -> Dict[str, Any]:
 
 
 def save_state(path: str, state: Dict[str, Any]) -> None:
+	# Atomic write (tmp + fsync + rename): a crash mid-write used to corrupt
+	# the file, and load_state silently reset to {"placed": []} — losing every
+	# placed marker and re-betting anything still live.
 	os.makedirs(os.path.dirname(path), exist_ok=True)
-	with open(path, "w", encoding="utf-8") as handle:
+	tmp_path = f"{path}.tmp"
+	with open(tmp_path, "w", encoding="utf-8") as handle:
 		json.dump(state, handle, indent=2, sort_keys=True)
+		handle.flush()
+		os.fsync(handle.fileno())
+	os.replace(tmp_path, path)
 
 
 def parse_event_time_seconds(raw_value: Any) -> int | None:
@@ -830,17 +837,23 @@ def execute_live_trade(
 	# sharp action is present.
 	decision_price = _coerce_float(entry.get("sharpSidePrice"))
 	live_price = fetch_live_buy_price(token_id)
-	if live_price is not None:
-		if live_price >= config.low_roi_threshold:
+	# FAIL CLOSED (2026-08-28 review): no live ask means the drift/ROI gates
+	# below can't run — skip the bet this tick rather than trade blind. The
+	# candidate is retried on the next poll once the price endpoint recovers.
+	if live_price is None:
+		raise RuntimeError(
+			"live ask unavailable — refusing to submit without price protection"
+		)
+	if live_price >= config.low_roi_threshold:
+		raise RuntimeError(
+			f"live ask {live_price} at/above low-ROI threshold {config.low_roi_threshold}"
+		)
+	if decision_price and decision_price > 0:
+		drift_bps = (live_price - decision_price) / decision_price * 10000
+		if drift_bps > config.max_price_drift_bps:
 			raise RuntimeError(
-				f"live ask {live_price} at/above low-ROI threshold {config.low_roi_threshold}"
+				f"live ask drifted {round(drift_bps)}bps above decision price {decision_price}"
 			)
-		if decision_price and decision_price > 0:
-			drift_bps = (live_price - decision_price) / decision_price * 10000
-			if drift_bps > config.max_price_drift_bps:
-				raise RuntimeError(
-					f"live ask drifted {round(drift_bps)}bps above decision price {decision_price}"
-				)
 	from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
 	client = build_clob_client(config)
 	# Worst acceptable fill price: decision price + drift cap, never past the
@@ -860,15 +873,14 @@ def execute_live_trade(
 			order_type=OrderType.FOK,
 			price=price_bound,
 		)
-	except TypeError:
-		# Client version without the price field — the live-price gates above
-		# still bound the exposure.
-		order = MarketOrderArgs(
-			token_id=token_id,
-			amount=float(stake),
-			side="BUY",
-			order_type=OrderType.FOK,
-		)
+	except TypeError as exc:
+		# FAIL CLOSED (2026-08-28 review): a client version without the price
+		# field would submit an unpriced FOK order. Pin the client version
+		# rather than trading without a price bound.
+		raise RuntimeError(
+			"clob client lacks MarketOrderArgs price support — refusing "
+			f"unpriced FOK order (pin py-clob-client-v2): {exc}"
+		) from exc
 	signed = client.create_market_order(order)
 	try:
 		response = client.post_order(signed, OrderType.FOK)
@@ -1229,70 +1241,9 @@ def place_bet(
 		"stake": round(stake, 2),
 		"mode": "paper" if config.dry_run else "live",
 	}
-	placed_successfully = False
-
-	if config.dry_run:
-		print(
-			colorize("[paper]", COLOR_CYAN),
-			"bet",
-			entry.get("marketTitle"),
-			entry.get("sharpSide"),
-			"grade",
-			colorize(grade_label, COLOR_GREEN if grade_label == "A+" else COLOR_YELLOW),
-			"stake",
-			round(stake, 2),
-		)
-		placed_successfully = True
-	else:
-		try:
-			result = execute_live_trade(entry, stake, config)
-			trade["tokenId"] = result.get("token_id")
-			trade["orderResponse"] = result.get("response")
-			print(
-				colorize("[live]", COLOR_GREEN),
-				"order",
-				entry.get("marketTitle"),
-				entry.get("sharpSide"),
-				"grade",
-				colorize(grade_label, COLOR_GREEN if grade_label == "A+" else COLOR_YELLOW),
-				"stake",
-				round(stake, 2),
-			)
-			placed_successfully = True
-		except OrderStateUnknownError as exc:
-			# Submission was attempted and the response was lost — the order
-			# may have filled. Treat the position as live: keep the condition
-			# marked placed (no re-bet) and record a pick with an 'unknown'
-			# fill for manual reconciliation. Never downgrade this to paper.
-			trade["error"] = str(exc)
-			trade["fillUnknown"] = True
-			placed_successfully = True
-			print(
-				colorize("[error]", COLOR_RED),
-				"ORDER STATE UNKNOWN — treating as placed; reconcile manually:",
-				exc,
-			)
-		except Exception as exc:
-			trade["mode"] = "paper"
-			trade["error"] = str(exc)
-			error_text = str(exc)
-			ray_id = extract_cloudflare_ray_id(error_text)
-			if ray_id:
-				trade["cloudflareRayId"] = ray_id
-				print(
-					colorize("[error]", COLOR_RED),
-					"cloudflare block (403) Ray ID:",
-					ray_id,
-				)
-				if config.stop_on_403:
-					print(colorize("[bot]", COLOR_YELLOW), "stopping on Cloudflare block")
-					append_trade_log(config.trade_log_path, trade)
-					sys.exit(1)
-			print(colorize("[error]", COLOR_RED), "live trade failed; defaulting to paper:", exc)
-
-	append_trade_log(config.trade_log_path, trade)
-	if not placed_successfully:
-		return False
+	# Pick payload is built BEFORE submission so the durable submit intent can
+	# carry it: a crash between exchange-accept and persistence used to leave
+	# no record anywhere, and the next poll would re-bet the same market.
 	threshold_used = (
 		config.market_quality_threshold if config.require_microstructure else None
 	)
@@ -1336,6 +1287,89 @@ def place_bet(
 		else None,
 		"decisionSnapshot": decision_snapshot,
 	}
+	condition_key = str(entry.get("conditionId"))
+	placed_successfully = False
+
+	if not config.dry_run:
+		# Durable pre-submit intent: persisted BEFORE the exchange call. If the
+		# process dies mid-submission, startup recovery treats the market as
+		# placed (never re-bets) and records an unknown-fill pick to reconcile.
+		state.setdefault("submitIntents", {})[condition_key] = {
+			"clientPickId": client_pick_id,
+			"pickPayload": pick_payload,
+			"marketGroupKey": get_market_group_key(entry),
+			"eventTime": entry.get("eventTime"),
+			"submittedAt": int(time.time()),
+		}
+		save_state(config.state_path, state)
+
+	if config.dry_run:
+		print(
+			colorize("[paper]", COLOR_CYAN),
+			"bet",
+			entry.get("marketTitle"),
+			entry.get("sharpSide"),
+			"grade",
+			colorize(grade_label, COLOR_GREEN if grade_label == "A+" else COLOR_YELLOW),
+			"stake",
+			round(stake, 2),
+		)
+		placed_successfully = True
+	else:
+		try:
+			result = execute_live_trade(entry, stake, config)
+			trade["tokenId"] = result.get("token_id")
+			trade["orderResponse"] = result.get("response")
+			print(
+				colorize("[live]", COLOR_GREEN),
+				"order",
+				entry.get("marketTitle"),
+				entry.get("sharpSide"),
+				"grade",
+				colorize(grade_label, COLOR_GREEN if grade_label == "A+" else COLOR_YELLOW),
+				"stake",
+				round(stake, 2),
+			)
+			placed_successfully = True
+		except OrderStateUnknownError as exc:
+			# Submission was attempted and the response was lost — the order
+			# may have filled. Treat the position as live: keep the condition
+			# marked placed (no re-bet) and record a pick with an 'unknown'
+			# fill for manual reconciliation. Never downgrade this to paper.
+			trade["error"] = str(exc)
+			trade["fillUnknown"] = True
+			placed_successfully = True
+			print(
+				colorize("[error]", COLOR_RED),
+				"ORDER STATE UNKNOWN — treating as placed; reconcile manually:",
+				exc,
+			)
+		except Exception as exc:
+			# Order definitively not placed (execute_live_trade classifies
+			# ambiguous submissions as OrderStateUnknownError, handled above)
+			# — retire the durable intent before any exit path can fire.
+			state.get("submitIntents", {}).pop(condition_key, None)
+			save_state(config.state_path, state)
+			trade["mode"] = "paper"
+			trade["error"] = str(exc)
+			error_text = str(exc)
+			ray_id = extract_cloudflare_ray_id(error_text)
+			if ray_id:
+				trade["cloudflareRayId"] = ray_id
+				print(
+					colorize("[error]", COLOR_RED),
+					"cloudflare block (403) Ray ID:",
+					ray_id,
+				)
+				if config.stop_on_403:
+					print(colorize("[bot]", COLOR_YELLOW), "stopping on Cloudflare block")
+					append_trade_log(config.trade_log_path, trade)
+					sys.exit(1)
+			print(colorize("[error]", COLOR_RED), "live trade failed; defaulting to paper:", exc)
+
+	append_trade_log(config.trade_log_path, trade)
+	if not placed_successfully:
+		return False
 	execution_payload = build_execution_payload(trade, stake, price)
 	try:
 		created = post_json(
@@ -1414,6 +1448,67 @@ def flush_pending_reports(config: BotConfig, state: Dict[str, Any]) -> None:
 			print("[bot] pending pick report retry failed:", exc)
 	state["pendingReports"] = remaining
 
+def recover_submit_intents(
+	config: BotConfig,
+	state: Dict[str, Any],
+	placed_meta: Dict[str, Dict[str, Any]],
+	placed_group_meta: Dict[str, Dict[str, Any]],
+) -> None:
+	"""Resolve submit intents left behind by a crash mid-submission.
+
+	An intent that survives a restart means the process died between the
+	pre-submit save and the post-placement save: the exchange may or may not
+	hold the order. Fail safe — treat the market as PLACED (never re-bet) and
+	queue an unknown-fill pick record for manual reconciliation.
+	"""
+	intents = state.get("submitIntents") or {}
+	if not intents:
+		return
+	for condition_id, intent in list(intents.items()):
+		print(
+			colorize("[bot]", COLOR_RED),
+			"RECOVERED IN-FLIGHT SUBMIT INTENT — treating as placed,",
+			"reconcile manually:",
+			condition_id,
+			(intent.get("pickPayload") or {}).get("marketTitle"),
+		)
+		placed_meta[condition_id] = {
+			"placedAt": int(intent.get("submittedAt") or time.time()),
+			"eventTime": intent.get("eventTime"),
+		}
+		group_key = intent.get("marketGroupKey")
+		if group_key:
+			placed_group_meta[group_key] = {
+				"placedAt": int(intent.get("submittedAt") or time.time()),
+				"eventTime": intent.get("eventTime"),
+				"conditionId": condition_id,
+			}
+		if intent.get("pickPayload"):
+			state.setdefault("pendingReports", []).append(
+				{
+					"clientPickId": intent.get("clientPickId"),
+					"pickPayload": intent["pickPayload"],
+					"executionPayload": {
+						"executionSubmittedAt": intent.get("submittedAt"),
+						"fillStatus": "unknown",
+						"executionNotes": (
+							"recovered submit intent after crash/restart; order "
+							"may have filled — reconcile manually"
+						),
+					},
+					"createdAt": int(time.time()),
+					"attempts": 0,
+				}
+			)
+		intents.pop(condition_id, None)
+	state["submitIntents"] = intents
+	state["placed"] = sorted(placed_meta.keys())
+	state["placedMeta"] = placed_meta
+	state["placedGroups"] = sorted(placed_group_meta.keys())
+	state["placedGroupMeta"] = placed_group_meta
+	save_state(config.state_path, state)
+
+
 def run_loop() -> None:
 	config = load_config()
 	if config.preflight_only:
@@ -1435,6 +1530,7 @@ def run_loop() -> None:
 		config.placed_ttl_seconds,
 		config.placed_event_grace_seconds,
 	)
+	recover_submit_intents(config, state, placed_meta, placed_group_meta)
 	placed = set(placed_meta.keys())
 	placed_groups = set(placed_group_meta.keys())
 	if "bankroll" not in state:
@@ -1647,6 +1743,9 @@ def run_loop() -> None:
 					state["placedMeta"] = placed_meta
 					state["placedGroups"] = sorted(placed_groups)
 					state["placedGroupMeta"] = placed_group_meta
+					# Submission resolved and markers recorded in the same
+					# save — the durable submit intent has done its job.
+					state.get("submitIntents", {}).pop(condition_id, None)
 					save_state(config.state_path, state)
 					new_bets += 1
 					if new_bets >= config.max_bets:
