@@ -761,9 +761,16 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // gate review). A sport now earns live status on its own shadow evidence via
 // the standard sole-blocker checkpoint instead of inheriting another sport's
 // calibration.
+//
+// NFL (2026-08-28, era v11): same principle ahead of week 1 (09-10). Zero
+// regular-season NFL rows ever recorded (preseason is gated separately by
+// nfl_preseason_excluded, which fires BEFORE this — preseason rows keep
+// their reason). Football markets also skew totals/spreads, where MLB-
+// derived calibration transfers worst.
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
 	"nhl",
 	"ncaaf",
+	"nfl",
 	"championship",
 	"laliga",
 	"bundesliga",

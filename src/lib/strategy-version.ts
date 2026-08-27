@@ -7,4 +7,4 @@
  * On bump: add a row to docs/STRATEGY.md and tag the commit
  * (`git tag strategy-vN`).
  */
-export const STRATEGY_VERSION = "v10-ncaaf-probation";
+export const STRATEGY_VERSION = "v11-nfl-probation";

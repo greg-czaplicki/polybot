@@ -139,6 +139,33 @@ describe("getBotCandidatePolicy", () => {
 		expect(ml.rejectReason).toBe("ncaaf_league_probation");
 	});
 
+	it("shadow-settles NFL behind league probation (era v11), preseason gate first", () => {
+		// 12185 is the nfl-2026 series ID (series-registry.ts).
+		const regularSeason = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 12185,
+			minutesToStart: 120,
+			// Mid-October: regular season, preseason gate does not fire.
+			eventTimeMs: Date.parse("2026-10-18T17:00:00Z"),
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(regularSeason.reject).toBe(true);
+		expect(regularSeason.rejectReason).toBe("nfl_league_probation");
+
+		// Preseason keeps its own (earlier) gate and reason.
+		const preseason = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 12185,
+			minutesToStart: 120,
+			eventTimeMs: Date.parse("2026-08-30T17:00:00Z"),
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(preseason.reject).toBe(true);
+		expect(preseason.rejectReason).toBe("nfl_preseason_excluded");
+	});
+
 	it("shadow-settles NBA >90m behind the timing gate, after the market-type gates", () => {
 		// 10345 is the NBA fallback series ID (series-registry.ts).
 		const ml = getBotCandidatePolicy({
@@ -185,6 +212,8 @@ describe("getBotCandidatePolicy", () => {
 		expect(preseason.reject).toBe(true);
 		expect(preseason.rejectReason).toBe("nfl_preseason_excluded");
 
+		// Week 1 clears the preseason gate but lands in league probation
+		// (era v11) — shadow-only until NFL earns its own checkpoint.
 		const week1 = getBotCandidatePolicy({
 			marketType: "moneyline",
 			sportSeriesId: 10187,
@@ -193,7 +222,8 @@ describe("getBotCandidatePolicy", () => {
 			baseMinGrade: "A",
 			baseMarketQualityThreshold: 0.7,
 		});
-		expect(week1.reject).toBeUndefined();
+		expect(week1.reject).toBe(true);
+		expect(week1.rejectReason).toBe("nfl_league_probation");
 	});
 
 	it("does not apply the preseason gate to non-NFL sports", () => {
