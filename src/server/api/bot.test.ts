@@ -166,6 +166,29 @@ describe("getBotCandidatePolicy", () => {
 		expect(preseason.rejectReason).toBe("nfl_preseason_excluded");
 	});
 
+	it("shadow-settles NCAAB behind league probation (era v12), spread gate first", () => {
+		// 10470 is the NCAAB series ID (series-registry.ts).
+		const ml = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10470,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(ml.reject).toBe(true);
+		expect(ml.rejectReason).toBe("ncaab_league_probation");
+
+		const spread = getBotCandidatePolicy({
+			marketType: "spread",
+			sportSeriesId: 10470,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+		});
+		expect(spread.reject).toBe(true);
+		expect(spread.rejectReason).toBe("ncaab_spread_excluded");
+	});
+
 	it("shadow-settles NBA >90m behind the timing gate, after the market-type gates", () => {
 		// 10345 is the NBA fallback series ID (series-registry.ts).
 		const ml = getBotCandidatePolicy({

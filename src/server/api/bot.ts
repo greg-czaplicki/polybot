@@ -767,10 +767,17 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // nfl_preseason_excluded, which fires BEFORE this — preseason rows keep
 // their reason). Football markets also skew totals/spreads, where MLB-
 // derived calibration transfers worst.
+//
+// NCAAB (2026-08-28, era v12): completes the sport-probation default ahead
+// of the ~November tip-off. ncaab_spread_excluded fires before this (same
+// ordering as NHL puck lines), so the probation cohort stays two-way
+// markets only; the ncaab_penalty ranking adjustment is moot while on
+// probation.
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
 	"nhl",
 	"ncaaf",
 	"nfl",
+	"ncaab",
 	"championship",
 	"laliga",
 	"bundesliga",
