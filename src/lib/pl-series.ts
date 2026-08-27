@@ -37,15 +37,15 @@ function dayEnd(days: number[], index: number): number {
  * each day end. Days before `startAt` (e.g. the CLV validity date) are null;
  * accumulation also ignores points settled before it.
  */
-export function cumulativeByDay(
-	points: SettledPoint[],
+export function cumulativeByDay<P extends SettledPoint>(
+	points: P[],
 	days: number[],
 	options?: {
-		value?: (point: SettledPoint) => number | null | undefined;
+		value?: (point: P) => number | null | undefined;
 		startAt?: number;
 	},
 ): Array<number | null> {
-	const value = options?.value ?? ((point: SettledPoint) => point.roi);
+	const value = options?.value ?? ((point: P) => point.roi);
 	const startAt = options?.startAt ?? days[0] ?? 0;
 	const sorted = points
 		.filter((point) => point.settledAt >= startAt)

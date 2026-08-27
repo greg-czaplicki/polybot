@@ -85,6 +85,10 @@ function formatUnits(value: number): string {
 	return `${value >= 0 ? "+" : ""}${value.toFixed(1)}u`;
 }
 
+function formatDollars(value: number): string {
+	return `${value >= 0 ? "+" : "−"}$${Math.abs(value).toFixed(0)}`;
+}
+
 function formatClvCents(value: number): string {
 	return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(0)}¢`;
 }
@@ -206,10 +210,37 @@ export function PlChartSection({ range }: { range: PlRange }) {
 			value: (point) => point.clv,
 			startAt: Math.max(days[0], CLV_VALID_FROM_SEC),
 		});
+		// Dollar curve: matched fills only, from the first real-money pick in
+		// range. Units × a rising stake is what makes this one bend upward
+		// while the units line stays straight — that is the comparison.
+		const firstMatched = data.picks.find((p) => p.dollars !== null);
+		const dollarCum = cumulativeByDay(data.picks, days, {
+			value: (point) => point.dollars,
+			startAt: firstMatched
+				? Math.max(days[0], firstMatched.settledAt)
+				: days[0],
+		});
+		const stakes = data.picks
+			.filter(
+				(p) =>
+					p.stake !== null &&
+					p.settledAt >= days[0] &&
+					p.settledAt < endSec + 86400,
+			)
+			.map((p) => p.stake as number);
+		const stakeRange =
+			stakes.length > 0
+				? { min: Math.min(...stakes), max: Math.max(...stakes) }
+				: null;
 		const netUnits = [...realCum].reverse().find((v) => v !== null) ?? 0;
+		const netDollars = [...dollarCum].reverse().find((v) => v !== null) ?? 0;
 		return {
 			days,
 			realCum,
+			dollarCum,
+			dollarsAllNull: dollarCum.every((v) => v === null),
+			stakeRange,
+			netDollars,
 			shadowCum,
 			rolling,
 			clvCum,
@@ -283,6 +314,47 @@ export function PlChartSection({ range }: { range: PlRange }) {
 							formatValue={formatUnits}
 							ariaLabel="Cumulative profit and loss in units for the real book and the shadow book over the selected range"
 						/>
+					</div>
+
+					<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+						<h3 className="mb-2 font-sans text-sm font-semibold text-ink-95">
+							Cumulative P/L — dollars
+							<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">
+								matched fills × ROI, same days as above
+								{chart.stakeRange
+									? ` · stake $${chart.stakeRange.min.toFixed(0)} → $${chart.stakeRange.max.toFixed(0)}`
+									: ""}
+							</span>
+						</h3>
+						{chart.dollarsAllNull ? (
+							<div className="py-6 font-mono text-sm text-ink-55">
+								no matched fills in this range
+							</div>
+						) : (
+							<>
+								<PlLineChart
+									days={chart.days}
+									series={[
+										{
+											key: "dollars",
+											label: "Real book (dollars)",
+											color: SERIES_COLORS.real,
+											values: chart.dollarCum,
+										},
+									]}
+									markers={chart.markers}
+									height={200}
+									formatValue={formatDollars}
+									ariaLabel="Cumulative real-money profit and loss in dollars from matched fills over the selected range"
+								/>
+								<p className="mt-2 text-xs text-ink-55">
+									Read the two panels together: units is the system (one unit
+									per bet, stake-independent); dollars is units × the stake you
+									were running. A straight units line under a curving dollar
+									line means the stake rose, not the edge.
+								</p>
+							</>
+						)}
 					</div>
 
 					<div className="grid gap-4 lg:grid-cols-2">

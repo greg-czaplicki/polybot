@@ -13,6 +13,11 @@ export interface PlPickPoint {
 	roi: number;
 	clv: number | null;
 	strategyVersion: string | null;
+	/** Real-money P/L for this pick: matched fill notional × ROI. Null for
+	 * paper picks (no matched fill) — the dollar curve skips them. */
+	dollars: number | null;
+	/** Matched fill notional (the stake actually at risk), null for paper. */
+	stake: number | null;
 }
 
 export interface PlShadowPoint {
@@ -34,9 +39,11 @@ export const getPlTimeseriesFn = createServerFn({ method: "GET" }).handler(
 			roi: number;
 			clv: number | null;
 			strategy_version: string | null;
+			fill_status: string | null;
+			fill_notional: number | null;
 		}>(
 			db,
-			`SELECT settled_at, roi, clv, strategy_version
+			`SELECT settled_at, roi, clv, strategy_version, fill_status, fill_notional
 			 FROM manual_picks
 			 WHERE status IN ('win','loss','push')
 			   AND roi IS NOT NULL
@@ -63,6 +70,18 @@ export const getPlTimeseriesFn = createServerFn({ method: "GET" }).handler(
 				roi: row.roi,
 				clv: row.clv,
 				strategyVersion: row.strategy_version,
+				dollars:
+					row.fill_status === "matched" &&
+					typeof row.fill_notional === "number" &&
+					row.fill_notional > 0
+						? row.fill_notional * row.roi
+						: null,
+				stake:
+					row.fill_status === "matched" &&
+					typeof row.fill_notional === "number" &&
+					row.fill_notional > 0
+						? row.fill_notional
+						: null,
 			})),
 			shadows: shadowRows.map((row) => ({
 				settledAt: row.settled_at,
