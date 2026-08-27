@@ -63,15 +63,20 @@ function SportMixCell({
 	topSport,
 	topSportShare,
 	sportsCount,
+	entries,
 }: {
 	topSport: string | null;
 	topSportShare: number | null;
 	sportsCount: number;
+	entries: number;
 }) {
 	if (!topSport || topSportShare === null) {
 		return <span className="text-ink-40">—</span>;
 	}
-	if (topSportShare >= 0.9) {
+	// Badge = specialist, same bar as the Sport Specialists panel (>=5
+	// entries): 4 increments into one game are 100% concentrated without
+	// saying anything about the wallet.
+	if (topSportShare >= 0.9 && entries >= 5) {
 		return (
 			<span className="inline-flex items-center rounded bg-brand-blue/10 px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider text-brand-cyan ring-1 ring-inset ring-brand-blue/35">
 				{sportBadge(topSport)}
@@ -82,7 +87,8 @@ function SportMixCell({
 		<span className="text-ink-70">
 			{sportBadge(topSport)}{" "}
 			<span className="text-ink-55">
-				{Math.round(topSportShare * 100)}% · {sportsCount} sports
+				{Math.round(topSportShare * 100)}%
+				{sportsCount > 1 ? ` · ${sportsCount} sports` : ""}
 			</span>
 		</span>
 	);
@@ -253,6 +259,7 @@ function WalletsPage() {
 														topSport={row.topSport}
 														topSportShare={row.topSportShare}
 														sportsCount={row.sportsCount}
+														entries={row.entries}
 													/>
 												</td>
 												<td
