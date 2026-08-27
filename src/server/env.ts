@@ -1,4 +1,5 @@
 import { STRATEGY_VERSION } from "@/lib/strategy-version";
+import { verifyAuthToken } from "./auth-token";
 
 export interface Env {
 	POLYWHALER_DB: D1Database;
@@ -23,6 +24,8 @@ export interface Env {
 export interface RequestContext {
 	env: Env;
 	executionCtx: ExecutionContext;
+	/** Auth token from the incoming request (cookie or header); null if absent. */
+	authToken?: string | null;
 }
 
 export function requireContext(context?: RequestContext) {
@@ -33,6 +36,27 @@ export function requireContext(context?: RequestContext) {
 	}
 
 	return context;
+}
+
+/**
+ * Server-side auth gate for server functions. FAIL CLOSED: missing secret
+ * configuration denies every caller rather than allowing them (set
+ * APP_PASSWORD/APP_AUTH_SECRET via wrangler secrets; .dev.vars locally).
+ */
+export async function requireAuth(context?: RequestContext): Promise<void> {
+	const ctx = requireContext(context);
+	const secret = ctx.env.APP_AUTH_SECRET ?? ctx.env.APP_PASSWORD;
+	if (!secret) {
+		throw new Error("unauthorized: auth is not configured");
+	}
+	const token = ctx.authToken;
+	if (!token) {
+		throw new Error("unauthorized: missing auth token");
+	}
+	const valid = await verifyAuthToken(token, secret);
+	if (!valid) {
+		throw new Error("unauthorized: invalid auth token");
+	}
 }
 
 export function getDb(context?: RequestContext) {

@@ -1,39 +1,49 @@
-import { createServerFn } from '@tanstack/react-start'
+import { signAuthToken } from "../auth-token";
+import type { Env } from "../env";
 
-import { signAuthToken } from '../auth-token'
+const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export const verifyPasswordFn = createServerFn({ method: 'POST' })
-  .inputValidator((d: { password?: string }) => d)
-  .handler(async ({ data, context }) => {
-    if (!context?.env) {
-      throw new Error('Environment not available')
-    }
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+	return new Response(JSON.stringify(body), {
+		...init,
+		headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+	});
+}
 
-    const password = context.env.APP_PASSWORD
-    if (!password) {
-      // If no password is set, allow access (backward compatibility)
-      const authSecret = context.env.APP_AUTH_SECRET
-      if (!authSecret) {
-        return { success: true }
-      }
-      const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
-      const token = await signAuthToken(authSecret, expiresAt)
-      return { success: true, token, expiresAt }
-    }
+/**
+ * Login route. A plain route (not a server function) so the global
+ * deny-by-default server-fn middleware (src/start.ts) needs no exemption.
+ * FAIL CLOSED: missing APP_PASSWORD denies every caller (set via wrangler
+ * secrets, or .dev.vars locally).
+ */
+export async function handleLoginRequest(
+	request: Request,
+	env: Env,
+): Promise<Response | null> {
+	const url = new URL(request.url);
+	if (url.pathname !== "/api/login") return null;
+	if (request.method !== "POST") {
+		return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+	}
 
-    const providedPassword = data?.password
-    if (!providedPassword) {
-      throw new Error('Password is required')
-    }
+	const password = env.APP_PASSWORD;
+	if (!password) {
+		return jsonResponse({ error: "auth_not_configured" }, { status: 503 });
+	}
 
-    // Simple password comparison (in production, use proper hashing)
-    if (providedPassword !== password) {
-      throw new Error('Invalid password')
-    }
+	let body: { password?: string } | null = null;
+	try {
+		body = (await request.json()) as { password?: string };
+	} catch {
+		return jsonResponse({ error: "invalid_body" }, { status: 400 });
+	}
 
-    const authSecret = context.env.APP_AUTH_SECRET ?? password
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
-    const token = await signAuthToken(authSecret, expiresAt)
+	if (!body?.password || body.password !== password) {
+		return jsonResponse({ error: "invalid_password" }, { status: 401 });
+	}
 
-    return { success: true, token, expiresAt }
-  })
+	const secret = env.APP_AUTH_SECRET ?? password;
+	const expiresAt = Date.now() + AUTH_TTL_MS;
+	const token = await signAuthToken(secret, expiresAt);
+	return jsonResponse({ success: true, token, expiresAt });
+}

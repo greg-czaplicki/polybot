@@ -2,11 +2,13 @@ import {
 	createStartHandler,
 	defaultStreamHandler,
 } from "@tanstack/react-start/server";
+import { handleLoginRequest } from "./server/api/auth";
 import { handleBotRequest } from "./server/api/bot";
 import { handleBotControlRequest } from "./server/api/bot-control";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { handleShadowDigestRequest } from "./server/api/shadow-digest";
+import { extractAuthToken, verifyAuthToken } from "./server/auth-token";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
 import { getCanonicalFreshness } from "./server/pipeline/canonical-sync";
@@ -55,6 +57,31 @@ const serverEntry = {
 			return shadowDigestResponse;
 		}
 
+		const loginResponse = await handleLoginRequest(request, env);
+		if (loginResponse) {
+			return loginResponse;
+		}
+
+		// Pipeline POST routes (trigger, with force passthrough) require the
+		// same signed token as the server functions. Status GETs stay open.
+		// /_canonical/ POSTs keep their own fail-closed BOT_API_KEY bearer
+		// auth (requireOpsAuth below) — a UI-token check here would reject
+		// those legitimate bearer-key callers.
+		if (request.method === "POST" && url.pathname.startsWith("/_pipeline/")) {
+			const secret = env.APP_AUTH_SECRET ?? env.APP_PASSWORD;
+			const token = extractAuthToken(request);
+			const authorized =
+				Boolean(secret) &&
+				Boolean(token) &&
+				(await verifyAuthToken(token as string, secret as string));
+			if (!authorized) {
+				return new Response(JSON.stringify({ error: "unauthorized" }), {
+					status: 401,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+		}
+
 		// Trigger background sharp pipeline refresh
 		if (url.pathname === "/_pipeline/trigger" && request.method === "POST") {
 			try {
@@ -100,9 +127,9 @@ const serverEntry = {
 			}
 		}
 
-		// Mutating canonical ops require the bot bearer key. Fails closed if the
-		// key is unset. /_pipeline/trigger stays open: the UI calls it from the
-		// browser and it only pokes the same DO tick the cron fires every 2 min.
+		// Mutating canonical ops require the bot bearer key. Fails closed if
+		// the key is unset. (/_pipeline/trigger is guarded by the UI-token
+		// check above — the browser sends the auth cookie.)
 		const requireOpsAuth = (): Response | null => {
 			const apiKey = env.BOT_API_KEY;
 			const authorization = request.headers.get("Authorization") ?? "";
@@ -304,6 +331,7 @@ const serverEntry = {
 		const context: RequestContext = {
 			env,
 			executionCtx,
+			authToken: extractAuthToken(request),
 		};
 
 		return startFetch(request, { context });
