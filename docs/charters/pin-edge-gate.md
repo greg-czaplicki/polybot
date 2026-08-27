@@ -54,6 +54,19 @@ Feature legality at T:
   original text said 20 min. The population therefore adds the filter
   `pin_captured_at − pin_feed_at ≤ 1800` for the primary read, with the
   stale-anchor rows reported as a separate diagnostic slice.
+  **Amendment v1.4 (2026-08-28, external review, no read taken):** the
+  "not possible by construction" claim above is WRONG — it conflated
+  "feed ≤ sweep time" with "feed ≤ decision time". The anchor sweep runs
+  after row creation and may fetch (or use) a feed newer than the row's
+  `created_at`, stamping `pin_feed_at > T` — post-decision information.
+  Both timestamps are stored per row, so the repair is a read-time
+  population filter: the primary read REQUIRES `pin_feed_at ≤ created_at`
+  (shadows) / `pin_feed_at ≤ picked_at` (live picks). Rows with a post-T
+  feed are a separate diagnostic slice, never pooled into the primary
+  read. Measured at amendment time: 87/119 anchored shadows (73%) comply;
+  the non-compliant tail averages ~3 min of post-T feed age. `pin_clv`
+  and `pin_move` are post-T evaluation metrics by definition and are
+  unaffected as criteria.
 - gate vector (`gates_json`), `reject_reason` — computed at T. Legal.
 - `pin_clv`, `pin_close_fair_prob`, `roi`, `resolved_outcome` — post-T.
   Evaluation only; never a feature.
@@ -166,7 +179,7 @@ bump.
 | item | finding |
 |---|---|
 | target lineage | `roi` written by settlement from Gamma resolution; not present at T; not an input |
-| feature availability | `price` at T; `pin_fair_prob` from feed at `pin_feed_at ≤ T` (TTL 20 min, recorded per row) |
+| feature availability | `price` at T; `pin_fair_prob` from feed at `pin_feed_at ≤ T` — NOT guaranteed by capture (v1.4): enforced as a read-time filter `pin_feed_at ≤ created_at`; post-T-feed rows are a diagnostic slice |
 | temporal transform | none (no rolling stats) |
 | joins | Polymarket title → Odds API event is a **display-name join** (`parseTitleTeams` + `matchOddsApiEvent`, team-name normalisation + 45-min / 6-h time gap). Failure mode is NON-capture (coverage), not contamination. Flagged `REVIEW REQUIRED` for coverage bias until the first read reports the anchored ÷ eligible ratio |
 | preprocessing / tuning | none; threshold fixed a priori |
