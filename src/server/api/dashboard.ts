@@ -168,6 +168,14 @@ function toEraSummary(label: string, r: EraAggRow): DashboardEraSummary {
 	};
 }
 
+/**
+ * Live-performance population (2026-08-28 review): exclude picks KNOWN not
+ * to be real money — paper (dry-run), failed submissions, and unknown-state
+ * fills awaiting reconciliation. NULL fill_status passes: every pick before
+ * execution tracking (pre-2026-08-05) was a real bet.
+ */
+const REAL_FILL_SQL = `(fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed'))`;
+
 const ERA_AGG = `SELECT
 	SUM(status = 'win') AS wins,
 	SUM(status = 'loss') AS losses,
@@ -180,7 +188,7 @@ const ERA_AGG = `SELECT
 	SUM(status IN ('win','loss') AND clv IS NOT NULL) AS clv_n,
 	SUM(status IN ('win','loss') AND book_clv IS NOT NULL) AS book_clv_n,
 	SUM(status IN ('win','loss') AND pin_clv IS NOT NULL) AS pin_clv_n
- FROM manual_picks`;
+ FROM manual_picks WHERE ${REAL_FILL_SQL}`;
 
 export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 	async ({ context }) => {
@@ -229,7 +237,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			        AVG(CASE WHEN status IN ('win','loss') THEN clv END) AS avg_clv,
 			        SUM(status IN ('win','loss') AND clv IS NOT NULL) AS clv_n
 			 FROM manual_picks
-			 WHERE status IN ('win','loss','push') AND settled_at >= ?`,
+			 WHERE status IN ('win','loss','push') AND settled_at >= ?
+			   AND ${REAL_FILL_SQL}`,
 			dayAgo,
 		);
 		const placedRow = await first<{ n: number }>(
@@ -256,12 +265,12 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const eraShort = STRATEGY_VERSION.split("-")[0];
 		const currentEraRow = await first<EraAggRow>(
 			db,
-			`${ERA_AGG} WHERE strategy_version LIKE ?`,
+			`${ERA_AGG} AND strategy_version LIKE ?`,
 			`${STRATEGY_VERSION}%`,
 		);
 		const postGateRow = await first<EraAggRow>(
 			db,
-			`${ERA_AGG} WHERE (strategy_version LIKE 'v4-%' OR strategy_version LIKE 'v5-%')
+			`${ERA_AGG} AND (strategy_version LIKE 'v4-%' OR strategy_version LIKE 'v5-%')
 			 AND strategy_version NOT LIKE '%+backfill'`,
 		);
 		const eras: DashboardEraSummary[] = [];
@@ -278,7 +287,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		        SUM(pin_fair_prob IS NOT NULL AND pin_close_fair_prob IS NOT NULL) AS pin_move_n,
 		        AVG(CASE WHEN pin_fair_prob IS NOT NULL THEN pin_close_fair_prob - pin_fair_prob END) AS avg_pin_move
 		 FROM manual_picks
-		 WHERE status IN ('win','loss') AND picked_at > ?`;
+		 WHERE status IN ('win','loss') AND picked_at > ?
+		   AND ${REAL_FILL_SQL}`;
 		type LiveRow = {
 			settled: number;
 			wins: number;
@@ -322,6 +332,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				        SUM(roi * roi) AS sumsq, 0 AS pin_move_n, NULL AS avg_pin_move
 				 FROM (SELECT status, roi FROM manual_picks
 				       WHERE status IN ('win','loss') AND picked_at > ?
+				         AND ${REAL_FILL_SQL}
 				       ORDER BY settled_at DESC LIMIT 100)`,
 				LIVE_OOS_SINCE,
 			),
