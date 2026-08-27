@@ -57,7 +57,7 @@ describe("getBotCandidatePolicy", () => {
 		expect(nba.notes).toContain("nba_moneyline_core");
 	});
 
-	it("prefers nba totals over ncaab totals in 1-3h", () => {
+	it("nba totals stay live-eligible in 1-3h; ncaab totals are probation (era v12)", () => {
 		const nbaTotal = getBotCandidatePolicy({
 			marketType: "total",
 			sportSeriesId: 10345,
@@ -65,6 +65,9 @@ describe("getBotCandidatePolicy", () => {
 			baseMinGrade: "A",
 			baseMarketQualityThreshold: 0.7,
 		});
+		expect(nbaTotal.reject).toBeUndefined();
+		// Pre-v12 this asserted the ncaab_total_caution penalty; NCAAB is now
+		// shadow-only, which supersedes the ranking preference entirely.
 		const ncaabTotal = getBotCandidatePolicy({
 			marketType: "total",
 			sportSeriesId: 10470,
@@ -72,12 +75,8 @@ describe("getBotCandidatePolicy", () => {
 			baseMinGrade: "A",
 			baseMarketQualityThreshold: 0.7,
 		});
-		expect(nbaTotal.rankingAdjustment).toBeGreaterThan(
-			ncaabTotal.rankingAdjustment,
-		);
-		expect(ncaabTotal.minGrade).toBe("A");
-		expect(ncaabTotal.marketQualityThreshold).toBeGreaterThanOrEqual(0.78);
-		expect(ncaabTotal.notes).toContain("ncaab_total_caution");
+		expect(ncaabTotal.reject).toBe(true);
+		expect(ncaabTotal.rejectReason).toBe("ncaab_league_probation");
 	});
 
 	it("boosts mlb 1-3h totals over baseline totals", () => {
