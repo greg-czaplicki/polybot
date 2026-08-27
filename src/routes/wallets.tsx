@@ -63,20 +63,20 @@ function SportMixCell({
 	topSport,
 	topSportShare,
 	sportsCount,
-	entries,
+	markets,
 }: {
 	topSport: string | null;
 	topSportShare: number | null;
 	sportsCount: number;
-	entries: number;
+	markets: number;
 }) {
 	if (!topSport || topSportShare === null) {
 		return <span className="text-ink-40">—</span>;
 	}
 	// Badge = specialist, same bar as the Sport Specialists panel (>=5
-	// entries): 4 increments into one game are 100% concentrated without
-	// saying anything about the wallet.
-	if (topSportShare >= 0.9 && entries >= 5) {
+	// distinct markets): increments pyramided into one game are 100%
+	// concentrated without saying anything about the wallet.
+	if (topSportShare >= 0.9 && markets >= 5) {
 		return (
 			<span className="inline-flex items-center rounded bg-brand-blue/10 px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider text-brand-cyan ring-1 ring-inset ring-brand-blue/35">
 				{sportBadge(topSport)}
@@ -259,7 +259,7 @@ function WalletsPage() {
 														topSport={row.topSport}
 														topSportShare={row.topSportShare}
 														sportsCount={row.sportsCount}
-														entries={row.entries}
+														markets={row.markets}
 													/>
 												</td>
 												<td
@@ -300,7 +300,8 @@ function WalletsPage() {
 							Sport Specialists
 						</h2>
 						<p className="mb-3 font-sans text-xs text-ink-55">
-							Wallets with ≥5 entries and ≥90% of them in one sport, ranked by
+							Wallets with ≥5 distinct markets and ≥90% of them in one sport
+							(pyramided increments into one game count once), ranked by
 							relative CLV (≥3 settled to rank). Descriptive only — the
 							2026-08-27 read found no specialist CLV edge yet; small-n leaders
 							are expected by chance.
@@ -320,6 +321,7 @@ function WalletsPage() {
 											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
+											<th className="py-1.5 pr-4 font-semibold">Markets</th>
 											<th className="py-1.5 pr-4 font-semibold">Entries</th>
 											<th className="py-1.5 pr-4 font-semibold">Volume in</th>
 											<th className="py-1.5 font-semibold">Last seen</th>
@@ -357,6 +359,7 @@ function WalletsPage() {
 												<td className="py-2 pr-4 text-ink-70">
 													{row.beatCloseCount}/{row.closed}
 												</td>
+												<td className="py-2 pr-4 text-ink-70">{row.markets}</td>
 												<td className="py-2 pr-4 text-ink-70">{row.entries}</td>
 												<td className="py-2 pr-4 text-ink-70">
 													{formatUsd(row.totalDeltaUsd)}

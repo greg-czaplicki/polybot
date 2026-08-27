@@ -47,12 +47,14 @@ export interface WalletLeaderboardRow {
 	topSport: string | null;
 	topSportShare: number | null;
 	sportsCount: number;
+	markets: number;
 }
 
 export interface WalletSpecialistRow {
 	walletAddress: string;
 	sport: string;
 	sportShare: number;
+	markets: number;
 	entries: number;
 	closed: number;
 	avgClv: number | null;
@@ -62,15 +64,21 @@ export interface WalletSpecialistRow {
 	lastSeenAt: number;
 }
 
-/** Specialist = ≥90% of a wallet's entries in one sport (2026-08-27 audit). */
+/**
+ * Specialist = ≥90% concentration in one sport. Counted and shared on
+ * DISTINCT MARKETS (condition_id), not raw entries: increments pyramided
+ * into one game are one observation, not five (a market's ML and total are
+ * still separate condition_ids — no game_id on wallet_entries to merge them).
+ */
 const SPECIALIST_SHARE = 0.9;
-/** Minimum entries before concentration means anything. */
-const SPECIALIST_MIN_ENTRIES = 5;
+/** Minimum distinct markets before concentration means anything. */
+const SPECIALIST_MIN_MARKETS = 5;
 
 interface WalletSportMix {
 	topSport: string | null;
 	topSportShare: number | null;
 	sportsCount: number;
+	markets: number;
 	entries: number;
 	closed: number;
 	clvSum: number;
@@ -170,6 +178,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			wallet_address: string;
 			sport_series_id: number;
 			n: number;
+			markets: number;
 			closed: number;
 			clv_sum: number | null;
 			rel_clv_sum: number | null;
@@ -181,6 +190,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			db,
 			`SELECT wallet_address, sport_series_id,
 			        COUNT(*) AS n,
+			        COUNT(DISTINCT condition_id) AS markets,
 			        SUM(status = 'closed') AS closed,
 			        SUM(CASE WHEN status = 'closed' THEN clv END) AS clv_sum,
 			        SUM(CASE WHEN status = 'closed' AND entry_price > 0 THEN clv / entry_price END) AS rel_clv_sum,
@@ -198,7 +208,9 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 		);
 
 		const mixByWallet = new Map<string, WalletSportMix>();
-		const tagEntriesByWallet = new Map<string, Map<string, number>>();
+		// Per-wallet per-tag DISTINCT MARKET counts (a condition_id belongs to
+		// exactly one series, so summing per-series counts into a tag is exact).
+		const tagMarketsByWallet = new Map<string, Map<string, number>>();
 		for (const row of sportRows) {
 			const tag =
 				resolveSportTagFromSeriesId(row.sport_series_id) ??
@@ -209,6 +221,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 					topSport: null,
 					topSportShare: null,
 					sportsCount: 0,
+					markets: 0,
 					entries: 0,
 					closed: 0,
 					clvSum: 0,
@@ -219,9 +232,10 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 					lastSeen: 0,
 				};
 				mixByWallet.set(row.wallet_address, mix);
-				tagEntriesByWallet.set(row.wallet_address, new Map());
+				tagMarketsByWallet.set(row.wallet_address, new Map());
 			}
 			mix.entries += row.n;
+			mix.markets += row.markets;
 			mix.closed += row.closed;
 			mix.clvSum += row.clv_sum ?? 0;
 			mix.relClvSum += row.rel_clv_sum ?? 0;
@@ -229,11 +243,11 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			mix.beatClose += row.beat_close;
 			mix.totalDelta += row.total_delta;
 			mix.lastSeen = Math.max(mix.lastSeen, row.last_seen);
-			const tags = tagEntriesByWallet.get(row.wallet_address);
-			if (tags) tags.set(tag, (tags.get(tag) ?? 0) + row.n);
+			const tags = tagMarketsByWallet.get(row.wallet_address);
+			if (tags) tags.set(tag, (tags.get(tag) ?? 0) + row.markets);
 		}
 		for (const [wallet, mix] of mixByWallet) {
-			const tags = tagEntriesByWallet.get(wallet);
+			const tags = tagMarketsByWallet.get(wallet);
 			if (!tags || tags.size === 0) continue;
 			mix.sportsCount = tags.size;
 			let top: string | null = null;
@@ -245,13 +259,13 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 				}
 			}
 			mix.topSport = top;
-			mix.topSportShare = mix.entries > 0 ? topN / mix.entries : null;
+			mix.topSportShare = mix.markets > 0 ? topN / mix.markets : null;
 		}
 
 		const specialistRows: WalletSpecialistRow[] = [];
 		for (const [wallet, mix] of mixByWallet) {
 			if (
-				mix.entries < SPECIALIST_MIN_ENTRIES ||
+				mix.markets < SPECIALIST_MIN_MARKETS ||
 				mix.topSport === null ||
 				mix.topSportShare === null ||
 				mix.topSportShare < SPECIALIST_SHARE
@@ -261,6 +275,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 				walletAddress: wallet,
 				sport: mix.topSport,
 				sportShare: mix.topSportShare,
+				markets: mix.markets,
 				entries: mix.entries,
 				closed: mix.closed,
 				avgClv: mix.closed > 0 ? mix.clvSum / mix.closed : null,
@@ -317,6 +332,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 				topSport: mix?.topSport ?? null,
 				topSportShare: mix?.topSportShare ?? null,
 				sportsCount: mix?.sportsCount ?? 0,
+				markets: mix?.markets ?? 0,
 			};
 		});
 
