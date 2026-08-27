@@ -2,11 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { getSportLabel } from "@/lib/sports";
 import {
 	getWalletClvSummaryFn,
 	type WalletClvTotals,
 	type WalletEntryRow,
 	type WalletLeaderboardRow,
+	type WalletSpecialistRow,
 } from "../server/api/wallet-clv-api";
 
 export const Route = createFileRoute("/wallets")({
@@ -53,6 +55,39 @@ function formatTime(seconds: number): string {
 	});
 }
 
+function sportBadge(tag: string | null): string {
+	return getSportLabel(tag) ?? "?";
+}
+
+function SportMixCell({
+	topSport,
+	topSportShare,
+	sportsCount,
+}: {
+	topSport: string | null;
+	topSportShare: number | null;
+	sportsCount: number;
+}) {
+	if (!topSport || topSportShare === null) {
+		return <span className="text-ink-40">—</span>;
+	}
+	if (topSportShare >= 0.9) {
+		return (
+			<span className="inline-flex items-center rounded bg-brand-blue/10 px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider text-brand-cyan ring-1 ring-inset ring-brand-blue/35">
+				{sportBadge(topSport)}
+			</span>
+		);
+	}
+	return (
+		<span className="text-ink-70">
+			{sportBadge(topSport)}{" "}
+			<span className="text-ink-55">
+				{Math.round(topSportShare * 100)}% · {sportsCount} sports
+			</span>
+		</span>
+	);
+}
+
 function statusTone(status: string): string {
 	switch (status) {
 		case "closed":
@@ -68,6 +103,7 @@ function WalletsPage() {
 	const [totals, setTotals] = useState<WalletClvTotals | null>(null);
 	const [recent, setRecent] = useState<WalletEntryRow[]>([]);
 	const [leaderboard, setLeaderboard] = useState<WalletLeaderboardRow[]>([]);
+	const [specialists, setSpecialists] = useState<WalletSpecialistRow[]>([]);
 	const [loadedAt, setLoadedAt] = useState<number | null>(null);
 	const [loadFailed, setLoadFailed] = useState(false);
 
@@ -77,6 +113,7 @@ function WalletsPage() {
 			setTotals(result.totals);
 			setRecent(result.recent);
 			setLeaderboard(result.leaderboard);
+			setSpecialists(result.specialists);
 			setLoadedAt(Date.now());
 			setLoadFailed(false);
 		} catch (error) {
@@ -131,6 +168,10 @@ function WalletsPage() {
 							<Stat label="open" value={String(totals.open)} muted />
 							<Stat label="settled" value={String(totals.closed)} />
 							<Stat
+								label="specialists"
+								value={String(totals.specialistWallets)}
+							/>
+							<Stat
 								label="avg clv"
 								value={formatCents(totals.avgClv)}
 								tone={
@@ -171,8 +212,8 @@ function WalletsPage() {
 						</h2>
 						<p className="mb-3 font-sans text-xs text-ink-55">
 							Wallets with ≥3 settled entries, ranked by relative CLV (close
-							move as % of entry price) — did their entry beat the close, and
-							by how much relative to what they paid?
+							move as % of entry price) — did their entry beat the close, and by
+							how much relative to what they paid?
 						</p>
 						{leaderboard.length === 0 ? (
 							<div className="font-mono text-sm text-ink-55">
@@ -185,6 +226,7 @@ function WalletsPage() {
 									<thead>
 										<tr className="text-left text-xxs uppercase tracking-wider text-ink-55">
 											<th className="py-1.5 pr-4 font-semibold">Wallet</th>
+											<th className="py-1.5 pr-4 font-semibold">Sport</th>
 											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
 											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
@@ -205,6 +247,97 @@ function WalletsPage() {
 													>
 														{shortWallet(row.walletAddress)}
 													</a>
+												</td>
+												<td className="py-2 pr-4">
+													<SportMixCell
+														topSport={row.topSport}
+														topSportShare={row.topSportShare}
+														sportsCount={row.sportsCount}
+													/>
+												</td>
+												<td
+													className={`py-2 pr-4 font-semibold ${clvClass(row.avgRelClv)}`}
+												>
+													{formatPct(row.avgRelClv)}
+												</td>
+												<td className={`py-2 pr-4 ${clvClass(row.avgClv)}`}>
+													{formatCents(row.avgClv)}
+												</td>
+												<td className="py-2 pr-4 text-ink-70">
+													{row.beatCloseCount}/{row.closed}
+												</td>
+												<td className="py-2 pr-4 text-ink-70">{row.entries}</td>
+												<td className="py-2 pr-4 text-ink-70">
+													{formatUsd(row.totalDeltaUsd)}
+												</td>
+												<td className="py-2 text-ink-55">
+													{formatTime(row.lastSeenAt)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						)}
+					</section>
+
+					{/* Sport specialists */}
+					<section
+						aria-labelledby="wallet-specialists-heading"
+						className="mb-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
+					>
+						<h2
+							id="wallet-specialists-heading"
+							className="mb-1 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
+						>
+							Sport Specialists
+						</h2>
+						<p className="mb-3 font-sans text-xs text-ink-55">
+							Wallets with ≥5 entries and ≥90% of them in one sport, ranked by
+							relative CLV (≥3 settled to rank). Descriptive only — the
+							2026-08-27 read found no specialist CLV edge yet; small-n leaders
+							are expected by chance.
+						</p>
+						{specialists.length === 0 ? (
+							<div className="font-mono text-sm text-ink-55">
+								no specialists with 3 settled entries yet.
+							</div>
+						) : (
+							<div className="overflow-x-auto">
+								<table className="w-full font-mono text-xs tabular-nums">
+									<thead>
+										<tr className="text-left text-xxs uppercase tracking-wider text-ink-55">
+											<th className="py-1.5 pr-4 font-semibold">Wallet</th>
+											<th className="py-1.5 pr-4 font-semibold">Sport</th>
+											<th className="py-1.5 pr-4 font-semibold">Focus</th>
+											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
+											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
+											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
+											<th className="py-1.5 pr-4 font-semibold">Entries</th>
+											<th className="py-1.5 pr-4 font-semibold">Volume in</th>
+											<th className="py-1.5 font-semibold">Last seen</th>
+										</tr>
+									</thead>
+									<tbody className="divide-y divide-ink-15">
+										{specialists.map((row) => (
+											<tr key={row.walletAddress}>
+												<td className="py-2 pr-4">
+													<a
+														href={profileUrl(row.walletAddress)}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="text-ink-85 underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+													>
+														{shortWallet(row.walletAddress)}
+													</a>
+												</td>
+												<td className="py-2 pr-4">
+													<span className="inline-flex items-center rounded bg-brand-blue/10 px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider text-brand-cyan ring-1 ring-inset ring-brand-blue/35">
+														{sportBadge(row.sport)}
+													</span>
+												</td>
+												<td className="py-2 pr-4 text-ink-70">
+													{Math.round(row.sportShare * 100)}%
 												</td>
 												<td
 													className={`py-2 pr-4 font-semibold ${clvClass(row.avgRelClv)}`}
@@ -301,6 +434,14 @@ function WalletsPage() {
 											<span>
 												{entry.kind === "new_top20" ? "new" : "added"}
 											</span>
+											{entry.sport && (
+												<>
+													<span aria-hidden>·</span>
+													<span className="uppercase">
+														{sportBadge(entry.sport)}
+													</span>
+												</>
+											)}
 											<span aria-hidden>·</span>
 											<span>{formatTime(entry.observedAt)}</span>
 											<span aria-hidden>·</span>
