@@ -455,3 +455,339 @@ describe("pinnapiLeagueMatches", () => {
 		expect(pinnapiLeagueMatches("unknown", "MLB")).toBe(false);
 	});
 });
+
+// ---- OddsPapi adapter ---------------------------------------------------
+import {
+	flipCommaName,
+	type OddspapiFixture,
+	type OddspapiMarket,
+	oddspapiToOddsApiEvent,
+	selectOddspapiTennisTournaments,
+} from "./pinnacle-odds";
+
+/** One OddsPapi market with Pinnacle-native outcome ids and decimal prices. */
+function oddspapiMarket(
+	outcomes: Array<[string, number, boolean?]>,
+	marketActive = true,
+): OddspapiMarket {
+	const out: NonNullable<OddspapiMarket["outcomes"]> = {};
+	outcomes.forEach(([id, price, active], i) => {
+		out[String(i)] = {
+			players: {
+				"0": { active: active ?? true, bookmakerOutcomeId: id, price },
+			},
+		};
+	});
+	return { marketActive, outcomes: out };
+}
+
+function mlbFixture(
+	markets: Record<string, OddspapiMarket>,
+	overrides?: Partial<OddspapiFixture>,
+): OddspapiFixture {
+	return {
+		fixtureId: "id1300010963300999",
+		sportId: 13,
+		tournamentId: 109,
+		startTime: "2026-08-28T18:20:00.000Z",
+		hasOdds: true,
+		participant1Name: "Chicago Cubs",
+		participant2Name: "Cincinnati Reds",
+		bookmakerOdds: { pinnacle: { suspended: false, markets } },
+		...overrides,
+	};
+}
+
+describe("flipCommaName", () => {
+	it("flips surname-first tennis names and leaves team names alone", () => {
+		expect(flipCommaName("Svrcina, Dalibor")).toBe("Dalibor Svrcina");
+		expect(flipCommaName("O'Connell, Christopher")).toBe(
+			"Christopher O'Connell",
+		);
+		expect(flipCommaName("Chicago Cubs")).toBe("Chicago Cubs");
+		expect(flipCommaName(", Solo")).toBe(", Solo");
+	});
+});
+
+describe("oddspapiToOddsApiEvent", () => {
+	it("converts the winner market and the whole alt-line totals ladder", () => {
+		// Real 2026-08-28 CHC-CIN shape: 131 = MLB winner incl. extra innings,
+		// 1318..1332 = the full-game ladder (6.5 inactive), 13806 = first-
+		// inning total, 13662 = team total — the latter two must be ignored.
+		const ev = oddspapiToOddsApiEvent(
+			mlbFixture({
+				"131": oddspapiMarket([
+					["home", 1.552],
+					["away", 2.66],
+				]),
+				"1318": oddspapiMarket([
+					["6.5/over", 1.438, false],
+					["6.5/under", 2.83, false],
+				]),
+				"1322": oddspapiMarket([
+					["7.5/over", 1.709],
+					["7.5/under", 2.23],
+				]),
+				"1326": oddspapiMarket([
+					["8.5/over", 1.99],
+					["8.5/under", 1.9],
+				]),
+				"1330": oddspapiMarket([
+					["9.5/over", 2.52],
+					["9.5/under", 1.564],
+				]),
+				"13806": oddspapiMarket([
+					["0.5/over", 1.869],
+					["0.5/under", 1.99],
+				]),
+				"13662": oddspapiMarket([
+					["home/4.5/over", 1.9],
+					["home/4.5/under", 1.952],
+				]),
+			}),
+		);
+		expect(ev).not.toBeNull();
+		expect(ev?.id).toBe("id1300010963300999");
+		expect(ev?.home_team).toBe("Chicago Cubs");
+		expect(ev?.away_team).toBe("Cincinnati Reds");
+		const book = ev?.bookmakers[0];
+		expect(book?.key).toBe("pinnacle");
+		const h2h = book?.markets.find((m) => m.key === "h2h");
+		expect(h2h?.outcomes).toEqual([
+			{ name: "Chicago Cubs", price: -181.2 },
+			{ name: "Cincinnati Reds", price: 166 },
+		]);
+		const totals = book?.markets.find((m) => m.key === "totals");
+		expect(totals?.outcomes.map((o) => o.point)).toEqual([
+			7.5, 7.5, 8.5, 8.5, 9.5, 9.5,
+		]);
+		expect(totals?.outcomes[2]).toEqual({
+			name: "Over",
+			price: -101,
+			point: 8.5,
+		});
+		expect(totals?.outcomes[3]).toEqual({
+			name: "Under",
+			price: -111.1,
+			point: 8.5,
+		});
+	});
+
+	it("uses the 90-minute 1X2 for soccer and ignores corners/bookings twins", () => {
+		// 101 = Full Time Result; 10911 = Bookings 1X2 and 10805 = corners
+		// O/U 10.0 both carry Pinnacle ids that look like moneyline/totals.
+		const ev = oddspapiToOddsApiEvent(
+			mlbFixture(
+				{
+					"101": oddspapiMarket([
+						["home", 5.02],
+						["draw", 4.08],
+						["away", 1.694],
+					]),
+					"10911": oddspapiMarket([
+						["home", 2.4],
+						["draw", 3.63],
+						["away", 2.57],
+					]),
+					"108": oddspapiMarket([
+						["1.5/over", 1.169],
+						["1.5/under", 5.15],
+					]),
+					"1010": oddspapiMarket([
+						["2.5/over", 1.51],
+						["2.5/under", 2.62],
+					]),
+					"10805": oddspapiMarket([
+						["10.0/over", 1.952],
+						["10.0/under", 1.84],
+					]),
+				},
+				{
+					sportId: 10,
+					tournamentId: 17,
+					participant1Name: "Crystal Palace",
+					participant2Name: "Manchester City",
+				},
+			),
+		);
+		const book = ev?.bookmakers[0];
+		const h2h = book?.markets.find((m) => m.key === "h2h");
+		expect(h2h?.outcomes.map((o) => o.name)).toEqual([
+			"Crystal Palace",
+			"Manchester City",
+			"Draw",
+		]);
+		expect(h2h?.outcomes[0].price).toBe(402);
+		const totals = book?.markets.find((m) => m.key === "totals");
+		expect(totals?.outcomes.map((o) => o.point)).toEqual([1.5, 1.5, 2.5, 2.5]);
+	});
+
+	it("keeps tennis GAMES totals, drops set totals, flips player names", () => {
+		// 121 = tennis winner; 1235 = total games 22.0; 12231 = total SETS 2.5.
+		const ev = oddspapiToOddsApiEvent(
+			mlbFixture(
+				{
+					"121": oddspapiMarket([
+						["home", 1.751],
+						["away", 2.12],
+					]),
+					"1235": oddspapiMarket([
+						["22.0/over", 1.97],
+						["22.0/under", 1.869],
+					]),
+					"12231": oddspapiMarket([
+						["2.5/over", 2.39],
+						["2.5/under", 1.598],
+					]),
+				},
+				{
+					sportId: 12,
+					tournamentId: 2591,
+					participant1Name: "Svrcina, Dalibor",
+					participant2Name: "McDonald, Mackenzie",
+				},
+			),
+		);
+		expect(ev?.home_team).toBe("Dalibor Svrcina");
+		expect(ev?.away_team).toBe("Mackenzie McDonald");
+		const totals = ev?.bookmakers[0].markets.find((m) => m.key === "totals");
+		expect(totals?.outcomes.map((o) => o.point)).toEqual([22, 22]);
+	});
+
+	it("drops half-priced lines, inactive markets, and a line that contradicts the catalog", () => {
+		const ev = oddspapiToOddsApiEvent(
+			mlbFixture({
+				"131": oddspapiMarket([
+					["home", 1.552],
+					["away", 2.66],
+				]),
+				"1326": oddspapiMarket([["8.5/over", 1.99]]),
+				"1328": oddspapiMarket(
+					[
+						["9.0/over", 2.26],
+						["9.0/under", 1.689],
+					],
+					false,
+				),
+				"1330": oddspapiMarket([
+					["8.5/over", 2.52],
+					["8.5/under", 1.564],
+				]),
+			}),
+		);
+		expect(ev?.bookmakers[0].markets.map((m) => m.key)).toEqual(["h2h"]);
+	});
+
+	it("returns null without Pinnacle prices, names, or when suspended", () => {
+		expect(oddspapiToOddsApiEvent(mlbFixture({}))).toBeNull();
+		expect(
+			oddspapiToOddsApiEvent(mlbFixture({}, { bookmakerOdds: undefined })),
+		).toBeNull();
+		expect(
+			oddspapiToOddsApiEvent(
+				mlbFixture(
+					{
+						"131": oddspapiMarket([
+							["home", 1.5],
+							["away", 2.7],
+						]),
+					},
+					{ participant2Name: null },
+				),
+			),
+		).toBeNull();
+		expect(
+			oddspapiToOddsApiEvent(
+				mlbFixture(
+					{
+						"131": oddspapiMarket([
+							["home", 1.5],
+							["away", 2.7],
+						]),
+					},
+					{
+						bookmakerOdds: {
+							pinnacle: {
+								suspended: true,
+								markets: {
+									"131": oddspapiMarket([
+										["home", 1.5],
+										["away", 2.7],
+									]),
+								},
+							},
+						},
+					},
+				),
+			),
+		).toBeNull();
+	});
+
+	it("works with the ladder-aware extractor on the pick's exact line", () => {
+		const ev = oddspapiToOddsApiEvent(
+			mlbFixture({
+				"1322": oddspapiMarket([
+					["7.5/over", 1.709],
+					["7.5/under", 2.23],
+				]),
+				"1326": oddspapiMarket([
+					["8.5/over", 1.99],
+					["8.5/under", 1.9],
+				]),
+			}),
+		) as OddsApiEvent;
+		const prices = extractPinnaclePrices(ev, {
+			betType: "total",
+			venueRole: null,
+			sideLabel: "Under",
+			marketTotalLine: 7.5,
+		});
+		expect(prices.totalLine).toBe(7.5);
+		expect(prices.fairProb).toBeCloseTo(1 / 2.23 / (1 / 1.709 + 1 / 2.23), 3);
+	});
+});
+
+describe("selectOddspapiTennisTournaments", () => {
+	const t = (
+		tournamentId: number,
+		categoryName: string,
+		tournamentName: string,
+		fut = 0,
+		up = 0,
+		live = 0,
+	) => ({
+		tournamentId,
+		categoryName,
+		tournamentName,
+		futureFixtures: fut,
+		upcomingFixtures: up,
+		liveFixtures: live,
+	});
+	it("prefers Grand Slam singles, then busiest, skipping doubles/ITF/idle", () => {
+		const chosen = selectOddspapiTennisTournaments([
+			t(4329, "ATP", "ATP Winston Salem, USA Men Singles", 41, 2, 2),
+			t(4331, "ATP", "ATP Winston Salem, USA Men Doubles", 15),
+			t(2591, "ATP", "US Open Men Singles", 127, 2),
+			t(2595, "WTA", "US Open Women Singles", 127, 2),
+			t(2599, "ATP", "US Open Mixed Doubles", 17),
+			t(2715, "WTA", "WTA Monterrey, Mexico Women Singles", 20, 5, 2),
+			t(2565, "ATP", "Australian Open", 0),
+			t(9999, "ITF Women", "ITF Hurghada Women Singles", 40),
+			t(2559, "WTA", "Wimbledon Women Singles", 0, 0, 2),
+			t(8363, "WTA", "WTA Cincinnati, USA Women Singles", 0, 1),
+		]);
+		expect(chosen.map((c) => c.id)).toEqual([2591, 2595, 2559, 4329, 2715]);
+		expect(chosen.map((c) => c.tag)).toEqual([
+			"atp",
+			"wta",
+			"wta",
+			"atp",
+			"wta",
+		]);
+	});
+	it("returns nothing in the off-season", () => {
+		expect(
+			selectOddspapiTennisTournaments([t(2591, "ATP", "US Open Men Singles")]),
+		).toEqual([]);
+	});
+});

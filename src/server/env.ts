@@ -10,8 +10,9 @@ export interface Env {
 	APP_AUTH_SECRET?: string;
 	// Bot API auth
 	BOT_API_KEY?: string;
-	// Pinnacle benchmark capture: pinnapi (primary) / The Odds API (fallback);
-	// sweep is a no-op when both are unset
+	// Pinnacle benchmark capture: OddsPapi (primary) / pinnapi / The Odds
+	// API (fallbacks, in that order); sweep is a no-op when all are unset
+	ODDSPAPI_KEY?: string;
 	PINNAPI_KEY?: string;
 	ODDS_API_KEY?: string;
 	// Bot control proxy

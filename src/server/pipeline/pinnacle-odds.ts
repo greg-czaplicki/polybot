@@ -7,19 +7,25 @@
  * edge. DraftKings (via ESPN pickcenter, book-odds.ts) stays as the soft-
  * book anchor; FanDuel adds no information beyond DK and is skipped.
  *
- * Providers (env-gated; absent keys make the sweep a no-op):
- *   - pinnapi (pinnapi.com, PINNAPI_KEY) — PRIMARY since 2026-08-26. A
- *     Pinnacle-native relay: one request returns every prematch fixture
- *     for a SPORT (all leagues, all periods, full total/spread ladders,
- *     decimal odds). Free tier = 100 requests/day. Events are filtered to
- *     the leagues we track and converted into the OddsApiEvent shape
+ * Providers (env-gated; absent keys make the sweep a no-op; the first key
+ * set is primary, an auth failure falls through to the next for 30 min):
+ *   - OddsPapi (oddspapi.io, ODDSPAPI_KEY) — PRIMARY since 2026-08-28.
+ *     Aggregator with Pinnacle on its free plan: 250 requests/month, one
+ *     request = one call; /v4/odds-by-tournaments returns every upcoming
+ *     Pinnacle-priced fixture for up to FIVE league ids (full alt-line
+ *     ladders, decimal odds, participant names). Tags are fetched in
+ *     groups (ODDSPAPI_GROUPS) and converted into the OddsApiEvent shape
  *     below (American odds, one "pinnacle" bookmaker, h2h + every total
  *     line) so matching / extraction / caching / tests are provider-
- *     agnostic.
- *   - The Odds API (the-odds-api.com, ODDS_API_KEY) — FALLBACK when
- *     PINNAPI_KEY is unset. One request per league key, 2 credits each,
- *     500 credits/month free (~8 fetches/day); tennis keys are per-
- *     tournament and resolved against the /v4/sports index.
+ *     agnostic. Market selection uses the OddsPapi catalog
+ *     (oddspapi-markets.ts, regenerate with scripts/gen-oddspapi-markets.mjs).
+ *   - pinnapi (pinnapi.com, PINNAPI_KEY) — Pinnacle-native relay, one
+ *     request per SPORT. Primary 2026-08-26 → 08-27 until the vendor
+ *     deleted both trial keys and the account; adapter kept, key unset.
+ *   - The Odds API (the-odds-api.com, ODDS_API_KEY) — last fallback. One
+ *     request per league key, 2 credits each, 500 credits/month free
+ *     (~8 fetches/day); tennis keys are per-tournament and resolved
+ *     against the /v4/sports index.
  *
  * Runs inside the scheduled cron. Two capture kinds per pick, both from
  * the same per-tag feed:
@@ -58,6 +64,10 @@ import {
 	devigTwoWay,
 	parseMarketTotalLine,
 } from "./book-odds";
+import {
+	ODDSPAPI_H2H_MARKET,
+	ODDSPAPI_TOTALS_MARKET,
+} from "./oddspapi-markets";
 
 // The Odds API sport keys for our canonical sport tags. NFL preseason is
 // keyed separately upstream (americanfootball_nfl_preseason) and is NOT
@@ -132,6 +142,60 @@ export function pinnapiLeagueMatches(tag: string, league: string): boolean {
 	return m ? m(league) : false;
 }
 
+// ---- OddsPapi (oddspapi.io) — PRIMARY since 2026-08-28 ------------------
+// Free plan: 250 requests/month, every bookmaker incl. Pinnacle, 1 request
+// = 1 call regardless of payload. /v4/odds-by-tournaments takes up to FIVE
+// tournament ids per call, so tags are fetched in GROUPS: one call serves
+// every tag in its group (like pinnapi's per-sport feed). Tournament ids
+// are season-stable league ids (verified 2026-08-28 via /v4/tournaments);
+// tennis tournaments are per-event and resolve dynamically (see
+// selectOddspapiTennisTournaments).
+const ODDSPAPI_BASE_URL = "https://api.oddspapi.io/v4";
+const ODDSPAPI_TOURNAMENT_IDS: Record<string, number> = {
+	mlb: 109,
+	nba: 132,
+	ncaab: 648,
+	nfl: 31,
+	ncaaf: 27653,
+	nhl: 234,
+	epl: 17,
+	championship: 18,
+	laliga: 8,
+	bundesliga: 35,
+	seriea: 23,
+	ligue1: 34,
+	ucl: 7,
+	mls: 242,
+};
+/** Fetch groups (≤ ODDSPAPI_MAX_TOURNAMENTS_PER_CALL tags each). Live
+ * leagues share a group so one live fetch also refreshes their shadows. */
+const ODDSPAPI_GROUPS: Record<string, string[]> = {
+	mlb: ["mlb"],
+	"soccer-a": ["epl", "mls", "laliga", "bundesliga", "seriea"],
+	"soccer-b": ["ligue1", "ucl", "championship"],
+	football: ["nfl", "ncaaf"],
+	winter: ["nba", "nhl", "ncaab"],
+	tennis: ["atp", "wta"],
+};
+const ODDSPAPI_GROUP_OF: Record<string, string> = Object.fromEntries(
+	Object.entries(ODDSPAPI_GROUPS).flatMap(([group, tags]) =>
+		tags.map((tag) => [tag, group]),
+	),
+);
+const ODDSPAPI_MAX_TOURNAMENTS_PER_CALL = 5;
+const ODDSPAPI_TENNIS_SPORT_ID = 12;
+/** pinnacle_feed_cache row holding the resolved tennis tournament ids. */
+const ODDSPAPI_TENNIS_INDEX_TAG = "oddspapi-tennis-index";
+const ODDSPAPI_TENNIS_INDEX_MAX_AGE_SECONDS = 24 * 3600;
+const ODDSPAPI_TENNIS_PREFERRED = [
+	/us open/i,
+	/wimbledon/i,
+	/french open|roland garros/i,
+	/australian open/i,
+];
+/** Documented per-endpoint cooldown is 1000 ms. */
+const ODDSPAPI_REQUEST_GAP_MS = 1100;
+
 // Tennis has no season-long key upstream — tournaments each get their own
 // (tennis_atp_us_open, ...), so atp/wta resolve dynamically against the
 // /v4/sports index (a zero-credit call) at sweep time.
@@ -188,6 +252,16 @@ const ODDS_API_CAPS: FetchCaps = {
 	liveClose: 12,
 	perSport: 12,
 };
+/** OddsPapi: 250 requests/month ≈ 8/day. Same shape as the Odds API
+ * budget, but every request serves a whole group (up to 5 leagues), and
+ * the monthly balance is enforced separately via /v4/account (unmetered)
+ * through the LIVE/BENCHMARK_MIN_CREDITS floors. */
+const ODDSPAPI_CAPS: FetchCaps = {
+	shadow: 5,
+	liveAnchor: 6,
+	liveClose: 8,
+	perSport: 4,
+};
 const FETCH_WINDOW_SECONDS = 24 * 3600;
 /** After any pinnapi request fails (auth, 429, 5xx, network) no pinnapi
  * request is made for this long — a failed fetch caches nothing, so
@@ -199,6 +273,34 @@ const PINNAPI_AUTH_FALLBACK_SECONDS = 30 * 60;
 /** pinnacle_fetch_log.sport_key prefix for failed pinnapi requests; these
  * rows drive the backoff and are NOT counted toward the fetch caps. */
 const PINNAPI_FAIL_KEY_PREFIX = "pinnapi-fail:";
+const ODDSPAPI_FAIL_KEY_PREFIX = "oddspapi-fail:";
+/** OddsPapi 429 = monthly quota exhausted (resets on the 1st): retrying
+ * every 10 minutes is pointless, so back off for much longer. */
+const ODDSPAPI_QUOTA_BACKOFF_SECONDS = 6 * 3600;
+const FAIL_KEY_PREFIXES: Array<[string, PinnacleProvider]> = [
+	[PINNAPI_FAIL_KEY_PREFIX, "pinnapi"],
+	[ODDSPAPI_FAIL_KEY_PREFIX, "oddspapi"],
+];
+/** pinnacle_fetch_log rows that are NOT spend: `<provider>-fail:<status>`. */
+function parseFailKey(
+	key: string,
+): { provider: PinnacleProvider; status: number } | null {
+	for (const [prefix, provider] of FAIL_KEY_PREFIXES) {
+		if (key.startsWith(prefix)) {
+			return {
+				provider,
+				status: Number.parseInt(key.slice(prefix.length), 10),
+			};
+		}
+	}
+	return null;
+}
+/** Which provider a spend row belongs to (fetch-log key namespace). */
+function providerOfLogKey(key: string): PinnacleProvider {
+	if (key.startsWith("oddspapi:")) return "oddspapi";
+	if (key.startsWith("pinnapi:")) return "pinnapi";
+	return "odds-api";
+}
 
 /** Close window opens this long before event_time. */
 const CLOSE_WINDOW_BEFORE_SECONDS = 600;
@@ -332,6 +434,187 @@ export function pinnapiToOddsApiEvent(e: PinnapiEvent): OddsApiEvent | null {
 		away_team: e.away,
 		bookmakers: [{ key: "pinnacle", markets }],
 	};
+}
+
+// ---- OddsPapi feed shape (subset we read) -------------------------------
+interface OddspapiPlayerOdds {
+	active?: boolean | null;
+	bookmakerOutcomeId?: string | null;
+	/** Decimal. */
+	price?: number | null;
+}
+export interface OddspapiMarket {
+	marketActive?: boolean | null;
+	outcomes?: Record<string, { players?: Record<string, OddspapiPlayerOdds> }>;
+}
+export interface OddspapiFixture {
+	fixtureId: string;
+	sportId: number;
+	tournamentId: number;
+	startTime: string;
+	hasOdds?: boolean;
+	participant1Name?: string | null;
+	participant2Name?: string | null;
+	/** Keyed by bookmaker slug; markets keyed by OddsPapi market id. */
+	bookmakerOdds?: Record<
+		string,
+		{ suspended?: boolean | null; markets?: Record<string, OddspapiMarket> }
+	>;
+}
+export interface OddspapiTournament {
+	tournamentId: number;
+	tournamentName: string;
+	categoryName: string;
+	futureFixtures?: number;
+	upcomingFixtures?: number;
+	liveFixtures?: number;
+}
+
+/** "Svrcina, Dalibor" → "Dalibor Svrcina": OddsPapi lists tennis players
+ * surname-first, Polymarket titles given-name-first. Pure — exported for
+ * tests. */
+export function flipCommaName(name: string): string {
+	const i = name.indexOf(", ");
+	if (i <= 0) return name.trim();
+	return `${name.slice(i + 2).trim()} ${name.slice(0, i).trim()}`;
+}
+
+const ODDSPAPI_TOTAL_OUTCOME_RE = /^(-?\d+(?:\.\d+)?)\/(over|under)$/;
+
+/**
+ * Converts an OddsPapi fixture (Pinnacle book only) into the provider-
+ * agnostic feed shape: the sport's winner market (soccer 1X2 incl. draw)
+ * and EVERY full-game total on the ladder. Market SELECTION goes through
+ * the OddsPapi catalog (oddspapi-markets.ts) — OddsPapi merges corners,
+ * bookings, team totals, sets and period markets into the same fixture
+ * with Pinnacle-native ids that look identical, so the Pinnacle
+ * `bookmakerMarketId` alone cannot be trusted. Side and line come from
+ * Pinnacle's `bookmakerOutcomeId` ("8.5/over", "home"), cross-checked
+ * against the catalog line. Inactive outcomes/markets are dropped.
+ * Null when the fixture carries no usable Pinnacle prices. Pure —
+ * exported for tests.
+ */
+export function oddspapiToOddsApiEvent(
+	f: OddspapiFixture,
+): OddsApiEvent | null {
+	const pin = f.bookmakerOdds?.pinnacle;
+	const home = f.participant1Name ? flipCommaName(f.participant1Name) : "";
+	const away = f.participant2Name ? flipCommaName(f.participant2Name) : "";
+	if (!pin?.markets || pin.suspended || !home || !away || !f.startTime)
+		return null;
+	const outcomesOf = (
+		m: OddspapiMarket | undefined,
+	): Array<{ id: string; price: number }> => {
+		if (!m || m.marketActive === false || !m.outcomes) return [];
+		const out: Array<{ id: string; price: number }> = [];
+		for (const o of Object.values(m.outcomes)) {
+			const p = o.players ? Object.values(o.players)[0] : undefined;
+			if (!p || p.active === false || typeof p.price !== "number") continue;
+			const price = decimalToAmerican(p.price);
+			if (price === null || !p.bookmakerOutcomeId) continue;
+			out.push({ id: p.bookmakerOutcomeId.toLowerCase(), price });
+		}
+		return out;
+	};
+	const markets: OddsApiEvent["bookmakers"][number]["markets"] = [];
+	const h2hId = ODDSPAPI_H2H_MARKET[f.sportId];
+	if (h2hId !== undefined) {
+		const outs = outcomesOf(pin.markets[String(h2hId)]);
+		const h = outs.find((o) => o.id === "home");
+		const a = outs.find((o) => o.id === "away");
+		const d = outs.find((o) => o.id === "draw");
+		if (h && a) {
+			const outcomes: OddsApiOutcome[] = [
+				{ name: home, price: h.price },
+				{ name: away, price: a.price },
+			];
+			if (d) outcomes.push({ name: "Draw", price: d.price });
+			markets.push({ key: "h2h", outcomes });
+		}
+	}
+	const byLine = new Map<number, { over?: number; under?: number }>();
+	for (const [mid, m] of Object.entries(pin.markets)) {
+		const catalog = ODDSPAPI_TOTALS_MARKET[Number(mid)];
+		if (!catalog || catalog[0] !== f.sportId) continue;
+		for (const o of outcomesOf(m)) {
+			const match = ODDSPAPI_TOTAL_OUTCOME_RE.exec(o.id);
+			if (!match) continue;
+			if (Math.abs(Number.parseFloat(match[1]) - catalog[1]) > 0.01) continue;
+			const slot = byLine.get(catalog[1]) ?? {};
+			if (match[2] === "over") slot.over = o.price;
+			else slot.under = o.price;
+			byLine.set(catalog[1], slot);
+		}
+	}
+	const lines = [...byLine.entries()]
+		.filter(([, s]) => s.over !== undefined && s.under !== undefined)
+		.sort((x, y) => x[0] - y[0]);
+	if (lines.length > 0) {
+		markets.push({
+			key: "totals",
+			outcomes: lines.flatMap(([line, s]) => [
+				{ name: "Over", price: s.over as number, point: line },
+				{ name: "Under", price: s.under as number, point: line },
+			]),
+		});
+	}
+	if (markets.length === 0) return null;
+	return {
+		id: f.fixtureId,
+		commence_time: f.startTime,
+		home_team: home,
+		away_team: away,
+		bookmakers: [{ key: "pinnacle", markets }],
+	};
+}
+
+/**
+ * Picks the tennis tournaments worth one fetch slot: ATP/WTA singles
+ * (main draws include qualifying) with fixtures listed, Grand Slams
+ * first, then by fixture count, up to `max` (the per-call id limit).
+ * Pure — exported for tests.
+ */
+export function selectOddspapiTennisTournaments(
+	list: OddspapiTournament[],
+	max = ODDSPAPI_MAX_TOURNAMENTS_PER_CALL,
+): Array<{ id: number; tag: string; name: string }> {
+	const scored: Array<{
+		id: number;
+		tag: string;
+		name: string;
+		preferred: number;
+		n: number;
+	}> = [];
+	for (const t of list) {
+		const tag =
+			t.categoryName === "ATP"
+				? "atp"
+				: t.categoryName === "WTA"
+					? "wta"
+					: null;
+		if (!tag) continue;
+		if (!/singles$/i.test(t.tournamentName)) continue;
+		if (/doubles|mixed/i.test(t.tournamentName)) continue;
+		const n =
+			(t.futureFixtures ?? 0) +
+			(t.upcomingFixtures ?? 0) +
+			(t.liveFixtures ?? 0);
+		if (n <= 0) continue;
+		const preferred = ODDSPAPI_TENNIS_PREFERRED.some((re) =>
+			re.test(t.tournamentName),
+		)
+			? 1
+			: 0;
+		scored.push({
+			id: t.tournamentId,
+			tag,
+			name: t.tournamentName,
+			preferred,
+			n,
+		});
+	}
+	scored.sort((x, y) => y.preferred - x.preferred || y.n - x.n || x.id - y.id);
+	return scored.slice(0, max).map(({ id, tag, name }) => ({ id, tag, name }));
 }
 
 function normalizeTeamName(name: string): string {
@@ -610,6 +893,117 @@ async function fetchPinnapiSport(
 	}
 }
 
+/** One OddsPapi GET. The key never appears in logs (path only). */
+async function oddspapiGet<T>(
+	apiKey: string,
+	path: string,
+	query: Record<string, string>,
+): Promise<{ data: T } | { failed: number }> {
+	const params = new URLSearchParams({ ...query, apiKey });
+	try {
+		const res = await fetch(`${ODDSPAPI_BASE_URL}${path}?${params}`);
+		if (!res.ok) {
+			const body = (await res.text().catch(() => "")).slice(0, 120);
+			console.warn(
+				`[pinnacle-odds] oddspapi returned ${res.status} for ${path}: ${body}${res.status === 429 ? " (MONTHLY QUOTA EXHAUSTED?)" : ""}`,
+			);
+			return { failed: res.status };
+		}
+		return { data: (await res.json()) as T };
+	} catch (err) {
+		console.warn(
+			`[pinnacle-odds] oddspapi fetch failed for ${path}:`,
+			err instanceof Error ? err.message : err,
+		);
+		return { failed: 0 };
+	}
+}
+
+/** One OddsPapi request: every upcoming Pinnacle-priced fixture in up to
+ * five tournaments (verbosity 3 = participant names included). */
+async function fetchOddspapiTournaments(
+	apiKey: string,
+	tournamentIds: number[],
+): Promise<{ fixtures: OddspapiFixture[] } | { failed: number }> {
+	const result = await oddspapiGet<OddspapiFixture[]>(
+		apiKey,
+		"/odds-by-tournaments",
+		{
+			tournamentIds: tournamentIds
+				.slice(0, ODDSPAPI_MAX_TOURNAMENTS_PER_CALL)
+				.join(","),
+			bookmakers: "pinnacle",
+			verbosity: "3",
+		},
+	);
+	if ("failed" in result) return result;
+	return { fixtures: Array.isArray(result.data) ? result.data : [] };
+}
+
+/** Requests left this month from the unmetered /v4/account; null when
+ * unreadable (the floors then don't apply — the rolling caps still do). */
+async function fetchOddspapiCredits(apiKey: string): Promise<number | null> {
+	const result = await oddspapiGet<{
+		subscriptions?: Array<{
+			is_active?: boolean;
+			request_limit?: number | null;
+			request_count?: number | null;
+		}>;
+	}>(apiKey, "/account", {});
+	if ("failed" in result) return null;
+	const subs = result.data.subscriptions ?? [];
+	const sub = subs.find((s) => s.is_active) ?? subs[0];
+	if (
+		!sub ||
+		typeof sub.request_limit !== "number" ||
+		typeof sub.request_count !== "number"
+	)
+		return null;
+	return sub.request_limit - sub.request_count;
+}
+
+interface TennisIndexMember {
+	id: number;
+	tag: string;
+	name: string;
+}
+
+async function readTennisIndex(
+	db: Db,
+): Promise<{ fetchedAt: number; members: TennisIndexMember[] } | null> {
+	const row = await first<FeedCacheRow>(
+		db,
+		`SELECT fetched_at, events_json FROM pinnacle_feed_cache WHERE sport_tag = ?`,
+		ODDSPAPI_TENNIS_INDEX_TAG,
+	);
+	if (!row) return null;
+	try {
+		const members = JSON.parse(row.events_json) as TennisIndexMember[];
+		return Array.isArray(members)
+			? { fetchedAt: row.fetched_at, members }
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+async function writeTennisIndex(
+	db: Db,
+	fetchedAt: number,
+	members: TennisIndexMember[],
+): Promise<void> {
+	await run(
+		db,
+		`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+		 VALUES (?, ?, ?, NULL)
+		 ON CONFLICT(sport_tag) DO UPDATE SET
+		   fetched_at = excluded.fetched_at, events_json = excluded.events_json`,
+		ODDSPAPI_TENNIS_INDEX_TAG,
+		fetchedAt,
+		JSON.stringify(members),
+	);
+}
+
 /**
  * Extracts the two team names from a Polymarket game-market title
  * ("Colorado Rockies vs. Arizona Diamondbacks: O/U 9.5" → both teams).
@@ -723,9 +1117,12 @@ interface Feed {
 	fetchedAt: number;
 }
 
-export type PinnacleProvider = "pinnapi" | "odds-api";
+export type PinnacleProvider = "oddspapi" | "pinnapi" | "odds-api";
 
+/** Provider precedence: oddspapi → pinnapi → The Odds API (first key set
+ * is primary; an auth failure on the primary falls through to the next). */
 export interface PinnacleKeys {
+	oddspapiKey?: string;
 	pinnapiKey?: string;
 	oddsApiKey?: string;
 }
@@ -760,22 +1157,26 @@ export async function capturePinnacleOddsForPicks(
 	// A bare string is the legacy Odds API key.
 	const resolved: PinnacleKeys =
 		typeof keys === "string" ? { oddsApiKey: keys } : (keys ?? {});
-	let provider: PinnacleProvider | null = resolved.pinnapiKey
-		? "pinnapi"
-		: resolved.oddsApiKey
-			? "odds-api"
-			: null;
+	const chain: PinnacleProvider[] = [];
+	if (resolved.oddspapiKey) chain.push("oddspapi");
+	if (resolved.pinnapiKey) chain.push("pinnapi");
+	if (resolved.oddsApiKey) chain.push("odds-api");
+	let provider: PinnacleProvider | null = chain[0] ?? null;
 	if (provider === null) return empty;
 	const tracked = (tag: string): boolean =>
-		provider === "pinnapi"
-			? PINNAPI_SPORT_IDS[tag] !== undefined
-			: !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
-	// Fetch-log key per tag: pinnapi spends per SPORT (one fetch serves
-	// every tag of that sport), The Odds API per league key.
+		provider === "oddspapi"
+			? ODDSPAPI_GROUP_OF[tag] !== undefined
+			: provider === "pinnapi"
+				? PINNAPI_SPORT_IDS[tag] !== undefined
+				: !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
+	// Fetch-log key per tag: oddspapi spends per GROUP, pinnapi per SPORT
+	// (one fetch serves every tag of it), The Odds API per league key.
 	const sportLogKey = (tag: string): string =>
-		provider === "pinnapi"
-			? `pinnapi:${PINNAPI_SPORT_IDS[tag]}`
-			: (ODDS_API_SPORT_KEYS[tag] ?? TENNIS_TOUR_PREFIXES[tag] ?? tag);
+		provider === "oddspapi"
+			? `oddspapi:${ODDSPAPI_GROUP_OF[tag]}`
+			: provider === "pinnapi"
+				? `pinnapi:${PINNAPI_SPORT_IDS[tag]}`
+				: (ODDS_API_SPORT_KEYS[tag] ?? TENNIS_TOUR_PREFIXES[tag] ?? tag);
 	const limit =
 		typeof options?.limit === "number" && options.limit > 0
 			? Math.min(options.limit, 50)
@@ -869,40 +1270,71 @@ export async function capturePinnacleOddsForPicks(
 		 FROM pinnacle_fetch_log WHERE fetched_at > ? GROUP BY sport_key`,
 		windowStart,
 	);
-	const perSport = new Map<string, number>();
-	let fetchesInWindow = 0;
-	let lastFailAt = 0;
-	let lastFailStatus = 0;
+	// Latest failure per provider (fail rows are not spend) and the spend
+	// rows, attributed to the provider whose key namespace they carry.
+	const lastFail = new Map<PinnacleProvider, { at: number; status: number }>();
+	const spendRows: Array<{
+		provider: PinnacleProvider;
+		key: string;
+		n: number;
+	}> = [];
 	for (const r of windowRows) {
-		if (r.sport_key.startsWith(PINNAPI_FAIL_KEY_PREFIX)) {
-			if (r.last_at > lastFailAt) {
-				lastFailAt = r.last_at;
-				lastFailStatus = Number.parseInt(
-					r.sport_key.slice(PINNAPI_FAIL_KEY_PREFIX.length),
-					10,
-				);
-			}
+		const fail = parseFailKey(r.sport_key);
+		if (fail) {
+			const prev = lastFail.get(fail.provider);
+			if (!prev || r.last_at > prev.at)
+				lastFail.set(fail.provider, { at: r.last_at, status: fail.status });
 			continue;
 		}
-		perSport.set(r.sport_key, r.n);
-		fetchesInWindow += r.n;
+		spendRows.push({
+			provider: providerOfLogKey(r.sport_key),
+			key: r.sport_key,
+			n: r.n,
+		});
 	}
-	let pinnapiBackoff = now - lastFailAt < PINNAPI_FAIL_BACKOFF_SECONDS;
+	// Auth failure on the primary → next provider in the chain for a while.
+	const primaryFail = lastFail.get(provider);
 	if (
-		provider === "pinnapi" &&
-		(lastFailStatus === 401 || lastFailStatus === 403) &&
-		now - lastFailAt < PINNAPI_AUTH_FALLBACK_SECONDS &&
-		resolved.oddsApiKey
+		primaryFail &&
+		(primaryFail.status === 401 || primaryFail.status === 403) &&
+		now - primaryFail.at < PINNAPI_AUTH_FALLBACK_SECONDS &&
+		chain.length > 1
 	) {
 		console.warn(
-			`[pinnacle-odds] pinnapi auth failed ${lastFailStatus} at ${lastFailAt}; using The Odds API fallback this sweep`,
+			`[pinnacle-odds] ${provider} auth failed ${primaryFail.status} at ${primaryFail.at}; using ${chain[1]} fallback this sweep`,
 		);
-		provider = "odds-api";
+		provider = chain[1];
 	}
+	// Caps count ONLY the active provider's spend. Counting every row let
+	// the day's pinnapi successes exhaust the Odds API caps the moment the
+	// 8/27 auth failure switched providers — the fallback never fetched.
+	const perSport = new Map<string, number>();
+	let fetchesInWindow = 0;
+	for (const r of spendRows) {
+		if (r.provider !== provider) continue;
+		perSport.set(r.key, r.n);
+		fetchesInWindow += r.n;
+	}
+	const providerFail = lastFail.get(provider);
+	let providerBackoff =
+		providerFail !== undefined &&
+		now - providerFail.at <
+			(provider === "oddspapi" && providerFail.status === 429
+				? ODDSPAPI_QUOTA_BACKOFF_SECONDS
+				: PINNAPI_FAIL_BACKOFF_SECONDS);
 	const apiKey = (
-		provider === "pinnapi" ? resolved.pinnapiKey : resolved.oddsApiKey
+		provider === "oddspapi"
+			? resolved.oddspapiKey
+			: provider === "pinnapi"
+				? resolved.pinnapiKey
+				: resolved.oddsApiKey
 	) as string;
-	const caps = provider === "pinnapi" ? PINNAPI_CAPS : ODDS_API_CAPS;
+	const caps =
+		provider === "oddspapi"
+			? ODDSPAPI_CAPS
+			: provider === "pinnapi"
+				? PINNAPI_CAPS
+				: ODDS_API_CAPS;
 	let fetches = 0;
 	// Odds API only: seed the credit tracker from the last persisted balance
 	// so the floors apply from the first fetch of the sweep, not the second.
@@ -937,22 +1369,30 @@ export async function capturePinnacleOddsForPicks(
 				: role === "live-anchor"
 					? caps.liveAnchor
 					: caps.shadow;
-		if (provider === "pinnapi" && pinnapiBackoff) return false;
+		if (providerBackoff) return false;
 		if (fetchesInWindow >= cap) return false;
 		return (perSport.get(sportLogKey(tag)) ?? 0) < caps.perSport;
 	};
 
-	// Failed pinnapi request: recorded for the backoff, not counted as spend.
-	const logPinnapiFailure = async (status: number): Promise<void> => {
-		pinnapiBackoff = true;
+	// Failed pinnapi/oddspapi request: recorded for the backoff, not spend.
+	const logProviderFailure = async (status: number): Promise<void> => {
+		providerBackoff = true;
 		await run(
 			db,
 			`INSERT INTO pinnacle_fetch_log (fetched_at, sport_key, credits_remaining)
 			 VALUES (?, ?, NULL)`,
 			now,
-			`${PINNAPI_FAIL_KEY_PREFIX}${status}`,
+			`${provider === "oddspapi" ? ODDSPAPI_FAIL_KEY_PREFIX : PINNAPI_FAIL_KEY_PREFIX}${status}`,
 		);
 	};
+	// OddsPapi documents a 1 s per-endpoint cooldown; pace every call.
+	let lastOddspapiAt = 0;
+	const oddspapiPace = async (): Promise<void> => {
+		const wait = lastOddspapiAt + ODDSPAPI_REQUEST_GAP_MS - Date.now();
+		if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+		lastOddspapiAt = Date.now();
+	};
+	let oddspapiCreditsChecked = false;
 
 	const logFetch = async (sportKey: string): Promise<void> => {
 		fetchesInWindow += 1;
@@ -970,6 +1410,41 @@ export async function capturePinnacleOddsForPicks(
 
 	// pinnapi: raw per-SPORT feeds fetched this sweep (null = failed).
 	const pinnapiSportFeeds = new Map<number, PinnapiEvent[] | null>();
+	// oddspapi: raw per-GROUP feeds fetched this sweep (null = failed).
+	const oddspapiGroupFeeds = new Map<string, OddspapiFixture[] | null>();
+
+	// Tennis tournament ids for the oddspapi "tennis" group: cached daily
+	// (the /v4/tournaments index is a billable request, logged under the
+	// group so the per-group cap covers it). Null = unresolvable this sweep.
+	const resolveOddspapiTennis = async (): Promise<
+		TennisIndexMember[] | null
+	> => {
+		const cached = await readTennisIndex(db);
+		if (
+			cached &&
+			now - cached.fetchedAt <= ODDSPAPI_TENNIS_INDEX_MAX_AGE_SECONDS
+		)
+			return cached.members;
+		await oddspapiPace();
+		const result = await oddspapiGet<OddspapiTournament[]>(
+			apiKey,
+			"/tournaments",
+			{ sportId: String(ODDSPAPI_TENNIS_SPORT_ID) },
+		);
+		if ("failed" in result) {
+			await logProviderFailure(result.failed);
+			return cached?.members ?? null;
+		}
+		await logFetch("oddspapi:tennis");
+		const members = selectOddspapiTennisTournaments(
+			Array.isArray(result.data) ? result.data : [],
+		);
+		await writeTennisIndex(db, now, members);
+		console.log(
+			`[pinnacle-odds] oddspapi tennis index: ${members.map((m) => `${m.tag}:${m.id} ${m.name}`).join(" | ") || "none active"}`,
+		);
+		return members;
+	};
 
 	// Fresh fetch for a tag. pinnapi: one request per SPORT, then every tag
 	// of that sport is filtered/converted, marked fresh and cached at once.
@@ -978,13 +1453,71 @@ export async function capturePinnacleOddsForPicks(
 	// Null = fetch failed (rows retry next sweep). Empty array = feed
 	// answered with no listing (rows stamp).
 	const fetchFresh = async (tag: string): Promise<OddsApiEvent[] | null> => {
+		if (provider === "oddspapi") {
+			const group = ODDSPAPI_GROUP_OF[tag];
+			let raw = oddspapiGroupFeeds.get(group);
+			let members: TennisIndexMember[] | null = null;
+			if (raw === undefined) {
+				members =
+					group === "tennis"
+						? await resolveOddspapiTennis()
+						: ODDSPAPI_GROUPS[group].map((t) => ({
+								id: ODDSPAPI_TOURNAMENT_IDS[t],
+								tag: t,
+								name: t,
+							}));
+				if (members === null) {
+					raw = null;
+				} else if (members.length === 0) {
+					raw = [];
+				} else {
+					await oddspapiPace();
+					const result = await fetchOddspapiTournaments(
+						apiKey,
+						members.map((m) => m.id),
+					);
+					if ("failed" in result) {
+						await logProviderFailure(result.failed);
+						raw = null;
+					} else {
+						await logFetch(`oddspapi:${group}`);
+						raw = result.fixtures;
+					}
+				}
+				oddspapiGroupFeeds.set(group, raw);
+				if (raw !== null) {
+					const tagOf = new Map(members?.map((m) => [m.id, m.tag]) ?? []);
+					const byTag = new Map<string, OddsApiEvent[]>(
+						ODDSPAPI_GROUPS[group].map((t) => [t, []]),
+					);
+					for (const f of raw) {
+						const t = tagOf.get(f.tournamentId);
+						if (!t) continue;
+						const converted = oddspapiToOddsApiEvent(f);
+						if (converted) byTag.get(t)?.push(converted);
+					}
+					for (const [t, events] of byTag) {
+						fresh.set(t, events);
+						await writeFeedCache(db, t, now, events, credits.remaining);
+					}
+					console.log(
+						`[pinnacle-odds] oddspapi ${group}: ${raw.length} fixtures, ${[...byTag].map(([t, e]) => `${t}=${e.length}`).join(" ")}`,
+					);
+				}
+			}
+			if (raw === null) {
+				fresh.set(tag, null);
+				return null;
+			}
+			return fresh.get(tag) ?? [];
+		}
 		if (provider === "pinnapi") {
 			const sportId = PINNAPI_SPORT_IDS[tag];
 			let raw = pinnapiSportFeeds.get(sportId);
 			if (raw === undefined) {
 				const result = await fetchPinnapiSport(apiKey, sportId);
 				if ("failed" in result) {
-					await logPinnapiFailure(result.failed);
+					await logProviderFailure(result.failed);
 					raw = null;
 				} else {
 					await logFetch(`pinnapi:${sportId}`);
@@ -1072,6 +1605,18 @@ export async function capturePinnacleOddsForPicks(
 		}
 		if (cached && now - cached.fetchedAt <= FEED_MAX_AGE_SECONDS[role]) {
 			return cached;
+		}
+		// About to spend on oddspapi: read the monthly balance once per
+		// sweep (unmetered) so the credit floors in canSpend apply.
+		if (provider === "oddspapi" && !oddspapiCreditsChecked) {
+			oddspapiCreditsChecked = true;
+			await oddspapiPace();
+			credits.remaining = await fetchOddspapiCredits(apiKey);
+			if (credits.remaining !== null && credits.remaining < 30) {
+				console.warn(
+					`[pinnacle-odds] oddspapi requests low: ${credits.remaining} left this month`,
+				);
+			}
 		}
 		if (canSpend(tag, role)) {
 			const events = await fetchFresh(tag);

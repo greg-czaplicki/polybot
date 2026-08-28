@@ -376,10 +376,11 @@ const serverEntry = {
 					}
 				})
 				.then(() =>
-					// Pinnacle benchmark (pinnapi primary, The Odds API fallback;
-					// no-op without either key; ≤1 fetch per sport per sweep, only
-					// when eligible picks exist).
+					// Pinnacle benchmark (OddsPapi primary, pinnapi / The Odds API
+					// fallbacks; no-op without a key; ≤1 fetch per sport group per
+					// sweep, only when eligible picks exist).
 					capturePinnacleOddsForPicks(env.POLYWHALER_DB, {
+						oddspapiKey: env.ODDSPAPI_KEY,
 						pinnapiKey: env.PINNAPI_KEY,
 						oddsApiKey: env.ODDS_API_KEY,
 					}),

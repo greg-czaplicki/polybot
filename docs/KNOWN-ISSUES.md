@@ -88,6 +88,49 @@ fixing commit.
   `signal_score_saturation`'s +33% sole-blocker ROI is 11-1 on the 12
   Pinnacle-covered rows vs 6-10 on the 16 earlier rows — a hot streak,
   not a CLV story.
+- **Pinnacle provider switched to OddsPapi (oddspapi.io) on 2026-08-28;
+  pinnapi is DEAD** (`ODDSPAPI_KEY` primary → `PINNAPI_KEY` (now unset) →
+  `ODDS_API_KEY`, first key set wins; an auth failure on the primary falls
+  through to the next for 30 min). Why: pinnapi deleted trial key #1 after
+  20 requests (8/26 19:32Z), key #2 after 22 (8/27 17:50Z) and then the
+  account itself — its own docs say quota breaches return 429, and
+  `401 invalid_key` means the key was deleted; we were far inside every
+  documented limit. **Pinnacle data gap: 2026-08-27 17:24Z → 08-28 deploy**
+  (every pin_*/pin_close_* in that window is NULL-stamped or missing; the
+  8/27 LAD-ATL U6.5 live pick has no pin_clv). Second cause of the gap,
+  FIXED 8/28: the rolling-24h caps counted every `pinnacle_fetch_log` row
+  regardless of provider, so the day's 22 pinnapi fetches already
+  exceeded the Odds API caps (8/8/12) when the 401 switched providers —
+  the fallback engaged but never fetched. Caps now count only the active
+  provider's rows (`oddspapi:*` / `pinnapi:*` / bare Odds API keys).
+  OddsPapi mechanics: free plan 250 requests/month, 1 request = 1 call
+  regardless of payload, `/v4/odds-by-tournaments` returns every upcoming
+  Pinnacle-priced fixture for up to FIVE league ids per call, so tags are
+  fetched in GROUPS (`oddspapi:mlb`, `oddspapi:soccer-a` = EPL/MLS/La
+  Liga/Bundesliga/Serie A, `oddspapi:soccer-b` = Ligue 1/UCL/Championship,
+  `oddspapi:football` = NFL/NCAAF, `oddspapi:winter` = NBA/NHL/NCAAB,
+  `oddspapi:tennis` = up to 5 ATP/WTA singles tournaments resolved daily
+  from `/v4/tournaments`, Grand Slams first — the index call is billable
+  and logged under the same key). Rolling-24h caps: shadow ≤ 5, live
+  anchors ≤ 6, live closes ≤ 8, ≤ 4 per group; the monthly balance is read
+  from the unmetered `/v4/account` before the first spend of a sweep and
+  drives the LIVE (2) / BENCHMARK (20) credit floors —
+  `pinnacle_fetch_log.credits_remaining` on `oddspapi:*` rows = requests
+  left this month. Failures log `oddspapi-fail:<status>` (429 = quota,
+  6-hour backoff). Semantics vs pinnapi: full alt-line totals ladders (so
+  the 8/26 totals discontinuity does NOT recur), soccer 1X2 incl. draw, US
+  sports "incl. OT" winner/totals, tennis totals = GAMES. Market selection
+  goes through OddsPapi's catalog (`src/server/pipeline/oddspapi-markets.ts`,
+  regenerate with `scripts/gen-oddspapi-markets.mjs`) because OddsPapi
+  merges corners/bookings/sets/team-total/period markets into the same
+  fixture with Pinnacle-native ids that look like the full-game ones; a
+  total line the catalog lacks is skipped, never guessed. Tennis names
+  arrive surname-first and are flipped before matching. NBA/NHL/NCAAB
+  tournament ids (132/234/648) come from the 8/28 index and are
+  season-stable per OddsPapi, but **VERIFY at opening night**. Caveat:
+  MLB Pinnacle listings appear ~1–2 days ahead (12 of 62 fixtures priced
+  on 8/28 mid-day), so anchors for picks made >36 h out may find no
+  listing and NULL-stamp — same as before.
 - **Pinnacle provider switched to pinnapi (pinnapi.com) on 2026-08-26
   (~12:40Z); The Odds API is now the fallback** (`PINNAPI_KEY` primary,
   `ODDS_API_KEY` used only when it is unset). pinnapi is a Pinnacle-native
