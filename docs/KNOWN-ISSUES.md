@@ -103,6 +103,29 @@ fixing commit.
   exceeded the Odds API caps (8/8/12) when the 401 switched providers —
   the fallback engaged but never fetched. Caps now count only the active
   provider's rows (`oddspapi:*` / `pinnapi:*` / bare Odds API keys).
+  **OddsPapi blocks Cloudflare Workers egress IPs** (`403
+  RESTRICTED_ACCESS "Your IP address has been blocked"` on every direct
+  call from the Worker, 8/28 12:40–12:52Z; the same key works from a
+  residential IP and from the bot VPS). All OddsPapi traffic therefore goes
+  **Worker → `BOT_CONTROL_URL/oddspapi/v4/…` → api.oddspapi.io**: the
+  VPS control agent (`control-agent.py`, bot `main` 8bc2f87) relays an
+  allowlisted path + query verbatim (the Worker supplies `apiKey`) and
+  returns the upstream status/body. Consequences: (1) Pinnacle capture now
+  depends on the VPS, the quick tunnel (URL auto-synced into
+  `BOT_CONTROL_URL` by `run-tunnel.sh`) and the control token — a tunnel
+  outage or URL rotation lag shows up as `oddspapi-fail:0/502/401` rows
+  and, for 401/403, a 30-min flip to The Odds API fallback (16 credits
+  left in August; the fallback now actually fetches — verified 8/28 12:44Z);
+  (2) the last error body is kept in `pinnacle_feed_cache` row
+  `oddspapi-last-error` because the sweep runs inside the sync DO where
+  `wrangler tail` showed nothing; (3) the control agent had been running
+  with the literal default `CONTROL_TOKEN=changeme` behind a public
+  trycloudflare URL — rotated 8/28 to a random 256-bit token (systemd
+  drop-in `polywhaler-control-agent.service.d/token.conf` + Worker secret
+  `BOT_CONTROL_TOKEN`). If the relay ever needs to move, the Worker falls
+  back to direct calls when `BOT_CONTROL_URL` is unset (which will 403
+  until OddsPapi allowlists us — ask them, "contact support" is their own
+  instruction in the 403 body).
   OddsPapi mechanics: free plan 250 requests/month, 1 request = 1 call
   regardless of payload, `/v4/odds-by-tournaments` returns every upcoming
   Pinnacle-priced fixture for up to FIVE league ids per call, so tags are
