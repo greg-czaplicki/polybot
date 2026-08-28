@@ -186,6 +186,8 @@ const ODDSPAPI_MAX_TOURNAMENTS_PER_CALL = 5;
 const ODDSPAPI_TENNIS_SPORT_ID = 12;
 /** pinnacle_feed_cache row holding the resolved tennis tournament ids. */
 const ODDSPAPI_TENNIS_INDEX_TAG = "oddspapi-tennis-index";
+/** pinnacle_feed_cache row holding the last OddsPapi error (path, status, body). */
+const ODDSPAPI_LAST_ERROR_TAG = "oddspapi-last-error";
 const ODDSPAPI_TENNIS_INDEX_MAX_AGE_SECONDS = 24 * 3600;
 const ODDSPAPI_TENNIS_PREFERRED = [
 	/us open/i,
@@ -898,7 +900,7 @@ async function oddspapiGet<T>(
 	apiKey: string,
 	path: string,
 	query: Record<string, string>,
-): Promise<{ data: T } | { failed: number }> {
+): Promise<{ data: T } | { failed: number; body: string }> {
 	const params = new URLSearchParams({ ...query, apiKey });
 	try {
 		const res = await fetch(`${ODDSPAPI_BASE_URL}${path}?${params}`);
@@ -907,15 +909,13 @@ async function oddspapiGet<T>(
 			console.warn(
 				`[pinnacle-odds] oddspapi returned ${res.status} for ${path}: ${body}${res.status === 429 ? " (MONTHLY QUOTA EXHAUSTED?)" : ""}`,
 			);
-			return { failed: res.status };
+			return { failed: res.status, body: `${path} ${res.status}: ${body}` };
 		}
 		return { data: (await res.json()) as T };
 	} catch (err) {
-		console.warn(
-			`[pinnacle-odds] oddspapi fetch failed for ${path}:`,
-			err instanceof Error ? err.message : err,
-		);
-		return { failed: 0 };
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn(`[pinnacle-odds] oddspapi fetch failed for ${path}:`, message);
+		return { failed: 0, body: `${path} network: ${message}` };
 	}
 }
 
@@ -924,7 +924,7 @@ async function oddspapiGet<T>(
 async function fetchOddspapiTournaments(
 	apiKey: string,
 	tournamentIds: number[],
-): Promise<{ fixtures: OddspapiFixture[] } | { failed: number }> {
+): Promise<{ fixtures: OddspapiFixture[] } | { failed: number; body: string }> {
 	const result = await oddspapiGet<OddspapiFixture[]>(
 		apiKey,
 		"/odds-by-tournaments",
@@ -1375,7 +1375,10 @@ export async function capturePinnacleOddsForPicks(
 	};
 
 	// Failed pinnapi/oddspapi request: recorded for the backoff, not spend.
-	const logProviderFailure = async (status: number): Promise<void> => {
+	const logProviderFailure = async (
+		status: number,
+		body?: string,
+	): Promise<void> => {
 		providerBackoff = true;
 		await run(
 			db,
@@ -1384,6 +1387,20 @@ export async function capturePinnacleOddsForPicks(
 			now,
 			`${provider === "oddspapi" ? ODDSPAPI_FAIL_KEY_PREFIX : PINNAPI_FAIL_KEY_PREFIX}${status}`,
 		);
+		// Last error body, durable: the sweep runs inside the sync DO where
+		// console output is not reliably observable from `wrangler tail`.
+		if (body) {
+			await run(
+				db,
+				`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+				 VALUES (?, ?, ?, NULL)
+				 ON CONFLICT(sport_tag) DO UPDATE SET
+				   fetched_at = excluded.fetched_at, events_json = excluded.events_json`,
+				ODDSPAPI_LAST_ERROR_TAG,
+				now,
+				JSON.stringify(body.slice(0, 2000)),
+			);
+		}
 	};
 	// OddsPapi documents a 1 s per-endpoint cooldown; pace every call.
 	let lastOddspapiAt = 0;
@@ -1432,7 +1449,7 @@ export async function capturePinnacleOddsForPicks(
 			{ sportId: String(ODDSPAPI_TENNIS_SPORT_ID) },
 		);
 		if ("failed" in result) {
-			await logProviderFailure(result.failed);
+			await logProviderFailure(result.failed, result.body);
 			return cached?.members ?? null;
 		}
 		await logFetch("oddspapi:tennis");
@@ -1477,7 +1494,7 @@ export async function capturePinnacleOddsForPicks(
 						members.map((m) => m.id),
 					);
 					if ("failed" in result) {
-						await logProviderFailure(result.failed);
+						await logProviderFailure(result.failed, result.body);
 						raw = null;
 					} else {
 						await logFetch(`oddspapi:${group}`);
