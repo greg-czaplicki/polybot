@@ -4,7 +4,10 @@ import {
 } from "@tanstack/react-start/server";
 import { handleLoginRequest } from "./server/api/auth";
 import { handleBotRequest } from "./server/api/bot";
-import { handleBotControlRequest } from "./server/api/bot-control";
+import {
+	getUpstreamHeaders,
+	handleBotControlRequest,
+} from "./server/api/bot-control";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { handleShadowDigestRequest } from "./server/api/shadow-digest";
@@ -381,6 +384,14 @@ const serverEntry = {
 					// sweep, only when eligible picks exist).
 					capturePinnacleOddsForPicks(env.POLYWHALER_DB, {
 						oddspapiKey: env.ODDSPAPI_KEY,
+						// oddspapi.io blocks Workers egress IPs: relay via the VPS
+						// control agent when configured (direct calls 403).
+						oddspapiTransport: env.BOT_CONTROL_URL
+							? {
+									baseUrl: `${env.BOT_CONTROL_URL.replace(/\/$/, "")}/oddspapi/v4`,
+									headers: Object.fromEntries(getUpstreamHeaders(env)),
+								}
+							: undefined,
 						pinnapiKey: env.PINNAPI_KEY,
 						oddsApiKey: env.ODDS_API_KEY,
 					}),

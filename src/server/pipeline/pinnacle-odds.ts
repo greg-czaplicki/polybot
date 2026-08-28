@@ -900,10 +900,14 @@ async function oddspapiGet<T>(
 	apiKey: string,
 	path: string,
 	query: Record<string, string>,
+	transport?: OddspapiTransport,
 ): Promise<{ data: T } | { failed: number; body: string }> {
 	const params = new URLSearchParams({ ...query, apiKey });
+	const baseUrl = transport?.baseUrl ?? ODDSPAPI_BASE_URL;
 	try {
-		const res = await fetch(`${ODDSPAPI_BASE_URL}${path}?${params}`);
+		const res = await fetch(`${baseUrl}${path}?${params}`, {
+			headers: { Accept: "application/json", ...(transport?.headers ?? {}) },
+		});
 		if (!res.ok) {
 			const body = (await res.text().catch(() => "")).slice(0, 120);
 			console.warn(
@@ -924,6 +928,7 @@ async function oddspapiGet<T>(
 async function fetchOddspapiTournaments(
 	apiKey: string,
 	tournamentIds: number[],
+	transport?: OddspapiTransport,
 ): Promise<{ fixtures: OddspapiFixture[] } | { failed: number; body: string }> {
 	const result = await oddspapiGet<OddspapiFixture[]>(
 		apiKey,
@@ -935,6 +940,7 @@ async function fetchOddspapiTournaments(
 			bookmakers: "pinnacle",
 			verbosity: "3",
 		},
+		transport,
 	);
 	if ("failed" in result) return result;
 	return { fixtures: Array.isArray(result.data) ? result.data : [] };
@@ -942,14 +948,17 @@ async function fetchOddspapiTournaments(
 
 /** Requests left this month from the unmetered /v4/account; null when
  * unreadable (the floors then don't apply — the rolling caps still do). */
-async function fetchOddspapiCredits(apiKey: string): Promise<number | null> {
+async function fetchOddspapiCredits(
+	apiKey: string,
+	transport?: OddspapiTransport,
+): Promise<number | null> {
 	const result = await oddspapiGet<{
 		subscriptions?: Array<{
 			is_active?: boolean;
 			request_limit?: number | null;
 			request_count?: number | null;
 		}>;
-	}>(apiKey, "/account", {});
+	}>(apiKey, "/account", {}, transport);
 	if ("failed" in result) return null;
 	const subs = result.data.subscriptions ?? [];
 	const sub = subs.find((s) => s.is_active) ?? subs[0];
@@ -1121,8 +1130,18 @@ export type PinnacleProvider = "oddspapi" | "pinnapi" | "odds-api";
 
 /** Provider precedence: oddspapi → pinnapi → The Odds API (first key set
  * is primary; an auth failure on the primary falls through to the next). */
+/** Where OddsPapi calls go. oddspapi.io blocks Cloudflare Workers egress
+ * IPs (403 RESTRICTED_ACCESS, 2026-08-28), so production routes through
+ * the bot VPS control agent's /oddspapi relay (BOT_CONTROL_URL + control
+ * auth headers); `baseUrl` replaces "https://api.oddspapi.io/v4". */
+export interface OddspapiTransport {
+	baseUrl: string;
+	headers?: Record<string, string>;
+}
+
 export interface PinnacleKeys {
 	oddspapiKey?: string;
+	oddspapiTransport?: OddspapiTransport;
 	pinnapiKey?: string;
 	oddsApiKey?: string;
 }
@@ -1447,6 +1466,7 @@ export async function capturePinnacleOddsForPicks(
 			apiKey,
 			"/tournaments",
 			{ sportId: String(ODDSPAPI_TENNIS_SPORT_ID) },
+			resolved.oddspapiTransport,
 		);
 		if ("failed" in result) {
 			await logProviderFailure(result.failed, result.body);
@@ -1492,6 +1512,7 @@ export async function capturePinnacleOddsForPicks(
 					const result = await fetchOddspapiTournaments(
 						apiKey,
 						members.map((m) => m.id),
+						resolved.oddspapiTransport,
 					);
 					if ("failed" in result) {
 						await logProviderFailure(result.failed, result.body);
@@ -1628,7 +1649,10 @@ export async function capturePinnacleOddsForPicks(
 		if (provider === "oddspapi" && !oddspapiCreditsChecked) {
 			oddspapiCreditsChecked = true;
 			await oddspapiPace();
-			credits.remaining = await fetchOddspapiCredits(apiKey);
+			credits.remaining = await fetchOddspapiCredits(
+				apiKey,
+				resolved.oddspapiTransport,
+			);
 			if (credits.remaining !== null && credits.remaining < 30) {
 				console.warn(
 					`[pinnacle-odds] oddspapi requests low: ${credits.remaining} left this month`,

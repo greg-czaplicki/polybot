@@ -49,7 +49,9 @@ async function requireUiAuth(
 	return { ok: true };
 }
 
-function getUpstreamHeaders(env: Env): Headers {
+/** Auth headers for the bot VPS control agent (control token + Cloudflare
+ * Access service token). Shared with the OddsPapi relay in server.ts. */
+export function getUpstreamHeaders(env: Env): Headers {
 	const headers = new Headers();
 	if (env.BOT_CONTROL_TOKEN) {
 		headers.set("Authorization", `Bearer ${env.BOT_CONTROL_TOKEN}`);

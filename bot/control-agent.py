@@ -4,6 +4,8 @@ import os
 import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
+import urllib.request
 from typing import Dict, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -14,6 +16,24 @@ CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "9102"))
 CONTROL_LOG_LINES_DEFAULT = int(os.environ.get("CONTROL_LOG_LINES_DEFAULT", "200"))
 CONTROL_LOG_LINES_MAX = int(os.environ.get("CONTROL_LOG_LINES_MAX", "1000"))
 CONTROL_ENV_FILE = os.environ.get("CONTROL_ENV_FILE", "")
+# OddsPapi relay (2026-08-28): oddspapi.io blocks Cloudflare Workers egress
+# IPs ("RESTRICTED_ACCESS: Your IP address has been blocked"), so the app's
+# Pinnacle sweep calls OddsPapi through this agent. Pure pass-through of an
+# allowlisted path + query (the app supplies apiKey in the query); the
+# response status/body are returned verbatim. Auth = the control token.
+ODDSPAPI_UPSTREAM = os.environ.get("ODDSPAPI_UPSTREAM", "https://api.oddspapi.io")
+ODDSPAPI_ALLOWED_PATHS = {
+	"/v4/account",
+	"/v4/sports",
+	"/v4/tournaments",
+	"/v4/markets",
+	"/v4/odds-by-tournaments",
+	"/v4/fixtures",
+	"/v4/fixture",
+	"/v4/odds",
+	"/v4/historical-odds",
+}
+ODDSPAPI_TIMEOUT_SECONDS = int(os.environ.get("ODDSPAPI_TIMEOUT_SECONDS", "60"))
 CONTROL_ENV_ALLOWLIST = {
 	key.strip()
 	for key in os.environ.get("CONTROL_ENV_ALLOWLIST", "").split(",")
@@ -151,6 +171,35 @@ def update_env_file(path: str, updates: Dict[str, str]) -> Dict[str, str]:
 	return read_env_file(path)
 
 
+def relay_oddspapi(handler: BaseHTTPRequestHandler, subpath: str, raw_query: str) -> None:
+	if subpath not in ODDSPAPI_ALLOWED_PATHS:
+		return json_response(handler, 404, {"error": "oddspapi_path_not_allowed"})
+	url = f"{ODDSPAPI_UPSTREAM}{subpath}" + (f"?{raw_query}" if raw_query else "")
+	request = urllib.request.Request(
+		url,
+		headers={"Accept": "application/json", "User-Agent": "polywhaler-relay/1.0"},
+	)
+	try:
+		with urllib.request.urlopen(request, timeout=ODDSPAPI_TIMEOUT_SECONDS) as response:
+			status = response.status
+			content_type = response.headers.get("Content-Type", "application/json")
+			data = response.read()
+	except urllib.error.HTTPError as exc:
+		status = exc.code
+		content_type = (exc.headers.get("Content-Type") if exc.headers else None) or "application/json"
+		data = exc.read()
+	except Exception as exc:  # network / timeout
+		return json_response(
+			handler, 502, {"error": "oddspapi_upstream_failed", "details": str(exc)[:200]}
+		)
+	handler.send_response(status)
+	handler.send_header("Content-Type", content_type)
+	handler.send_header("Cache-Control", "no-store")
+	handler.send_header("Content-Length", str(len(data)))
+	handler.end_headers()
+	handler.wfile.write(data)
+
+
 class ControlHandler(BaseHTTPRequestHandler):
 	def do_GET(self) -> None:
 		if not require_auth(self):
@@ -162,6 +211,9 @@ class ControlHandler(BaseHTTPRequestHandler):
 
 		if path == "/status":
 			return json_response(self, 200, get_status())
+
+		if path.startswith("/oddspapi/"):
+			return relay_oddspapi(self, path[len("/oddspapi") :], parsed.query)
 
 		if path == "/logs":
 			lines = clamp_log_lines(int(query.get("lines", [CONTROL_LOG_LINES_DEFAULT])[0]))
