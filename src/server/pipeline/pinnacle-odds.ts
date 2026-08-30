@@ -236,11 +236,26 @@ const LIVE_MIN_CREDITS = 2;
  * `perSport` bounds any single sport so MLB's all-day slate cannot starve
  * an evening soccer/tennis close. pinnapi trial = 100 requests/day (hard
  * 429 beyond); The Odds API = 500 credits/month at 2 per fetch. */
-interface FetchCaps {
+export interface FetchCaps {
 	shadow: number;
 	liveAnchor: number;
 	liveClose: number;
 	perSport: number;
+}
+
+/** The role caps share one rolling-24h window, so a group whose demand
+ * peaks late in the day (football's Saturday-evening slate) can find the
+ * window already filled by MLB live fetches and the morning tennis/soccer
+ * sweeps — and never fetch at all (zero NCAAF anchors on the 2026-08-29
+ * opening slate). A group with no spend in the window may make one fetch
+ * past its role cap, still under the absolute live-close ceiling, so the
+ * daily worst case stays caps.liveClose. */
+export function starvedGroupMayFetch(
+	spentOnGroup: number,
+	fetchesInWindow: number,
+	caps: FetchCaps,
+): boolean {
+	return spentOnGroup === 0 && fetchesInWindow < caps.liveClose;
 }
 const PINNAPI_CAPS: FetchCaps = {
 	shadow: 56,
@@ -1389,8 +1404,16 @@ export async function capturePinnacleOddsForPicks(
 					? caps.liveAnchor
 					: caps.shadow;
 		if (providerBackoff) return false;
-		if (fetchesInWindow >= cap) return false;
-		return (perSport.get(sportLogKey(tag)) ?? 0) < caps.perSport;
+		const spent = perSport.get(sportLogKey(tag)) ?? 0;
+		if (
+			fetchesInWindow >= cap &&
+			!(
+				provider === "oddspapi" &&
+				starvedGroupMayFetch(spent, fetchesInWindow, caps)
+			)
+		)
+			return false;
+		return spent < caps.perSport;
 	};
 
 	// Failed pinnapi/oddspapi request: recorded for the backoff, not spend.

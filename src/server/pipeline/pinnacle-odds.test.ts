@@ -6,9 +6,11 @@ import {
 } from "./book-odds";
 import {
 	extractPinnaclePrices,
+	type FetchCaps,
 	matchOddsApiEvent,
 	type OddsApiEvent,
 	parseTitleTeams,
+	starvedGroupMayFetch,
 } from "./pinnacle-odds";
 
 const T0 = 1786400000; // arbitrary fixed event time (seconds)
@@ -789,5 +791,25 @@ describe("selectOddspapiTennisTournaments", () => {
 		expect(
 			selectOddspapiTennisTournaments([t(2591, "ATP", "US Open Men Singles")]),
 		).toEqual([]);
+	});
+});
+
+describe("starvedGroupMayFetch", () => {
+	const caps: FetchCaps = {
+		shadow: 5,
+		liveAnchor: 6,
+		liveClose: 8,
+		perSport: 4,
+	};
+	it("lets a group with no window spend fetch past its role cap", () => {
+		// Saturday evening: 6 fetches in the window (MLB live + morning
+		// sweeps) exceed the shadow cap, but football has spent nothing.
+		expect(starvedGroupMayFetch(0, 6, caps)).toBe(true);
+	});
+	it("denies a group that already fetched in the window", () => {
+		expect(starvedGroupMayFetch(1, 6, caps)).toBe(false);
+	});
+	it("holds the absolute live-close ceiling", () => {
+		expect(starvedGroupMayFetch(0, 8, caps)).toBe(false);
 	});
 });
