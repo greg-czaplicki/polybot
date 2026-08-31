@@ -11,6 +11,8 @@ import {
 	type OddsApiEvent,
 	parseTitleTeams,
 	starvedGroupMayFetch,
+	TENNIS_BOOST_UNTIL_SECONDS,
+	tennisBoostMayFetch,
 } from "./pinnacle-odds";
 
 const T0 = 1786400000; // arbitrary fixed event time (seconds)
@@ -811,5 +813,30 @@ describe("starvedGroupMayFetch", () => {
 	});
 	it("holds the absolute live-close ceiling", () => {
 		expect(starvedGroupMayFetch(0, 8, caps)).toBe(false);
+	});
+});
+
+describe("tennisBoostMayFetch", () => {
+	const caps: FetchCaps = {
+		shadow: 5,
+		liveAnchor: 6,
+		liveClose: 8,
+		perSport: 4,
+	};
+	const duringUsOpen = TENNIS_BOOST_UNTIL_SECONDS - 24 * 3600;
+	it("lets tennis fetch past the shared shadow cap during the boost", () => {
+		// Shadow window filled (5 fetches) but tennis has only spent 1 today.
+		expect(tennisBoostMayFetch(duringUsOpen, 1, 5, caps)).toBe(true);
+	});
+	it("caps tennis at its own daily allowance", () => {
+		expect(tennisBoostMayFetch(duringUsOpen, 3, 5, caps)).toBe(false);
+	});
+	it("holds the absolute live-close ceiling", () => {
+		expect(tennisBoostMayFetch(duringUsOpen, 1, 8, caps)).toBe(false);
+	});
+	it("self-reverts after the tournament", () => {
+		expect(
+			tennisBoostMayFetch(TENNIS_BOOST_UNTIL_SECONDS, 1, 5, caps),
+		).toBe(false);
 	});
 });

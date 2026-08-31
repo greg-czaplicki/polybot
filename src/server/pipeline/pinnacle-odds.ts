@@ -257,6 +257,29 @@ export function starvedGroupMayFetch(
 ): boolean {
 	return spentOnGroup === 0 && fetchesInWindow < caps.liveClose;
 }
+
+/** US Open fortnight boost (self-reverts): the tennis group shares the
+ * shadow window with the soccer groups and was landing ~1-2 fetches/day,
+ * anchoring only ~10% of ATP/WTA shadows — too thin for the tennis-verdict
+ * read (n≈200, ~mid-Sept) and the WTA-fade charter, both of which consume
+ * pin_clv. Until the tournament ends the tennis group may fetch past the
+ * shared shadow cap up to its own daily allowance, still under the absolute
+ * live-close ceiling and the credit floors (worst case ≈ +1-2 requests/day
+ * for two weeks, inside the 250/month budget). */
+export const TENNIS_BOOST_UNTIL_SECONDS = Date.UTC(2026, 8, 14) / 1000;
+const TENNIS_BOOST_DAILY_FETCHES = 3;
+export function tennisBoostMayFetch(
+	now: number,
+	spentOnGroup: number,
+	fetchesInWindow: number,
+	caps: FetchCaps,
+): boolean {
+	return (
+		now < TENNIS_BOOST_UNTIL_SECONDS &&
+		spentOnGroup < TENNIS_BOOST_DAILY_FETCHES &&
+		fetchesInWindow < caps.liveClose
+	);
+}
 const PINNAPI_CAPS: FetchCaps = {
 	shadow: 56,
 	liveAnchor: 64,
@@ -1409,7 +1432,9 @@ export async function capturePinnacleOddsForPicks(
 			fetchesInWindow >= cap &&
 			!(
 				provider === "oddspapi" &&
-				starvedGroupMayFetch(spent, fetchesInWindow, caps)
+				(starvedGroupMayFetch(spent, fetchesInWindow, caps) ||
+					(sportLogKey(tag) === "oddspapi:tennis" &&
+						tennisBoostMayFetch(now, spent, fetchesInWindow, caps)))
 			)
 		)
 			return false;
