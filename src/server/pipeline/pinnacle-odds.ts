@@ -265,7 +265,11 @@ export function starvedGroupMayFetch(
  * pin_clv. Until the tournament ends the tennis group may fetch past the
  * shared shadow cap up to its own daily allowance, still under the absolute
  * live-close ceiling and the credit floors (worst case ≈ +1-2 requests/day
- * for two weeks, inside the 250/month budget). */
+ * for two weeks, inside the 250/month budget). The boost stops ONE slot
+ * short of that ceiling: a starved group's demand peaks late in the day
+ * (football's Saturday slate), and both NCAAF Saturdays left in the
+ * fortnight (9/5, 9/12) would otherwise find the window boosted to the
+ * ceiling before their first-ever fetch. */
 export const TENNIS_BOOST_UNTIL_SECONDS = Date.UTC(2026, 8, 14) / 1000;
 const TENNIS_BOOST_DAILY_FETCHES = 3;
 export function tennisBoostMayFetch(
@@ -277,7 +281,7 @@ export function tennisBoostMayFetch(
 	return (
 		now < TENNIS_BOOST_UNTIL_SECONDS &&
 		spentOnGroup < TENNIS_BOOST_DAILY_FETCHES &&
-		fetchesInWindow < caps.liveClose
+		fetchesInWindow < caps.liveClose - 1
 	);
 }
 const PINNAPI_CAPS: FetchCaps = {

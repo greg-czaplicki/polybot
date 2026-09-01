@@ -831,8 +831,12 @@ describe("tennisBoostMayFetch", () => {
 	it("caps tennis at its own daily allowance", () => {
 		expect(tennisBoostMayFetch(duringUsOpen, 3, 5, caps)).toBe(false);
 	});
-	it("holds the absolute live-close ceiling", () => {
+	it("stops one slot short of the ceiling, reserving it for starved groups", () => {
+		// A starved group (football's first-ever Saturday fetch) may take the
+		// window to 7; the boost must not occupy that last slot first.
+		expect(tennisBoostMayFetch(duringUsOpen, 1, 7, caps)).toBe(false);
 		expect(tennisBoostMayFetch(duringUsOpen, 1, 8, caps)).toBe(false);
+		expect(starvedGroupMayFetch(0, 7, caps)).toBe(true);
 	});
 	it("self-reverts after the tournament", () => {
 		expect(
