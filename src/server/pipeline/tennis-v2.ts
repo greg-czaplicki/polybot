@@ -1,22 +1,26 @@
 /**
- * tennis-v2 Stage 2 — R1 paper lane.
+ * Pin-divergence paper lanes.
  *
- * Charter: docs/charters/tennis-ground-up.md; thresholds FINAL in
- * docs/charters/tennis-ground-up-addendum-1.md (2026-09-01, clause-(b)
- * folded in). R1 fires when Polymarket and a FRESH Pinnacle quote
- * disagree by >= THETA1 on a tennis match-winner market, recording the
- * underpriced PM side to shadow_candidates under
- * reject_reason 'tennis_v2_paper' (fire-once per condition via the
- * (condition_id, reject_reason) unique key). Paper only — nothing here
- * feeds the bot.
+ * Two lanes, one rule (PM vs fresh Pinnacle de-vigged divergence on
+ * moneyline markets, paper only, fire-once per condition):
  *
- * NOTE ON FIELD SEMANTICS in this lane: sharp_side/sharp_side_label mean
- * "the side R1 bets" (price-derived), NOT the holder signal's side, and
- * top_holders_json is deliberately NULL — keep this lane out of
- * holder-signal analyses. Rule inputs are stamped into warnings_json.
+ * - `tennis_v2_paper` (atp/wta) — tennis-v2 R1. Charter:
+ *   docs/charters/tennis-ground-up.md; thresholds FINAL in
+ *   docs/charters/tennis-ground-up-addendum-1.md (2026-09-01).
+ * - `pin_div_paper` (team sports incl. football + soccer) — the
+ *   transparency-blind benchmark lane. Charter:
+ *   docs/charters/pin-divergence-benchmark.md (FINAL 2026-09-01).
  *
- * R2 (WTA model edge, no-fresh-quote branch) ships separately; R3 is
- * blocked on its own addendum per the charter.
+ * Fair probs come from extractPinnaclePrices per side (home AND away
+ * roles) so soccer's three-way de-vig is honored — the two sides' fairs
+ * sum to < 1 when a draw carries mass; never derive one side as the
+ * complement of the other.
+ *
+ * NOTE ON FIELD SEMANTICS in these lanes: sharp_side/sharp_side_label
+ * mean "the side the rule bets" (price-derived), NOT the holder
+ * signal's side, and top_holders_json is deliberately NULL — keep these
+ * lanes out of holder-signal analyses. Rule inputs are stamped into
+ * warnings_json. Nothing here feeds the bot.
  */
 
 import type { Db } from "../db/client";
@@ -33,18 +37,36 @@ import { getMarketTypeLabel } from "./line-ingestion";
 import { recordShadowCandidates } from "./shadow-book";
 
 export const TENNIS_V2_LANE = "tennis_v2_paper";
-/** Addendum 1: |pm − pin_devigged| ≥ θ1; clears Pinnacle tennis vig ~2×. */
+export const PIN_DIV_LANE = "pin_div_paper";
+/** Lane per sport_tag; tags absent here never fire. */
+export const LANE_BY_TAG: Record<string, string> = {
+	atp: TENNIS_V2_LANE,
+	wta: TENNIS_V2_LANE,
+	nfl: PIN_DIV_LANE,
+	ncaaf: PIN_DIV_LANE,
+	mlb: PIN_DIV_LANE,
+	epl: PIN_DIV_LANE,
+	mls: PIN_DIV_LANE,
+	laliga: PIN_DIV_LANE,
+	bundesliga: PIN_DIV_LANE,
+	seriea: PIN_DIV_LANE,
+	ligue1: PIN_DIV_LANE,
+	ucl: PIN_DIV_LANE,
+	championship: PIN_DIV_LANE,
+};
+/** Both charters: |pm − pin_devigged| ≥ θ; clears Pinnacle vig ~2×. */
 export const THETA1 = 0.05;
-/** Era-v9 floor and its symmetric cap (addendum 1). */
+/** Era-v9 floor and its symmetric cap. */
 export const R1_PRICE_MIN = 0.25;
 export const R1_PRICE_MAX = 0.75;
 /** Charter T: ≥ 30 min before the (session-proxy) start. */
 export const R1_MIN_MINUTES_TO_START = 30;
-/** Addendum 1: the Pinnacle quote must be ≤ 20 min stale. */
+/** The Pinnacle quote must be ≤ 20 min stale. */
 export const R1_MAX_QUOTE_AGE_SECONDS = 20 * 60;
-/** PM stamps session start, not match slot — same tolerance as the
- * pin sweep's tennis matching. */
+/** PM stamps tennis SESSION start, not the match slot — tennis pairings
+ * need hours of tolerance; team sports use the sweep's default. */
 const TENNIS_MATCH_GAP_SECONDS = 6 * 3600;
+const TENNIS_TAGS = new Set(["atp", "wta"]);
 
 export interface TennisV2Side {
 	label?: string | null;
@@ -56,8 +78,8 @@ export interface TennisV2Entry {
 	marketTitle: string;
 	sportTag: string | null;
 	/** Passed through so recordShadowCandidates stamps sport_tag — the
-	 * pin sweep matches close-capture rows by tag, which is how this
-	 * lane accrues the pin_clv its promotion criterion needs. */
+	 * pin sweep matches close-capture rows by tag, which is how these
+	 * lanes accrue the pin_clv their promotion criterion needs. */
 	sportSeriesId?: number;
 	eventTime?: string | null;
 	sideA: TennisV2Side;
@@ -73,8 +95,8 @@ export interface R1Decision {
 }
 
 /**
- * Pure R1 decision for one entry against one tour's feed events.
- * Returns null when the rule does not fire.
+ * Pure divergence decision for one entry against one league's feed
+ * events. Returns null when the rule does not fire.
  */
 export function evaluateR1ForEntry(
 	entry: TennisV2Entry,
@@ -105,31 +127,37 @@ export function evaluateR1ForEntry(
 		homeName: teams.teamA,
 		awayName: teams.teamB,
 		eventTime,
-		maxGapSeconds: TENNIS_MATCH_GAP_SECONDS,
+		maxGapSeconds: TENNIS_TAGS.has(entry.sportTag ?? "")
+			? TENNIS_MATCH_GAP_SECONDS
+			: undefined,
 	});
 	if (!event) return null;
 
-	// De-vig once from the home perspective; two-way devig is symmetric.
-	const prices = extractPinnaclePrices(event, {
-		betType: "moneyline",
-		venueRole: "home",
-		sideLabel: null,
-		marketTotalLine: null,
-	});
-	if (prices.fairProb === null) return null;
-	const fairHome = prices.fairProb;
+	// De-vig each side independently: with a draw outcome (soccer) the
+	// two sides' fair probs sum to < 1, so no side is the complement of
+	// the other. extractPinnaclePrices handles two- and three-way books.
+	const fairFor = (role: "home" | "away"): number | null =>
+		extractPinnaclePrices(event, {
+			betType: "moneyline",
+			venueRole: role,
+			sideLabel: null,
+			marketTotalLine: null,
+		}).fairProb;
+	const fairHome = fairFor("home");
+	const fairAway = fairFor("away");
+	if (fairHome === null || fairAway === null) return null;
 
-	// Map PM sides onto the matched event's players by name.
+	// Map PM sides onto the matched event's participants by name.
 	const sideFair = (label: string): number | null =>
 		teamNamesMatch(label, event.home_team)
 			? fairHome
 			: teamNamesMatch(label, event.away_team)
-				? 1 - fairHome
+				? fairAway
 				: null;
 	const fairA = sideFair(a.label);
 	const fairB = sideFair(b.label);
 	if (fairA === null || fairB === null) return null;
-	// Both labels resolving to the SAME player would double-count.
+	// Both labels resolving to the SAME participant would double-count.
 	if (
 		teamNamesMatch(a.label, event.home_team) ===
 		teamNamesMatch(b.label, event.home_team)
@@ -161,19 +189,21 @@ export function evaluateR1ForEntry(
 }
 
 /**
- * Evaluate R1 over this tick's tennis entries using the cached Pinnacle
- * tennis feeds (fresh only). Records fire-once paper rows; never throws.
+ * Evaluate the divergence lanes over this tick's entries using the
+ * cached Pinnacle feeds (fresh only). Records fire-once paper rows;
+ * never throws.
  */
-export async function evaluateTennisV2R1(
+export async function evaluatePinDivergenceLanes(
 	db: Db,
 	entries: TennisV2Entry[],
 ): Promise<number> {
 	try {
 		const now = nowUnixSeconds();
-		const tennis = entries.filter(
-			(e) => e.sportTag === "atp" || e.sportTag === "wta",
+		const eligible = entries.filter(
+			(e) => e.sportTag !== null && LANE_BY_TAG[e.sportTag] !== undefined,
 		);
-		if (tennis.length === 0) return 0;
+		if (eligible.length === 0) return 0;
+		const tags = [...new Set(eligible.map((e) => e.sportTag as string))];
 		const feeds = await all<{
 			sport_tag: string;
 			fetched_at: number;
@@ -181,37 +211,40 @@ export async function evaluateTennisV2R1(
 		}>(
 			db,
 			`SELECT sport_tag, fetched_at, events_json FROM pinnacle_feed_cache
-			 WHERE sport_tag IN ('atp','wta') AND fetched_at > ?`,
+			 WHERE sport_tag IN (${tags.map(() => "?").join(",")})
+			   AND fetched_at > ?`,
+			...tags,
 			now - R1_MAX_QUOTE_AGE_SECONDS,
 		);
 		if (feeds.length === 0) return 0;
-		const eventsByTour = new Map<string, { at: number; events: OddsApiEvent[] }>();
+		const eventsByTag = new Map<string, { at: number; events: OddsApiEvent[] }>();
 		for (const feed of feeds) {
 			try {
 				const events = JSON.parse(feed.events_json) as OddsApiEvent[];
 				if (Array.isArray(events) && events.length > 0)
-					eventsByTour.set(feed.sport_tag, {
+					eventsByTag.set(feed.sport_tag, {
 						at: feed.fetched_at,
 						events,
 					});
 			} catch {
-				// unparseable cache row: skip the tour this tick
+				// unparseable cache row: skip the league this tick
 			}
 		}
-		if (eventsByTour.size === 0) return 0;
+		if (eventsByTag.size === 0) return 0;
 
 		const inputs = [];
-		for (const entry of tennis) {
-			const feed = eventsByTour.get(entry.sportTag as string);
+		for (const entry of eligible) {
+			const feed = eventsByTag.get(entry.sportTag as string);
 			if (!feed) continue;
 			const decision = evaluateR1ForEntry(entry, feed.events, now);
 			if (!decision) continue;
 			const eventTime = Math.floor(
 				Date.parse(entry.eventTime as string) / 1000,
 			);
+			const lane = LANE_BY_TAG[entry.sportTag as string];
 			inputs.push({
 				conditionId: entry.conditionId,
-				rejectReason: TENNIS_V2_LANE,
+				rejectReason: lane,
 				marketTitle: entry.marketTitle,
 				marketType: "moneyline",
 				sportSeriesId: entry.sportSeriesId,
@@ -221,7 +254,7 @@ export async function evaluateTennisV2R1(
 				minutesToStart: Math.round((eventTime - now) / 60),
 				eventTime: entry.eventTime,
 				warnings: [
-					"tennis_v2:R1",
+					lane === TENNIS_V2_LANE ? "tennis_v2:R1" : "pin_div:benchmark",
 					`theta1=${THETA1}`,
 					`pm=${decision.price.toFixed(4)}`,
 					`pin_fair=${decision.pinFair.toFixed(4)}`,
@@ -233,10 +266,12 @@ export async function evaluateTennisV2R1(
 		if (inputs.length === 0) return 0;
 		const recorded = await recordShadowCandidates(db, inputs);
 		if (recorded > 0)
-			console.log(`[tennis-v2] R1 recorded ${recorded} paper rows`);
+			console.log(
+				`[pin-divergence] recorded ${recorded} paper rows across lanes`,
+			);
 		return recorded;
 	} catch (error) {
-		console.warn("[tennis-v2] R1 evaluation failed:", error);
+		console.warn("[pin-divergence] lane evaluation failed:", error);
 		return 0;
 	}
 }

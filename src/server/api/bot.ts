@@ -40,7 +40,7 @@ import {
 	recordShadowCandidates,
 	type ShadowCandidateInput,
 } from "../pipeline/shadow-book";
-import { evaluateTennisV2R1 } from "../pipeline/tennis-v2";
+import { evaluatePinDivergenceLanes } from "../pipeline/tennis-v2";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
@@ -2041,10 +2041,11 @@ async function listBotCandidates(
 		} catch (error) {
 			console.warn("[bot] shadow-book record failed:", error);
 		}
-		// tennis-v2 R1 paper lane (charter tennis-ground-up.md, addendum 1):
-		// PM-vs-fresh-Pinnacle divergence on this tick's tennis entries.
+		// Pin-divergence paper lanes (tennis_v2_paper + pin_div_paper,
+		// charters tennis-ground-up.md + pin-divergence-benchmark.md):
+		// PM-vs-fresh-Pinnacle divergence on this tick's entries.
 		// Independent of the holder signal; internally never throws.
-		await evaluateTennisV2R1(
+		await evaluatePinDivergenceLanes(
 			db,
 			[...shadowEntryByConditionId.values()].map((entry) => ({
 				conditionId: entry.conditionId,
