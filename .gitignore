@@ -23,3 +23,5 @@ __pycache__/
 
 # local wrangler secrets
 .dev.vars
+data/tennis/.venv/
+data/tennis/matches_*.csv
