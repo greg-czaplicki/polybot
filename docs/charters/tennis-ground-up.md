@@ -17,9 +17,22 @@ tennis strategy from the ground up. Infrastructure may be borrowed
 
 ## Charter
 
-**question** — Can a tennis-native pricing stack select Polymarket ATP/WTA
-match-winner bets with positive CLV against the Pinnacle de-vigged close
-and positive match-clustered ROI?
+**question** — Does Polymarket's transparency (visible holders, wallet
+P&L, streaks — the platform's founding thesis) yield a tennis edge BEYOND
+what a transparency-blind price-divergence rule achieves? Concretely: can
+a tennis-native smart-money rule (R3) select ATP/WTA match-winner bets
+with positive Pinnacle CLV and match-clustered ROI, and beat the R1
+price-divergence benchmark on the same held-out population?
+
+**program hierarchy (owner framing, 2026-09-01)** — R3 (wallet-native)
+is the headline track: the informational edge is the durable one on a
+maturing two-sided exchange, and it is what this platform exists to
+exploit. R1 is the commodity "+EV scanner" rule any outsider could run:
+it is retained as the INCUMBENT BASELINE the smart-money thesis must
+beat — and as a cashable interim strategy if it clears the bar alone.
+R2 (model edge) exists only to extend R1's reach past our sharp-quote
+budget. R1/R2 clearing the promotion bar is money; R3 beating R1 is the
+thesis.
 
 **analysis_type** — Predictive/decision (betting). All explanatory
 findings along the way are diagnostics, never promotion inputs.
@@ -143,6 +156,13 @@ mixed.
   `gate-verdict.ts`. The bar is arithmetic, not an MLB convention, and
   the standing rule from the tennis-verdict charter carries over: it is
   never loosened to make tennis pass.
+- Thesis verdict (once R3 exists and both R1 and R3 have n ≥ 50): R3 is
+  judged not only against the absolute bar but against R1 on the same
+  held-out window — the transparency edge must be INCREMENTAL to the
+  commodity edge, or the moat thesis is recorded as unsupported for
+  tennis. Overlapping selections are expected; the comparison is
+  per-rule cohort performance, pre-registered in the R3 addendum before
+  R3's first row.
 - Promotion means: live via the existing bot at the fixed $8 stake,
   tennis-v2 stamped as its own strategy lane.
 
