@@ -80,8 +80,33 @@ shadow read begins)** —
 - **R2 (model edge)**: when no fresh Pinnacle quote exists at T, bet the
   PM side underpriced vs the Stage-1 model by ≥ θ2, restricted to
   calibration slices Stage 1 validated.
+- **R3 (tennis-native wallet rule)**: a wallet-transparency rule derived
+  for tennis from scratch — NOT the MLB recipe (top-20 × MLB-tuned
+  PnL/momentum weights), which the 2026-08-31 read showed has no tennis
+  skill. R3 has no thresholds and no shape yet: it may only be
+  pre-registered by written addendum from the outputs of Stage 1b
+  (below) and/or the wallet-sport specialization confirmatory read
+  (~mid-Oct, `docs/charters/wallet-sport-clv.md`). Rationale: wallet
+  visibility is Polymarket's structural moat — the only edge here a
+  sharp-book arbitrageur cannot copy — and it is the proven mechanism
+  behind the live MLB book. It failed on tennis as-implemented, not
+  as-a-data-source.
 - The WTA fade is NOT part of tennis-v2; it continues untouched under
   `docs/charters/fade-inversion.md` (read ~mid-Oct).
+
+**Stage 1b — tennis holder-composition study (runs alongside Stage 1;
+zero budget, data already owned)** — A DESCRIPTIVE study of the
+`top_holders_json` snapshots stored on every tennis shadow row since
+2026-08-18: who actually holds tennis markets (recurring wallets vs
+one-offs), holder concentration vs MLB markets, whether any recurring
+tennis wallet has a meaningful settled track record on tennis (
+wallet-clustered, the specialization charter's artifact lesson applies),
+and whether top-holder composition looks like bettors or resting
+liquidity. Classified descriptive/exploratory under the doctrine: its
+outputs are never promotion inputs and never a read — their sole use is
+to decide whether an R3 addendum is worth pre-registering, and to
+parameterize it if so. If nothing recurs or track records are null, that
+is recorded as a valid result and R3 dies before it is born.
 
 **validation_design (Stage 1)** — Season walk-forward: train ≤ 2021,
 validate 2022; roll forward through 2025. 2026 YTD is the final test,
