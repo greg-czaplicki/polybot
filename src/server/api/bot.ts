@@ -40,6 +40,7 @@ import {
 	recordShadowCandidates,
 	type ShadowCandidateInput,
 } from "../pipeline/shadow-book";
+import { evaluateTennisV2R1 } from "../pipeline/tennis-v2";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
@@ -2040,6 +2041,27 @@ async function listBotCandidates(
 		} catch (error) {
 			console.warn("[bot] shadow-book record failed:", error);
 		}
+		// tennis-v2 R1 paper lane (charter tennis-ground-up.md, addendum 1):
+		// PM-vs-fresh-Pinnacle divergence on this tick's tennis entries.
+		// Independent of the holder signal; internally never throws.
+		await evaluateTennisV2R1(
+			db,
+			[...shadowEntryByConditionId.values()].map((entry) => ({
+				conditionId: entry.conditionId,
+				marketTitle: entry.marketTitle,
+				sportTag: resolveSportTagFromSeriesId(entry.sportSeriesId),
+				sportSeriesId: entry.sportSeriesId,
+				eventTime: entry.eventTime,
+				sideA: {
+					label: entry.sideA.label,
+					price: entry.sideA.price ?? null,
+				},
+				sideB: {
+					label: entry.sideB.label,
+					price: entry.sideB.price ?? null,
+				},
+			})),
+		);
 	};
 	if (upcomingEntries.length === 0) {
 		await recordShadowBook();

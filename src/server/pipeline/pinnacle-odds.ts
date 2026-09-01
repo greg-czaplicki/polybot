@@ -665,7 +665,7 @@ function normalizeTeamName(name: string): string {
 	return name.toLowerCase().replace(/[.']/g, "").replace(/\s+/g, " ").trim();
 }
 
-function teamNamesMatch(a: string, b: string): boolean {
+export function teamNamesMatch(a: string, b: string): boolean {
 	const na = normalizeTeamName(a);
 	const nb = normalizeTeamName(b);
 	return na === nb || na.includes(nb) || nb.includes(na);
