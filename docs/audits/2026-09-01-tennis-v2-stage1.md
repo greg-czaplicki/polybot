@@ -60,6 +60,20 @@ tours.
   baseline source-shift (mostly Avg, not Pinnacle) — comparisons vs
   2021–2025 must carry that caveat.
 
+## 2026 test read (run ONCE, 2026-09-01, after the leakage audit passed)
+
+`stage1_elo.py --test-2026`, locked params (w=0.25; shrink .90/.95):
+
+| | n | cold | null | market | elo | verdict confirmed |
+|---|---|---|---|---|---|---|
+| ATP 2026 | 1853 | 156 | .6330 | .6040 | .6328 | R2 drop stands (dead even vs null) |
+| WTA 2026 | 1805 | 125 | .6234 | .5803 | .6143 | R2 survives (clearest margin yet; ECE 3.5%) |
+
+Gap p90 replicates at .163–.164 both tours → the θ2 ≈ .16 floor holds
+out-of-sample. Caveat carried: 2026 market column is mostly Avg (PS
+coverage collapsed in-source), and quotes are late-pre-match, not
+verified closes. This read is final; 2026 is spent as a test set.
+
 ## Remaining before Stage 2 shadow rows
 
 1. Leakage pre-audit (`leakage-audit` skill) → then the single 2026 test read.

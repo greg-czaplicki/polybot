@@ -3,8 +3,9 @@
 
 Boundaries (charter docs/charters/tennis-ground-up.md):
   warmup/train <= 2020, TUNE on 2021 only, VALIDATE 2022-2025.
-  2026 is the untouched final test: this script refuses to score it
-  (rows are neither evaluated nor rated past 2025-12-31).
+  2026 was the untouched final test, scored ONCE via --test-2026 on
+  2026-09-01 after the leakage audit passed (see docs/audits/). The
+  default path still refuses 2026 rows.
 
 Models, locked before running:
   null    — market favorite at a constant p = favorite win rate over all
@@ -41,10 +42,13 @@ def odds_prob(r):
     return implied(r["psw"], r["psl"]) or implied(r["avgw"], r["avgl"]) \
         or implied(r["b365w"], r["b365l"])
 
-def load(tour):
+def load(tour, include_test=False):
+    """include_test admits 2026 rows — ONLY for the one-shot test read
+    (--test-2026), run after the 2026-09-01 leakage audit passed."""
+    max_year = "2026" if include_test else "2025"
     with open(os.path.join(BASE, f"matches_{tour}.csv")) as f:
         rows = [r for r in csv.DictReader(f)]
-    rows = [r for r in rows if r["year_file"] <= "2025"          # 2026 untouched
+    rows = [r for r in rows if r["year_file"] <= max_year
             and (r["comment"] or "").strip().lower() != "walkover"
             and r["winner"] and r["loser"] and r["date"]]
     rows.sort(key=lambda r: (r["date"], r["tournament"], r["round"]))
@@ -78,13 +82,14 @@ class Elo:
         self.n[w] += 1; self.n[l] += 1
         self.ns[(w, s)] += 1; self.ns[(l, s)] += 1
 
-def run(tour, blend, eval_years, collect_gaps=False, shrink=1.0):
+def run(tour, blend, eval_years, collect_gaps=False, shrink=1.0,
+        include_test=False):
     """One chronological pass; score only rows in eval_years.
 
     shrink: probability shrinkage toward 0.5 applied at SCORING time only
     (p' = 0.5 + shrink*(p-0.5)) — revision recorded in the Stage 1 read:
     raw Elo is overconfident (ECE ~4-5%); tuned on 2021 only."""
-    rows = load(tour)
+    rows = load(tour, include_test=include_test)
     elo = Elo(blend)
     fav_hist = defaultdict(lambda: [0, 0])          # year -> [fav wins, n]
     per_year = defaultdict(lambda: defaultdict(list))
@@ -133,7 +138,38 @@ def summarize(tour, per_year, cold):
         print(f"  ALL  {n:5d}        "
               f"{sum(tot['ll_null'])/n:.4f}  {sum(tot['ll_mkt'])/n:.4f}  {sum(tot['ll_elo'])/n:.4f}")
 
+LOCKED = {"atp": {"blend": 0.25, "shrink": 0.90},
+          "wta": {"blend": 0.25, "shrink": 0.95}}
+
+def test_read_2026():
+    """One-shot 2026 test read. Locked params, run once (2026-09-01)."""
+    for tour in ("atp", "wta"):
+        p = LOCKED[tour]
+        per_year, cold, gaps = run(tour, p["blend"], ["2026"],
+                                   collect_gaps=True, shrink=p["shrink"],
+                                   include_test=True)
+        summarize(tour, per_year, cold)
+        allc = per_year["2026"]["cal"]
+        bins2 = defaultdict(lambda: [0, 0, 0.0])
+        for pe, _ in allc:
+            for pr, o in ((pe, 1), (1 - pe, 0)):
+                b = min(9, int(pr * 10))
+                bins2[b][0] += o; bins2[b][1] += 1; bins2[b][2] += pr
+        ece = 0.0; N = sum(v[1] for v in bins2.values())
+        for b in sorted(bins2):
+            o, n, ps = bins2[b]
+            ece += n / N * abs(ps / n - o / n)
+        print(f"  [{tour}] 2026 ECE={ece:.4f}")
+        gaps.sort()
+        q = lambda x: gaps[int(x * (len(gaps) - 1))]
+        print(f"  [{tour}] |elo-market| gap 2026: median {q(.5):.3f} "
+              f"p90 {q(.9):.3f}  n={len(gaps)}")
+
 if __name__ == "__main__":
+    import sys
+    if "--test-2026" in sys.argv:
+        test_read_2026()
+        sys.exit(0)
     for tour in ("atp", "wta"):
         # --- tune blend on 2021 only ---
         best, best_ll = None, None
