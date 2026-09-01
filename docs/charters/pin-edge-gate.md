@@ -186,3 +186,13 @@ bump.
 | split | chronological blocks; no training set |
 | duplicates / groups | dedup to first sighting per (market, side); paired rows of the same game (over/under, both ML sides) can both appear — reported, not deduped, because each is its own would-have-bet decision |
 | **verdict** | `REVIEW REQUIRED` (coverage-bias item open) — becomes `CLEAN` when the first read documents coverage ≥ 50% and staleness ≤ TTL |
+
+## Amendment 2026-09-01 — tennis folded into tennis-v2 (owner decision)
+
+For ATP and WTA only, this charter's evaluation and both promotion paths
+are RETIRED and folded into `tennis-ground-up.md` rule R1
+(`tennis-ground-up-addendum-1.md`, θ1 = 0.05): one hypothesis, one read.
+Tennis pin-divergence verdicts come exclusively from the R1
+`tennis_v2_paper` cohort. Non-tennis sports are unaffected. Any tennis
+rows accrued under this charter before this date are exploratory context
+only, never combined with the R1 cohort.

@@ -1,10 +1,10 @@
-# tennis-v2 Addendum 1 — Stage 2 thresholds (DRAFT 2026-09-01)
+# tennis-v2 Addendum 1 — Stage 2 thresholds (FINAL 2026-09-01)
 
 Written after Stage 1 completed (validation read + one-shot 2026 test,
 `docs/audits/2026-09-01-tennis-v2-stage1.md`; leakage audit passed).
-Becomes FINAL, and Stage 2 shadow rows may begin, only when the one open
-owner decision below is resolved. Per the charter, nothing here changes
-after the first `tennis_v2_paper` row is recorded.
+FINAL: the clause-(b) fold-in was decided by the owner 2026-09-01
+(fold into R1). Per the charter, nothing here changes after the first
+`tennis_v2_paper` row is recorded.
 
 ## R2 (model edge) — WTA only; ATP R2 is dead per Stage 1
 
@@ -32,11 +32,10 @@ after the first `tennis_v2_paper` row is recorded.
   clears the vig band ~2× and is far above PM tick noise; unlike θ2 it
   needs no model-error buffer because the reference is a sharp quote,
   not an estimate.
-- **OPEN OWNER DECISION (blocks final status)**: fold
-  `pin-edge-gate.md` clause (b)'s tennis read into R1 (recommended —
-  one hypothesis, one read) or keep both with clause (b) precedence.
-  If folded, the pin-edge charter gets a cross-reference note and its
-  tennis clause is retired; verdicts then come only from R1's cohort.
+- **DECIDED (owner, 2026-09-01): folded.** `pin-edge-gate.md` clause
+  (b)'s tennis read is retired with a cross-reference note; all tennis
+  pin-divergence verdicts come from R1's cohort under this charter.
+  θ1 = 0.05 is FINAL.
 
 ## Bookkeeping (both rules)
 
