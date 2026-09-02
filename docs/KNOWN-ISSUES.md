@@ -5,6 +5,15 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Player-prop shadow coverage starts 2026-09-02.** Titles like "Drake
+  Maye: Passing Yards O/U 249.5" were dropped at discovery from the first
+  commit (`isMainMarketTitle`), so no prop-subtype read before this date
+  contains player props, and the `prop` shadow cohort before it is
+  game-props only (BTTS/NRFI/team totals/period/soccer derivatives). From
+  9/2 they classify as `prop` → `prop_market_excluded` → subtype
+  `player_prop`; `pin_clv` is NULL for them by construction (no player
+  markets on OddsPapi or the ESPN DK anchor). Charter:
+  docs/charters/player-props-shadow.md.
 - **Tennis Pinnacle matching missed middle-name players before
   2026-09-02.** `teamNamesMatch` was plain substring containment, so PM's
   "Adolfo Vallejo" never matched Pinnacle's "Adolfo Daniel Vallejo" (no

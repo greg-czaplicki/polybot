@@ -11,6 +11,7 @@ import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import type { Env } from "../env";
 import { getDb, nowUnixSeconds } from "../env";
+import { isPlayerPropTitle } from "../pipeline/line-ingestion";
 import { recordWalletEntries } from "../pipeline/wallet-clv";
 import {
 	backfillSharpMoneyHistory,
@@ -184,6 +185,18 @@ type RuntimeMarketStats = {
 		newestComputed?: number;
 		cutoff: number;
 	};
+	/** Player-prop markets SEEN per tag this run, before the volume floor —
+	 * the measurement behind "do props carry volume?" (charter
+	 * player-props-shadow.md). aboveFloor = would be scanned. */
+	playerPropStats?: Array<{
+		tag: string;
+		seen: number;
+		aboveFloor: number;
+		totalVolume: number;
+		maxVolume: number;
+		maxTitle: string;
+		byType: Record<string, number>;
+	}>;
 	tagStats: Array<{
 		tag: string;
 		seriesId: number;
@@ -380,6 +393,9 @@ export interface GammaMarket {
 	marketMakerAddress?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	/** Gamma's own classifier ("moneyline", "spreads", "totals",
+	 * "passing_yards", ...). Diagnostic only — titles drive classification. */
+	sportsMarketType?: string;
 	// Event data
 	groupItemTitle?: string;
 	eventSlug?: string;
@@ -398,20 +414,16 @@ function getEventSlug(market: GammaMarket): string | undefined {
 	return market.eventSlug ?? market.event_slug ?? undefined;
 }
 
-function isPlayerPropTitle(title: string): boolean {
-	const normalized = title.toLowerCase();
-	if (!normalized.includes(":")) return false;
-	// "anytime"/"first touchdown" cover scorer props ("Kenneth Walker III:
-	// Anytime Touchdown"), which previously fell through this regex and were
-	// dropped only because their titles happen to lack vs/at/@.
-	return /:\s*(points|rebounds|assists|threes|three pointers|goals|shots|saves|strikeouts|hits|rbis|home runs|yards|touchdowns|touchdown|anytime|first touchdown|last touchdown|completions|passing|rushing|receiving)\b/i.test(
-		title,
-	);
-}
-
+/** Player props ("Drake Maye: Passing Yards O/U 249.5") were dropped here
+ * from the start; since 2026-09-02 they are ingested like any other market
+ * (volume floor still applies) and land in the shadow book behind the
+ * era-v7 prop gate — record-only, charter
+ * docs/charters/player-props-shadow.md. Polymarket lists them as their
+ * own "<A> vs. <B> - Player Props" events under the game series, so no
+ * discovery change is needed beyond not dropping them. */
 function isMainMarketTitle(title: string): boolean {
 	const normalized = title.toLowerCase();
-	if (isPlayerPropTitle(title)) return false;
+	if (isPlayerPropTitle(title)) return true;
 	if (normalized.includes("spread:")) return true;
 	if (normalized.includes("o/u") || normalized.includes("over/under"))
 		return true;
@@ -976,6 +988,8 @@ export async function fetchTrendingSportsMarkets(
 		// Fetch markets for each sport series via events
 		const allSportsMarkets: GammaMarket[] = [];
 		const tagStats: RuntimeMarketStats["tagStats"] = [];
+		const playerPropStats: NonNullable<RuntimeMarketStats["playerPropStats"]> =
+			[];
 		const eventStats: RuntimeMarketStats["eventStats"] = [];
 		const eventDetails: RuntimeMarketStats["eventDetails"] = [];
 		const paginationCapHits: RuntimeMarketStats["paginationCapHits"] = [];
@@ -1090,6 +1104,31 @@ export async function fetchTrendingSportsMarkets(
 					return isMainMarketTitle(market.question ?? "");
 				});
 
+				const propStat = {
+					tag,
+					seen: 0,
+					aboveFloor: 0,
+					totalVolume: 0,
+					maxVolume: 0,
+					maxTitle: "",
+					byType: {} as Record<string, number>,
+				};
+				for (const market of tagMarkets) {
+					const title = market.question ?? "";
+					if (!isPlayerPropTitle(title)) continue;
+					const marketVolume = market.volumeNum ?? market.volume ?? 0;
+					propStat.seen += 1;
+					if (marketVolume >= minVolumeUsd) propStat.aboveFloor += 1;
+					propStat.totalVolume += marketVolume;
+					if (marketVolume > propStat.maxVolume) {
+						propStat.maxVolume = marketVolume;
+						propStat.maxTitle = title;
+					}
+					const type = market.sportsMarketType ?? "unknown";
+					propStat.byType[type] = (propStat.byType[type] ?? 0) + 1;
+				}
+				if (propStat.seen > 0) playerPropStats.push(propStat);
+
 				tagStats.push({
 					tag,
 					seriesId,
@@ -1159,6 +1198,7 @@ export async function fetchTrendingSportsMarkets(
 			totalRetries: runtimeFetchMetrics.totalRetries,
 			totalFailures: runtimeFetchMetrics.totalFailures,
 			paginationCapHits,
+			playerPropStats,
 			tagStats,
 			combinedTagStats: [...combinedTagMap.entries()].map(([tag, markets]) => ({
 				tag,

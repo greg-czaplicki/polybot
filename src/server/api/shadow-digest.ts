@@ -224,7 +224,7 @@ export async function handleShadowDigestRequest(
 				"avg_pin_clv = Pinnacle close − PM entry price, so it carries a structural ≈ −0.3%/side offset that is NOT line movement (PM prices across both sides sum to ~1.005; a de-vigged book sums to 1; audited 2026-08-26 on 98 MLB ML markets). avg_clv (PM self-close) has no such offset — the two are not on the same footing. avg_pin_move = Pinnacle close − Pinnacle anchor (pin_move_n rows, anchors from 2026-08-25) is the offset-free movement read; DIAGNOSTIC ONLY, the pre-registered verdict rule still uses avg_pin_clv > 0",
 				"perGate attributes each row to the FIRST gate that fired — contaminated for per-gate causal reads; soleBlockerPerGate (this gate alone failed, all others passed) is the ONLY cohort valid for gate-promotion decisions, and the pre-registered n>=50 checkpoint counts ITS rows",
 				"the former cleanPerGate field (bare gate-vector filter, still first-fired attribution) was removed 2026-08-12 — it overstated cohort sizes and nearly false-fired the checkpoint",
-				"propCohort accumulates BTTS/NRFI/team-total/period markets from 2026-08-07 (era v7)",
+				"propCohort accumulates BTTS/NRFI/team-total/period markets from 2026-08-07 (era v7); subtype player_prop (NFL passing/rushing/receiving/TD props etc.) is ingested record-only from 2026-09-02 (charter docs/charters/player-props-shadow.md) — pessimistic pre-registered hypothesis: thin prop books are dominated by liquidity wallets and the holder signal will NOT clear the bar; read per subtype, never pooled with game props",
 				"propCohortClean is the promotion-read cohort: prop gate sole blocker, all other gates passing — use it, not propCohort, for would-betting-props-pay reads",
 			],
 		},

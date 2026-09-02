@@ -93,6 +93,22 @@ const PERIOD_MARKET_PATTERN =
 	/\b(?:[12]h|[1-4]q|(?:1st|first) half|(?:2nd|second) half|(?:1st|2nd|3rd|4th) quarter|halftime|set [1-5])\b/i;
 
 /**
+ * Player props — "Drake Maye: Passing Yards O/U 249.5", "Kenneth Walker
+ * III: Anytime Touchdown", "Shohei Ohtani: Strikeouts O/U 6.5". The stat
+ * keyword sits directly after the colon (a team-sport qualifier title puts
+ * the matchup or O/U there instead), so "Chelsea vs. Arsenal: O/U 2.5
+ * Goals" does not match. Shared by discovery (sharp-money.ts, which
+ * DROPPED these until 2026-09-02) and the classifier below (→ prop, so
+ * the era-v7 prop gate shadows them; charter
+ * docs/charters/player-props-shadow.md).
+ */
+const PLAYER_PROP_PATTERN =
+	/:\s*(?:points|rebounds|assists|threes|three pointers|steals|blocks|goals|shots|saves|strikeouts|hits|rbis|home runs|total bases|yards|touchdowns|touchdown|anytime|first touchdown|last touchdown|completions|passing|rushing|receiving|receptions|interceptions|sacks|tackles|kicking|field goals)\b/i;
+export function isPlayerPropTitle(title: string): boolean {
+	return title.includes(":") && PLAYER_PROP_PATTERN.test(title);
+}
+
+/**
  * Classifies a market title into a bet type. Shared by the candidate scan
  * (grading, policy segments) and the shadow book (rejected-candidate rows).
  */
@@ -105,7 +121,8 @@ export function getMarketTypeLabel(
 	// otherwise classify as pickable full-game markets (era v7).
 	if (
 		GAME_PROP_KEYWORDS.some((kw) => lower.includes(kw)) ||
-		PERIOD_MARKET_PATTERN.test(marketTitle)
+		PERIOD_MARKET_PATTERN.test(marketTitle) ||
+		isPlayerPropTitle(marketTitle)
 	) {
 		return "prop";
 	}

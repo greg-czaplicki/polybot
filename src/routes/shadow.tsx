@@ -133,6 +133,7 @@ function formatZ(value: number | null): string {
 }
 
 const PROP_SUBTYPE_LABELS: Record<string, string> = {
+	player_prop: "Player prop (record-only from 2026-09-02)",
 	first_inning: "First inning (NRFI/YRFI)",
 	btts: "Both teams to score",
 	team_total: "Team total",

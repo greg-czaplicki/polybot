@@ -4,6 +4,7 @@ import {
 	extractSpreadFromTitle,
 	getMarketTypeLabel,
 	identifySpreadTeamPosition,
+	isPlayerPropTitle,
 } from "./line-ingestion";
 
 describe("getMarketTypeLabel", () => {
@@ -21,6 +22,24 @@ describe("getMarketTypeLabel", () => {
 				"Chelsea FC vs. Manchester United FC: Both Teams to Score",
 			),
 		).toBe("prop");
+	});
+
+	it("classifies player props as props, not totals", () => {
+		expect(getMarketTypeLabel("Drake Maye: Passing Yards O/U 249.5")).toBe(
+			"prop",
+		);
+		expect(getMarketTypeLabel("Kenneth Walker III: Anytime Touchdown")).toBe(
+			"prop",
+		);
+		expect(getMarketTypeLabel("Shohei Ohtani: Strikeouts O/U 6.5")).toBe(
+			"prop",
+		);
+		// The stat keyword must sit right after the colon: game qualifiers
+		// put the line there instead.
+		expect(getMarketTypeLabel("Chelsea FC vs. Arsenal: O/U 2.5 Goals")).toBe(
+			"total",
+		);
+		expect(isPlayerPropTitle("Browns vs. Jaguars: O/U 38.5")).toBe(false);
 	});
 
 	it("classifies tennis set handicaps as spreads, not moneylines", () => {
