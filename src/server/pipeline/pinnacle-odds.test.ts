@@ -836,8 +836,11 @@ describe("starvedGroupMayFetch", () => {
 	it("denies a group that already fetched in the window", () => {
 		expect(starvedGroupMayFetch(1, 6, caps)).toBe(false);
 	});
-	it("holds the absolute live-close ceiling", () => {
-		expect(starvedGroupMayFetch(0, 8, caps)).toBe(false);
+	it("takes one slot past the live-close ceiling, no more", () => {
+		// The rolling window sat at 7-8 every evening of US Open week; a
+		// never-fetched group must still get its first slot.
+		expect(starvedGroupMayFetch(0, 8, caps)).toBe(true);
+		expect(starvedGroupMayFetch(0, 9, caps)).toBe(false);
 	});
 });
 

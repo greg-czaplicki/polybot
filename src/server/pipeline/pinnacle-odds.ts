@@ -255,8 +255,20 @@ export function starvedGroupMayFetch(
 	fetchesInWindow: number,
 	caps: FetchCaps,
 ): boolean {
-	return spentOnGroup === 0 && fetchesInWindow < caps.liveClose;
+	return (
+		spentOnGroup === 0 &&
+		fetchesInWindow < caps.liveClose + STARVED_GROUP_EXTRA_FETCHES
+	);
 }
+/** The first guard (2026-08-30) still required the window to sit BELOW
+ * the live-close ceiling, but the rolling 24h window was at 7-8 every
+ * evening of the US Open week (MLB 3 + tennis 3 + soccer 1-2), so a
+ * Saturday football slate would have been denied again. A starved group
+ * may now take one slot PAST the ceiling: daily worst case becomes
+ * caps.liveClose + (number of never-fetched groups with demand), which
+ * in practice is football on Sat/Sun and the winter group at its season
+ * open. */
+const STARVED_GROUP_EXTRA_FETCHES = 1;
 
 /** US Open fortnight boost (self-reverts): the tennis group shares the
  * shadow window with the soccer groups and was landing ~1-2 fetches/day,
@@ -318,8 +330,10 @@ const PINNAPI_AUTH_FALLBACK_SECONDS = 30 * 60;
  * rows drive the backoff and are NOT counted toward the fetch caps. */
 const PINNAPI_FAIL_KEY_PREFIX = "pinnapi-fail:";
 const ODDSPAPI_FAIL_KEY_PREFIX = "oddspapi-fail:";
-/** OddsPapi 429 = monthly quota exhausted (resets on the 1st): retrying
- * every 10 minutes is pointless, so back off for much longer. */
+/** OddsPapi 429 = monthly quota exhausted: retrying every 10 minutes is
+ * pointless, so back off for much longer. The reset day is NOT the 1st
+ * (the balance kept falling through 2026-09-01) — see the
+ * `oddspapi-account` feed-cache row for the subscription period. */
 const ODDSPAPI_QUOTA_BACKOFF_SECONDS = 6 * 3600;
 const FAIL_KEY_PREFIXES: Array<[string, PinnacleProvider]> = [
 	[PINNAPI_FAIL_KEY_PREFIX, "pinnapi"],
@@ -1005,7 +1019,7 @@ async function fetchOddspapiTournaments(
 async function fetchOddspapiCredits(
 	apiKey: string,
 	transport?: OddspapiTransport,
-): Promise<number | null> {
+): Promise<{ remaining: number | null; account: unknown }> {
 	const result = await oddspapiGet<{
 		subscriptions?: Array<{
 			is_active?: boolean;
@@ -1013,7 +1027,7 @@ async function fetchOddspapiCredits(
 			request_count?: number | null;
 		}>;
 	}>(apiKey, "/account", {}, transport);
-	if ("failed" in result) return null;
+	if ("failed" in result) return { remaining: null, account: null };
 	const subs = result.data.subscriptions ?? [];
 	const sub = subs.find((s) => s.is_active) ?? subs[0];
 	if (
@@ -1021,9 +1035,15 @@ async function fetchOddspapiCredits(
 		typeof sub.request_limit !== "number" ||
 		typeof sub.request_count !== "number"
 	)
-		return null;
-	return sub.request_limit - sub.request_count;
+		return { remaining: null, account: result.data };
+	return {
+		remaining: sub.request_limit - sub.request_count,
+		account: result.data,
+	};
 }
+/** pinnacle_feed_cache row holding the last /v4/account payload verbatim
+ * (subscription period / reset date live there, not in our schema). */
+const ODDSPAPI_ACCOUNT_TAG = "oddspapi-account";
 
 interface TennisIndexMember {
 	id: number;
@@ -1713,10 +1733,28 @@ export async function capturePinnacleOddsForPicks(
 		if (provider === "oddspapi" && !oddspapiCreditsChecked) {
 			oddspapiCreditsChecked = true;
 			await oddspapiPace();
-			credits.remaining = await fetchOddspapiCredits(
+			const account = await fetchOddspapiCredits(
 				apiKey,
 				resolved.oddspapiTransport,
 			);
+			credits.remaining = account.remaining;
+			if (account.account !== null) {
+				await run(
+					db,
+					`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+					 VALUES (?, ?, ?, ?)
+					 ON CONFLICT(sport_tag) DO UPDATE SET
+					   fetched_at = excluded.fetched_at,
+					   events_json = excluded.events_json,
+					   credits_remaining = excluded.credits_remaining`,
+					ODDSPAPI_ACCOUNT_TAG,
+					now,
+					JSON.stringify(account.account).slice(0, 4000),
+					credits.remaining,
+				).catch((error) =>
+					console.warn("[pinnacle-odds] account row write failed:", error),
+				);
+			}
 			if (credits.remaining !== null && credits.remaining < 30) {
 				console.warn(
 					`[pinnacle-odds] oddspapi requests low: ${credits.remaining} left this month`,
