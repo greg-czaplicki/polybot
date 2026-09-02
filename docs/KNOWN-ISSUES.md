@@ -5,6 +5,21 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Tennis Pinnacle matching missed middle-name players before
+  2026-09-02.** `teamNamesMatch` was plain substring containment, so PM's
+  "Adolfo Vallejo" never matched Pinnacle's "Adolfo Daniel Vallejo" (no
+  anchor, no `pin_clv`, no paper-lane evaluation for that match). Fixed
+  2026-09-02 with whole-word token-subset matching, which also stops
+  "Bu" matching inside "Bublik". Tennis shadow anchor coverage before
+  that date is biased toward players Pinnacle lists by two-word names;
+  team sports unaffected (full club names both sides). Same commit:
+  "Set Handicap: …" tennis titles now classify as `spread` (they were
+  `moneyline`, which would have let the pin-divergence lanes price a
+  handicap at moneyline fair odds had the labels ever matched). The
+  paper lanes (`tennis_v2_paper`, `pin_div_paper`) now write a heartbeat
+  to `bot_runtime_status` key `paper_lanes` on every tick that evaluated
+  ≥1 entry against a fresh (≤20 min) feed — the only durable evidence the
+  lanes ran, since worker logs are not retained.
 - **Shadow-only league coverage starts 2026-08-18** (EFL Championship
   10355; La Liga 10193, Bundesliga 10194, Serie A 10203, Ligue 1 10195,
   UCL 10204 — same evening; ATP 10365, WTA 10366; **NHL from 2026-08-25**

@@ -12,6 +12,7 @@ import {
 	parseTitleTeams,
 	starvedGroupMayFetch,
 	TENNIS_BOOST_UNTIL_SECONDS,
+	teamNamesMatch,
 	tennisBoostMayFetch,
 } from "./pinnacle-odds";
 
@@ -97,6 +98,30 @@ describe("mapTotalsToPick", () => {
 		expect(mapTotalsToPick({ ...odds, totalLine: null }, "Over", 8.5)).toBe(
 			null,
 		);
+	});
+});
+
+describe("teamNamesMatch", () => {
+	it("matches when Pinnacle carries a middle name PM drops", () => {
+		expect(teamNamesMatch("Adolfo Vallejo", "Adolfo Daniel Vallejo")).toBe(
+			true,
+		);
+		expect(teamNamesMatch("Adolfo Daniel Vallejo", "Adolfo Vallejo")).toBe(
+			true,
+		);
+	});
+	it("matches a tournament-prefixed PM side label", () => {
+		expect(
+			teamNamesMatch("US Open ATP: Adolfo Vallejo", "Adolfo Vallejo"),
+		).toBe(true);
+	});
+	it("does not match on a shared surname alone or partial words", () => {
+		expect(teamNamesMatch("Yunchaokete Bu", "Alexander Bublik")).toBe(false);
+		expect(teamNamesMatch("Mirra Andreeva", "Erika Andreeva")).toBe(false);
+	});
+	it("single-word names still need containment", () => {
+		expect(teamNamesMatch("Sherif", "Mayar Sherif Ahmed Abdelaziz")).toBe(true);
+		expect(teamNamesMatch("Bu", "Alexander Bublik")).toBe(false);
 	});
 });
 
@@ -839,8 +864,8 @@ describe("tennisBoostMayFetch", () => {
 		expect(starvedGroupMayFetch(0, 7, caps)).toBe(true);
 	});
 	it("self-reverts after the tournament", () => {
-		expect(
-			tennisBoostMayFetch(TENNIS_BOOST_UNTIL_SECONDS, 1, 5, caps),
-		).toBe(false);
+		expect(tennisBoostMayFetch(TENNIS_BOOST_UNTIL_SECONDS, 1, 5, caps)).toBe(
+			false,
+		);
 	});
 });

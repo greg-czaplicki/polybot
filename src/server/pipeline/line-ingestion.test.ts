@@ -23,21 +23,28 @@ describe("getMarketTypeLabel", () => {
 		).toBe("prop");
 	});
 
+	it("classifies tennis set handicaps as spreads, not moneylines", () => {
+		expect(
+			getMarketTypeLabel("Set Handicap: Bartunkova (-1.5) vs Sherif (+1.5)"),
+		).toBe("spread");
+		expect(
+			getMarketTypeLabel("US Open ATP: Adolfo Vallejo vs Gael Monfils"),
+		).toBe("moneyline");
+	});
+
 	it("classifies team totals as props, not game totals", () => {
 		expect(getMarketTypeLabel("Seahawks Team Total: O/U 25.5")).toBe("prop");
 	});
 
 	it("classifies period markets as props regardless of core keywords", () => {
-		expect(
-			getMarketTypeLabel("Seahawks vs. Patriots: 1H O/U 23.5"),
-		).toBe("prop");
-		expect(
-			getMarketTypeLabel("Miami vs. Indiana: 1H Moneyline"),
-		).toBe("prop");
+		expect(getMarketTypeLabel("Seahawks vs. Patriots: 1H O/U 23.5")).toBe(
+			"prop",
+		);
+		expect(getMarketTypeLabel("Miami vs. Indiana: 1H Moneyline")).toBe("prop");
 		expect(getMarketTypeLabel("1H Spread: Seahawks (-3.5)")).toBe("prop");
-		expect(
-			getMarketTypeLabel("Lakers vs. Celtics: 1st Half O/U 112.5"),
-		).toBe("prop");
+		expect(getMarketTypeLabel("Lakers vs. Celtics: 1st Half O/U 112.5")).toBe(
+			"prop",
+		);
 	});
 
 	it("classifies soccer derivative markets as props, not game totals", () => {
@@ -47,7 +54,9 @@ describe("getMarketTypeLabel", () => {
 			),
 		).toBe("prop");
 		expect(
-			getMarketTypeLabel("Everton FC vs. Crystal Palace FC: O/U 9.5 Total Corners"),
+			getMarketTypeLabel(
+				"Everton FC vs. Crystal Palace FC: O/U 9.5 Total Corners",
+			),
 		).toBe("prop");
 		expect(
 			getMarketTypeLabel("Chelsea FC vs. Arsenal FC: O/U 4.5 Total Cards"),
@@ -61,21 +70,21 @@ describe("getMarketTypeLabel", () => {
 	});
 
 	it("does not misread Cardinals as a card prop", () => {
-		expect(
-			getMarketTypeLabel("St. Louis Cardinals vs. Chicago Cubs"),
-		).toBe("moneyline");
+		expect(getMarketTypeLabel("St. Louis Cardinals vs. Chicago Cubs")).toBe(
+			"moneyline",
+		);
 		expect(
 			getMarketTypeLabel("St. Louis Cardinals vs. Chicago Cubs: O/U 8.5"),
 		).toBe("total");
 	});
 
 	it("keeps core market types unchanged", () => {
-		expect(
-			getMarketTypeLabel("Yankees vs. Red Sox: O/U 8.5 Total Runs"),
-		).toBe("total");
-		expect(
-			getMarketTypeLabel("PHI vs CHA: Spread: Hornets (-6.5)"),
-		).toBe("spread");
+		expect(getMarketTypeLabel("Yankees vs. Red Sox: O/U 8.5 Total Runs")).toBe(
+			"total",
+		);
+		expect(getMarketTypeLabel("PHI vs CHA: Spread: Hornets (-6.5)")).toBe(
+			"spread",
+		);
 		expect(getMarketTypeLabel("Minnesota Twins vs. Kansas City Royals")).toBe(
 			"moneyline",
 		);
@@ -91,7 +100,9 @@ describe("getMarketTypeLabel", () => {
 		);
 		// Will-the-match-finish prop, not the winner.
 		expect(
-			getMarketTypeLabel("Cancun: Completed Match: Alexandre Muller vs Coleman Wong"),
+			getMarketTypeLabel(
+				"Cancun: Completed Match: Alexandre Muller vs Coleman Wong",
+			),
 		).toBe("prop");
 		// Full-match totals stay totals; per-set markets are period props.
 		expect(getMarketTypeLabel("Muller vs. Wong: Total Sets O/U 2.5")).toBe(

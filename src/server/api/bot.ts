@@ -40,11 +40,14 @@ import {
 	recordShadowCandidates,
 	type ShadowCandidateInput,
 } from "../pipeline/shadow-book";
-import { evaluatePinDivergenceLanes } from "../pipeline/tennis-v2";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
 } from "../pipeline/team-seeder";
+import {
+	evaluatePinDivergenceLanes,
+	type PaperLaneStats,
+} from "../pipeline/tennis-v2";
 import {
 	insertBotCandidateSnapshot,
 	listBotCandidateSnapshots,
@@ -133,6 +136,8 @@ type BotCandidatesDebug = {
 	returnedBySportSeries: Record<string, number>;
 	nearMisses: BotCandidateNearMiss[];
 	inspect?: BotCandidateDebugInspect;
+	/** Pin-divergence paper lanes, this tick (see pipeline/tennis-v2.ts). */
+	paperLanes?: PaperLaneStats;
 };
 
 type BotCandidatesOptions = {
@@ -2045,7 +2050,7 @@ async function listBotCandidates(
 		// charters tennis-ground-up.md + pin-divergence-benchmark.md):
 		// PM-vs-fresh-Pinnacle divergence on this tick's entries.
 		// Independent of the holder signal; internally never throws.
-		await evaluatePinDivergenceLanes(
+		debug.paperLanes = await evaluatePinDivergenceLanes(
 			db,
 			[...shadowEntryByConditionId.values()].map((entry) => ({
 				conditionId: entry.conditionId,
@@ -2885,7 +2890,8 @@ export async function handleBotRequest(
 				typeof payload.bankrollSyncedAt === "number"
 					? payload.bankrollSyncedAt
 					: null,
-			stakeMode: typeof payload.stakeMode === "string" ? payload.stakeMode : null,
+			stakeMode:
+				typeof payload.stakeMode === "string" ? payload.stakeMode : null,
 			fixedStake:
 				typeof payload.fixedStake === "number" ? payload.fixedStake : null,
 		};

@@ -24,8 +24,9 @@
  */
 
 import type { Db } from "../db/client";
-import { all } from "../db/client";
+import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
+import { getMarketTypeLabel } from "./line-ingestion";
 import {
 	extractPinnaclePrices,
 	matchOddsApiEvent,
@@ -33,7 +34,6 @@ import {
 	parseTitleTeams,
 	teamNamesMatch,
 } from "./pinnacle-odds";
-import { getMarketTypeLabel } from "./line-ingestion";
 import { recordShadowCandidates } from "./shadow-book";
 
 export const TENNIS_V2_LANE = "tennis_v2_paper";
@@ -193,16 +193,62 @@ export function evaluateR1ForEntry(
  * cached Pinnacle feeds (fresh only). Records fire-once paper rows;
  * never throws.
  */
+export interface PaperLaneStats {
+	/** Entries whose sport_tag has a lane. */
+	eligible: number;
+	/** Leagues with a Pinnacle feed ≤ R1_MAX_QUOTE_AGE_SECONDS old. */
+	freshFeeds: number;
+	/** Eligible entries in a league with a fresh feed. */
+	evaluated: number;
+	/** Rule fired (before fire-once dedup). */
+	fired: number;
+	/** New paper rows written this tick. */
+	recorded: number;
+}
+const EMPTY_STATS: PaperLaneStats = {
+	eligible: 0,
+	freshFeeds: 0,
+	evaluated: 0,
+	fired: 0,
+	recorded: 0,
+};
+
+/** Durable heartbeat (bot_runtime_status key `paper_lanes`): worker logs
+ * are not retained, so this is the only evidence the lanes ran. Written
+ * only on ticks that evaluated at least one entry against a fresh feed. */
+async function writeLaneHeartbeat(
+	db: Db,
+	now: number,
+	stats: PaperLaneStats,
+): Promise<void> {
+	try {
+		await run(
+			db,
+			`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+			 VALUES ('paper_lanes', ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET
+			   value_json = excluded.value_json,
+			   updated_at = excluded.updated_at`,
+			JSON.stringify({ ...stats, evaluatedAt: now }),
+			now,
+		);
+	} catch (error) {
+		console.warn("[pin-divergence] heartbeat write failed:", error);
+	}
+}
+
 export async function evaluatePinDivergenceLanes(
 	db: Db,
 	entries: TennisV2Entry[],
-): Promise<number> {
+): Promise<PaperLaneStats> {
+	const stats: PaperLaneStats = { ...EMPTY_STATS };
 	try {
 		const now = nowUnixSeconds();
 		const eligible = entries.filter(
 			(e) => e.sportTag !== null && LANE_BY_TAG[e.sportTag] !== undefined,
 		);
-		if (eligible.length === 0) return 0;
+		stats.eligible = eligible.length;
+		if (eligible.length === 0) return stats;
 		const tags = [...new Set(eligible.map((e) => e.sportTag as string))];
 		const feeds = await all<{
 			sport_tag: string;
@@ -216,8 +262,11 @@ export async function evaluatePinDivergenceLanes(
 			...tags,
 			now - R1_MAX_QUOTE_AGE_SECONDS,
 		);
-		if (feeds.length === 0) return 0;
-		const eventsByTag = new Map<string, { at: number; events: OddsApiEvent[] }>();
+		if (feeds.length === 0) return stats;
+		const eventsByTag = new Map<
+			string,
+			{ at: number; events: OddsApiEvent[] }
+		>();
 		for (const feed of feeds) {
 			try {
 				const events = JSON.parse(feed.events_json) as OddsApiEvent[];
@@ -230,14 +279,17 @@ export async function evaluatePinDivergenceLanes(
 				// unparseable cache row: skip the league this tick
 			}
 		}
-		if (eventsByTag.size === 0) return 0;
+		stats.freshFeeds = eventsByTag.size;
+		if (eventsByTag.size === 0) return stats;
 
 		const inputs = [];
 		for (const entry of eligible) {
 			const feed = eventsByTag.get(entry.sportTag as string);
 			if (!feed) continue;
+			stats.evaluated += 1;
 			const decision = evaluateR1ForEntry(entry, feed.events, now);
 			if (!decision) continue;
+			stats.fired += 1;
 			const eventTime = Math.floor(
 				Date.parse(entry.eventTime as string) / 1000,
 			);
@@ -263,15 +315,17 @@ export async function evaluatePinDivergenceLanes(
 				],
 			});
 		}
-		if (inputs.length === 0) return 0;
-		const recorded = await recordShadowCandidates(db, inputs);
-		if (recorded > 0)
-			console.log(
-				`[pin-divergence] recorded ${recorded} paper rows across lanes`,
-			);
-		return recorded;
+		if (inputs.length > 0) {
+			stats.recorded = await recordShadowCandidates(db, inputs);
+			if (stats.recorded > 0)
+				console.log(
+					`[pin-divergence] recorded ${stats.recorded} paper rows across lanes`,
+				);
+		}
+		if (stats.evaluated > 0) await writeLaneHeartbeat(db, now, stats);
+		return stats;
 	} catch (error) {
 		console.warn("[pin-divergence] lane evaluation failed:", error);
-		return 0;
+		return stats;
 	}
 }

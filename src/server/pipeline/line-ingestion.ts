@@ -126,7 +126,11 @@ export function getMarketTypeLabel(
 	) {
 		return "total";
 	}
-	if (lower.includes("spread")) return "spread";
+	// Tennis set handicaps / soccer Asian handicaps are spreads: without
+	// this, "Set Handicap: Bartunkova (-1.5) vs Sherif (+1.5)" reads as a
+	// prefixed tennis moneyline and the pin lanes would price a handicap
+	// at moneyline fair odds.
+	if (lower.includes("spread") || lower.includes("handicap")) return "spread";
 	if (plainMatchup || prefixedMatchup) return "moneyline";
 	if (lower.includes("moneyline") || lower.includes("ml")) return "moneyline";
 	return "other";

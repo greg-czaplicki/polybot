@@ -668,7 +668,19 @@ function normalizeTeamName(name: string): string {
 export function teamNamesMatch(a: string, b: string): boolean {
 	const na = normalizeTeamName(a);
 	const nb = normalizeTeamName(b);
-	return na === nb || na.includes(nb) || nb.includes(na);
+	if (na === nb) return true;
+	// Whole-word subset: every word of the shorter name must appear in the
+	// longer one. Covers PM's dropped middle names ("Adolfo Vallejo" vs
+	// Pinnacle's "Adolfo Daniel Vallejo"), tournament-prefixed side labels
+	// ("US Open ATP: Adolfo Vallejo"), and nicknames ("Athletics" vs
+	// "Oakland Athletics") — while plain substring containment would let
+	// "Bu" match inside "Bublik".
+	const ta = na.split(" ").filter(Boolean);
+	const tb = nb.split(" ").filter(Boolean);
+	if (ta.length === 0 || tb.length === 0) return false;
+	const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+	const longSet = new Set(long);
+	return short.every((t) => longSet.has(t));
 }
 
 /**
