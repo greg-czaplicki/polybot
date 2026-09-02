@@ -1,6 +1,7 @@
 import { all } from "../db/client";
 import type { Env } from "../env";
 import {
+	PAPER_LANE_SQL,
 	PROP_CLEAN_SQL,
 	PROP_SUBTYPE_SQL,
 	SOLE_BLOCKER_SQL,
@@ -27,6 +28,8 @@ type GateSummaryRow = {
 	new_7d: number;
 	settled_7d: number;
 };
+
+type LaneSportRow = GateSummaryRow & { sport_tag: string | null };
 
 type PropCleanRow = {
 	subtype: string;
@@ -77,10 +80,13 @@ export async function handleShadowDigestRequest(
 		chronicErrors,
 		runStats,
 		lastRunRows,
+		paperLanes,
+		paperLanesBySport,
 	] = await Promise.all([
 		all<GateSummaryRow>(
 			db,
-			`${GATE_SUMMARY_SQL} GROUP BY reject_reason ORDER BY n DESC`,
+			`${GATE_SUMMARY_SQL} WHERE NOT ${PAPER_LANE_SQL}
+				GROUP BY reject_reason ORDER BY n DESC`,
 			weekAgo,
 		),
 		// Promotion-read cohort, same semantics as the /shadow page's
@@ -91,7 +97,7 @@ export async function handleShadowDigestRequest(
 		// served exactly that cut as "cleanPerGate" until 2026-08-12).
 		all<GateSummaryRow>(
 			db,
-			`${GATE_SUMMARY_SQL} WHERE ${SOLE_BLOCKER_SQL}
+			`${GATE_SUMMARY_SQL} WHERE ${SOLE_BLOCKER_SQL} AND NOT ${PAPER_LANE_SQL}
 				GROUP BY reject_reason ORDER BY n DESC`,
 			weekAgo,
 		),
@@ -153,6 +159,23 @@ export async function handleShadowDigestRequest(
 			`SELECT started_at, status, duration_ms FROM canonical_sync_runs
 				 ORDER BY started_at DESC LIMIT 1`,
 		),
+		// Paper lanes: every row is the cohort (the rule was the only
+		// decision), read per lane and per lane×sport.
+		all<GateSummaryRow>(
+			db,
+			`${GATE_SUMMARY_SQL} WHERE ${PAPER_LANE_SQL}
+				GROUP BY reject_reason ORDER BY n DESC`,
+			weekAgo,
+		),
+		all<LaneSportRow>(
+			db,
+			`${GATE_SUMMARY_SQL.replace(
+				"reject_reason,",
+				"reject_reason, sport_tag,",
+			)} WHERE ${PAPER_LANE_SQL}
+				GROUP BY reject_reason, sport_tag ORDER BY reject_reason, n DESC`,
+			weekAgo,
+		),
 	]);
 
 	const lastRun = lastRunRows[0] ?? null;
@@ -191,7 +214,10 @@ export async function handleShadowDigestRequest(
 			soleBlockerPerGate,
 			propCohort,
 			propCohortClean,
+			paperLanes,
+			paperLanesBySport,
 			notes: [
+				"paperLanes / paperLanesBySport are the pin-divergence PAPER lanes (reject_reason tennis_v2_paper = tennis-v2 R1, pin_div_paper = transparency-blind benchmark for football/soccer/MLB; charters in docs/charters/): rule = PM price vs fresh de-vigged Pinnacle, |gap| >= 5pts, moneyline, price .25-.75, fire-once. They are NOT holder-signal gates and are excluded from perGate/soleBlockerPerGate; every lane row is its own clean cohort, so the standard promotion bar (n>=50 settled, event-clustered z>=2, avg_pin_clv>0) applies per lane per sport. Low volume is expected (fires only within 20 min of a Pinnacle fetch); zero rows for days is not an outage — see bot_runtime_status key paper_lanes for the last evaluation heartbeat",
 				"health.alert=true means the pipeline needs attention NOW — lead the digest with it: chronicErrors24h lists error_summary values repeating >=3x across 24h of sync runs (the failure shape of the two worst past incidents: a 4-month silent line-ingestion death and a 6-day ESPN freeze), and alert also fires when the last sync run is >30 min old (cron is 6-min) or >=20% of 24h runs are non-success",
 				"roi/clv are fractions (0.05 = +5%), settled rows only",
 				"avg_pin_clv is the de-vigged Pinnacle close-proxy benchmark (coverage from 2026-08-12, pin_clv_n = rows carrying it); once pin_clv_n is meaningful prefer it over avg_clv (PM self-close) for the checkpoint's CLV criterion",

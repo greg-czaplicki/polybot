@@ -13,7 +13,23 @@
  * (input unavailable at record time), which fails the =1 test: unknown is
  * never counted as a pass.
  */
+/**
+ * Pin-divergence paper lanes (docs/charters/tennis-ground-up.md,
+ * pin-divergence-benchmark.md). Rows here are NOT holder-signal gate
+ * rejects: reject_reason names the RULE that fired, sharp_side is the side
+ * the rule bets, gates_json/top_holders_json are NULL. Every lane row is
+ * its own clean cohort — the rule was the only decision — so the standard
+ * promotion verdict (n>=50, clustered z>=2, pin_clv>0) applies to all of
+ * them, per lane per sport. Keep them OUT of per-gate reads.
+ */
+export const PAPER_LANE_REASONS = ["tennis_v2_paper", "pin_div_paper"] as const;
+export const PAPER_LANE_SQL = `reject_reason IN (${PAPER_LANE_REASONS.map(
+	(r) => `'${r}'`,
+).join(",")})`;
+
 export const SOLE_BLOCKER_SQL = `(
+	${PAPER_LANE_SQL}
+	OR (
 	gates_json IS NOT NULL
 	AND (json_extract(gates_json,'$.price_edge.pass') = 1
 	     OR reject_reason = 'price_edge_below_floor')
@@ -25,6 +41,7 @@ export const SOLE_BLOCKER_SQL = `(
 	     OR reject_reason = 'low_score_differential')
 	AND (json_extract(gates_json,'$.grade_vs_base.pass') = 1
 	     OR reject_reason = 'below_policy_grade')
+	)
 )`;
 
 /**
