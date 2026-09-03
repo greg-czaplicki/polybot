@@ -1839,13 +1839,13 @@ function RuntimePage() {
 	return (
 		<Shell wide>
 			<div>
-				<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10">
+				<div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-3 py-4">
 					<header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 						<div>
 							<p className="text-xs uppercase tracking-[0.3em] text-ink-55">
 								Runtime
 							</p>
-							<h1 className="text-3xl font-semibold text-ink-95">
+							<h1 className="text-lg font-semibold text-ink-95">
 								Market Fetch Stats
 							</h1>
 							<p className="mt-2 text-sm text-ink-55">
@@ -1855,7 +1855,7 @@ function RuntimePage() {
 						</div>
 					</header>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 							<div>
 								<p className="text-sm text-ink-55">
@@ -1947,7 +1947,7 @@ function RuntimePage() {
 						)}
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex items-start justify-between gap-4">
 							<div>
 								<p className="text-xs uppercase tracking-[0.3em] text-ink-950">
@@ -1982,7 +1982,7 @@ function RuntimePage() {
 						{latestDailySnapshot ? (
 							<div className="mt-5 space-y-5">
 								<div className="grid gap-3 md:grid-cols-4">
-									<div className="rounded-md bg-ink-10 p-4">
+									<div className="bg-ink-05 p-3">
 										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
 											Latest Day
 										</p>
@@ -1995,7 +1995,7 @@ function RuntimePage() {
 											{latestDailySnapshot.manualPicks.losses}
 										</p>
 									</div>
-									<div className="rounded-md bg-ink-10 p-4">
+									<div className="bg-ink-05 p-3">
 										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
 											Daily ROI
 										</p>
@@ -2011,7 +2011,7 @@ function RuntimePage() {
 											)}
 										</p>
 									</div>
-									<div className="rounded-md bg-ink-10 p-4">
+									<div className="bg-ink-05 p-3">
 										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
 											Daily CLV
 										</p>
@@ -2031,7 +2031,7 @@ function RuntimePage() {
 												: "—"}
 										</p>
 									</div>
-									<div className="rounded-md bg-ink-10 p-4">
+									<div className="bg-ink-05 p-3">
 										<p className="text-xs uppercase tracking-[0.2em] text-ink-950">
 											Candidate Funnel
 										</p>
@@ -2050,7 +2050,7 @@ function RuntimePage() {
 								</div>
 
 								<div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-									<div className="rounded-md bg-ink-00 p-4">
+									<div className="bg-ink-05 p-3">
 										<div className="flex items-center justify-between">
 											<p className="text-sm font-semibold text-ink-95">
 												Recent Daily Trend
@@ -2121,7 +2121,7 @@ function RuntimePage() {
 									</div>
 
 									<div className="space-y-4">
-										<div className="rounded-md bg-ink-00 p-4">
+										<div className="bg-ink-05 p-3">
 											<p className="text-sm font-semibold text-ink-95">
 												Latest Read
 											</p>
@@ -2165,7 +2165,7 @@ function RuntimePage() {
 											</div>
 										</div>
 
-										<div className="rounded-md bg-ink-00 p-4">
+										<div className="bg-ink-05 p-3">
 											<p className="text-sm font-semibold text-ink-95">
 												Top Market Types
 											</p>
@@ -2210,7 +2210,7 @@ function RuntimePage() {
 						)}
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex flex-col gap-4">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
 								<div>
@@ -2254,26 +2254,26 @@ function RuntimePage() {
 							{candidateDebugResult && (
 								<div className="space-y-5">
 									<div className="grid gap-3 md:grid-cols-4">
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>Entries: {candidateDebugResult.debug.totalEntries}</p>
 											<p>
 												Upcoming: {candidateDebugResult.debug.upcomingEntries}
 											</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Before dedup:{" "}
 												{candidateDebugResult.debug.candidatesBeforeDedup}
 											</p>
 											<p>Returned: {candidateDebugResult.returned}</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Dedup dropped: {candidateDebugResult.debug.dedupDropped}
 											</p>
 											<p>Requested grades: {candidateDebugResult.requested}</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Top exclusion:{" "}
 												{Object.entries(candidateDebugResult.debug.excluded)
@@ -2289,7 +2289,7 @@ function RuntimePage() {
 										</div>
 									</div>
 									<div className="grid gap-4 lg:grid-cols-2">
-										<div className="overflow-auto rounded-md bg-ink-00 p-4">
+										<div className="overflow-auto bg-ink-05 p-3">
 											<h3 className="text-sm font-semibold text-ink-95">
 												Top policy buckets
 											</h3>
@@ -2321,7 +2321,7 @@ function RuntimePage() {
 											{candidateReturnedBreakdowns.map((section) => (
 												<div
 													key={section.title}
-													className="overflow-auto rounded-md bg-ink-00 p-4"
+													className="overflow-auto bg-ink-05 p-3"
 												>
 													<h3 className="text-sm font-semibold text-ink-95">
 														{section.title}
@@ -2345,7 +2345,7 @@ function RuntimePage() {
 											))}
 										</div>
 									</div>
-									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+									<div className="overflow-auto bg-ink-05 p-3">
 										<h3 className="text-sm font-semibold text-ink-95">
 											Top returned candidates
 										</h3>
@@ -2517,7 +2517,7 @@ function RuntimePage() {
 											</p>
 										)}
 									</div>
-									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+									<div className="overflow-auto bg-ink-05 p-3">
 										<h3 className="text-sm font-semibold text-ink-95">
 											Top near misses
 										</h3>
@@ -2609,7 +2609,7 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex flex-col gap-4">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
 								<div>
@@ -2654,17 +2654,17 @@ function RuntimePage() {
 							{cohortLatest && (
 								<div className="space-y-5">
 									<div className="grid gap-3 md:grid-cols-4">
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Latest: {formatRelativeTime(cohortLatest.createdAt)}
 											</p>
 											<p>Returned: {cohortLatest.returned}</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>Upcoming: {cohortLatest.upcomingEntries}</p>
 											<p>Before dedup: {cohortLatest.candidatesBeforeDedup}</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Config: {cohortLatest.minGrade} •{" "}
 												{cohortLatest.minMinutesToStart}-
@@ -2675,7 +2675,7 @@ function RuntimePage() {
 												{cohortLatest.marketQualityThreshold.toFixed(2)}
 											</p>
 										</div>
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											<p>
 												Started:{" "}
 												{cohortLatest.includeStarted ? "included" : "excluded"}
@@ -2688,21 +2688,21 @@ function RuntimePage() {
 									</div>
 									{cohortSummary && (
 										<div className="grid gap-3 md:grid-cols-4">
-											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+											<div className="bg-ink-05 p-3 text-sm text-ink-70">
 												<p>Recent scans: {cohortSummary.scans}</p>
 												<p>
 													Returned scans: {cohortSummary.returnedScans} (
 													{formatPercent(cohortSummary.hitRate)})
 												</p>
 											</div>
-											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+											<div className="bg-ink-05 p-3 text-sm text-ink-70">
 												<p>Total returned: {cohortSummary.totalReturned}</p>
 												<p>
 													Avg returned/scan:{" "}
 													{cohortSummary.avgReturned.toFixed(2)}
 												</p>
 											</div>
-											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+											<div className="bg-ink-05 p-3 text-sm text-ink-70">
 												<p>Total upcoming: {cohortSummary.totalUpcoming}</p>
 												<p>
 													Avg upcoming/scan:{" "}
@@ -2714,7 +2714,7 @@ function RuntimePage() {
 														: "—"}
 												</p>
 											</div>
-											<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+											<div className="bg-ink-05 p-3 text-sm text-ink-70">
 												<p>
 													Trend top exclusion:{" "}
 													{topEntries(
@@ -2729,7 +2729,7 @@ function RuntimePage() {
 										</div>
 									)}
 									<div className="grid gap-4 lg:grid-cols-2">
-										<div className="overflow-auto rounded-md bg-ink-00 p-4">
+										<div className="overflow-auto bg-ink-05 p-3">
 											<h3 className="text-sm font-semibold text-ink-95">
 												Top exclusions
 											</h3>
@@ -2748,7 +2748,7 @@ function RuntimePage() {
 											{cohortReturnedSections.map((section) => (
 												<div
 													key={section.title}
-													className="overflow-auto rounded-md bg-ink-00 p-4"
+													className="overflow-auto bg-ink-05 p-3"
 												>
 													<h3 className="text-sm font-semibold text-ink-95">
 														{section.title}
@@ -2782,7 +2782,7 @@ function RuntimePage() {
 									</div>
 									{cohortSummary && (
 										<div className="grid gap-4 lg:grid-cols-2">
-											<div className="overflow-auto rounded-md bg-ink-00 p-4">
+											<div className="overflow-auto bg-ink-05 p-3">
 												<h3 className="text-sm font-semibold text-ink-95">
 													Trend top exclusions
 												</h3>
@@ -2804,7 +2804,7 @@ function RuntimePage() {
 												{cohortTrendSections.map((section) => (
 													<div
 														key={section.title}
-														className="overflow-auto rounded-md bg-ink-00 p-4"
+														className="overflow-auto bg-ink-05 p-3"
 													>
 														<h3 className="text-sm font-semibold text-ink-95">
 															{section.title}
@@ -2842,7 +2842,7 @@ function RuntimePage() {
 											</div>
 										</div>
 									)}
-									<div className="overflow-auto rounded-md bg-ink-00 p-4">
+									<div className="overflow-auto bg-ink-05 p-3">
 										<h3 className="text-sm font-semibold text-ink-95">
 											Recent scans
 										</h3>
@@ -2901,7 +2901,7 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex flex-col gap-4">
 							<div>
 								<h2 className="text-lg font-semibold text-ink-95">
@@ -2950,14 +2950,14 @@ function RuntimePage() {
 							)}
 							{clvTimingResult ? (
 								<div className="space-y-5">
-									<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+									<div className="bg-ink-05 p-3 text-sm text-ink-70">
 										Settled picks: {clvTimingResult.settledPicks} • Quality
 										threshold: {clvTimingResult.qualityThreshold.toFixed(2)}
 									</div>
 									{clvTimingResult.segments.map((segment) => (
 										<div
 											key={segment.key}
-											className="overflow-auto rounded-md bg-ink-00 p-4"
+											className="overflow-auto bg-ink-05 p-3"
 										>
 											<p className="text-sm font-semibold text-ink-95">
 												{segment.label}
@@ -3054,7 +3054,7 @@ function RuntimePage() {
 								)}
 								{shadowWindowResult ? (
 									<div className="mt-4 space-y-5">
-										<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+										<div className="bg-ink-05 p-3 text-sm text-ink-70">
 											Settled picks: {shadowWindowResult.settledPicks} • Quality
 											threshold:{" "}
 											{shadowWindowResult.qualityThreshold.toFixed(2)}
@@ -3062,7 +3062,7 @@ function RuntimePage() {
 										{shadowWindowResult.segments.map((segment) => (
 											<div
 												key={segment.key}
-												className="overflow-auto rounded-md bg-ink-00 p-4"
+												className="overflow-auto bg-ink-05 p-3"
 											>
 												<p className="text-sm font-semibold text-ink-95">
 													{segment.label}
@@ -3393,7 +3393,7 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						<div className="flex flex-col gap-4">
 							<div>
 								<h2 className="text-lg font-semibold text-ink-95">
@@ -3404,7 +3404,7 @@ function RuntimePage() {
 									time-to-start.
 								</p>
 							</div>
-							<div className="rounded-md bg-ink-00 p-4">
+							<div className="bg-ink-05 p-3">
 								<p className="text-sm font-semibold text-ink-95">
 									Coverage Health
 								</p>
@@ -3585,7 +3585,7 @@ function RuntimePage() {
 									].map((table) => (
 										<div
 											key={table.title}
-											className="overflow-auto rounded-md bg-ink-00 p-4"
+											className="overflow-auto bg-ink-05 p-3"
 										>
 											<p className="text-sm font-semibold text-ink-95">
 												{table.title}
@@ -3643,7 +3643,7 @@ function RuntimePage() {
 										</div>
 									))}
 									{gradeRecalibrationResult ? (
-										<div className="rounded-md bg-ink-00 p-4">
+										<div className="bg-ink-05 p-3">
 											<div className="flex items-center justify-between">
 												<div>
 													<p className="text-sm font-semibold text-ink-95">
@@ -3776,7 +3776,7 @@ function RuntimePage() {
 							)}
 							{bucketPerformanceResult ? (
 								<div className="space-y-5">
-									<div className="rounded-md bg-ink-00 p-4 text-sm text-ink-70">
+									<div className="bg-ink-05 p-3 text-sm text-ink-70">
 										Settled picks in bucket analysis:{" "}
 										{bucketPerformanceResult.settledPicks}
 									</div>
@@ -3800,7 +3800,7 @@ function RuntimePage() {
 									].map((table) => (
 										<div
 											key={table.title}
-											className="overflow-auto rounded-md bg-ink-00 p-4"
+											className="overflow-auto bg-ink-05 p-3"
 										>
 											<p className="text-sm font-semibold text-ink-95">
 												{table.title}
@@ -3866,7 +3866,7 @@ function RuntimePage() {
 						</div>
 					</section>
 
-					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">
+					<section className="border border-ink-15 bg-ink-00 p-4">
 						{stats?.filteredTagStats ? (
 							<div className="overflow-auto">
 								<table className="min-w-full text-left text-sm text-ink-85">

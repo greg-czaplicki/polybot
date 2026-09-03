@@ -1,6 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
+import {
+	Cell,
+	Empty,
+	Panel,
+	Row,
+	Tag,
+	Tape,
+	Workspace,
+} from "@/components/terminal/panel";
 import { Shell } from "@/components/terminal/shell";
 import { getSportLabel } from "@/lib/sports";
 import {
@@ -94,17 +103,6 @@ function SportMixCell({
 	);
 }
 
-function statusTone(status: string): string {
-	switch (status) {
-		case "closed":
-			return "bg-brand-blue/10 text-brand-cyan ring-brand-blue/35";
-		case "void":
-			return "bg-ink-10 text-ink-55 ring-ink-25";
-		default:
-			return "bg-ink-10 text-ink-70 ring-ink-25";
-	}
-}
-
 function WalletsPage() {
 	const [totals, setTotals] = useState<WalletClvTotals | null>(null);
 	const [recent, setRecent] = useState<WalletEntryRow[]>([]);
@@ -135,322 +133,283 @@ function WalletsPage() {
 	}, [load]);
 
 	return (
-		<Shell wide>
-			<div>
-				<div className="mx-auto w-full max-w-6xl px-4 py-10">
-					{/* Header */}
-					<div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-						<div>
-							<h1 className="font-sans text-2xl font-semibold tracking-tight text-ink-95">
-								Wallet CLV
-							</h1>
-							<p className="mt-0.5 font-sans text-sm text-ink-70">
-								Top-holder entries observed per market, settled against the
-								closing line. Skill = beating the close, repeatedly.
-							</p>
-						</div>
-						<div className="flex items-center gap-2"></div>
-					</div>
-
-					{/* Totals strip */}
-					{totals && (
-						<div className="mb-6 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
-							<Stat label="entries" value={String(totals.entries)} />
-							<Stat label="wallets" value={String(totals.distinctWallets)} />
-							<Stat label="24h" value={String(totals.entriesLast24h)} />
-							<Stat label="open" value={String(totals.open)} muted />
-							<Stat label="settled" value={String(totals.closed)} />
-							<Stat
-								label="specialists"
-								value={String(totals.specialistWallets)}
-							/>
-							<Stat
-								label="avg clv"
-								value={formatCents(totals.avgClv)}
-								tone={
-									totals.avgClv === null
-										? undefined
-										: totals.avgClv >= 0
-											? "pos"
-											: "bad"
-								}
-							/>
-							{loadedAt && (
-								<span className="ml-auto text-xxs uppercase tracking-wider text-ink-40">
-									auto-refreshes · updated{" "}
-									{new Date(loadedAt).toLocaleTimeString(undefined, {
-										hour: "numeric",
-										minute: "2-digit",
-									})}
-								</span>
-							)}
-						</div>
-					)}
-					{loadFailed && (
-						<div className="mb-6 rounded-md bg-ink-05 p-4 font-mono text-sm text-ink-55 ring-1 ring-inset ring-ink-15">
-							failed to load wallet data.
-						</div>
-					)}
-
-					{/* Leaderboard */}
-					<section
-						aria-labelledby="wallet-leaderboard-heading"
-						className="mb-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
-					>
-						<h2
-							id="wallet-leaderboard-heading"
-							className="mb-1 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
-						>
-							Skill Leaderboard
-						</h2>
-						<p className="mb-3 font-sans text-xs text-ink-55">
-							Wallets with ≥3 settled entries, ranked by relative CLV (close
-							move as % of entry price) — did their entry beat the close, and by
-							how much relative to what they paid?
-						</p>
-						{leaderboard.length === 0 ? (
-							<div className="font-mono text-sm text-ink-55">
-								no wallets qualify yet — entries settle when their games start,
-								and a wallet needs 3 settled entries to rank.
-							</div>
-						) : (
-							<div className="overflow-x-auto">
-								<table className="w-full font-mono text-xs tabular-nums">
-									<thead>
-										<tr className="text-left text-xxs uppercase tracking-wider text-ink-55">
-											<th className="py-1.5 pr-4 font-semibold">Wallet</th>
-											<th className="py-1.5 pr-4 font-semibold">Sport</th>
-											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
-											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
-											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
-											<th className="py-1.5 pr-4 font-semibold">Entries</th>
-											<th className="py-1.5 pr-4 font-semibold">Volume in</th>
-											<th className="py-1.5 font-semibold">Last seen</th>
-										</tr>
-									</thead>
-									<tbody className="divide-y divide-ink-15">
-										{leaderboard.map((row) => (
-											<tr key={row.walletAddress}>
-												<td className="py-2 pr-4">
-													<a
-														href={profileUrl(row.walletAddress)}
-														target="_blank"
-														rel="noopener noreferrer"
-														className="text-ink-85 underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-													>
-														{shortWallet(row.walletAddress)}
-													</a>
-												</td>
-												<td className="py-2 pr-4">
-													<SportMixCell
-														topSport={row.topSport}
-														topSportShare={row.topSportShare}
-														sportsCount={row.sportsCount}
-														markets={row.markets}
-													/>
-												</td>
-												<td
-													className={`py-2 pr-4 font-semibold ${clvClass(row.avgRelClv)}`}
-												>
-													{formatPct(row.avgRelClv)}
-												</td>
-												<td className={`py-2 pr-4 ${clvClass(row.avgClv)}`}>
-													{formatCents(row.avgClv)}
-												</td>
-												<td className="py-2 pr-4 text-ink-70">
-													{row.beatCloseCount}/{row.closed}
-												</td>
-												<td className="py-2 pr-4 text-ink-70">{row.entries}</td>
-												<td className="py-2 pr-4 text-ink-70">
-													{formatUsd(row.totalDeltaUsd)}
-												</td>
-												<td className="py-2 text-ink-55">
-													{formatTime(row.lastSeenAt)}
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						)}
-					</section>
-
-					{/* Sport specialists */}
-					<section
-						aria-labelledby="wallet-specialists-heading"
-						className="mb-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
-					>
-						<h2
-							id="wallet-specialists-heading"
-							className="mb-1 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
-						>
-							Sport Specialists
-						</h2>
-						<p className="mb-3 font-sans text-xs text-ink-55">
-							Wallets with ≥5 distinct markets and ≥90% of them in one sport
-							(pyramided increments into one game count once), ranked by
-							relative CLV (≥3 settled to rank). Descriptive only — the
-							2026-08-27 read found no specialist CLV edge yet; small-n leaders
-							are expected by chance.
-						</p>
-						{specialists.length === 0 ? (
-							<div className="font-mono text-sm text-ink-55">
-								no specialists with 3 settled entries yet.
-							</div>
-						) : (
-							<div className="overflow-x-auto">
-								<table className="w-full font-mono text-xs tabular-nums">
-									<thead>
-										<tr className="text-left text-xxs uppercase tracking-wider text-ink-55">
-											<th className="py-1.5 pr-4 font-semibold">Wallet</th>
-											<th className="py-1.5 pr-4 font-semibold">Sport</th>
-											<th className="py-1.5 pr-4 font-semibold">Focus</th>
-											<th className="py-1.5 pr-4 font-semibold">Rel CLV</th>
-											<th className="py-1.5 pr-4 font-semibold">Avg CLV</th>
-											<th className="py-1.5 pr-4 font-semibold">Beat close</th>
-											<th className="py-1.5 pr-4 font-semibold">Markets</th>
-											<th className="py-1.5 pr-4 font-semibold">Entries</th>
-											<th className="py-1.5 pr-4 font-semibold">Volume in</th>
-											<th className="py-1.5 font-semibold">Last seen</th>
-										</tr>
-									</thead>
-									<tbody className="divide-y divide-ink-15">
-										{specialists.map((row) => (
-											<tr key={row.walletAddress}>
-												<td className="py-2 pr-4">
-													<a
-														href={profileUrl(row.walletAddress)}
-														target="_blank"
-														rel="noopener noreferrer"
-														className="text-ink-85 underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-													>
-														{shortWallet(row.walletAddress)}
-													</a>
-												</td>
-												<td className="py-2 pr-4">
-													<span className="inline-flex items-center rounded bg-brand-blue/10 px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider text-brand-cyan ring-1 ring-inset ring-brand-blue/35">
-														{sportBadge(row.sport)}
-													</span>
-												</td>
-												<td className="py-2 pr-4 text-ink-70">
-													{Math.round(row.sportShare * 100)}%
-												</td>
-												<td
-													className={`py-2 pr-4 font-semibold ${clvClass(row.avgRelClv)}`}
-												>
-													{formatPct(row.avgRelClv)}
-												</td>
-												<td className={`py-2 pr-4 ${clvClass(row.avgClv)}`}>
-													{formatCents(row.avgClv)}
-												</td>
-												<td className="py-2 pr-4 text-ink-70">
-													{row.beatCloseCount}/{row.closed}
-												</td>
-												<td className="py-2 pr-4 text-ink-70">{row.markets}</td>
-												<td className="py-2 pr-4 text-ink-70">{row.entries}</td>
-												<td className="py-2 pr-4 text-ink-70">
-													{formatUsd(row.totalDeltaUsd)}
-												</td>
-												<td className="py-2 text-ink-55">
-													{formatTime(row.lastSeenAt)}
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						)}
-					</section>
-
-					{/* Live entry feed */}
-					<section
-						aria-labelledby="wallet-feed-heading"
-						className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
-					>
-						<h2
-							id="wallet-feed-heading"
-							className="mb-1 font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
-						>
-							Entry Feed
-						</h2>
-						<p className="mb-3 font-sans text-xs text-ink-55">
-							Newest observed positions — “new” means first appearance in a
-							market’s top 20 (entry size is a lower bound).
-						</p>
-						{recent.length === 0 ? (
-							<div className="font-mono text-sm text-ink-55">
-								no entries yet.
-							</div>
-						) : (
-							<ul className="divide-y divide-ink-15">
-								{recent.map((entry) => (
-									<li
-										key={`${entry.walletAddress}-${entry.observedAt}-${entry.marketTitle}-${entry.side}`}
-										className="py-2.5 first:pt-0 last:pb-0"
-									>
-										<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-											<div className="min-w-0 flex-1">
-												<span className="font-sans text-sm font-semibold text-ink-95">
-													{entry.marketTitle}
-												</span>
-												<span className="ml-2 font-mono text-xxs uppercase tracking-wider text-ink-55">
-													side {entry.side}
-												</span>
-											</div>
-											<div className="flex shrink-0 items-center gap-2 font-mono text-xs tabular-nums">
-												<span className="text-ink-85">
-													{formatUsd(entry.deltaUsd)}
-												</span>
-												<span className="text-ink-55">
-													@ {entry.entryPrice.toFixed(2)}
-												</span>
-												{entry.status === "closed" && (
-													<span
-														className={`font-semibold ${clvClass(entry.clv)}`}
-													>
-														{formatCents(entry.clv)}
-													</span>
-												)}
-												<span
-													className={`inline-flex items-center rounded px-1.5 py-0.5 text-xxs font-semibold uppercase tracking-wider ring-1 ring-inset ${statusTone(entry.status)}`}
-												>
-													{entry.status === "closed" ? "settled" : entry.status}
-												</span>
-											</div>
-										</div>
-										<div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 font-mono text-xxs tabular-nums text-ink-55">
-											<a
-												href={profileUrl(entry.walletAddress)}
-												target="_blank"
-												rel="noopener noreferrer"
-												className="underline decoration-ink-25 underline-offset-2 transition-colors hover:text-brand-cyan hover:decoration-brand-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-											>
-												{shortWallet(entry.walletAddress)}
-											</a>
-											<span aria-hidden>·</span>
-											<span>
-												{entry.kind === "new_top20" ? "new" : "added"}
-											</span>
-											{entry.sport && (
-												<>
-													<span aria-hidden>·</span>
-													<span className="uppercase">
-														{sportBadge(entry.sport)}
-													</span>
-												</>
-											)}
-											<span aria-hidden>·</span>
-											<span>{formatTime(entry.observedAt)}</span>
-											<span aria-hidden>·</span>
-											<span>game {formatTime(entry.eventTime)}</span>
-										</div>
-									</li>
-								))}
-							</ul>
-						)}
-					</section>
-				</div>
+		<Shell
+			wide
+			actions={
+				loadedAt ? (
+					<span className="font-mono text-xxs tabular-nums text-ink-40">
+						auto ·{" "}
+						{new Date(loadedAt).toLocaleTimeString(undefined, {
+							hour: "numeric",
+							minute: "2-digit",
+						})}
+					</span>
+				) : undefined
+			}
+		>
+			{/* Totals strip */}
+			<div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 bg-ink-05 px-3 py-2 font-mono text-xs tabular-nums">
+				<span className="mr-2 text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
+					Wallet CLV
+				</span>
+				{totals ? (
+					<>
+						<Stat label="entries" value={String(totals.entries)} />
+						<Stat label="wallets" value={String(totals.distinctWallets)} />
+						<Stat label="24h" value={String(totals.entriesLast24h)} />
+						<Stat label="open" value={String(totals.open)} muted />
+						<Stat label="settled" value={String(totals.closed)} />
+						<Stat
+							label="specialists"
+							value={String(totals.specialistWallets)}
+						/>
+						<Stat
+							label="avg clv"
+							value={formatCents(totals.avgClv)}
+							tone={
+								totals.avgClv === null
+									? undefined
+									: totals.avgClv >= 0
+										? "pos"
+										: "bad"
+							}
+						/>
+					</>
+				) : (
+					<span className="text-ink-55">
+						{loadFailed ? "failed to load" : "loading…"}
+					</span>
+				)}
+				<span className="ml-auto text-xxs text-ink-40">
+					top-holder entries settled against the close · skill = beating it
+					repeatedly
+				</span>
 			</div>
+
+			<Workspace>
+				<Panel
+					title="Skill leaderboard"
+					span={12}
+					meta="≥3 settled · ranked by relative CLV (close move as % of entry)"
+				>
+					{leaderboard.length === 0 ? (
+						<Empty>
+							No wallets qualify yet. Entries settle when their games start; a
+							wallet needs 3 settled entries to rank.
+						</Empty>
+					) : (
+						<Tape
+							minWidth="min-w-[760px]"
+							head={[
+								{ label: "Wallet" },
+								{ label: "Sport" },
+								{ label: "Rel CLV", align: "right" },
+								{ label: "Avg CLV", align: "right" },
+								{ label: "Beat close", align: "right" },
+								{ label: "Entries", align: "right" },
+								{ label: "Volume in", align: "right" },
+								{ label: "Last seen", align: "right" },
+							]}
+						>
+							{leaderboard.map((row) => (
+								<Row key={row.walletAddress}>
+									<Cell mono>
+										<a
+											href={profileUrl(row.walletAddress)}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="text-ink-85 hover:text-brand-blue"
+										>
+											{shortWallet(row.walletAddress)}
+										</a>
+									</Cell>
+									<Cell>
+										<SportMixCell
+											topSport={row.topSport}
+											topSportShare={row.topSportShare}
+											sportsCount={row.sportsCount}
+											markets={row.markets}
+										/>
+									</Cell>
+									<Cell
+										right
+										className={`font-semibold ${clvClass(row.avgRelClv)}`}
+									>
+										{formatPct(row.avgRelClv)}
+									</Cell>
+									<Cell right className={clvClass(row.avgClv)}>
+										{formatCents(row.avgClv)}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{row.beatCloseCount}/{row.closed}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{row.entries}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{formatUsd(row.totalDeltaUsd)}
+									</Cell>
+									<Cell right className="text-ink-55">
+										{formatTime(row.lastSeenAt)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					)}
+				</Panel>
+
+				<Panel
+					title="Sport specialists"
+					span={12}
+					meta="≥5 markets · ≥90% one sport · descriptive only (2026-08-27 read: no specialist edge yet)"
+				>
+					{specialists.length === 0 ? (
+						<Empty>No specialists with 3 settled entries yet.</Empty>
+					) : (
+						<Tape
+							minWidth="min-w-[820px]"
+							head={[
+								{ label: "Wallet" },
+								{ label: "Sport" },
+								{ label: "Focus", align: "right" },
+								{ label: "Rel CLV", align: "right" },
+								{ label: "Avg CLV", align: "right" },
+								{ label: "Beat close", align: "right" },
+								{ label: "Markets", align: "right" },
+								{ label: "Entries", align: "right" },
+								{ label: "Volume in", align: "right" },
+								{ label: "Last seen", align: "right" },
+							]}
+						>
+							{specialists.map((row) => (
+								<Row key={row.walletAddress}>
+									<Cell mono>
+										<a
+											href={profileUrl(row.walletAddress)}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="text-ink-85 hover:text-brand-blue"
+										>
+											{shortWallet(row.walletAddress)}
+										</a>
+									</Cell>
+									<Cell>
+										<Tag>{sportBadge(row.sport)}</Tag>
+									</Cell>
+									<Cell right className="text-ink-70">
+										{Math.round(row.sportShare * 100)}%
+									</Cell>
+									<Cell
+										right
+										className={`font-semibold ${clvClass(row.avgRelClv)}`}
+									>
+										{formatPct(row.avgRelClv)}
+									</Cell>
+									<Cell right className={clvClass(row.avgClv)}>
+										{formatCents(row.avgClv)}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{row.beatCloseCount}/{row.closed}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{row.markets}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{row.entries}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{formatUsd(row.totalDeltaUsd)}
+									</Cell>
+									<Cell right className="text-ink-55">
+										{formatTime(row.lastSeenAt)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					)}
+				</Panel>
+
+				<Panel
+					title="Entry feed"
+					span={12}
+					meta="newest top-20 appearances · size is a lower bound"
+				>
+					{recent.length === 0 ? (
+						<Empty>No entries yet.</Empty>
+					) : (
+						<Tape
+							minWidth="min-w-[820px]"
+							head={[
+								{ label: "Market" },
+								{ label: "Side" },
+								{ label: "Wallet" },
+								{ label: "Kind" },
+								{ label: "Sport" },
+								{ label: "Size", align: "right" },
+								{ label: "Entry", align: "right" },
+								{ label: "CLV", align: "right" },
+								{ label: "Status" },
+								{ label: "Seen", align: "right" },
+								{ label: "Game", align: "right" },
+							]}
+						>
+							{recent.map((entry) => (
+								<Row
+									key={`${entry.walletAddress}-${entry.observedAt}-${entry.marketTitle}-${entry.side}`}
+								>
+									<Cell className="max-w-[16rem] truncate text-ink-95">
+										{entry.marketTitle}
+									</Cell>
+									<Cell>
+										<Tag>{entry.side}</Tag>
+									</Cell>
+									<Cell mono>
+										<a
+											href={profileUrl(entry.walletAddress)}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="text-ink-70 hover:text-brand-blue"
+										>
+											{shortWallet(entry.walletAddress)}
+										</a>
+									</Cell>
+									<Cell className="text-xs text-ink-55">
+										{entry.kind === "new_top20" ? "new" : "added"}
+									</Cell>
+									<Cell>
+										{entry.sport ? <Tag>{sportBadge(entry.sport)}</Tag> : "—"}
+									</Cell>
+									<Cell right>{formatUsd(entry.deltaUsd)}</Cell>
+									<Cell right className="text-ink-70">
+										{entry.entryPrice.toFixed(2)}
+									</Cell>
+									<Cell
+										right
+										className={`font-semibold ${clvClass(entry.clv)}`}
+									>
+										{entry.status === "closed" ? formatCents(entry.clv) : "—"}
+									</Cell>
+									<Cell
+										className={`font-mono text-xxs uppercase tracking-[0.12em] ${
+											entry.status === "closed"
+												? "text-ink-70"
+												: "text-signal-pos"
+										}`}
+									>
+										{entry.status === "closed" ? "settled" : entry.status}
+									</Cell>
+									<Cell right className="text-ink-55">
+										{formatTime(entry.observedAt)}
+									</Cell>
+									<Cell right className="text-ink-55">
+										{formatTime(entry.eventTime)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					)}
+				</Panel>
+			</Workspace>
 		</Shell>
 	);
 }

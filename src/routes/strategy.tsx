@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { Shell } from "@/components/terminal/shell";
+import { Panel, Workspace } from "@/components/terminal/panel";
+import { Shell, ShellButton } from "@/components/terminal/shell";
 import {
 	ContextPerformanceTable,
 	type PerformanceBucket,
@@ -133,66 +134,62 @@ function StrategyPage() {
 	};
 
 	return (
-		<Shell wide>
-			<div>
-				<div className="mx-auto w-full max-w-6xl px-4 py-10">
-					{/* Header */}
-					<div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-						<div>
-							<h1 className="text-2xl font-semibold tracking-tight">
-								Strategy Analysis
-							</h1>
-							<p className="text-sm text-ink-55">
-								Pick performance by canonical context — which trends and setups
-								actually help?
-							</p>
-						</div>
-						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-ink-55">
-							<button
-								type="button"
-								onClick={() => loadSection(activeSection)}
-								disabled={loading}
-								className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-brand-blue transition-colors hover:bg-brand-blue/20 disabled:opacity-50"
-							>
-								{loading ? "Loading..." : "Refresh"}
-							</button>
-						</div>
-					</div>
+		<Shell
+			wide
+			actions={
+				<ShellButton
+					onClick={() => loadSection(activeSection)}
+					disabled={loading}
+				>
+					{loading ? "…" : "Refresh"}
+				</ShellButton>
+			}
+		>
+			{/* Tabs + summary on one bar */}
+			<div className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-ink-05 px-3 py-1.5">
+				<span className="mr-1 font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
+					Strategy context
+				</span>
+				<div className="flex flex-wrap items-center gap-0.5">
+					{SECTION_TABS.map((tab) => (
+						<button
+							type="button"
+							key={tab.key}
+							onClick={() => handleTabClick(tab.key)}
+							className={`h-7 border-b-2 px-2.5 font-mono text-xxs font-semibold uppercase tracking-[0.15em] transition-colors ${
+								activeSection === tab.key
+									? "border-brand-blue text-ink-95"
+									: "border-transparent text-ink-55 hover:text-ink-85"
+							}`}
+						>
+							{tab.label}
+						</button>
+					))}
+				</div>
+				{sectionData && (
+					<span className="ml-auto font-mono text-xxs tabular-nums text-ink-40">
+						{sectionData.settledPicks} settled · {sectionData.enrichedPicks}{" "}
+						with trend data
+					</span>
+				)}
+			</div>
 
-					{/* Summary banner */}
-					{sectionData && (
-						<div className="mb-4 flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.2em] text-ink-55">
-							<span>{sectionData.settledPicks} settled picks</span>
-							<span>{sectionData.enrichedPicks} with trend data</span>
-						</div>
-					)}
+			{error && !loading && (
+				<div className="border-t border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad">
+					{error}
+				</div>
+			)}
 
-					{/* Section tabs */}
-					<div className="mb-4 flex flex-wrap items-center gap-2">
-						{SECTION_TABS.map((tab) => (
-							<button
-								type="button"
-								key={tab.key}
-								onClick={() => handleTabClick(tab.key)}
-								className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition-colors ${
-									activeSection === tab.key
-										? "bg-cyan-500 text-ink-95"
-										: "bg-ink-10 text-ink-70 hover:bg-ink-10"
-								}`}
-							>
-								{tab.label}
-							</button>
-						))}
-					</div>
-
-					{/* Error state */}
-					{error && !loading && (
-						<div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-							{error}
-						</div>
-					)}
-
-					{/* Content sections */}
+			<Workspace>
+				<Panel
+					title={
+						SECTION_TABS.find((t) => t.key === activeSection)?.label ??
+						"Context"
+					}
+					span={12}
+					meta="pick performance by canonical context"
+					bodyClassName="p-3"
+				>
 					{activeSection === "venue" && (
 						<ContextPerformanceTable
 							title="Performance by Venue + Fav/Dog Role"
@@ -200,7 +197,6 @@ function StrategyPage() {
 							loading={loading}
 						/>
 					)}
-
 					{activeSection === "trend" && (
 						<ContextPerformanceTable
 							title="Performance by ATS Trend Bucket"
@@ -208,7 +204,6 @@ function StrategyPage() {
 							loading={loading}
 						/>
 					)}
-
 					{activeSection === "streak" && (
 						<StreakPerformanceTable
 							title="Performance by ATS Streak"
@@ -216,7 +211,6 @@ function StrategyPage() {
 							loading={loading}
 						/>
 					)}
-
 					{activeSection === "matchup" && (
 						<ContextPerformanceTable
 							title="Performance by Matchup Edge (ATS Delta)"
@@ -224,7 +218,6 @@ function StrategyPage() {
 							loading={loading}
 						/>
 					)}
-
 					{activeSection === "combined" && (
 						<ContextPerformanceTable
 							title="Performance by Combined Context (venue|trend|streak)"
@@ -232,10 +225,9 @@ function StrategyPage() {
 							loading={loading}
 						/>
 					)}
-
 					{activeSection === "features" && <FeatureLegend />}
-				</div>
-			</div>
+				</Panel>
+			</Workspace>
 		</Shell>
 	);
 }

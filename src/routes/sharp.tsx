@@ -2093,16 +2093,18 @@ function SharpMoneyPage() {
 									<h2 className="font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
 										Markets
 									</h2>
-									<span className="font-mono text-xxs tabular-nums text-ink-40">
+									<span className="min-w-0 truncate font-mono text-xxs tabular-nums text-ink-40">
 										{displayEntries.length}/{entries.length} passing
 										{displayDimmedEntries.length > 0
 											? ` · ${displayDimmedEntries.length} near-miss`
 											: ""}
-										{" · click a row for holders, history, bot inspect"}
+										<span className="hidden md:inline">
+											{" · click a row for holders, history, bot inspect"}
+										</span>
 									</span>
 								</div>
 								<div className="overflow-x-auto">
-									<table className="w-full min-w-[900px] text-sm text-ink-85">
+									<table className="w-full min-w-[560px] text-sm text-ink-85 md:min-w-[900px]">
 										<thead>
 											<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
 												<th className="px-3 text-left font-medium">Mkt</th>
@@ -2113,10 +2115,18 @@ function SharpMoneyPage() {
 												</th>
 												<th className="px-3 text-right font-medium">Px</th>
 												<th className="px-3 text-right font-medium">Grd</th>
-												<th className="px-3 text-right font-medium">Sig</th>
-												<th className="px-3 text-right font-medium">Edge</th>
-												<th className="px-3 text-right font-medium">Diff</th>
-												<th className="px-3 text-left font-medium">Conf</th>
+												<th className="hidden px-3 text-right font-medium md:table-cell">
+													Sig
+												</th>
+												<th className="hidden px-3 text-right font-medium md:table-cell">
+													Edge
+												</th>
+												<th className="hidden px-3 text-right font-medium md:table-cell">
+													Diff
+												</th>
+												<th className="hidden px-3 text-left font-medium md:table-cell">
+													Conf
+												</th>
 												<th className="px-3 text-left font-medium">Bet</th>
 											</tr>
 										</thead>
@@ -2370,7 +2380,7 @@ function TapeRow({
 				>
 					{startsText}
 				</td>
-				<td className="max-w-[22rem] truncate px-3 text-ink-95">
+				<td className="max-w-[11rem] truncate px-3 text-ink-95 md:max-w-[22rem]">
 					<span className="mr-1.5 inline-block w-2 text-ink-40">
 						{isExpanded ? "−" : "+"}
 					</span>
@@ -2394,21 +2404,21 @@ function TapeRow({
 				<td className={`px-3 text-right font-sans font-semibold ${gradeClass}`}>
 					{grade}
 				</td>
-				<td className="px-3 text-right font-mono tabular-nums">
+				<td className="hidden px-3 text-right font-mono tabular-nums md:table-cell">
 					{Number.isFinite(scoreForGrade) ? Math.round(scoreForGrade) : "—"}
 				</td>
 				<td
-					className={`px-3 text-right font-mono tabular-nums ${
+					className={`hidden px-3 text-right font-mono tabular-nums md:table-cell ${
 						entry.edgeRating >= MIN_EDGE_RATING ? "" : "text-ink-40"
 					}`}
 				>
 					{Math.round(entry.edgeRating)}
 				</td>
-				<td className="px-3 text-right font-mono tabular-nums text-ink-70">
+				<td className="hidden px-3 text-right font-mono tabular-nums text-ink-70 md:table-cell">
 					{Math.round(entry.scoreDifferential)}
 				</td>
 				<td
-					className={`px-3 font-mono text-xxs uppercase tracking-[0.12em] ${confClass}`}
+					className={`hidden px-3 font-mono text-xxs uppercase tracking-[0.12em] md:table-cell ${confClass}`}
 				>
 					{entry.confidence.toLowerCase()}
 				</td>

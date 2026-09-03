@@ -62,17 +62,19 @@ function StatCard({
 		<div
 			style={{
 				padding: 12,
-				border: "1px solid #333",
+				border: "1px solid var(--ink-15)",
 				borderRadius: 8,
 				textAlign: "center",
 			}}
 		>
-			<div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
+			<div style={{ fontSize: 12, color: "var(--ink-55)", marginBottom: 4 }}>
 				{label}
 			</div>
 			<div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
 			{sub && (
-				<div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>{sub}</div>
+				<div style={{ fontSize: 11, color: "var(--ink-55)", marginTop: 2 }}>
+					{sub}
+				</div>
 			)}
 		</div>
 	);
@@ -209,7 +211,11 @@ function TeamTrendSection({
 					{loading ? "..." : "Search"}
 				</button>
 			</div>
-			{error && <div style={{ color: "#f55", marginBottom: 8 }}>{error}</div>}
+			{error && (
+				<div style={{ color: "var(--signal-bad)", marginBottom: 8 }}>
+					{error}
+				</div>
+			)}
 			{overview && <TrendOverviewTable overview={overview} />}
 		</section>
 	);
@@ -245,7 +251,7 @@ function TrendOverviewTable({
 				}}
 			>
 				<thead>
-					<tr style={{ borderBottom: "2px solid #444" }}>
+					<tr style={{ borderBottom: "2px solid var(--ink-25)" }}>
 						<th style={thStyle}>Split</th>
 						<th style={thStyle}>SU Record</th>
 						<th style={thStyle}>SU Streak</th>
@@ -265,7 +271,10 @@ function TrendOverviewTable({
 						const s = overview.splits[type];
 						if (!s) return null;
 						return (
-							<tr key={type} style={{ borderBottom: "1px solid #333" }}>
+							<tr
+								key={type}
+								style={{ borderBottom: "1px solid var(--ink-15)" }}
+							>
 								<td style={tdStyle}>{s.split.label}</td>
 								<td style={tdStyle}>{s.su.record.display}</td>
 								<td style={tdStyle}>{s.su.streak?.display ?? "—"}</td>
@@ -277,7 +286,9 @@ function TrendOverviewTable({
 								<td style={tdStyle}>{formatPercent(s.ou.record.winPct)}</td>
 								<td style={tdStyle}>{s.ou.streak?.display ?? "—"}</td>
 								<td style={tdStyle}>{formatMargin(s.ou.avgTotalMargin)}</td>
-								<td style={{ ...tdStyle, fontSize: 11, color: "#888" }}>
+								<td
+									style={{ ...tdStyle, fontSize: 11, color: "var(--ink-55)" }}
+								>
 									{s.snapshotSource}
 								</td>
 							</tr>
@@ -293,7 +304,7 @@ const thStyle: React.CSSProperties = {
 	textAlign: "left",
 	padding: "6px 8px",
 	fontSize: 11,
-	color: "#aaa",
+	color: "var(--ink-55)",
 	fontWeight: 500,
 };
 
@@ -388,7 +399,7 @@ function MatchupComparisonSection({
 						</option>
 					))}
 				</select>
-				<span style={{ alignSelf: "center", color: "#aaa" }}>vs</span>
+				<span style={{ alignSelf: "center", color: "var(--ink-55)" }}>vs</span>
 				<select
 					value={opponentId}
 					onChange={(e) => setOpponentId(e.target.value)}
@@ -410,7 +421,11 @@ function MatchupComparisonSection({
 					{loading ? "..." : "Compare"}
 				</button>
 			</div>
-			{error && <div style={{ color: "#f55", marginBottom: 8 }}>{error}</div>}
+			{error && (
+				<div style={{ color: "var(--signal-bad)", marginBottom: 8 }}>
+					{error}
+				</div>
+			)}
 			{comparison && <MatchupDisplay comparison={comparison} />}
 		</section>
 	);
@@ -430,14 +445,14 @@ function MatchupDisplay({
 					style={{
 						marginBottom: 16,
 						padding: 12,
-						border: "1px solid #333",
+						border: "1px solid var(--ink-15)",
 						borderRadius: 8,
 					}}
 				>
 					<div
 						style={{
 							fontSize: 12,
-							color: "#888",
+							color: "var(--ink-55)",
 							marginBottom: 8,
 							fontWeight: 500,
 						}}
@@ -453,7 +468,7 @@ function MatchupDisplay({
 						}}
 					>
 						<thead>
-							<tr style={{ borderBottom: "1px solid #444" }}>
+							<tr style={{ borderBottom: "1px solid var(--ink-25)" }}>
 								<th style={thStyle}>Metric</th>
 								<th style={thStyle}>{comparison.team.name}</th>
 								<th style={thStyle}>{comparison.opponent.name}</th>
@@ -462,12 +477,15 @@ function MatchupDisplay({
 						</thead>
 						<tbody>
 							{split.metrics.map((m) => (
-								<tr key={m.metric} style={{ borderBottom: "1px solid #222" }}>
+								<tr
+									key={m.metric}
+									style={{ borderBottom: "1px solid var(--ink-05)" }}
+								>
 									<td style={tdStyle}>{m.metric.toUpperCase()}</td>
 									<td style={tdStyle}>
 										{m.team.record}
 										{m.team.streak && (
-											<span style={{ color: "#888", marginLeft: 6 }}>
+											<span style={{ color: "var(--ink-55)", marginLeft: 6 }}>
 												{m.team.streak}
 											</span>
 										)}
@@ -475,7 +493,7 @@ function MatchupDisplay({
 									<td style={tdStyle}>
 										{m.opponent.record}
 										{m.opponent.streak && (
-											<span style={{ color: "#888", marginLeft: 6 }}>
+											<span style={{ color: "var(--ink-55)", marginLeft: 6 }}>
 												{m.opponent.streak}
 											</span>
 										)}
@@ -507,9 +525,9 @@ function EdgeBadge({
 	opponentName: string;
 }) {
 	if (edge === "even") {
-		return <span style={{ color: "#888" }}>Even</span>;
+		return <span style={{ color: "var(--ink-55)" }}>Even</span>;
 	}
-	const color = edge === "team" ? "#4a9" : "#f84";
+	const color = edge === "team" ? "var(--signal-pos)" : "var(--signal-warn)";
 	const name = edge === "team" ? teamName : opponentName;
 	return <span style={{ color, fontWeight: 500 }}>{name}</span>;
 }
@@ -568,7 +586,11 @@ function PickContextSection() {
 					{loading ? "..." : "Lookup"}
 				</button>
 			</div>
-			{error && <div style={{ color: "#f55", marginBottom: 8 }}>{error}</div>}
+			{error && (
+				<div style={{ color: "var(--signal-bad)", marginBottom: 8 }}>
+					{error}
+				</div>
+			)}
 			{pickContext && <PickContextDisplay context={pickContext} />}
 		</section>
 	);
@@ -583,7 +605,7 @@ function PickContextDisplay({
 	return (
 		<div
 			style={{
-				border: "1px solid #333",
+				border: "1px solid var(--ink-15)",
 				borderRadius: 8,
 				padding: 12,
 			}}
@@ -592,7 +614,7 @@ function PickContextDisplay({
 				<div style={{ fontSize: 14, fontWeight: 500 }}>
 					{context.marketTitle}
 				</div>
-				<div style={{ fontSize: 12, color: "#888" }}>
+				<div style={{ fontSize: 12, color: "var(--ink-55)" }}>
 					Picked: {formatTimestamp(context.pickedAt)}
 				</div>
 			</div>
@@ -601,7 +623,7 @@ function PickContextDisplay({
 				<div
 					style={{
 						fontSize: 12,
-						color: "#888",
+						color: "var(--ink-55)",
 						fontWeight: 500,
 						marginBottom: 4,
 					}}
@@ -652,7 +674,7 @@ function PickContextDisplay({
 				<div
 					style={{
 						fontSize: 12,
-						color: "#888",
+						color: "var(--ink-55)",
 						fontWeight: 500,
 						marginBottom: 4,
 					}}
@@ -683,8 +705,10 @@ function EnrichField({
 }) {
 	return (
 		<div>
-			<div style={{ color: "#aaa", fontSize: 10 }}>{label}</div>
-			<div style={{ color: value ? "#eee" : "#555" }}>{value ?? "—"}</div>
+			<div style={{ color: "var(--ink-55)", fontSize: 10 }}>{label}</div>
+			<div style={{ color: value ? "var(--ink-85)" : "var(--ink-25)" }}>
+				{value ?? "—"}
+			</div>
 		</div>
 	);
 }
@@ -709,13 +733,13 @@ function SnapshotCard({
 				style={{
 					flex: 1,
 					padding: 8,
-					border: "1px solid #333",
+					border: "1px solid var(--ink-15)",
 					borderRadius: 6,
 					fontSize: 12,
 				}}
 			>
-				<div style={{ color: "#888", marginBottom: 4 }}>{label}</div>
-				<div style={{ color: "#999" }}>No snapshot available</div>
+				<div style={{ color: "var(--ink-55)", marginBottom: 4 }}>{label}</div>
+				<div style={{ color: "var(--ink-55)" }}>No snapshot available</div>
 			</div>
 		);
 	}
@@ -724,12 +748,12 @@ function SnapshotCard({
 			style={{
 				flex: 1,
 				padding: 8,
-				border: "1px solid #333",
+				border: "1px solid var(--ink-15)",
 				borderRadius: 6,
 				fontSize: 12,
 			}}
 		>
-			<div style={{ color: "#888", marginBottom: 4 }}>
+			<div style={{ color: "var(--ink-55)", marginBottom: 4 }}>
 				{label} ({snapshot.type}, L{snapshot.window})
 			</div>
 			<div style={{ display: "flex", gap: 12 }}>
@@ -829,8 +853,8 @@ function PipelineHealthSection() {
 					onClick={() => triggerSync(false)}
 					disabled={triggering}
 					style={{
-						background: "#2a6",
-						color: "#fff",
+						background: "var(--signal-pos-dim)",
+						color: "var(--ink-95)",
 						border: "none",
 						padding: "4px 12px",
 						borderRadius: 4,
@@ -844,8 +868,8 @@ function PipelineHealthSection() {
 					onClick={() => triggerSync(true)}
 					disabled={triggering}
 					style={{
-						background: "#c82",
-						color: "#fff",
+						background: "var(--signal-warn-dim)",
+						color: "var(--ink-95)",
 						border: "none",
 						padding: "4px 12px",
 						borderRadius: 4,
@@ -863,9 +887,11 @@ function PipelineHealthSection() {
 						marginBottom: 12,
 						borderRadius: 4,
 						background: triggerResult.startsWith("Sync")
-							? "#1a3a1a"
-							: "#3a1a1a",
-						color: triggerResult.startsWith("Sync") ? "#4a9" : "#f55",
+							? "color-mix(in oklch, var(--signal-pos) 15%, var(--ink-00))"
+							: "color-mix(in oklch, var(--signal-bad) 15%, var(--ink-00))",
+						color: triggerResult.startsWith("Sync")
+							? "var(--signal-pos)"
+							: "var(--signal-bad)",
 						fontSize: 13,
 					}}
 				>
@@ -917,11 +943,11 @@ function EnrichmentDiagnostics({
 			style={{
 				marginBottom: 16,
 				padding: 12,
-				border: "1px solid #333",
+				border: "1px solid var(--ink-15)",
 				borderRadius: 8,
 			}}
 		>
-			<h3 style={{ fontSize: 14, margin: "0 0 10px", color: "#aaa" }}>
+			<h3 style={{ fontSize: 14, margin: "0 0 10px", color: "var(--ink-55)" }}>
 				Enrichment Diagnostics
 			</h3>
 			<div
@@ -932,7 +958,9 @@ function EnrichmentDiagnostics({
 				}}
 			>
 				<div>
-					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+					<div
+						style={{ color: "var(--ink-55)", fontSize: 12, marginBottom: 6 }}
+					>
 						Field coverage
 					</div>
 					<div
@@ -948,18 +976,22 @@ function EnrichmentDiagnostics({
 								key={label}
 								style={{
 									padding: 8,
-									border: "1px solid #2f2f2f",
+									border: "1px solid var(--ink-05)",
 									borderRadius: 6,
 								}}
 							>
-								<div style={{ color: "#888", marginBottom: 4 }}>{label}</div>
+								<div style={{ color: "var(--ink-55)", marginBottom: 4 }}>
+									{label}
+								</div>
 								<div>{formatCoverage(count, total)}</div>
 							</div>
 						))}
 					</div>
 				</div>
 				<div>
-					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+					<div
+						style={{ color: "var(--ink-55)", fontSize: 12, marginBottom: 6 }}
+					>
 						Latest changed fields
 					</div>
 					{changedFields.length > 0 ? (
@@ -971,21 +1003,25 @@ function EnrichmentDiagnostics({
 										display: "flex",
 										justifyContent: "space-between",
 										padding: "6px 8px",
-										border: "1px solid #2f2f2f",
+										border: "1px solid var(--ink-05)",
 										borderRadius: 6,
 									}}
 								>
-									<span style={{ color: "#ccc" }}>{label}</span>
+									<span style={{ color: "var(--ink-70)" }}>{label}</span>
 									<strong>{count}</strong>
 								</div>
 							))}
 						</div>
 					) : (
-						<div style={{ color: "#777", fontSize: 12 }}>No recent changes</div>
+						<div style={{ color: "var(--ink-40)", fontSize: 12 }}>
+							No recent changes
+						</div>
 					)}
 				</div>
 				<div>
-					<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+					<div
+						style={{ color: "var(--ink-55)", fontSize: 12, marginBottom: 6 }}
+					>
 						Latest failure reasons
 					</div>
 					{failureReasons.length > 0 ? (
@@ -997,24 +1033,24 @@ function EnrichmentDiagnostics({
 										display: "flex",
 										justifyContent: "space-between",
 										padding: "6px 8px",
-										border: "1px solid #2f2f2f",
+										border: "1px solid var(--ink-05)",
 										borderRadius: 6,
 									}}
 								>
-									<span style={{ color: "#ccc" }}>{label}</span>
+									<span style={{ color: "var(--ink-70)" }}>{label}</span>
 									<strong>{count}</strong>
 								</div>
 							))}
 						</div>
 					) : (
-						<div style={{ color: "#777", fontSize: 12 }}>
+						<div style={{ color: "var(--ink-40)", fontSize: 12 }}>
 							No failure reasons on latest run
 						</div>
 					)}
 				</div>
 			</div>
 			<div style={{ marginTop: 12 }}>
-				<div style={{ color: "#888", fontSize: 12, marginBottom: 6 }}>
+				<div style={{ color: "var(--ink-55)", fontSize: 12, marginBottom: 6 }}>
 					Bet type breakdown
 				</div>
 				<div
@@ -1025,17 +1061,19 @@ function EnrichmentDiagnostics({
 							key={label}
 							style={{
 								padding: "6px 10px",
-								border: "1px solid #2f2f2f",
+								border: "1px solid var(--ink-05)",
 								borderRadius: 999,
 							}}
 						>
-							<span style={{ color: "#888", marginRight: 6 }}>{label}</span>
+							<span style={{ color: "var(--ink-55)", marginRight: 6 }}>
+								{label}
+							</span>
 							<strong>{count}</strong>
 						</div>
 					))}
 				</div>
 				{freshness.backfillDiagnostics.latestRunId && (
-					<div style={{ color: "#777", fontSize: 11, marginTop: 8 }}>
+					<div style={{ color: "var(--ink-40)", fontSize: 11, marginTop: 8 }}>
 						Latest backfill run: {freshness.backfillDiagnostics.latestRunId}
 					</div>
 				)}
@@ -1049,7 +1087,7 @@ function FreshnessIndicator({
 }: {
 	staleness: CanonicalFreshnessStatus["staleness"];
 }) {
-	const color = staleness.isStale ? "#f55" : "#4a9";
+	const color = staleness.isStale ? "var(--signal-bad)" : "var(--signal-pos)";
 	const label = staleness.isStale ? "STALE" : "FRESH";
 
 	return (
@@ -1074,12 +1112,14 @@ function FreshnessIndicator({
 				}}
 			/>
 			<span style={{ fontWeight: 600, color }}>{label}</span>
-			<span style={{ color: "#888", fontSize: 13 }}>
+			<span style={{ color: "var(--ink-55)", fontSize: 13 }}>
 				{staleness.lastSuccessAt
 					? `Last success: ${formatRelativeTimestamp(staleness.lastSuccessAt)} (${staleness.minutesSinceLastSuccess}m ago)`
 					: "No successful sync recorded"}
 			</span>
-			<span style={{ color: "#999", fontSize: 12, marginLeft: "auto" }}>
+			<span
+				style={{ color: "var(--ink-55)", fontSize: 12, marginLeft: "auto" }}
+			>
 				Threshold: {staleness.staleThresholdMinutes}m
 			</span>
 		</div>
@@ -1131,7 +1171,7 @@ function RecentSyncRuns({ runs }: { runs: SyncRunSummary[] }) {
 
 	return (
 		<div>
-			<h3 style={{ fontSize: 14, marginBottom: 8, color: "#aaa" }}>
+			<h3 style={{ fontSize: 14, marginBottom: 8, color: "var(--ink-55)" }}>
 				Recent Sync Runs
 			</h3>
 			<table
@@ -1142,7 +1182,7 @@ function RecentSyncRuns({ runs }: { runs: SyncRunSummary[] }) {
 				}}
 			>
 				<thead>
-					<tr style={{ borderBottom: "2px solid #444" }}>
+					<tr style={{ borderBottom: "2px solid var(--ink-25)" }}>
 						<th style={thStyle}>Status</th>
 						<th style={thStyle}>Started</th>
 						<th style={thStyle}>Duration</th>
@@ -1176,16 +1216,16 @@ function SyncRunRow({
 }) {
 	const statusColor =
 		run.status === "success"
-			? "#4a9"
+			? "var(--signal-pos)"
 			: run.status === "failed"
-				? "#f55"
-				: "#fa0";
+				? "var(--signal-bad)"
+				: "var(--signal-warn)";
 
 	return (
 		<>
 			<tr
 				style={{
-					borderBottom: "1px solid #333",
+					borderBottom: "1px solid var(--ink-15)",
 					cursor: run.steps.length > 0 ? "pointer" : "default",
 				}}
 				onClick={run.steps.length > 0 ? onToggle : undefined}
@@ -1210,7 +1250,7 @@ function SyncRunRow({
 						? `${run.steps.length} steps ${isExpanded ? "▼" : "▶"}`
 						: "—"}
 					{run.errorSummary && (
-						<span style={{ color: "#f55", marginLeft: 8 }}>
+						<span style={{ color: "var(--signal-bad)", marginLeft: 8 }}>
 							{run.errorSummary}
 						</span>
 					)}
@@ -1239,10 +1279,10 @@ function SyncStepDetails({ steps }: { steps: SyncRunSummary["steps"] }) {
 			{steps.map((step) => {
 				const color =
 					step.status === "success"
-						? "#4a9"
+						? "var(--signal-pos)"
 						: step.status === "error"
-							? "#f55"
-							: "#888";
+							? "var(--signal-bad)"
+							: "var(--ink-55)";
 				return (
 					<div
 						key={step.step}
@@ -1263,7 +1303,7 @@ function SyncStepDetails({ steps }: { steps: SyncRunSummary["steps"] }) {
 							{step.step}
 						</div>
 						{step.counts && (
-							<div style={{ color: "#ccc" }}>
+							<div style={{ color: "var(--ink-70)" }}>
 								{Object.entries(step.counts).map(([k, v]) => (
 									<div key={k}>
 										{k}: {v}
@@ -1271,11 +1311,13 @@ function SyncStepDetails({ steps }: { steps: SyncRunSummary["steps"] }) {
 								))}
 							</div>
 						)}
-						<div style={{ color: "#888" }}>
+						<div style={{ color: "var(--ink-55)" }}>
 							{(step.durationMs / 1000).toFixed(1)}s
 						</div>
 						{step.error && (
-							<div style={{ color: "#f55", fontSize: 11 }}>{step.error}</div>
+							<div style={{ color: "var(--signal-bad)", fontSize: 11 }}>
+								{step.error}
+							</div>
 						)}
 					</div>
 				);
@@ -1300,29 +1342,29 @@ function formatRelativeTimestamp(ts: number): string {
 
 const buttonStyle: React.CSSProperties = {
 	padding: "6px 14px",
-	border: "1px solid #444",
+	border: "1px solid var(--ink-25)",
 	borderRadius: 6,
-	background: "#2a2a2a",
-	color: "#eee",
+	background: "var(--ink-05)",
+	color: "var(--ink-85)",
 	cursor: "pointer",
 	fontSize: 13,
 };
 
 const inputStyle: React.CSSProperties = {
 	padding: "6px 10px",
-	border: "1px solid #444",
+	border: "1px solid var(--ink-25)",
 	borderRadius: 6,
-	background: "#1a1a1a",
-	color: "#eee",
+	background: "var(--ink-05)",
+	color: "var(--ink-85)",
 	flex: 1,
 };
 
 const selectStyle: React.CSSProperties = {
 	padding: "6px 10px",
-	border: "1px solid #444",
+	border: "1px solid var(--ink-25)",
 	borderRadius: 6,
-	background: "#1a1a1a",
-	color: "#eee",
+	background: "var(--ink-05)",
+	color: "var(--ink-85)",
 };
 
 // ---------------------------------------------------------------------------
@@ -1344,19 +1386,24 @@ function CanonicalPage() {
 	return (
 		<Shell wide>
 			<div
-				style={{ padding: 24, maxWidth: 1200, margin: "0 auto", color: "#eee" }}
+				style={{
+					padding: 24,
+					maxWidth: 1200,
+					margin: "0 auto",
+					color: "var(--ink-85)",
+				}}
 			>
 				<h1>Canonical Analytics</h1>
-				<p style={{ color: "#888", marginBottom: 24 }}>
+				<p style={{ color: "var(--ink-55)", marginBottom: 24 }}>
 					Team trends, matchup comparisons, and pick enrichment inspection.
 				</p>
 
 				<PipelineHealthSection />
-				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
+				<hr style={{ borderColor: "var(--ink-15)", margin: "24px 0" }} />
 				<TeamTrendSection teams={teams} sportTags={sportTags} />
-				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
+				<hr style={{ borderColor: "var(--ink-15)", margin: "24px 0" }} />
 				<MatchupComparisonSection teams={teams} sportTags={sportTags} />
-				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
+				<hr style={{ borderColor: "var(--ink-15)", margin: "24px 0" }} />
 				<PickContextSection />
 			</div>
 		</Shell>
