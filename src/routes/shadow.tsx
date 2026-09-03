@@ -1,177 +1,184 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { ago, dateStamp, pct, units } from "@/components/terminal/format";
+import {
+	Cell,
+	Empty,
+	Num,
+	Panel,
+	Row,
+	Tag,
+	Tape,
+	VerdictWord,
+	Workspace,
+} from "@/components/terminal/panel";
+import { Shell, ShellButton } from "@/components/terminal/shell";
 import {
 	type GateVerdict,
+	PIN_CLV_MIN_N,
 	PROMOTION_MIN_N,
 	PROMOTION_MIN_Z,
 } from "@/lib/gate-verdict";
+import { PROP_SUBTYPE_LABELS, reasonLabel } from "@/lib/shadow-labels";
 import { formatSideLabel } from "@/lib/side-label";
+import { PAPER_LANE_REASONS } from "@/server/api/shadow-sql";
 import {
 	getShadowBookSummaryFn,
-	type ShadowPropSummary,
 	type ShadowReasonSummary,
-	type ShadowRowSummary,
 	type ShadowSportSummary,
-	type ShadowTimingPairSummary,
 } from "../server/api/shadow-book-api";
 
 export const Route = createFileRoute("/shadow")({
-	component: ShadowBookPage,
+	component: VerdictBoardPage,
 });
 
-const REASON_LABELS: Record<string, string> = {
-	outside_window: "Earlier than window (>180m)",
-	too_close_to_start: "Later than window (<60m)",
-	spread_market_excluded: "Spread gate",
-	ncaab_spread_excluded: "NCAAB spread gate",
-	nhl_league_probation: "NHL probation",
-	nba_timing_excluded: "NBA >90m gate",
-	nfl_preseason_excluded: "NFL preseason gate",
-	prop_market_excluded: "Prop market gate",
-	tennis_v2_paper: "PAPER · tennis-v2 R1 (pin divergence)",
-	pin_div_paper: "PAPER · pin-divergence benchmark",
-	"0-15m_timing_excluded": "0-15m gate",
-	not_ready: "Not ready",
-	below_policy_grade: "Grade below policy",
-	low_score_differential: "Low score differential",
-	signal_score_saturation: "Signal saturation gate",
-	edge_rating_saturation: "Edge saturation gate",
-	edge_rating_dead_zone: "Edge dead-zone gate",
-	edge_rating_below_floor: "Edge below floor",
-	below_policy_microstructure: "Microstructure gate",
-	price_edge_below_floor: "Price-edge floor",
-};
+type Summary = Awaited<ReturnType<typeof getShadowBookSummaryFn>>;
 
-function reasonLabel(reason: string): string {
-	return REASON_LABELS[reason] ?? reason;
+/** Below this many settled rows the ROI colour no longer vouches for the number. */
+const MIN_N_FOR_COLOR = 20;
+
+const RANK: Record<GateVerdict, number> = { ready: 0, watch: 1, hold: 2 };
+const PAPER = new Set<string>(PAPER_LANE_REASONS);
+
+function isPaper(reason: string): boolean {
+	return PAPER.has(reason);
 }
 
-function formatUnits(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "—";
-	return `${value >= 0 ? "+" : ""}${value.toFixed(2)}u`;
+function z(value: number | null): string {
+	return value === null || !Number.isFinite(value) ? "—" : value.toFixed(1);
 }
 
-function formatRoi(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "—";
-	return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
-}
-
-function roiClass(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "text-ink-55";
-	return value >= 0 ? "text-emerald-500" : "text-red-500";
-}
-
-/**
- * Below this many settled rows, ROI/CLV cells render dimmed: the number is
- * still shown, but the color no longer vouches for it (multiple-comparisons
- * guard — with a dozen gates, some small cell is always at ±60%).
- */
-const MIN_SETTLED_FOR_EMPHASIS = 20;
-
-function roiCellClass(value: number | null, settled: number): string {
-	if (settled < MIN_SETTLED_FOR_EMPHASIS) return "text-ink-40 opacity-70";
-	return roiClass(value);
-}
-
-function smallSampleTitle(settled: number): string | undefined {
-	return settled < MIN_SETTLED_FOR_EMPHASIS
-		? `n=${settled} settled — too small to color`
-		: undefined;
-}
-
-const VERDICT_STYLE: Record<GateVerdict, { label: string; className: string }> =
-	{
-		ready: {
-			label: "READY",
-			className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/40",
-		},
-		watch: {
-			label: "WATCH",
-			className: "bg-amber-500/15 text-amber-500 border-amber-500/40",
-		},
-		hold: {
-			label: "HOLD",
-			className: "bg-ink-05 text-ink-55 border-ink-15",
-		},
-	};
-
-/**
- * The verdict badge is the only thing on this page that answers "do I need
- * to do anything": HOLD = no; WATCH = no, but the cohort is moving toward
- * the bar; READY = the pre-registered promotion criteria are all met and
- * the gate earns a review. Hover shows which criteria are still unmet.
- */
-function VerdictBadge({
-	verdict,
-	reason,
-	clvSource,
-}: {
-	verdict: GateVerdict;
-	reason: string;
-	clvSource: "pinnacle" | "polymarket" | "none";
-}) {
-	const style = VERDICT_STYLE[verdict];
-	const title =
-		verdict === "ready"
-			? `All criteria met (n≥${PROMOTION_MIN_N}, z≥${PROMOTION_MIN_Z}, ${clvSource} CLV>0)`
-			: `Unmet: ${reason} (CLV source: ${clvSource})`;
+function VerdictHead() {
 	return (
-		<span
-			title={title}
-			className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.15em] ${style.className}`}
-		>
-			{style.label}
-		</span>
+		<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
+			<th className="px-3 text-left font-medium">Gate</th>
+			<th className="px-3 text-left font-medium">Mkt</th>
+			<th className="px-3 text-left font-medium">Verdict</th>
+			<th
+				className="px-3 text-right font-medium"
+				title="sole-blocker settled rows"
+			>
+				n
+			</th>
+			<th className="px-3 text-right font-medium">W-L</th>
+			<th className="px-3 text-right font-medium">ROI</th>
+			<th className="px-3 text-right font-medium" title="event-clustered z">
+				z
+			</th>
+			<th className="px-3 text-right font-medium">Pin CLV</th>
+			<th
+				className="px-3 text-right font-medium"
+				title="close − anchor, offset-free"
+			>
+				Pin move
+			</th>
+			<th className="px-3 text-left font-medium">Next</th>
+		</tr>
 	);
 }
 
-function formatZ(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "—";
-	return value.toFixed(1);
+/**
+ * One row of the board. `scope` is "all" for the gate across sports or a
+ * sport tag. Every number is the sole-blocker (clean) cohort — the only
+ * cut the promotion rule reads.
+ */
+function VerdictRow({
+	r,
+	scope,
+	indent = false,
+	onClick,
+	expanded,
+}: {
+	r: ShadowReasonSummary | ShadowSportSummary;
+	scope: string;
+	indent?: boolean;
+	onClick?: () => void;
+	expanded?: boolean;
+}) {
+	const n = r.cleanTotal;
+	const title =
+		r.verdict === "ready"
+			? `All criteria met (n≥${PROMOTION_MIN_N}, z≥${PROMOTION_MIN_Z}, ${r.verdictClvSource} CLV>0)`
+			: `Unmet: ${r.verdictReason} · CLV source ${r.verdictClvSource}`;
+	return (
+		<Row onClick={onClick} className={indent ? "bg-ink-05/60" : ""}>
+			<Cell
+				className={`max-w-[15rem] truncate ${indent ? "pl-6 text-ink-70" : "text-ink-95"}`}
+			>
+				{indent ? (
+					""
+				) : onClick ? (
+					<span className="mr-1.5 inline-block w-2 text-ink-40">
+						{expanded ? "−" : "+"}
+					</span>
+				) : null}
+				{indent ? "" : reasonLabel(r.rejectReason)}
+			</Cell>
+			<Cell>
+				<Tag>{scope}</Tag>
+			</Cell>
+			<Cell>
+				<VerdictWord verdict={r.verdict} title={title} />
+			</Cell>
+			<Cell
+				right
+				className={n >= PROMOTION_MIN_N ? "text-ink-95" : "text-ink-70"}
+			>
+				{n}
+				<span className="text-ink-40">/{PROMOTION_MIN_N}</span>
+			</Cell>
+			<Cell right className="text-ink-70">
+				{r.cleanWins}-{r.cleanLosses}
+			</Cell>
+			<Cell right>
+				<Num
+					value={r.cleanRoiPct}
+					text={pct(r.cleanRoiPct)}
+					dim={n < MIN_N_FOR_COLOR}
+				/>
+			</Cell>
+			<Cell
+				right
+				title={`clustered over ${r.cleanClusters} events · per-row z ${z(r.cleanRowZ)}`}
+			>
+				<Num value={r.cleanZ} text={z(r.cleanZ)} dim={n < MIN_N_FOR_COLOR} />
+			</Cell>
+			<Cell right title={`${r.cleanPinN} rows carry Pinnacle CLV`}>
+				<Num
+					value={r.cleanAvgPinClvPct}
+					text={r.cleanPinN > 0 ? pct(r.cleanAvgPinClvPct, 2) : "—"}
+					dim={r.cleanPinN < PIN_CLV_MIN_N}
+				/>
+				{r.cleanPinN > 0 ? (
+					<span className="ml-1 text-xxs text-ink-40">{r.cleanPinN}</span>
+				) : null}
+			</Cell>
+			<Cell right title={`${r.cleanPinMoveN} rows with anchor + close`}>
+				<Num
+					value={r.cleanAvgPinMovePct}
+					text={r.cleanPinMoveN > 0 ? pct(r.cleanAvgPinMovePct, 2) : "—"}
+					dim={r.cleanPinMoveN < PIN_CLV_MIN_N}
+				/>
+			</Cell>
+			<Cell className="max-w-[16rem] truncate font-mono text-xs text-ink-55">
+				{r.verdict === "ready" ? "review for promotion" : r.verdictReason}
+			</Cell>
+		</Row>
+	);
 }
 
-const PROP_SUBTYPE_LABELS: Record<string, string> = {
-	player_prop: "Player prop (record-only from 2026-09-02)",
-	first_inning: "First inning (NRFI/YRFI)",
-	btts: "Both teams to score",
-	team_total: "Team total",
-	period: "Period (1H/2H/quarter)",
-	other_prop: "Other prop",
-};
-
-function formatTime(seconds: number | null): string {
-	if (!seconds) return "—";
-	return new Date(seconds * 1000).toLocaleString(undefined, {
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function ShadowBookPage() {
-	const [reasons, setReasons] = useState<ShadowReasonSummary[]>([]);
-	const [bySport, setBySport] = useState<ShadowSportSummary[]>([]);
-	const [props, setProps] = useState<ShadowPropSummary[]>([]);
-	const [timingPairs, setTimingPairs] = useState<ShadowTimingPairSummary[]>([]);
-	const [recent, setRecent] = useState<ShadowRowSummary[]>([]);
-	const [computedAt, setComputedAt] = useState<number | null>(null);
+function VerdictBoardPage() {
+	const [data, setData] = useState<Summary | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [open, setOpen] = useState<Set<string>>(new Set());
 
 	const load = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
 		try {
-			const result = await getShadowBookSummaryFn();
-			setReasons(result.reasons);
-			setBySport(result.bySport);
-			setProps(result.props);
-			setTimingPairs(result.timingPairs);
-			setRecent(result.recent);
-			setComputedAt(result.computedAt);
+			setData(await getShadowBookSummaryFn());
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load");
 		} finally {
@@ -183,661 +190,434 @@ function ShadowBookPage() {
 		void load();
 	}, [load]);
 
-	const settledTotal = reasons.reduce((s, r) => s + r.wins + r.losses, 0);
-	const pendingTotal = reasons.reduce((s, r) => s + r.pending, 0);
-	const unitsTotal = reasons.reduce((s, r) => s + (r.units ?? 0), 0);
+	const toggle = (key: string) =>
+		setOpen((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+
+	const gates = useMemo(
+		() =>
+			(data?.reasons ?? [])
+				.filter((r) => !isPaper(r.rejectReason))
+				.sort(
+					(a, b) =>
+						RANK[a.verdict] - RANK[b.verdict] || b.cleanTotal - a.cleanTotal,
+				),
+		[data],
+	);
+	const activeGates = useMemo(
+		() => gates.filter((g) => g.cleanTotal > 0),
+		[gates],
+	);
+	const dormantGates = useMemo(
+		() => gates.filter((g) => g.cleanTotal === 0),
+		[gates],
+	);
+	const lanes = useMemo(
+		() => (data?.reasons ?? []).filter((r) => isPaper(r.rejectReason)),
+		[data],
+	);
+	const sportsFor = useCallback(
+		(reason: string) =>
+			(data?.bySport ?? [])
+				.filter((s) => s.rejectReason === reason)
+				.sort(
+					(a, b) =>
+						RANK[a.verdict] - RANK[b.verdict] || b.cleanTotal - a.cleanTotal,
+				),
+		[data],
+	);
+
+	const all = [...(data?.reasons ?? []), ...(data?.bySport ?? [])];
+	const ready = all.filter((r) => r.verdict === "ready");
+	const watch = all.filter((r) => r.verdict === "watch");
+	const settledTotal = (data?.reasons ?? []).reduce(
+		(s, r) => s + r.wins + r.losses,
+		0,
+	);
+	const pendingTotal = (data?.reasons ?? []).reduce((s, r) => s + r.pending, 0);
+	const readyLabel = (r: ShadowReasonSummary | ShadowSportSummary) =>
+		`${reasonLabel(r.rejectReason)}${"sportTag" in r ? ` · ${r.sportTag.toUpperCase()}` : ""}`;
 
 	return (
-		<AuthGate>
-			<div className="mx-auto max-w-6xl px-4 py-8">
-				<div className="flex items-baseline justify-between">
-					<div>
-						<h1 className="text-xl font-semibold text-ink-95">Shadow Book</h1>
-						<p className="mt-1 text-sm text-ink-55">
-							Gate-rejected candidates settled without betting — what each
-							filter saved or cost. Recording started 2026-07-30; ROI assumes 1u
-							at the first-sighting price (ignores slippage). Small samples lie:
-							judge gates on n, not vibes.
-						</p>
-					</div>
-					<button
-						type="button"
-						onClick={() => void load()}
-						disabled={isLoading}
-						className="rounded-md border border-ink-15 px-3 py-1.5 text-sm text-ink-85 hover:bg-ink-05 disabled:opacity-50"
-					>
-						{isLoading ? "Loading…" : "Refresh"}
-					</button>
-				</div>
+		<Shell
+			wide
+			actions={
+				<>
+					{data ? (
+						<span className="hidden font-mono text-xxs tabular-nums text-ink-40 sm:inline">
+							as of {ago(data.computedAt)}
+						</span>
+					) : null}
+					<ShellButton onClick={() => void load()} disabled={isLoading}>
+						{isLoading ? "…" : "Refresh"}
+					</ShellButton>
+				</>
+			}
+		>
+			{error ? (
+				<p className="border-b border-signal-bad/40 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad">
+					{error}
+				</p>
+			) : null}
 
-				{error ? (
-					<p className="mt-4 rounded-md bg-red-500/10 p-3 text-sm text-red-500">
-						{error}
-					</p>
+			{/* DECISION — the one line this screen exists for. */}
+			<div
+				className={`flex flex-wrap items-baseline gap-x-4 gap-y-1 px-3 py-2 ${
+					ready.length > 0 ? "bg-signal-pos/10" : "bg-ink-05"
+				}`}
+			>
+				<span className="font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-40">
+					Decision
+				</span>
+				<span
+					className={`text-sm font-semibold ${
+						ready.length > 0 ? "text-signal-pos" : "text-ink-95"
+					}`}
+				>
+					{!data
+						? isLoading
+							? "Loading…"
+							: "—"
+						: ready.length > 0
+							? `${ready.length} cohort${ready.length === 1 ? "" : "s"} ready for promotion review: ${ready
+									.map(readyLabel)
+									.join(", ")}`
+							: "Nothing to do. Every cohort is HOLD."}
+				</span>
+				{data && watch.length > 0 ? (
+					<span className="font-mono text-xs text-ink-55">
+						watching{" "}
+						{watch
+							.map((r) => `${readyLabel(r)} (${r.verdictReason})`)
+							.join(" · ")}
+					</span>
 				) : null}
-
-				<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-					{[
-						{
-							label: "Shadow candidates",
-							value: String(
-								settledTotal +
-									pendingTotal +
-									reasons.reduce((s, r) => s + r.pushes, 0),
-							),
-						},
-						{ label: "Settled", value: String(settledTotal) },
-						{ label: "Pending", value: String(pendingTotal) },
-						{
-							label: "Units (all gates)",
-							value: formatUnits(settledTotal > 0 ? unitsTotal : null),
-						},
-					].map((tile) => (
-						<div key={tile.label} className="rounded-md bg-ink-00 p-4">
-							<p className="text-xs uppercase tracking-[0.2em] text-ink-55">
-								{tile.label}
-							</p>
-							<p className="mt-1 text-lg font-semibold text-ink-95">
-								{tile.value}
-							</p>
-						</div>
-					))}
-				</div>
-
-				{/* Decision banner — the answer to "do I need to do anything?" */}
-				{(() => {
-					const actionable = [
-						...reasons.map((r) => ({
-							key: r.rejectReason,
-							label: `${reasonLabel(r.rejectReason)} (all sports)`,
-							verdict: r.verdict,
-							reason: r.verdictReason,
-							clvSource: r.verdictClvSource,
-						})),
-						...bySport.map((r) => ({
-							key: `${r.rejectReason}-${r.sportTag}`,
-							label: `${reasonLabel(r.rejectReason)} · ${r.sportTag.toUpperCase()}`,
-							verdict: r.verdict,
-							reason: r.verdictReason,
-							clvSource: r.verdictClvSource,
-						})),
-					].filter((r) => r.verdict !== "hold");
-					const ready = actionable.filter((r) => r.verdict === "ready");
-					const watch = actionable.filter((r) => r.verdict === "watch");
-					return (
-						<div
-							className={`mt-6 rounded-md border p-4 ${
-								ready.length > 0
-									? "border-emerald-500/40 bg-emerald-500/10"
-									: "border-ink-15 bg-ink-00"
-							}`}
-						>
-							<p className="text-xs uppercase tracking-[0.2em] text-ink-55">
-								Decision
-							</p>
-							<p className="mt-1 text-base font-semibold text-ink-95">
-								{isLoading && reasons.length === 0
-									? "Loading…"
-									: ready.length > 0
-										? `${ready.length} gate${ready.length === 1 ? "" : "s"} ready for promotion review`
-										: "Nothing to do — every gate is HOLD"}
-							</p>
-							<p className="mt-1 text-xs text-ink-55">
-								A gate earns a review only when its sole-blocker cohort reaches
-								n≥{PROMOTION_MIN_N} settled, z≥{PROMOTION_MIN_Z} on ROI, and
-								CLV&gt;0 (Pinnacle once ≥10 rows carry it). Raw W-L and ROI
-								columns are context, never the trigger.
-							</p>
-							{ready.length > 0 ? (
-								<ul className="mt-2 space-y-1 text-sm text-ink-85">
-									{ready.map((r) => (
-										<li key={r.key} className="flex items-center gap-2">
-											<VerdictBadge
-												verdict={r.verdict}
-												reason={r.reason}
-												clvSource={r.clvSource}
-											/>
-											{r.label}
-										</li>
-									))}
-								</ul>
-							) : null}
-							{watch.length > 0 ? (
-								<p className="mt-2 text-xs text-ink-55">
-									Watching (moving toward the bar, no action):{" "}
-									{watch.map((r) => `${r.label} — ${r.reason}`).join("; ")}
-								</p>
-							) : null}
-						</div>
-					);
-				})()}
-
-				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-					Performance by gate
-				</h2>
-				<p className="mt-2 text-sm text-amber-500/90">
-					Read with care: a row lands under the FIRST gate that fired, and the
-					chain stops there — so a gate&apos;s raw ROI mixes in candidates other
-					gates would have rejected anyway, and overstates what loosening that
-					one gate would recover. The Sole-blocker columns (which the Verdict
-					reads) are the clean cohort: rejected by this gate alone, every other
-					gate passing — only rows from 2026-08-06 onward carry the per-gate
-					vector. The dimmed Raw columns are context only. Dimmed cells have
-					fewer than {MIN_SETTLED_FOR_EMPHASIS} settled rows — the number is
-					shown but the sample is too small to color.
-				</p>
-				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
-					<table className="min-w-full text-left text-sm text-ink-85">
-						<thead>
-							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
-								<th className="pb-2 pr-4">Gate</th>
-								<th className="pb-2 pr-4">Verdict</th>
-								<th className="pb-2 pr-4">Sole-blocker W-L</th>
-								<th className="pb-2 pr-4">SB ROI</th>
-								<th className="pb-2 pr-4">SB z</th>
-								<th className="pb-2 pr-4">SB Pin CLV</th>
-								<th
-									className="pb-2 pr-4"
-									title="Pinnacle close − Pinnacle anchor (movement only, offset-free). Diagnostic, not a verdict input."
-								>
-									SB Pin move
-								</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
-								<th className="pb-2 pr-4 text-ink-40">Pending</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw units</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw ROI</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw CLV</th>
-								<th className="pb-2 text-ink-40">Avg mins-to-start</th>
-							</tr>
-						</thead>
-						<tbody>
-							{reasons.map((r) => (
-								<tr key={r.rejectReason} className="border-t border-ink-10">
-									<td className="py-2 pr-4">
-										<span className="text-ink-95">
-											{reasonLabel(r.rejectReason)}
-										</span>
-										<span className="ml-2 text-xs text-ink-55">
-											{r.rejectReason}
-										</span>
-									</td>
-									<td className="py-2 pr-4">
-										<VerdictBadge
-											verdict={r.verdict}
-											reason={r.verdictReason}
-											clvSource={r.verdictClvSource}
-										/>
-									</td>
-									<td className="py-2 pr-4">
-										{r.cleanTotal > 0
-											? `${r.cleanWins}-${r.cleanLosses}${
-													r.cleanTotal > r.cleanWins + r.cleanLosses
-														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
-														: ""
-												}`
-											: "—"}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
-										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
-									>
-										{formatRoi(r.cleanRoiPct)}
-									</td>
-									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
-									<td
-										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
-										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
-									>
-										{formatRoi(r.cleanAvgPinClvPct)}
-										{r.cleanPinN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">
-												n={r.cleanPinN}
-											</span>
-										) : null}
-									</td>
-									<td
-										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinMovePct, r.cleanPinMoveN)}`}
-										title={`Pinnacle close − Pinnacle anchor on n=${r.cleanPinMoveN} sole-blocker rows carrying both (anchors from 2026-08-25). Diagnostic only — not a verdict input. Free of the ~−0.3% PM-spread offset baked into Pin CLV.`}
-									>
-										{formatRoi(r.cleanAvgPinMovePct)}
-										{r.cleanPinMoveN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">
-												n={r.cleanPinMoveN}
-											</span>
-										) : null}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">{r.total}</td>
-									<td className="py-2 pr-4 text-ink-40">{r.pending}</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{r.wins}-{r.losses}
-										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{formatUnits(r.units)}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{formatRoi(r.roiPct)}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{formatRoi(r.avgClvPct)}
-									</td>
-									<td className="py-2 text-ink-40">
-										{r.avgMinutesToStart !== null
-											? Math.round(r.avgMinutesToStart)
-											: "—"}
-									</td>
-								</tr>
-							))}
-							{reasons.length === 0 && !isLoading ? (
-								<tr>
-									<td colSpan={9} className="py-4 text-ink-55">
-										No shadow candidates yet.
-									</td>
-								</tr>
-							) : null}
-						</tbody>
-					</table>
-				</div>
-
-				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-					Paired timing view — window boundary drift
-				</h2>
-				<p className="mt-1 text-xs text-ink-55">
-					outside_window shadows paired with a real pick on the SAME market —
-					the direct measurement of the window&apos;s early boundary. Drift =
-					pick price − first-sighting price (&gt;180m out) on the same side, in
-					probability points: positive means the market moved toward the sharp
-					side before we were allowed in (waiting cost us entry price — evidence
-					for opening the window earlier); negative means waiting got us a
-					better price. Side-flipped pairs are excluded from drift. Post-entry
-					drift needs no bucket here — that is exactly what CLV measures.
-				</p>
-				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
-					<table className="min-w-full text-left text-sm text-ink-85">
-						<thead>
-							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
-								<th className="pb-2 pr-4">Boundary</th>
-								<th className="pb-2 pr-4">Pairs</th>
-								<th className="pb-2 pr-4">Side matched</th>
-								<th className="pb-2 pr-4">Side flipped</th>
-								<th className="pb-2 pr-4">Avg drift</th>
-								<th className="pb-2 pr-4">Median drift</th>
-								<th className="pb-2 pr-4">Toward / away</th>
-								<th className="pb-2">Paired pick W-L</th>
-							</tr>
-						</thead>
-						<tbody>
-							{timingPairs.map((r) => (
-								<tr key={r.bucket} className="border-t border-ink-10">
-									<td className="py-2 pr-4 text-ink-95">
-										{r.bucket === "outside_window"
-											? "Early sighting → pick entry"
-											: "Pick entry → later sighting"}
-									</td>
-									<td className="py-2 pr-4">{r.pairs}</td>
-									<td className="py-2 pr-4">{r.sideMatched}</td>
-									<td className="py-2 pr-4">{r.sideFlipped}</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.avgDriftPct, r.sideMatched)}`}
-										title={smallSampleTitle(r.sideMatched)}
-									>
-										{r.avgDriftPct !== null
-											? `${r.avgDriftPct >= 0 ? "+" : ""}${r.avgDriftPct.toFixed(1)}pp`
-											: "—"}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.medianDriftPct, r.sideMatched)}`}
-										title={smallSampleTitle(r.sideMatched)}
-									>
-										{r.medianDriftPct !== null
-											? `${r.medianDriftPct >= 0 ? "+" : ""}${r.medianDriftPct.toFixed(1)}pp`
-											: "—"}
-									</td>
-									<td className="py-2 pr-4">
-										{r.movedTowardSide} / {r.movedAway}
-									</td>
-									<td className="py-2">
-										{r.pickWins}-{r.pickLosses}
-									</td>
-								</tr>
-							))}
-							{timingPairs.every((r) => r.pairs === 0) && !isLoading ? (
-								<tr>
-									<td colSpan={8} className="py-4 text-ink-55">
-										No timing-shadow/pick pairs yet.
-									</td>
-								</tr>
-							) : null}
-						</tbody>
-					</table>
-				</div>
-
-				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-					Prop cohort — promotion watch
-				</h2>
-				<p className="mt-1 text-xs text-ink-55">
-					All prop-typed shadows regardless of which gate claimed them (timing
-					pre-filters fire before the prop gate, so reject reason under-counts
-					the cohort). Accumulating since 2026-08-07 (era v7). The Clean columns
-					count only rows where the prop gate was the sole blocker — every other
-					gate passing — which is the number the promotion decision reads; the
-					raw columns mix in props other gates would have rejected anyway. A
-					subtype earns a promotion review on sustained clean n with positive
-					ROI and CLV — per-subtype, with its own scoring path, never by
-					unmuting the full-game machinery.
-				</p>
-				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
-					<table className="min-w-full text-left text-sm text-ink-85">
-						<thead>
-							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
-								<th className="pb-2 pr-4">Subtype</th>
-								<th className="pb-2 pr-4">Total</th>
-								<th className="pb-2 pr-4">Pending</th>
-								<th className="pb-2 pr-4">W-L</th>
-								<th className="pb-2 pr-4">Units</th>
-								<th className="pb-2 pr-4">ROI</th>
-								<th className="pb-2 pr-4">Avg CLV</th>
-								<th className="pb-2 pr-4">Clean W-L</th>
-								<th className="pb-2 pr-4">Clean ROI</th>
-								<th className="pb-2">Clean CLV</th>
-							</tr>
-						</thead>
-						<tbody>
-							{props.map((r) => (
-								<tr key={r.subtype} className="border-t border-ink-10">
-									<td className="py-2 pr-4">
-										<span className="text-ink-95">
-											{PROP_SUBTYPE_LABELS[r.subtype] ?? r.subtype}
-										</span>
-										<span className="ml-2 text-xs text-ink-55">
-											{r.subtype}
-										</span>
-									</td>
-									<td className="py-2 pr-4">{r.total}</td>
-									<td className="py-2 pr-4">{r.pending}</td>
-									<td className="py-2 pr-4">
-										{r.wins}-{r.losses}
-										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.units, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatUnits(r.units)}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.roiPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.roiPct)}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.avgClvPct, r.wins + r.losses)}`}
-										title={smallSampleTitle(r.wins + r.losses)}
-									>
-										{formatRoi(r.avgClvPct)}
-									</td>
-									<td className="py-2 pr-4">
-										{r.cleanTotal > 0
-											? `${r.cleanWins}-${r.cleanLosses}${
-													r.cleanTotal > r.cleanWins + r.cleanLosses
-														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
-														: ""
-												}`
-											: "—"}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
-										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
-									>
-										{formatRoi(r.cleanRoiPct)}
-									</td>
-									<td
-										className={`py-2 ${roiCellClass(r.cleanAvgClvPct, r.cleanWins + r.cleanLosses)}`}
-										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
-									>
-										{formatRoi(r.cleanAvgClvPct)}
-									</td>
-								</tr>
-							))}
-							{props.length === 0 && !isLoading ? (
-								<tr>
-									<td colSpan={10} className="py-4 text-ink-55">
-										No prop shadows yet — they accumulate as BTTS, NRFI/YRFI,
-										team-total, and period markets hit the gates.
-									</td>
-								</tr>
-							) : null}
-						</tbody>
-					</table>
-				</div>
-
-				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-					Performance by gate × sport
-				</h2>
-				<p className="mt-1 text-xs text-ink-55">
-					The same gate can be right for one sport and wrong for another — the
-					verdict is per gate × sport for that reason. The Sole-blocker columns
-					are what the verdict reads (this gate alone fired, every other gate
-					passing); the dimmed Raw columns count every row that landed under the
-					gate first, including ones another gate would have rejected anyway,
-					and are context only. Sport comes from the series registry; soccer
-					shows per-league (epl/mls).
-				</p>
-				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
-					<table className="min-w-full text-left text-sm text-ink-85">
-						<thead>
-							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
-								<th className="pb-2 pr-4">Gate</th>
-								<th className="pb-2 pr-4">Sport</th>
-								<th className="pb-2 pr-4">Verdict</th>
-								<th className="pb-2 pr-4">Sole-blocker W-L</th>
-								<th className="pb-2 pr-4">SB ROI</th>
-								<th className="pb-2 pr-4">SB z</th>
-								<th className="pb-2 pr-4">SB Pin CLV</th>
-								<th
-									className="pb-2 pr-4"
-									title="Pinnacle close − Pinnacle anchor (movement only, offset-free). Diagnostic, not a verdict input."
-								>
-									SB Pin move
-								</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw total</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw W-L</th>
-								<th className="pb-2 pr-4 text-ink-40">Raw units</th>
-								<th className="pb-2 text-ink-40">Raw ROI</th>
-							</tr>
-						</thead>
-						<tbody>
-							{bySport.map((r) => (
-								<tr
-									key={`${r.rejectReason}-${r.sportTag}`}
-									className="border-t border-ink-10"
-								>
-									<td className="py-2 pr-4 text-xs text-ink-55">
-										{r.rejectReason}
-									</td>
-									<td className="py-2 pr-4 uppercase text-ink-95">
-										{r.sportTag}
-									</td>
-									<td className="py-2 pr-4">
-										<VerdictBadge
-											verdict={r.verdict}
-											reason={r.verdictReason}
-											clvSource={r.verdictClvSource}
-										/>
-									</td>
-									<td className="py-2 pr-4">
-										{r.cleanTotal > 0
-											? `${r.cleanWins}-${r.cleanLosses}${
-													r.cleanTotal > r.cleanWins + r.cleanLosses
-														? ` (${r.cleanTotal - r.cleanWins - r.cleanLosses}p)`
-														: ""
-												}`
-											: "—"}
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiCellClass(r.cleanRoiPct, r.cleanWins + r.cleanLosses)}`}
-										title={smallSampleTitle(r.cleanWins + r.cleanLosses)}
-									>
-										{formatRoi(r.cleanRoiPct)}
-									</td>
-									<td className="py-2 pr-4 text-ink-55">{formatZ(r.cleanZ)}</td>
-									<td
-										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinClvPct, r.cleanPinN)}`}
-										title={`n=${r.cleanPinN} sole-blocker rows carry a Pinnacle close`}
-									>
-										{formatRoi(r.cleanAvgPinClvPct)}
-										{r.cleanPinN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">
-												n={r.cleanPinN}
-											</span>
-										) : null}
-									</td>
-									<td
-										className={`whitespace-nowrap py-2 pr-4 ${roiCellClass(r.cleanAvgPinMovePct, r.cleanPinMoveN)}`}
-										title={`Pinnacle close − Pinnacle anchor on n=${r.cleanPinMoveN} sole-blocker rows carrying both (anchors from 2026-08-25). Diagnostic only — not a verdict input. Free of the ~−0.3% PM-spread offset baked into Pin CLV.`}
-									>
-										{formatRoi(r.cleanAvgPinMovePct)}
-										{r.cleanPinMoveN > 0 ? (
-											<span className="ml-1 text-xs text-ink-40">
-												n={r.cleanPinMoveN}
-											</span>
-										) : null}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{r.total}
-										{r.pending > 0 ? (
-											<span className="ml-1 text-xs">
-												({r.pending} pending)
-											</span>
-										) : null}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{r.wins}-{r.losses}
-										{r.pushes > 0 ? ` (${r.pushes}p)` : ""}
-									</td>
-									<td className="py-2 pr-4 text-ink-40">
-										{formatUnits(r.units)}
-									</td>
-									<td className="py-2 text-ink-40">{formatRoi(r.roiPct)}</td>
-								</tr>
-							))}
-							{bySport.length === 0 && !isLoading ? (
-								<tr>
-									<td colSpan={11} className="py-4 text-ink-55">
-										No shadow candidates yet.
-									</td>
-								</tr>
-							) : null}
-						</tbody>
-					</table>
-				</div>
-
-				<h2 className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-					Recent shadow candidates (latest 100)
-				</h2>
-				<div className="mt-3 overflow-x-auto rounded-md bg-ink-00 p-4">
-					<table className="min-w-full text-left text-sm text-ink-85">
-						<thead>
-							<tr className="whitespace-nowrap text-xs uppercase tracking-[0.15em] text-ink-55">
-								<th className="pb-2 pr-4">Market</th>
-								<th className="pb-2 pr-4">Gate</th>
-								<th className="pb-2 pr-4">Side</th>
-								<th className="pb-2 pr-4">Price</th>
-								<th className="pb-2 pr-4">Grade</th>
-								<th className="pb-2 pr-4">Mins</th>
-								<th className="pb-2 pr-4">Status</th>
-								<th className="pb-2 pr-4">ROI</th>
-								<th className="pb-2">Recorded</th>
-							</tr>
-						</thead>
-						<tbody>
-							{recent.map((row) => (
-								<tr
-									key={`${row.marketTitle}-${row.rejectReason}-${row.createdAt}`}
-									className="border-t border-ink-10"
-								>
-									<td className="max-w-xs truncate py-2 pr-4 text-ink-95">
-										{row.marketTitle}
-									</td>
-									<td className="py-2 pr-4 text-xs text-ink-55">
-										{row.rejectReason}
-									</td>
-									<td className="py-2 pr-4">
-										{(() => {
-											const sideText = formatSideLabel(
-												row.sharpSideLabel,
-												row.sharpSide,
-												row.marketTitle,
-											);
-											return sideText ? (
-												<>
-													<span className="text-ink-95">{sideText}</span>
-													<span className="ml-1 text-xs text-ink-55">
-														({row.sharpSide})
-													</span>
-												</>
-											) : (
-												(row.sharpSide ?? "—")
-											);
-										})()}
-									</td>
-									<td className="py-2 pr-4">
-										{row.price !== null ? row.price.toFixed(2) : "—"}
-									</td>
-									<td className="py-2 pr-4">{row.grade ?? "—"}</td>
-									<td className="py-2 pr-4 text-ink-55">
-										{row.minutesToStart !== null
-											? Math.round(row.minutesToStart)
-											: "—"}
-									</td>
-									<td className="py-2 pr-4">
-										<span
-											className={
-												row.status === "win"
-													? "text-emerald-500"
-													: row.status === "loss"
-														? "text-red-500"
-														: "text-ink-55"
-											}
-										>
-											{row.status}
-										</span>
-									</td>
-									<td
-										className={`py-2 pr-4 ${roiClass(
-											row.status === "win" || row.status === "loss"
-												? row.roi
-												: null,
-										)}`}
-									>
-										{row.status === "win" || row.status === "loss"
-											? formatUnits(row.roi)
-											: "—"}
-									</td>
-									<td className="py-2 text-xs text-ink-55">
-										{formatTime(row.createdAt)}
-									</td>
-								</tr>
-							))}
-							{recent.length === 0 && !isLoading ? (
-								<tr>
-									<td colSpan={9} className="py-4 text-ink-55">
-										Nothing recorded yet.
-									</td>
-								</tr>
-							) : null}
-						</tbody>
-					</table>
-				</div>
-
-				{computedAt ? (
-					<p className="mt-4 text-xs text-ink-55">
-						Computed {formatTime(computedAt)}
-					</p>
-				) : null}
+				<span className="ml-auto font-mono text-xxs tabular-nums text-ink-40">
+					{data ? `${settledTotal} settled · ${pendingTotal} pending` : ""}
+				</span>
 			</div>
-		</AuthGate>
+			<p className="border-t border-ink-15 px-3 py-1 font-mono text-xxs text-ink-40">
+				Rule: sole-blocker cohort n≥{PROMOTION_MIN_N} · clustered z≥
+				{PROMOTION_MIN_Z} · Pinnacle CLV&gt;0 once ≥{PIN_CLV_MIN_N} rows carry
+				it. Colour is withheld below n={MIN_N_FOR_COLOR}. Raw first-fired cuts
+				are not shown here; they never decide anything.
+			</p>
+
+			<Workspace>
+				{/* GATES */}
+				<Panel
+					title="Gates"
+					span={12}
+					meta={
+						data
+							? `${gates.length} gates · click a row for per-market cohorts`
+							: undefined
+					}
+					tone={gates.some((g) => g.verdict === "ready") ? "pos" : undefined}
+				>
+					{data ? (
+						<div className="overflow-x-auto">
+							<table className="w-full min-w-[880px] text-sm text-ink-85">
+								<thead>
+									<VerdictHead />
+								</thead>
+								<tbody>
+									{activeGates.map((g) => {
+										const sports = sportsFor(g.rejectReason);
+										const expanded = open.has(g.rejectReason);
+										return (
+											<Fragment key={g.rejectReason}>
+												<VerdictRow
+													r={g}
+													scope="all"
+													onClick={
+														sports.length > 0
+															? () => toggle(g.rejectReason)
+															: undefined
+													}
+													expanded={expanded}
+												/>
+												{expanded
+													? sports.map((s) => (
+															<VerdictRow
+																key={`${s.rejectReason}:${s.sportTag}`}
+																r={s}
+																scope={s.sportTag}
+																indent
+															/>
+														))
+													: null}
+											</Fragment>
+										);
+									})}
+									{activeGates.length === 0 ? (
+										<tr>
+											<td colSpan={10}>
+												<Empty>No gate rows yet.</Empty>
+											</td>
+										</tr>
+									) : null}
+									{dormantGates.length > 0 ? (
+										<tr>
+											<td
+												colSpan={10}
+												className="px-3 py-1.5 font-mono text-xxs text-ink-40"
+											>
+												dormant (no settled sole-blocker rows):{" "}
+												{dormantGates
+													.map(
+														(g) =>
+															`${reasonLabel(g.rejectReason)}${g.pending > 0 ? ` (${g.pending} pending)` : ""}`,
+													)
+													.join(" · ")}
+											</td>
+										</tr>
+									) : null}
+								</tbody>
+							</table>
+						</div>
+					) : (
+						<Empty>{isLoading ? "Loading…" : "No data."}</Empty>
+					)}
+				</Panel>
+
+				{/* PAPER LANES — their own cohort, not gate rejects. */}
+				<Panel
+					title="Paper lanes"
+					span={7}
+					meta="rule-only cohorts · same promotion rule"
+					tone={lanes.some((l) => l.verdict === "ready") ? "pos" : undefined}
+				>
+					{data ? (
+						lanes.length > 0 ? (
+							<div className="overflow-x-auto">
+								<table className="w-full min-w-[720px] text-sm text-ink-85">
+									<thead>
+										<VerdictHead />
+									</thead>
+									<tbody>
+										{lanes.map((l) => (
+											<Fragment key={l.rejectReason}>
+												<VerdictRow r={l} scope="all" />
+												{sportsFor(l.rejectReason).map((s) => (
+													<VerdictRow
+														key={`${s.rejectReason}:${s.sportTag}`}
+														r={s}
+														scope={s.sportTag}
+														indent
+													/>
+												))}
+											</Fragment>
+										))}
+									</tbody>
+								</table>
+							</div>
+						) : (
+							<Empty>
+								No lane rows yet. The pin-divergence rule fires rarely on liquid
+								lines; the heartbeat on the terminal shows it ran.
+							</Empty>
+						)
+					) : (
+						<Empty>{isLoading ? "Loading…" : "No data."}</Empty>
+					)}
+				</Panel>
+
+				{/* PROPS — record-only cohort. */}
+				<Panel title="Props" span={5} meta="record-only · clean cut">
+					{data && data.props.length > 0 ? (
+						<Tape
+							minWidth="min-w-[420px]"
+							head={[
+								{ label: "Subtype" },
+								{ label: "n", align: "right" },
+								{ label: "Pend", align: "right" },
+								{ label: "W-L", align: "right" },
+								{ label: "ROI", align: "right" },
+								{ label: "CLV", align: "right" },
+							]}
+						>
+							{data.props.map((p) => {
+								const n = p.cleanWins + p.cleanLosses;
+								return (
+									<Row
+										key={p.subtype}
+										title={`raw: ${p.wins}-${p.losses} · ${pct(p.roiPct)}`}
+									>
+										<Cell className="text-ink-85">
+											{PROP_SUBTYPE_LABELS[p.subtype] ?? p.subtype}
+										</Cell>
+										<Cell right>{p.cleanTotal}</Cell>
+										<Cell right className="text-ink-55">
+											{p.pending}
+										</Cell>
+										<Cell right className="text-ink-70">
+											{p.cleanWins}-{p.cleanLosses}
+										</Cell>
+										<Cell right>
+											<Num
+												value={p.cleanRoiPct}
+												text={pct(p.cleanRoiPct)}
+												dim={n < MIN_N_FOR_COLOR}
+											/>
+										</Cell>
+										<Cell right>
+											<Num
+												value={p.cleanAvgClvPct}
+												text={pct(p.cleanAvgClvPct, 2)}
+												dim={n < MIN_N_FOR_COLOR}
+											/>
+										</Cell>
+									</Row>
+								);
+							})}
+						</Tape>
+					) : (
+						<Empty>{isLoading && !data ? "Loading…" : "No prop rows."}</Empty>
+					)}
+				</Panel>
+
+				{/* TIMING PAIRS — collapsed; diagnostic only. */}
+				<Panel
+					title="Window drift"
+					span={12}
+					meta="paired timing view · diagnostic"
+				>
+					<details>
+						<summary className="cursor-pointer px-3 py-1.5 font-mono text-xs text-ink-55 hover:text-ink-85">
+							Same market seen on both sides of a window boundary: did the side
+							flip, and which way did price drift?{" "}
+							{data ? `${data.timingPairs.length} boundaries` : ""}
+						</summary>
+						{data && data.timingPairs.length > 0 ? (
+							<Tape
+								head={[
+									{ label: "Boundary" },
+									{ label: "Pairs", align: "right" },
+									{ label: "Side kept", align: "right" },
+									{ label: "Flipped", align: "right" },
+									{ label: "Avg drift", align: "right" },
+									{ label: "Median", align: "right" },
+									{ label: "Toward/away", align: "right" },
+									{ label: "Paired W-L", align: "right" },
+								]}
+							>
+								{data.timingPairs.map((t) => (
+									<Row key={t.bucket}>
+										<Cell className="text-ink-85">{t.bucket}</Cell>
+										<Cell right>{t.pairs}</Cell>
+										<Cell right>{t.sideMatched}</Cell>
+										<Cell right>{t.sideFlipped}</Cell>
+										<Cell right>
+											<Num value={t.avgDriftPct} text={pct(t.avgDriftPct, 2)} />
+										</Cell>
+										<Cell right>
+											<Num
+												value={t.medianDriftPct}
+												text={pct(t.medianDriftPct, 2)}
+											/>
+										</Cell>
+										<Cell right className="text-ink-70">
+											{t.movedTowardSide}/{t.movedAway}
+										</Cell>
+										<Cell right className="text-ink-70">
+											{t.pickWins}-{t.pickLosses}
+										</Cell>
+									</Row>
+								))}
+							</Tape>
+						) : (
+							<Empty>No pairs yet.</Empty>
+						)}
+					</details>
+				</Panel>
+
+				{/* RECENT — collapsed; the raw feed. */}
+				<Panel
+					title="Recent shadow rows"
+					span={12}
+					meta={data ? `latest ${data.recent.length}` : undefined}
+				>
+					<details>
+						<summary className="cursor-pointer px-3 py-1.5 font-mono text-xs text-ink-55 hover:text-ink-85">
+							Raw feed of the latest rejects — what fired, at what price, and
+							how it settled.
+						</summary>
+						{data && data.recent.length > 0 ? (
+							<Tape
+								head={[
+									{ label: "Market" },
+									{ label: "Gate" },
+									{ label: "Side" },
+									{ label: "Px", align: "right" },
+									{ label: "Grd", align: "right" },
+									{ label: "Mins", align: "right" },
+									{ label: "R", align: "right" },
+									{ label: "Units", align: "right" },
+									{ label: "Recorded", align: "right" },
+								]}
+							>
+								{data.recent.map((r, i) => (
+									<Row key={`${r.marketTitle}-${r.createdAt}-${i}`}>
+										<Cell className="max-w-[18rem] truncate text-ink-85">
+											{r.marketTitle}
+										</Cell>
+										<Cell className="max-w-[12rem] truncate text-xs text-ink-55">
+											{reasonLabel(r.rejectReason)}
+										</Cell>
+										<Cell className="max-w-[10rem] truncate">
+											{formatSideLabel(
+												r.sharpSideLabel,
+												r.sharpSide,
+												r.marketTitle,
+											) ??
+												r.sharpSide ??
+												"—"}
+										</Cell>
+										<Cell right>
+											{r.price !== null ? r.price.toFixed(2) : "—"}
+										</Cell>
+										<Cell right>{r.grade ?? "—"}</Cell>
+										<Cell right className="text-ink-55">
+											{r.minutesToStart ?? "—"}
+										</Cell>
+										<Cell
+											right
+											className={`font-semibold ${
+												r.status === "win"
+													? "text-signal-pos"
+													: r.status === "loss"
+														? "text-signal-bad"
+														: "text-ink-40"
+											}`}
+										>
+											{r.status === "win"
+												? "W"
+												: r.status === "loss"
+													? "L"
+													: r.status === "pending"
+														? "·"
+														: r.status.slice(0, 1).toUpperCase()}
+										</Cell>
+										<Cell right>
+											<Num value={r.roi} text={units(r.roi)} />
+										</Cell>
+										<Cell right className="text-ink-55">
+											{dateStamp(r.createdAt)}
+										</Cell>
+									</Row>
+								))}
+							</Tape>
+						) : (
+							<Empty>No rows.</Empty>
+						)}
+					</details>
+				</Panel>
+			</Workspace>
+		</Shell>
 	);
 }

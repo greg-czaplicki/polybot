@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import { getSportLabel } from "@/lib/sports";
 import {
 	getWalletClvSummaryFn,
@@ -135,8 +135,8 @@ function WalletsPage() {
 	}, [load]);
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-ink-00 text-ink-85">
+		<Shell wide>
+			<div>
 				<div className="mx-auto w-full max-w-6xl px-4 py-10">
 					{/* Header */}
 					<div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -464,7 +464,7 @@ function WalletsPage() {
 					</section>
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }
 

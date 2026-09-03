@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { AuthGate } from '@/components/auth-gate'
+import { Shell } from '@/components/terminal/shell'
 import {
   analyzeMarketSharpnessDebugFn,
   fetchBatchMultiPeriodPnlFn,
@@ -314,8 +314,8 @@ function SharpDebugPage() {
   }, [walletLookup])
 
   return (
-    <AuthGate>
-      <div className="min-h-screen bg-slate-950 text-slate-100">
+    <Shell wide>
+      <div>
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-10">
         <header>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Sharp Debug</p>
@@ -835,6 +835,6 @@ function SharpDebugPage() {
         )}
       </div>
       </div>
-    </AuthGate>
+    </Shell>
   )
 }

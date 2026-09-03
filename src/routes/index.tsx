@@ -1,208 +1,248 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import {
+	PlChartSection,
+	presetRange,
+} from "@/components/charts/pl-chart-section";
+import { ago, clock, dollars, pct, units } from "@/components/terminal/format";
+import {
+	Cell,
+	Dot,
+	Empty,
+	Num,
+	Panel,
+	Row,
+	Stat,
+	Tag,
+	Tape,
+	type Tone,
+	toneClass,
+	VerdictWord,
+	Workspace,
+} from "@/components/terminal/panel";
+import { Shell, ShellButton } from "@/components/terminal/shell";
+import { roiZScore } from "@/lib/gate-verdict";
+import { reasonLabel } from "@/lib/shadow-labels";
 import { formatSideLabel } from "@/lib/side-label";
 import {
-	type DashboardEraSummary,
 	type DashboardHealth,
-	type DashboardLiveBook,
 	type DashboardPickRow,
-	type DashboardRecap,
 	getDashboardFn,
 } from "../server/api/dashboard";
+import {
+	getShadowBookSummaryFn,
+	type ShadowReasonSummary,
+	type ShadowSportSummary,
+} from "../server/api/shadow-book-api";
 
 export const Route = createFileRoute("/")({
-	component: DashboardPage,
+	component: TerminalPage,
 });
 
-const NAV_LINKS: { href: string; label: string }[] = [
-	{ href: "/sharp", label: "Markets" },
-	{ href: "/bot", label: "Bot" },
-	{ href: "/stats", label: "Stats" },
-	{ href: "/shadow", label: "Shadow" },
-	{ href: "/wallets", label: "Wallets" },
-	{ href: "/strategy", label: "Strategy" },
-	{ href: "/canonical", label: "Canonical" },
-];
-
-function formatRelativeTime(seconds: number | null): string {
-	if (!seconds) return "never";
-	const diff = Math.floor(Date.now() / 1000) - seconds;
-	if (diff < 60) return "just now";
-	if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-	if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-	return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function formatEventTime(iso: string | null): string {
-	if (!iso) return "—";
-	const date = new Date(iso);
-	if (Number.isNaN(date.getTime())) return "—";
-	return date.toLocaleString(undefined, {
-		weekday: "short",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function formatSettledTime(seconds: number | null): string {
-	if (!seconds) return "—";
-	return new Date(seconds * 1000).toLocaleString(undefined, {
-		weekday: "short",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function formatUnits(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "—";
-	return `${value >= 0 ? "+" : ""}${value.toFixed(2)}u`;
-}
-
-function formatPct(value: number | null, digits = 1): string {
-	if (value === null || !Number.isFinite(value)) return "—";
-	return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
-}
-
-/**
- * The three closing-line benchmarks began capture on different dates, so
- * each era average covers a different subset of picks. The coverage column
- * (n of settled) must stay next to every average — an average over thin
- * coverage reads as authoritative without it (book CLV was shown for weeks
- * while backed by 10 picks).
- */
-function eraBenchmarks(
-	era: DashboardEraSummary,
-): { name: string; value: number | null; n: number }[] {
-	return [
-		{ name: "Polymarket", value: era.avgClvPct, n: era.clvN },
-		{ name: "DraftKings", value: era.avgBookClvPct, n: era.bookClvN },
-		{ name: "Pinnacle", value: era.avgPinClvPct, n: era.pinClvN },
-	];
-}
-
-function signClass(value: number | null): string {
-	if (value === null || !Number.isFinite(value)) return "text-ink-55";
-	return value >= 0 ? "text-signal-pos" : "text-signal-bad";
-}
-
-function statusClass(status: string): string {
-	switch (status) {
-		case "win":
-			return "bg-signal-pos/10 text-signal-pos ring-signal-pos/35";
-		case "loss":
-			return "bg-signal-bad/10 text-signal-bad ring-signal-bad/35";
-		default:
-			return "bg-ink-10 text-ink-70 ring-ink-25";
-	}
-}
-
-type HealthTone = "ok" | "warn" | "bad" | "unknown";
+type Dashboard = Awaited<ReturnType<typeof getDashboardFn>>;
+type ShadowSummary = Awaited<ReturnType<typeof getShadowBookSummaryFn>>;
 
 function ageTone(
 	seconds: number | null,
 	warnAfter: number,
 	badAfter: number,
-): HealthTone {
-	if (!seconds) return "unknown";
+): Tone {
+	if (!seconds) return "off";
 	const age = Math.floor(Date.now() / 1000) - seconds;
 	if (age <= warnAfter) return "ok";
 	if (age <= badAfter) return "warn";
 	return "bad";
 }
 
-const TONE_DOT: Record<HealthTone, string> = {
-	ok: "bg-signal-pos",
-	warn: "bg-signal-warn",
-	bad: "bg-signal-bad",
-	unknown: "bg-ink-25",
-};
-
-interface HealthItem {
+interface AliveItem {
+	key: string;
 	label: string;
-	tone: HealthTone;
-	detail: string;
+	tone: Tone;
+	value: string;
+	/** Shown only when the item is not ok — what to look at. */
+	alarm?: string;
 }
 
-function buildHealthItems(health: DashboardHealth): HealthItem[] {
+/** The "is the machine alive" strip. Thresholds mirror each subsystem's cadence. */
+function aliveItems(h: DashboardHealth): AliveItem[] {
+	const botTone = ageTone(h.botLastSeenAt, 15 * 60, 60 * 60);
+	const syncTone =
+		h.canonicalLastRunStatus === "failed"
+			? "bad"
+			: ageTone(h.canonicalLastRunAt, 15 * 60, 60 * 60);
+	const pipeTone = ageTone(h.pipelineNewestAt, 10 * 60, 30 * 60);
+	const pinTone =
+		h.pinCredits === null
+			? "off"
+			: h.pinCredits < 25
+				? "bad"
+				: h.pinCredits < 60
+					? "warn"
+					: ageTone(h.pinLastFetchAt, 36 * 3600, 72 * 3600);
+	const bankTone =
+		h.bankroll === null
+			? "off"
+			: ageTone(h.bankrollSyncedAt, 30 * 60, 2 * 3600);
 	return [
 		{
+			key: "bot",
 			label: "Bot",
-			// VPS bot polls every few minutes; silence past 15m is unusual.
-			tone: ageTone(health.botLastSeenAt, 15 * 60, 60 * 60),
-			detail: `polled ${formatRelativeTime(health.botLastSeenAt)}`,
+			tone: botTone,
+			value: `polled ${ago(h.botLastSeenAt)}`,
+			alarm: botTone === "bad" ? "bot silent — check VPS" : undefined,
 		},
 		{
+			key: "sync",
+			label: "Sync",
+			tone: syncTone,
+			value: `${h.canonicalLastRunStatus ?? "none"} ${ago(h.canonicalLastRunAt)}`,
+			alarm:
+				syncTone === "bad"
+					? h.canonicalLastRunStatus === "failed"
+						? "canonical sync failed"
+						: "canonical sync stale"
+					: undefined,
+		},
+		{
+			key: "pipe",
 			label: "Pipeline",
-			// Worker cron runs every 2 minutes.
-			tone: ageTone(health.pipelineNewestAt, 10 * 60, 30 * 60),
-			detail: `data ${formatRelativeTime(health.pipelineNewestAt)}`,
+			tone: pipeTone,
+			value: `data ${ago(h.pipelineNewestAt)}`,
+			alarm: pipeTone === "bad" ? "sharp-money cache stale" : undefined,
 		},
 		{
-			label: "Canonical",
-			// Staleness threshold matches canonical-sync (6h).
-			tone:
-				health.canonicalLastRunStatus === "failed"
-					? "bad"
-					: ageTone(health.canonicalLastRunAt, 6 * 3600, 24 * 3600),
-			detail: `${health.canonicalLastRunStatus ?? "no runs"} ${formatRelativeTime(
-				health.canonicalLastRunAt,
-			)}`,
+			key: "pin",
+			label: "Pinnacle",
+			tone: pinTone,
+			value:
+				h.pinCredits === null
+					? "no fetches"
+					: `${h.pinCredits} cr · ${h.pinFetches24h}/24h · ${ago(h.pinLastFetchAt)}`,
+			alarm:
+				pinTone === "bad"
+					? h.pinCredits !== null && h.pinCredits < 25
+						? "OddsPapi credits nearly gone"
+						: "no Pinnacle fetch in 3 days"
+					: undefined,
 		},
 		{
-			label: "Last pick",
-			// Informational — long gaps between picks are legitimate.
-			tone: health.lastPickAt ? "ok" : "unknown",
-			detail: formatRelativeTime(health.lastPickAt),
-		},
-		{
+			key: "bank",
 			label: "Bankroll",
-			// Bot re-syncs from the wallet every 15 min; a stale report means
-			// the bot stopped posting, not that the money moved.
-			tone:
-				health.bankroll === null
-					? "unknown"
-					: ageTone(health.bankrollSyncedAt, 30 * 60, 2 * 3600),
-			detail:
-				health.bankroll === null
-					? "no report yet"
-					: `$${health.bankroll.toFixed(2)}${
-							health.stakeMode === "fixed" && health.fixedStake
-								? ` · flat $${health.fixedStake}`
-								: health.stakeMode === "kelly"
-									? " · kelly"
-									: ""
-						} · ${formatRelativeTime(health.bankrollSyncedAt)}`,
+			tone: bankTone,
+			value:
+				h.bankroll === null
+					? "no report"
+					: `${dollars(h.bankroll)} · ${
+							h.stakeMode === "fixed" && h.fixedStake
+								? `flat $${h.fixedStake}`
+								: (h.stakeMode ?? "—")
+						} · ${ago(h.bankrollSyncedAt)}`,
+			alarm: bankTone === "bad" ? "bankroll report stale" : undefined,
+		},
+		{
+			key: "lanes",
+			label: "Paper lanes",
+			tone: h.lanesEvaluatedAt ? "ok" : "off",
+			value: h.lanesEvaluatedAt
+				? `${h.lanesFired ?? 0} fired · ${ago(h.lanesEvaluatedAt)}`
+				: "no heartbeat",
+		},
+		{
+			key: "pick",
+			label: "Last pick",
+			tone: h.lastPickAt ? "ok" : "off",
+			value: ago(h.lastPickAt),
 		},
 	];
 }
 
-function PickSide({ pick }: { pick: DashboardPickRow }) {
-	const sideText = formatSideLabel(
+function Side({ pick }: { pick: DashboardPickRow }) {
+	const text = formatSideLabel(
 		pick.sharpSideLabel,
 		pick.sharpSide,
 		pick.marketTitle,
 	);
 	return (
-		<span>
-			<span className="text-ink-95">{sideText ?? pick.sharpSide ?? "—"}</span>
+		<span className="text-ink-95">
+			{text ?? pick.sharpSide ?? "—"}
 			{pick.betType ? (
-				<span className="ml-2 text-xs uppercase text-ink-55">
-					{pick.betType}
+				<span className="ml-1.5">
+					<Tag>{pick.betType === "moneyline" ? "ML" : pick.betType}</Tag>
 				</span>
 			) : null}
 		</span>
 	);
 }
 
-function DashboardPage() {
-	const [health, setHealth] = useState<DashboardHealth | null>(null);
-	const [activeBets, setActiveBets] = useState<DashboardPickRow[]>([]);
-	const [recentSettled, setRecentSettled] = useState<DashboardPickRow[]>([]);
-	const [recap, setRecap] = useState<DashboardRecap | null>(null);
-	const [eras, setEras] = useState<DashboardEraSummary[]>([]);
-	const [liveBook, setLiveBook] = useState<DashboardLiveBook | null>(null);
+function resultWord(status: string): string {
+	return status === "win" ? "W" : status === "loss" ? "L" : "P";
+}
+
+function resultClass(status: string): string {
+	return status === "win"
+		? "text-signal-pos"
+		: status === "loss"
+			? "text-signal-bad"
+			: "text-ink-55";
+}
+
+interface VerdictRow {
+	key: string;
+	label: string;
+	scope: string;
+	verdict: "ready" | "watch" | "hold";
+	reason: string;
+	n: number;
+	wins: number;
+	losses: number;
+	roiPct: number | null;
+	z: number | null;
+	pinClvPct: number | null;
+	pinN: number;
+}
+
+function verdictRows(
+	reasons: ShadowReasonSummary[],
+	bySport: ShadowSportSummary[],
+): VerdictRow[] {
+	const rank = { ready: 0, watch: 1, hold: 2 };
+	const rows: VerdictRow[] = [
+		...reasons.map((r) => ({
+			key: r.rejectReason,
+			label: reasonLabel(r.rejectReason),
+			scope: "all",
+			verdict: r.verdict,
+			reason: r.verdictReason,
+			n: r.cleanTotal,
+			wins: r.cleanWins,
+			losses: r.cleanLosses,
+			roiPct: r.cleanRoiPct,
+			z: r.cleanZ,
+			pinClvPct: r.cleanAvgPinClvPct,
+			pinN: r.cleanPinN,
+		})),
+		...bySport.map((r) => ({
+			key: `${r.rejectReason}:${r.sportTag}`,
+			label: reasonLabel(r.rejectReason),
+			scope: r.sportTag,
+			verdict: r.verdict,
+			reason: r.verdictReason,
+			n: r.cleanTotal,
+			wins: r.cleanWins,
+			losses: r.cleanLosses,
+			roiPct: r.cleanRoiPct,
+			z: r.cleanZ,
+			pinClvPct: r.cleanAvgPinClvPct,
+			pinN: r.cleanPinN,
+		})),
+	];
+	return rows.sort((a, b) => rank[a.verdict] - rank[b.verdict] || b.n - a.n);
+}
+
+function TerminalPage() {
+	const [data, setData] = useState<Dashboard | null>(null);
+	const [shadow, setShadow] = useState<ShadowSummary | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -210,13 +250,12 @@ function DashboardPage() {
 		setIsLoading(true);
 		setError(null);
 		try {
-			const result = await getDashboardFn();
-			setHealth(result.health);
-			setActiveBets(result.activeBets);
-			setRecentSettled(result.recentSettled);
-			setRecap(result.recap);
-			setEras(result.eras);
-			setLiveBook(result.liveBook);
+			const [d, s] = await Promise.all([
+				getDashboardFn(),
+				getShadowBookSummaryFn().catch(() => null),
+			]);
+			setData(d);
+			setShadow(s);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load");
 		} finally {
@@ -228,372 +267,548 @@ function DashboardPage() {
 		void load();
 	}, [load]);
 
-	const recapSettled = recap ? recap.wins + recap.losses + recap.pushes : 0;
+	const chartRange = useMemo(() => presetRange("30d", null), []);
+	const alive = data ? aliveItems(data.health) : [];
+	const alarms = alive.filter((a) => a.alarm);
+	const verdicts = useMemo(
+		() => (shadow ? verdictRows(shadow.reasons, shadow.bySport) : []),
+		[shadow],
+	);
+	const readyN = verdicts.filter((v) => v.verdict === "ready").length;
+	const watchN = verdicts.filter((v) => v.verdict === "watch").length;
+	const shownVerdicts = verdicts
+		.filter((v) => v.verdict !== "hold" || v.n >= 20)
+		.slice(0, 9);
+
+	const live = data?.liveBook ?? null;
+	const currentEra = data?.eras[0] ?? null;
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-ink-00 text-ink-85">
-				<div className="mx-auto w-full max-w-6xl px-4 py-8">
-					<div className="flex flex-wrap items-center justify-between gap-3">
-						<div>
-							<h1 className="font-sans text-2xl font-semibold tracking-tight text-ink-95">
-								Polywhaler
-							</h1>
-							<p className="mt-0.5 font-sans text-sm text-ink-70">
-								The bot runs itself — this is what happened.
+		<Shell
+			wide
+			actions={
+				<>
+					{data ? (
+						<span className="hidden font-mono text-xxs tabular-nums text-ink-40 sm:inline">
+							as of {ago(data.computedAt)}
+						</span>
+					) : null}
+					<ShellButton onClick={() => void load()} disabled={isLoading}>
+						{isLoading ? "…" : "Refresh"}
+					</ShellButton>
+				</>
+			}
+		>
+			{error ? (
+				<p className="border-b border-signal-bad/40 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad">
+					{error}
+				</p>
+			) : null}
+
+			{/* ALIVE strip — the first three seconds. */}
+			<div className="flex flex-wrap items-stretch divide-x divide-ink-15 bg-ink-05">
+				{alive.map((item) => (
+					<div
+						key={item.key}
+						className="flex min-w-0 flex-1 basis-[9.5rem] items-center gap-2 px-3 py-1.5"
+					>
+						<Dot tone={item.tone} />
+						<div className="min-w-0">
+							<p className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+								{item.label}
+							</p>
+							<p
+								className={`truncate font-mono text-xs tabular-nums ${
+									item.tone === "bad"
+										? "text-signal-bad"
+										: item.tone === "warn"
+											? "text-signal-warn"
+											: "text-ink-85"
+								}`}
+							>
+								{item.value}
 							</p>
 						</div>
-						<div className="flex flex-wrap items-center gap-1.5">
-							{NAV_LINKS.map((link) => (
-								<a
-									key={link.href}
-									href={link.href}
-									className="inline-flex h-8 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-								>
-									{link.label}
-								</a>
-							))}
-							<button
-								type="button"
-								onClick={() => void load()}
-								disabled={isLoading}
-								className="inline-flex h-8 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-							>
-								{isLoading ? "…" : "Refresh"}
-							</button>
-						</div>
 					</div>
-
-					{error ? (
-						<p className="mt-4 rounded-md bg-signal-bad/10 p-3 text-sm text-signal-bad">
-							{error}
-						</p>
-					) : null}
-
-					{/* Health strip */}
-					<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-						{(health ? buildHealthItems(health) : []).map((item) => (
-							<div
-								key={item.label}
-								className="flex items-center gap-2.5 rounded-md bg-ink-05 px-4 py-3 ring-1 ring-inset ring-ink-15"
-							>
-								<span
-									className={`h-2 w-2 flex-shrink-0 rounded-full ${TONE_DOT[item.tone]}`}
-								/>
-								<div className="min-w-0">
-									<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-										{item.label}
-									</p>
-									<p className="truncate text-sm text-ink-85">{item.detail}</p>
-								</div>
-							</div>
-						))}
-						{!health && !error ? (
-							<p className="col-span-full py-2 text-sm text-ink-55">
-								{isLoading ? "Loading…" : ""}
-							</p>
-						) : null}
-					</div>
-
-					{/* Live-book stake ladder — pre-registered 2026-08-27
-					    (docs/STRATEGY.md). Each trigger is a fact the day it fires;
-					    until then the strip shows progress toward it. */}
-					{liveBook ? (
-						<div className="mt-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-							<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Live book · stake ladder (out-of-sample since 2026-07-20)
-								</p>
-								<p className="font-mono text-xxs text-ink-55">
-									all {liveBook.all.wins}-{liveBook.all.losses}
-									{liveBook.all.units !== null && liveBook.all.settled > 0
-										? ` · ${((liveBook.all.units / liveBook.all.settled) * 100).toFixed(1)}%`
-										: ""}
-									{" · totals "}
-									{liveBook.totals.wins}-{liveBook.totals.losses}
-									{" · ML "}
-									{liveBook.moneyline.wins}-{liveBook.moneyline.losses}
-								</p>
-							</div>
-							<div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-								{liveBook.triggers.map((t) => (
-									<div
-										key={t.key}
-										title={`When met: ${t.action}`}
-										className="flex items-start gap-2.5 rounded-md bg-ink-10 px-3 py-2 ring-1 ring-inset ring-ink-15"
-									>
-										<span
-											className={`mt-1.5 h-2 w-2 flex-shrink-0 rounded-full ${
-												t.met
-													? t.key === "stop"
-														? TONE_DOT.bad
-														: TONE_DOT.ok
-													: TONE_DOT.unknown
-											}`}
-										/>
-										<div className="min-w-0">
-											<p className="text-sm text-ink-85">
-												{t.label}
-												<span className="ml-2 font-mono text-xxs uppercase tracking-[0.15em] text-ink-55">
-													{t.met ? "MET" : "not yet"}
-												</span>
-											</p>
-											<p className="text-xs text-ink-55">{t.detail}</p>
-										</div>
-									</div>
-								))}
-							</div>
-						</div>
-					) : null}
-
-					{/* Overnight recap — one strip: record + units + CLV beat, with
-					    placed/active as header meta. Pinnacle CLV preferred (sharpest
-					    reference), PM close as fallback while pin coverage ramps. */}
-					{recap ? (
-						<div className="mt-6 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-							<div className="flex items-baseline justify-between gap-x-3">
-								<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-									Last {recap.windowHours}h
-								</p>
-								<p className="font-mono text-xxs tabular-nums text-ink-40">
-									{recap.picksPlaced} placed · {activeBets.length} active
-								</p>
-							</div>
-							{recapSettled > 0 ? (
-								<div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
-									<span className="text-lg font-semibold text-ink-95">
-										{recap.wins}-{recap.losses}
-										{recap.pushes > 0 ? ` (${recap.pushes}p)` : ""}
-									</span>
-									<span
-										className={`text-lg font-semibold ${signClass(recap.units)}`}
-									>
-										{formatUnits(recap.units)}
-									</span>
-									{recap.pinClvN > 0 ? (
-										<span
-											className={`text-sm ${signClass(recap.avgPinClvPct)}`}
-										>
-											Pin CLV {formatPct(recap.avgPinClvPct, 2)}{" "}
-											<span className="font-mono text-xs tabular-nums text-ink-40">
-												{recap.pinClvN}/{recapSettled}
-											</span>
-										</span>
-									) : recap.clvN > 0 ? (
-										<span className={`text-sm ${signClass(recap.avgClvPct)}`}>
-											CLV {formatPct(recap.avgClvPct, 2)}{" "}
-											<span className="font-mono text-xs tabular-nums text-ink-40">
-												{recap.clvN}/{recapSettled}
-											</span>
-										</span>
-									) : null}
-								</div>
-							) : (
-								<p className="mt-2 text-sm text-ink-55">
-									Nothing settled in the last {recap.windowHours}h.
-								</p>
-							)}
-						</div>
-					) : null}
-
-					{/* Active bets */}
-					<h2 className="mt-8 font-mono text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-						Active bets
-					</h2>
-					<div className="mt-3 overflow-x-auto rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-						<table className="min-w-full text-left text-sm text-ink-85">
-							<thead>
-								<tr className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-55">
-									<th className="pb-2 pr-4">Market</th>
-									<th className="pb-2 pr-4">Side</th>
-									<th className="pb-2 pr-4">Price</th>
-									<th className="pb-2 pr-4">Grade</th>
-									<th className="pb-2 pr-4">Sport</th>
-									<th className="pb-2 pr-4">Fill</th>
-									<th className="pb-2">Starts</th>
-								</tr>
-							</thead>
-							<tbody>
-								{activeBets.map((pick) => (
-									<tr key={pick.id} className="border-t border-ink-10">
-										<td className="max-w-sm py-2 pr-4">
-											<a
-												href={`/sharp/market/${pick.conditionId}`}
-												className="block truncate text-ink-95 hover:text-brand-blue"
-											>
-												{pick.marketTitle}
-											</a>
-										</td>
-										<td className="py-2 pr-4">
-											<PickSide pick={pick} />
-										</td>
-										<td className="py-2 pr-4">
-											{pick.price !== null ? pick.price.toFixed(2) : "—"}
-										</td>
-										<td className="py-2 pr-4">{pick.grade ?? "—"}</td>
-										<td className="py-2 pr-4 uppercase text-ink-55">
-											{pick.sportTag ?? "—"}
-										</td>
-										<td className="py-2 pr-4 text-ink-55">
-											{pick.fillStatus ?? "—"}
-										</td>
-										<td className="py-2 text-ink-55">
-											{formatEventTime(pick.eventTime)}
-										</td>
-									</tr>
-								))}
-								{activeBets.length === 0 && !isLoading ? (
-									<tr>
-										<td colSpan={7} className="py-4 text-ink-55">
-											No open bets — the bot has nothing pending.
-										</td>
-									</tr>
-								) : null}
-							</tbody>
-						</table>
-					</div>
-
-					{/* Recently settled */}
-					<h2 className="mt-8 font-mono text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-						Settled (last 48h)
-					</h2>
-					<div className="mt-3 overflow-x-auto rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
-						<table className="min-w-full text-left text-sm text-ink-85">
-							<thead>
-								<tr className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-55">
-									<th className="pb-2 pr-4">Market</th>
-									<th className="pb-2 pr-4">Side</th>
-									<th className="pb-2 pr-4">Price</th>
-									<th className="pb-2 pr-4">Result</th>
-									<th className="pb-2 pr-4">Units</th>
-									<th className="pb-2 pr-4">CLV</th>
-									<th className="pb-2">Settled</th>
-								</tr>
-							</thead>
-							<tbody>
-								{recentSettled.map((pick) => (
-									<tr key={pick.id} className="border-t border-ink-10">
-										<td className="max-w-sm py-2 pr-4">
-											<a
-												href={`/sharp/market/${pick.conditionId}`}
-												className="block truncate text-ink-95 hover:text-brand-blue"
-											>
-												{pick.marketTitle}
-											</a>
-										</td>
-										<td className="py-2 pr-4">
-											<PickSide pick={pick} />
-										</td>
-										<td className="py-2 pr-4">
-											{pick.price !== null ? pick.price.toFixed(2) : "—"}
-										</td>
-										<td className="py-2 pr-4">
-											<span
-												className={`inline-flex rounded px-1.5 py-0.5 font-mono text-xxs font-semibold uppercase ring-1 ring-inset ${statusClass(pick.status)}`}
-											>
-												{pick.status}
-											</span>
-										</td>
-										<td className={`py-2 pr-4 ${signClass(pick.roi)}`}>
-											{formatUnits(pick.roi)}
-										</td>
-										<td className={`py-2 pr-4 ${signClass(pick.clv)}`}>
-											{pick.clv !== null ? formatPct(pick.clv * 100, 1) : "—"}
-										</td>
-										<td className="py-2 text-ink-55">
-											{formatSettledTime(pick.settledAt)}
-										</td>
-									</tr>
-								))}
-								{recentSettled.length === 0 && !isLoading ? (
-									<tr>
-										<td colSpan={7} className="py-4 text-ink-55">
-											Nothing settled in the last 48 hours.
-										</td>
-									</tr>
-								) : null}
-							</tbody>
-						</table>
-					</div>
-
-					{/* Era performance */}
-					<h2 className="mt-8 font-mono text-sm font-semibold uppercase tracking-[0.2em] text-ink-55">
-						Strategy performance
-					</h2>
-					<p className="mt-1 text-xs text-ink-55">
-						Live picks only, current strategy code. Small samples — judge on n,
-						not vibes. Full history on{" "}
-						<a href="/stats" className="text-brand-blue hover:underline">
-							/stats
-						</a>
-						.
+				))}
+				{!data && !error ? (
+					<p className="px-3 py-2 text-sm text-ink-55">
+						{isLoading ? "Loading…" : ""}
 					</p>
-					<div className="mt-3 grid gap-3 sm:grid-cols-2">
-						{eras.map((era) => {
-							const settled = era.wins + era.losses;
-							return (
-								<div
-									key={era.label}
-									className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15"
-								>
-									<div className="flex items-baseline justify-between gap-x-3">
-										<p className="font-mono text-xxs uppercase tracking-[0.2em] text-ink-55">
-											{era.label}
-										</p>
-										<p className="font-mono text-xxs tabular-nums text-ink-40">
-											{settled} settled
-											{era.pending > 0 ? ` · ${era.pending} pending` : ""}
-										</p>
-									</div>
-									<div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
-										<span className="text-lg font-semibold text-ink-95">
-											{era.wins}-{era.losses}
-											{era.pushes > 0 ? ` (${era.pushes}p)` : ""}
-										</span>
-										<span
-											className={`text-lg font-semibold ${signClass(era.units)}`}
-										>
-											{formatUnits(era.units)}
-										</span>
-										<span className={`text-sm ${signClass(era.roiPct)}`}>
-											ROI {formatPct(era.roiPct)}
-										</span>
-									</div>
-									<div className="mt-3 grid grid-cols-[1fr_auto_auto] items-baseline gap-x-5 gap-y-1 border-t border-ink-10 pt-2 text-xs">
-										<span className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
-											CLV vs
-										</span>
-										<span className="text-right font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
-											avg
-										</span>
-										<span className="text-right font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
-											picks
-										</span>
-										{eraBenchmarks(era).map((b) => (
-											<Fragment key={b.name}>
-												<span className="text-ink-70">{b.name}</span>
-												<span
-													className={`text-right font-mono tabular-nums ${
-														b.n > 0 ? signClass(b.value) : "text-ink-40"
-													}`}
+				) : null}
+			</div>
+			{alarms.length > 0 ? (
+				<p className="border-t border-ink-15 bg-signal-bad/10 px-3 py-1.5 font-mono text-xs text-signal-bad">
+					<span className="font-semibold uppercase tracking-[0.15em]">
+						Attention
+					</span>{" "}
+					{alarms.map((a) => a.alarm).join(" · ")}
+				</p>
+			) : null}
+
+			<Workspace>
+				{/* BOOK */}
+				<Panel
+					title="Book"
+					span={4}
+					meta={
+						data?.health.bankroll !== null &&
+						data?.health.bankroll !== undefined
+							? `bankroll ${dollars(data.health.bankroll)}`
+							: "real fills"
+					}
+				>
+					{data ? (
+						<>
+							<table className="w-full text-sm">
+								<thead>
+									<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
+										<th className="px-3 text-left font-medium">Window</th>
+										<th className="px-3 text-right font-medium">W-L</th>
+										<th className="px-3 text-right font-medium">Units</th>
+										<th className="px-3 text-right font-medium">ROI</th>
+										<th className="px-3 text-right font-medium">Pin CLV</th>
+									</tr>
+								</thead>
+								<tbody>
+									{data.windows.map((w) => {
+										const settled = w.wins + w.losses;
+										return (
+											<Row key={w.label}>
+												<Cell mono className="text-ink-70">
+													{w.label}
+													{w.placed > 0 ? (
+														<span className="ml-1.5 text-ink-40">
+															{w.placed} placed
+														</span>
+													) : null}
+												</Cell>
+												<Cell right className="text-ink-95">
+													{settled > 0
+														? `${w.wins}-${w.losses}${w.pushes ? ` (${w.pushes}p)` : ""}`
+														: "—"}
+												</Cell>
+												<Cell right>
+													<Num value={w.units} text={units(w.units)} />
+												</Cell>
+												<Cell right>
+													<Num value={w.roiPct} text={pct(w.roiPct)} />
+												</Cell>
+												<Cell
+													right
+													title={`${w.pinClvN}/${settled} settled carry Pinnacle CLV`}
 												>
-													{b.n > 0 ? formatPct(b.value, 2) : "—"}
-												</span>
-												<span className="text-right font-mono tabular-nums text-ink-40">
-													{settled > 0 ? `${b.n}/${settled}` : "—"}
-												</span>
-											</Fragment>
-										))}
+													<Num
+														value={w.avgPinClvPct}
+														text={w.pinClvN > 0 ? pct(w.avgPinClvPct, 2) : "—"}
+														dim={w.pinClvN < 10}
+													/>
+													{w.pinClvN > 0 ? (
+														<span className="ml-1 text-xxs text-ink-40">
+															{w.pinClvN}
+														</span>
+													) : null}
+												</Cell>
+											</Row>
+										);
+									})}
+								</tbody>
+							</table>
+							{live ? (
+								<div className="border-t border-ink-15 px-3 py-2">
+									<p className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+										Out of sample since{" "}
+										{new Date(live.since * 1000).toLocaleDateString(undefined, {
+											month: "short",
+											day: "numeric",
+											timeZone: "UTC",
+										})}
+									</p>
+									<div className="mt-1.5 grid grid-cols-3 gap-x-3">
+										{(
+											[
+												["All", live.all],
+												["Totals", live.totals],
+												["ML", live.moneyline],
+											] as const
+										).map(([label, c]) => {
+											const roi =
+												c.settled > 0 && c.units !== null
+													? (c.units / c.settled) * 100
+													: null;
+											const z = roiZScore(c.settled, c.units, c.sumSq);
+											return (
+												<Stat
+													key={label}
+													label={label}
+													value={
+														<span className={toneClass(roi)}>{pct(roi)}</span>
+													}
+													sub={`${c.wins}-${c.losses} · z ${
+														z === null ? "—" : z.toFixed(1)
+													}`}
+												/>
+											);
+										})}
 									</div>
 								</div>
-							);
-						})}
-						{eras.length === 0 && !isLoading ? (
-							<p className="text-sm text-ink-55">No era data yet.</p>
-						) : null}
-					</div>
-				</div>
-			</div>
-		</AuthGate>
+							) : null}
+							{currentEra ? (
+								<div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 border-t border-ink-15 px-3 py-2 font-mono text-xs">
+									<span className="text-xxs uppercase tracking-[0.15em] text-ink-40">
+										CLV vs · current era
+									</span>
+									<span className="text-right text-xxs uppercase tracking-[0.15em] text-ink-40">
+										avg
+									</span>
+									<span className="text-right text-xxs uppercase tracking-[0.15em] text-ink-40">
+										n
+									</span>
+									{(
+										[
+											["Polymarket", currentEra.avgClvPct, currentEra.clvN],
+											[
+												"DraftKings",
+												currentEra.avgBookClvPct,
+												currentEra.bookClvN,
+											],
+											["Pinnacle", currentEra.avgPinClvPct, currentEra.pinClvN],
+										] as const
+									).map(([name, v, n]) => (
+										<Fragment key={name}>
+											<span className="text-ink-70">{name}</span>
+											<Num
+												value={v}
+												text={n > 0 ? pct(v, 2) : "—"}
+												dim={n < 10}
+											/>
+											<span className="text-right tabular-nums text-ink-40">
+												{n}/{currentEra.wins + currentEra.losses}
+											</span>
+										</Fragment>
+									))}
+								</div>
+							) : null}
+						</>
+					) : (
+						<Empty>{isLoading ? "Loading…" : "No data."}</Empty>
+					)}
+				</Panel>
+
+				{/* POSITIONS */}
+				<Panel
+					title="Positions"
+					span={8}
+					meta={data ? `${data.activeBets.length} open` : undefined}
+				>
+					{data && data.activeBets.length > 0 ? (
+						<Tape
+							head={[
+								{ label: "Market" },
+								{ label: "Side" },
+								{ label: "Px", align: "right" },
+								{ label: "Grd", align: "right" },
+								{ label: "Mkt" },
+								{ label: "Fill" },
+								{ label: "Starts", align: "right" },
+							]}
+						>
+							{data.activeBets.map((p) => (
+								<Row key={p.id}>
+									<Cell className="max-w-[18rem]">
+										<a
+											href={`/sharp/market/${p.conditionId}`}
+											className="block truncate text-ink-95 hover:text-brand-blue"
+										>
+											{p.marketTitle}
+										</a>
+									</Cell>
+									<Cell>
+										<Side pick={p} />
+									</Cell>
+									<Cell right>
+										{p.price !== null ? p.price.toFixed(2) : "—"}
+									</Cell>
+									<Cell right>{p.grade ?? "—"}</Cell>
+									<Cell>
+										<Tag>{p.sportTag ?? "—"}</Tag>
+									</Cell>
+									<Cell className="text-ink-55">{p.fillStatus ?? "—"}</Cell>
+									<Cell right className="text-ink-55">
+										{clock(p.eventTime)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>
+							{isLoading && !data ? "Loading…" : "Flat. No open positions."}
+						</Empty>
+					)}
+				</Panel>
+
+				{/* SETTLED */}
+				<Panel
+					title="Settled · 48h"
+					span={7}
+					meta={
+						data?.recap
+							? `${data.recap.wins}-${data.recap.losses} · ${units(data.recap.units)} last 24h`
+							: undefined
+					}
+				>
+					{data && data.recentSettled.length > 0 ? (
+						<Tape
+							head={[
+								{ label: "Market" },
+								{ label: "Side" },
+								{ label: "Px", align: "right" },
+								{ label: "R", align: "right" },
+								{ label: "Units", align: "right" },
+								{ label: "CLV", align: "right" },
+								{ label: "Settled", align: "right" },
+							]}
+						>
+							{data.recentSettled.map((p) => (
+								<Row key={p.id}>
+									<Cell className="max-w-[16rem]">
+										<a
+											href={`/sharp/market/${p.conditionId}`}
+											className="block truncate text-ink-95 hover:text-brand-blue"
+										>
+											{p.marketTitle}
+										</a>
+									</Cell>
+									<Cell>
+										<Side pick={p} />
+									</Cell>
+									<Cell right>
+										{p.price !== null ? p.price.toFixed(2) : "—"}
+									</Cell>
+									<Cell
+										right
+										className={`font-semibold ${resultClass(p.status)}`}
+									>
+										{resultWord(p.status)}
+									</Cell>
+									<Cell right>
+										<Num value={p.roi} text={units(p.roi)} />
+									</Cell>
+									<Cell right>
+										<Num
+											value={p.clv}
+											text={p.clv !== null ? pct(p.clv * 100) : "—"}
+										/>
+									</Cell>
+									<Cell right className="text-ink-55">
+										{clock(p.settledAt)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>
+							{isLoading && !data ? "Loading…" : "Nothing settled in 48h."}
+						</Empty>
+					)}
+				</Panel>
+
+				{/* STAKE LADDER */}
+				<Panel
+					title="Stake ladder"
+					span={5}
+					meta="pre-registered 2026-08-27"
+					tone={
+						live?.triggers.some((t) => t.met && t.key === "stop")
+							? "bad"
+							: undefined
+					}
+				>
+					{live ? (
+						<ul>
+							{live.triggers.map((t) => (
+								<li
+									key={t.key}
+									title={`When met: ${t.action}`}
+									className="flex items-start gap-2 border-b border-ink-10 px-3 py-1.5 last:border-b-0"
+								>
+									<span className="mt-1.5">
+										<Dot
+											tone={t.met ? (t.key === "stop" ? "bad" : "ok") : "off"}
+										/>
+									</span>
+									<div className="min-w-0 flex-1">
+										<p className="flex items-baseline justify-between gap-2 text-sm text-ink-85">
+											<span className="truncate">{t.label}</span>
+											<span
+												className={`shrink-0 font-mono text-xxs uppercase tracking-[0.15em] ${
+													t.met ? "text-signal-pos" : "text-ink-40"
+												}`}
+											>
+												{t.met ? "met" : "—"}
+											</span>
+										</p>
+										<p className="truncate font-mono text-xxs tabular-nums text-ink-55">
+											{t.detail}
+										</p>
+									</div>
+								</li>
+							))}
+						</ul>
+					) : (
+						<Empty>{isLoading ? "Loading…" : "No ladder data."}</Empty>
+					)}
+				</Panel>
+
+				{/* VERDICTS */}
+				<Panel
+					title={
+						<a href="/shadow" className="hover:text-ink-85">
+							Verdicts ↗
+						</a>
+					}
+					span={7}
+					tone={readyN > 0 ? "pos" : undefined}
+					meta={
+						shadow
+							? readyN > 0
+								? `${readyN} ready · ${watchN} watch`
+								: watchN > 0
+									? `all hold · ${watchN} watch`
+									: "all hold"
+							: undefined
+					}
+				>
+					{shadow ? (
+						shownVerdicts.length > 0 ? (
+							<Tape
+								head={[
+									{ label: "Gate" },
+									{ label: "Mkt" },
+									{ label: "Verdict" },
+									{ label: "n", align: "right" },
+									{ label: "W-L", align: "right" },
+									{ label: "ROI", align: "right" },
+									{ label: "z", align: "right" },
+									{ label: "Pin CLV", align: "right" },
+								]}
+							>
+								{shownVerdicts.map((v) => (
+									<Row key={v.key} title={v.reason}>
+										<Cell className="max-w-[14rem] truncate text-ink-85">
+											{v.label}
+										</Cell>
+										<Cell>
+											<Tag>{v.scope}</Tag>
+										</Cell>
+										<Cell>
+											<VerdictWord verdict={v.verdict} title={v.reason} />
+										</Cell>
+										<Cell right>{v.n}</Cell>
+										<Cell right className="text-ink-70">
+											{v.wins}-{v.losses}
+										</Cell>
+										<Cell right>
+											<Num
+												value={v.roiPct}
+												text={pct(v.roiPct)}
+												dim={v.n < 20}
+											/>
+										</Cell>
+										<Cell right>
+											<Num
+												value={v.z}
+												text={v.z === null ? "—" : v.z.toFixed(1)}
+												dim={v.n < 20}
+											/>
+										</Cell>
+										<Cell right>
+											<Num
+												value={v.pinClvPct}
+												text={v.pinN > 0 ? pct(v.pinClvPct, 2) : "—"}
+												dim={v.pinN < 10}
+											/>
+										</Cell>
+									</Row>
+								))}
+							</Tape>
+						) : (
+							<Empty>No gate has 20 settled sole-blocker rows yet.</Empty>
+						)
+					) : (
+						<Empty>{isLoading ? "Loading…" : "Verdicts unavailable."}</Empty>
+					)}
+				</Panel>
+
+				{/* TAPE BY MARKET */}
+				<Panel title="Tape · 24h" span={5} meta="by market">
+					{data && data.tape.length > 0 ? (
+						<Tape
+							minWidth="min-w-[420px]"
+							head={[
+								{ label: "Mkt" },
+								{ label: "Live", align: "right" },
+								{ label: "Shadow", align: "right" },
+								{ label: "Pin", align: "right" },
+								{ label: "Ahead", align: "right" },
+								{ label: "Top gate" },
+							]}
+						>
+							{data.tape.map((t) => (
+								<Row key={t.sportTag}>
+									<Cell className="font-mono text-xs uppercase tracking-[0.12em] text-ink-85">
+										{t.sportTag}
+									</Cell>
+									<Cell
+										right
+										className={t.livePicks > 0 ? "text-ink-95" : "text-ink-40"}
+									>
+										{t.livePicks}
+									</Cell>
+									<Cell right>{t.shadowRows}</Cell>
+									<Cell
+										right
+										title="shadow rows with a Pinnacle anchor"
+										className={
+											t.shadowRows > 0 && t.shadowAnchored === 0
+												? "text-ink-40"
+												: ""
+										}
+									>
+										{t.shadowAnchored}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{t.upcoming}
+									</Cell>
+									<Cell className="max-w-[11rem] truncate text-xs text-ink-55">
+										{t.topReject ? reasonLabel(t.topReject) : "—"}
+										{t.topRejectN > 0 ? (
+											<span className="ml-1 font-mono text-xxs text-ink-40">
+												{t.topRejectN}
+											</span>
+										) : null}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>{isLoading && !data ? "Loading…" : "Quiet tape."}</Empty>
+					)}
+				</Panel>
+
+				{/* P&L */}
+				<Panel
+					title={
+						<a href="/stats" className="hover:text-ink-85">
+							P&amp;L · 30d ↗
+						</a>
+					}
+					span={12}
+					meta="flat-stake units · real vs shadow"
+				>
+					<PlChartSection range={chartRange} compact />
+				</Panel>
+			</Workspace>
+		</Shell>
 	);
 }

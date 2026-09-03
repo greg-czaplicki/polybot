@@ -170,7 +170,14 @@ export function PlRangeRow({
 	);
 }
 
-export function PlChartSection({ range }: { range: PlRange }) {
+export function PlChartSection({
+	range,
+	compact = false,
+}: {
+	range: PlRange;
+	/** Terminal panel mode: only the units line, no section chrome. */
+	compact?: boolean;
+}) {
 	const [data, setData] = useState<PlTimeseriesResult | null>(null);
 	const [loadFailed, setLoadFailed] = useState(false);
 
@@ -249,6 +256,40 @@ export function PlChartSection({ range }: { range: PlRange }) {
 			clvAllNull: clvCum.every((v) => v === null),
 		};
 	}, [data, range]);
+
+	if (compact) {
+		if (loadFailed)
+			return (
+				<p className="px-3 py-3 text-sm text-ink-55">chart failed to load.</p>
+			);
+		if (!chart)
+			return <p className="px-3 py-3 text-sm text-ink-55">loading…</p>;
+		return (
+			<div className="px-3 py-2">
+				<PlLineChart
+					days={chart.days}
+					series={[
+						{
+							key: "real",
+							label: "Real book",
+							color: SERIES_COLORS.real,
+							values: chart.realCum,
+						},
+						{
+							key: "shadow",
+							label: "Shadow book",
+							color: SERIES_COLORS.shadow,
+							values: chart.shadowCum,
+						},
+					]}
+					markers={chart.markers}
+					height={200}
+					formatValue={formatUnits}
+					ariaLabel="Cumulative profit and loss in units for the real book and the shadow book"
+				/>
+			</div>
+		);
+	}
 
 	return (
 		<section

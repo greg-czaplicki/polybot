@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import { MatchupCard } from "@/components/canonical/matchup-card";
 import { usePickContext } from "@/components/canonical/pick-context-panel";
 import { TeamTrendCard } from "@/components/canonical/team-trend-card";
@@ -170,8 +170,8 @@ function StatsPage() {
 	}, [filteredPicks]);
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-ink-00 text-ink-85">
+		<Shell wide>
+			<div>
 				<div className="mx-auto w-full max-w-6xl px-4 py-10">
 					{/* Page header — title + summary metrics, actions demoted */}
 					<div className="mb-6 flex flex-col gap-4">
@@ -316,7 +316,7 @@ function StatsPage() {
 					</div>
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }
 

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import {
 	ContextPerformanceTable,
 	type PerformanceBucket,
@@ -133,8 +133,8 @@ function StrategyPage() {
 	};
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-slate-950 text-white">
+		<Shell wide>
+			<div>
 				<div className="mx-auto w-full max-w-6xl px-4 py-10">
 					{/* Header */}
 					<div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -248,6 +248,6 @@ function StrategyPage() {
 					{activeSection === "features" && <FeatureLegend />}
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }

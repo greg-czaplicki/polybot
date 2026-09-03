@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import {
 	getMatchupComparisonFn,
 	getPickContextFn,
@@ -1342,7 +1342,7 @@ function CanonicalPage() {
 	}, []);
 
 	return (
-		<AuthGate>
+		<Shell wide>
 			<div
 				style={{ padding: 24, maxWidth: 1200, margin: "0 auto", color: "#eee" }}
 			>
@@ -1359,6 +1359,6 @@ function CanonicalPage() {
 				<hr style={{ borderColor: "#333", margin: "24px 0" }} />
 				<PickContextSection />
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }

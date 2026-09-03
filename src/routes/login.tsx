@@ -45,7 +45,7 @@ function LoginPage() {
 			localStorage.setItem("polywhaler_auth_expires_at", String(expiresAt));
 			localStorage.setItem("polywhaler_auth_token", result.token);
 			setAuthCookie(result.token, expiresAt);
-			navigate({ to: "/sharp" });
+			navigate({ to: "/" });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Invalid password");
 			setIsLoading(false);

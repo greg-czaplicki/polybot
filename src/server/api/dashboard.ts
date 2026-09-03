@@ -86,6 +86,43 @@ export interface DashboardHealth {
 	bankrollSyncedAt: number | null;
 	stakeMode: string | null;
 	fixedStake: number | null;
+	/** OddsPapi credits after the most recent Pinnacle fetch (null = none logged). */
+	pinCredits: number | null;
+	pinLastFetchAt: number | null;
+	pinLastSportKey: string | null;
+	pinFetches24h: number;
+	/** Paper-lane heartbeat (bot_runtime_status key `paper_lanes`). */
+	lanesEvaluatedAt: number | null;
+	lanesEvaluated: number | null;
+	lanesFired: number | null;
+	lanesRecorded: number | null;
+}
+
+/** Live-book results over a trailing window (real fills only). */
+export interface DashboardWindow {
+	label: string;
+	hours: number;
+	placed: number;
+	wins: number;
+	losses: number;
+	pushes: number;
+	units: number | null;
+	roiPct: number | null;
+	avgPinClvPct: number | null;
+	pinClvN: number;
+}
+
+/** Per-market (sport) tape over the last 24h: what flowed, what the gates did. */
+export interface DashboardTapeRow {
+	sportTag: string;
+	livePicks: number;
+	shadowRows: number;
+	/** Shadow rows that captured a Pinnacle anchor. */
+	shadowAnchored: number;
+	topReject: string | null;
+	topRejectN: number;
+	/** Shadow rows whose event is still ahead — the upcoming slate. */
+	upcoming: number;
 }
 
 const PICK_COLUMNS = `id, condition_id, market_title, event_time, picked_at,
@@ -383,6 +420,160 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			botStatus = null;
 		}
 
+		// Pinnacle feed budget — the sweep logs credits_remaining per fetch.
+		let pinLast: {
+			fetched_at: number;
+			sport_key: string;
+			credits_remaining: number | null;
+		} | null = null;
+		let pinFetches24h = 0;
+		try {
+			pinLast = await first(
+				db,
+				`SELECT fetched_at, sport_key, credits_remaining FROM pinnacle_fetch_log
+				 ORDER BY fetched_at DESC LIMIT 1`,
+			);
+			const n = await first<{ n: number }>(
+				db,
+				`SELECT COUNT(*) AS n FROM pinnacle_fetch_log WHERE fetched_at >= ?`,
+				dayAgo,
+			);
+			pinFetches24h = n?.n ?? 0;
+		} catch {
+			pinLast = null;
+		}
+
+		let lanes: {
+			evaluatedAt?: number;
+			evaluated?: number;
+			fired?: number;
+			recorded?: number;
+		} | null = null;
+		try {
+			const laneRow = await first<{ value_json: string }>(
+				db,
+				`SELECT value_json FROM bot_runtime_status WHERE key = 'paper_lanes'`,
+			);
+			if (laneRow?.value_json) lanes = JSON.parse(laneRow.value_json);
+		} catch {
+			lanes = null;
+		}
+
+		// Trailing windows of the live book (real fills only).
+		const windows: DashboardWindow[] = [];
+		for (const w of [
+			{ label: "24h", hours: 24 },
+			{ label: "7d", hours: 24 * 7 },
+			{ label: "30d", hours: 24 * 30 },
+		]) {
+			const since = now - w.hours * 3600;
+			const r = await first<{
+				wins: number;
+				losses: number;
+				pushes: number;
+				units: number | null;
+				avg_pin_clv: number | null;
+				pin_clv_n: number | null;
+			}>(
+				db,
+				`SELECT SUM(status = 'win') AS wins,
+				        SUM(status = 'loss') AS losses,
+				        SUM(status = 'push') AS pushes,
+				        SUM(CASE WHEN status IN ('win','loss') THEN roi END) AS units,
+				        AVG(CASE WHEN status IN ('win','loss') THEN pin_clv END) AS avg_pin_clv,
+				        SUM(status IN ('win','loss') AND pin_clv IS NOT NULL) AS pin_clv_n
+				 FROM manual_picks
+				 WHERE status IN ('win','loss','push') AND settled_at >= ?
+				   AND ${REAL_FILL_SQL}`,
+				since,
+			);
+			const placed = await first<{ n: number }>(
+				db,
+				`SELECT COUNT(*) AS n FROM manual_picks WHERE picked_at >= ? AND ${REAL_FILL_SQL}`,
+				since,
+			);
+			const settled = (r?.wins ?? 0) + (r?.losses ?? 0);
+			windows.push({
+				label: w.label,
+				hours: w.hours,
+				placed: placed?.n ?? 0,
+				wins: r?.wins ?? 0,
+				losses: r?.losses ?? 0,
+				pushes: r?.pushes ?? 0,
+				units: r?.units ?? null,
+				roiPct:
+					settled > 0 && r?.units != null ? (r.units / settled) * 100 : null,
+				avgPinClvPct: r?.avg_pin_clv != null ? r.avg_pin_clv * 100 : null,
+				pinClvN: r?.pin_clv_n ?? 0,
+			});
+		}
+
+		// Per-market tape, last 24h.
+		const tapeRows = await all<{
+			sport_tag: string;
+			shadow_rows: number;
+			anchored: number;
+			upcoming: number;
+		}>(
+			db,
+			`SELECT sport_tag, COUNT(*) AS shadow_rows,
+			        SUM(pin_captured_at IS NOT NULL) AS anchored,
+			        SUM(event_time > ?) AS upcoming
+			 FROM shadow_candidates
+			 WHERE created_at >= ? AND sport_tag IS NOT NULL
+			 GROUP BY sport_tag`,
+			now,
+			dayAgo,
+		);
+		const liveByTag = await all<{ sport_tag: string; n: number }>(
+			db,
+			`SELECT sport_tag, COUNT(*) AS n FROM manual_picks
+			 WHERE picked_at >= ? AND sport_tag IS NOT NULL AND ${REAL_FILL_SQL}
+			 GROUP BY sport_tag`,
+			dayAgo,
+		);
+		const topRejects = await all<{
+			sport_tag: string;
+			reject_reason: string;
+			n: number;
+		}>(
+			db,
+			`SELECT sport_tag, reject_reason, COUNT(*) AS n FROM shadow_candidates
+			 WHERE created_at >= ? AND sport_tag IS NOT NULL
+			 GROUP BY sport_tag, reject_reason
+			 ORDER BY n DESC`,
+			dayAgo,
+		);
+		const liveMap = new Map(liveByTag.map((r) => [r.sport_tag, r.n]));
+		const rejectMap = new Map<string, { reason: string; n: number }>();
+		for (const r of topRejects) {
+			if (!rejectMap.has(r.sport_tag))
+				rejectMap.set(r.sport_tag, { reason: r.reject_reason, n: r.n });
+		}
+		const tape: DashboardTapeRow[] = tapeRows
+			.map((r) => ({
+				sportTag: r.sport_tag,
+				livePicks: liveMap.get(r.sport_tag) ?? 0,
+				shadowRows: r.shadow_rows,
+				shadowAnchored: r.anchored,
+				topReject: rejectMap.get(r.sport_tag)?.reason ?? null,
+				topRejectN: rejectMap.get(r.sport_tag)?.n ?? 0,
+				upcoming: r.upcoming,
+			}))
+			.sort((a, b) => b.livePicks - a.livePicks || b.shadowRows - a.shadowRows);
+		for (const [tag, n] of liveMap) {
+			if (!tape.some((t) => t.sportTag === tag))
+				tape.unshift({
+					sportTag: tag,
+					livePicks: n,
+					shadowRows: 0,
+					shadowAnchored: 0,
+					topReject: null,
+					topRejectN: 0,
+					upcoming: 0,
+				});
+		}
+
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
 			pipelineNewestAt: cacheStats.newestEntry ?? null,
@@ -397,6 +588,14 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			bankrollSyncedAt: botStatus?.bankrollSyncedAt ?? null,
 			stakeMode: botStatus?.stakeMode ?? null,
 			fixedStake: botStatus?.fixedStake ?? null,
+			pinCredits: pinLast?.credits_remaining ?? null,
+			pinLastFetchAt: pinLast?.fetched_at ?? null,
+			pinLastSportKey: pinLast?.sport_key ?? null,
+			pinFetches24h,
+			lanesEvaluatedAt: lanes?.evaluatedAt ?? null,
+			lanesEvaluated: lanes?.evaluated ?? null,
+			lanesFired: lanes?.fired ?? null,
+			lanesRecorded: lanes?.recorded ?? null,
 		};
 
 		return {
@@ -407,6 +606,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			recap,
 			eras,
 			liveBook,
+			windows,
+			tape,
 		};
 	},
 );

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import {
 	getClobDepthSnapshotFn,
 	getSharpMoneyCacheEntryFn,
@@ -266,8 +266,8 @@ function SharpMarketDepthPage() {
 	const outcomeCards = useMemo(() => snapshot?.outcomes ?? [], [snapshot]);
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-slate-950 text-slate-100">
+		<Shell wide>
+			<div>
 				<div className="mx-auto w-full max-w-6xl px-6 py-10">
 					<div className="mb-6 flex flex-wrap items-start justify-between gap-4">
 						<div>
@@ -498,6 +498,6 @@ function SharpMarketDepthPage() {
 					</div>
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import {
 	computeSignalScoreFromHistory,
 	computeSignalScoreFromWindow,
@@ -1204,7 +1204,9 @@ function SharpMoneyPage() {
 					continue;
 				}
 				if (entry.edgeRating < existing.edgeRating) continue;
-				if ((entry.scoreDifferential ?? 0) > (existing.scoreDifferential ?? 0)) {
+				if (
+					(entry.scoreDifferential ?? 0) > (existing.scoreDifferential ?? 0)
+				) {
 					deduped.set(key, entry);
 					continue;
 				}
@@ -1482,7 +1484,10 @@ function SharpMoneyPage() {
 				return;
 			}
 			if (ageMinutes > 30) {
-				setHealthStatus({ label: "Warn", detail: `updated ${ageMinutes}m ago` });
+				setHealthStatus({
+					label: "Warn",
+					detail: `updated ${ageMinutes}m ago`,
+				});
 				return;
 			}
 			const staleRatio = freshness.staleHistory / freshness.total;
@@ -1605,8 +1610,8 @@ function SharpMoneyPage() {
 	}
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-ink-00">
+		<Shell wide>
+			<div>
 				{showPullIndicator && (
 					<div
 						className="pointer-events-none fixed left-0 right-0 top-0 z-[60] flex justify-center"
@@ -1634,61 +1639,31 @@ function SharpMoneyPage() {
 					</div>
 				)}
 				{/* Header */}
-				<header
-					className="sticky top-0 z-50 w-full border-b border-ink-15 bg-ink-05"
-					style={{
-						paddingTop: "max(1rem, env(safe-area-inset-top, 0px) + 1rem)",
-					}}
-				>
-					<div className="mx-auto max-w-7xl px-4 py-4">
-						<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-							<div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-								<div className="flex min-w-0 flex-col gap-1">
-									<div className="flex min-w-0 items-center gap-3">
-										<img
-											src="/logo-trans.png"
-											alt=""
-											className="h-10 w-auto flex-shrink-0 sm:h-18"
-										/>
-										<h1 className="font-sans text-2xl font-bold uppercase leading-tight tracking-wider text-ink-95 sm:whitespace-nowrap sm:text-4xl">
-											Polywhaler
-										</h1>
-										<span
-											className={`rounded-full px-2 py-0.5 font-mono text-xxs font-semibold uppercase tracking-[0.2em] ${
-												healthStatus.label === "Good"
-													? "bg-signal-pos/10 text-signal-pos"
-													: healthStatus.label === "Warn"
-														? "bg-signal-warn/10 text-signal-warn"
-														: "bg-ink-15 text-ink-70"
-											}`}
-											title={healthStatus.detail ?? ""}
-										>
-											{healthStatus.label}
-										</span>
-									</div>
-								</div>
-							</div>
-							<div className="flex w-full flex-shrink-0 items-center justify-between gap-1.5 sm:w-auto sm:justify-end sm:gap-2">
-								<span className="font-mono text-xxs tabular-nums text-ink-55 sm:text-xs">
-									updated{" "}
-									{cacheStats?.newestEntry
-										? formatRelativeTime(cacheStats.newestEntry)
-										: "—"}
-								</span>
-								<a
-									href="/stats"
-									className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-								>
-									stats
-								</a>
-								<a
-									href="/wallets"
-									className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-								>
-									wallets
-								</a>
-							</div>
+				<header className="sticky top-10 z-20 w-full border-b border-ink-15 bg-ink-05">
+					<div className="mx-auto flex h-8 max-w-7xl items-center justify-between gap-3 px-4">
+						<div className="flex min-w-0 items-center gap-3">
+							<h1 className="font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
+								Tape · sharp-money board
+							</h1>
+							<span
+								className={`font-mono text-xxs font-semibold uppercase tracking-[0.15em] ${
+									healthStatus.label === "Good"
+										? "text-signal-pos"
+										: healthStatus.label === "Warn"
+											? "text-signal-warn"
+											: "text-ink-40"
+								}`}
+								title={healthStatus.detail ?? ""}
+							>
+								{healthStatus.label}
+							</span>
 						</div>
+						<span className="font-mono text-xxs tabular-nums text-ink-40">
+							updated{" "}
+							{cacheStats?.newestEntry
+								? formatRelativeTime(cacheStats.newestEntry)
+								: "—"}
+						</span>
 					</div>
 				</header>
 
@@ -2083,8 +2058,7 @@ function SharpMoneyPage() {
 					{!showProcessingState &&
 						!showSortingState &&
 						!isLoading &&
-						(displayEntries.length > 0 ||
-							displayDimmedEntries.length > 0) && (
+						(displayEntries.length > 0 || displayDimmedEntries.length > 0) && (
 							<div className="space-y-4">
 								{/* Show counts */}
 								{(entries.length > displayEntries.length || showAllEntries) && (
@@ -2132,7 +2106,9 @@ function SharpMoneyPage() {
 												onToggle={() => toggleMarket(entry)}
 												history={historyByConditionId[entry.conditionId]}
 												isHistoryLoading={historyLoading.has(entry.conditionId)}
-												signalScore={signalScoreByConditionId[entry.conditionId]}
+												signalScore={
+													signalScoreByConditionId[entry.conditionId]
+												}
 												gradeData={gradesByConditionId[entry.conditionId]}
 												maxVolume={maxVolume}
 												debugInfo={debugInfoById[entry.id]}
@@ -2146,7 +2122,7 @@ function SharpMoneyPage() {
 						)}
 				</main>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }
 
@@ -2399,7 +2375,9 @@ function SharpMoneyCard({
 	return (
 		<article
 			className={`@container overflow-hidden rounded-lg bg-ink-05 ring-1 ring-inset ring-ink-15 transition-opacity ${dimmed ? "opacity-40 hover:opacity-70 focus-within:opacity-100" : ""}`}
-			aria-label={dimmed ? "Near-miss market (below filter criteria)" : undefined}
+			aria-label={
+				dimmed ? "Near-miss market (below filter criteria)" : undefined
+			}
 		>
 			{showDebug && debugInfo && (
 				<div className="flex flex-wrap gap-x-3 gap-y-0.5 bg-ink-10 px-3 py-1.5 font-mono text-xxs uppercase tracking-wider tabular-nums text-ink-55">

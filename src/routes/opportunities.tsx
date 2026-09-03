@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 import { RankedOpportunityTable } from "../components/opportunities/ranked-opportunity-table";
 import { getRankedOpportunitiesFn } from "../server/api/opportunity-ranking";
 import type { RankedOpportunity } from "../server/repositories/opportunity-ranking";
@@ -50,8 +50,8 @@ function OpportunitiesPage() {
 	}, [loadRankings]);
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-slate-950 text-white">
+		<Shell wide>
+			<div>
 				<div className="mx-auto w-full max-w-6xl px-4 py-10">
 					{/* Header */}
 					<div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -118,6 +118,6 @@ function OpportunitiesPage() {
 					<RankedOpportunityTable data={opportunities} loading={loading} />
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }

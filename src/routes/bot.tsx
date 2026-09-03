@@ -9,7 +9,7 @@ import {
 	useState,
 } from "react";
 
-import { AuthGate } from "@/components/auth-gate";
+import { Shell } from "@/components/terminal/shell";
 
 export const Route = createFileRoute("/bot")({
 	component: BotPage,
@@ -350,8 +350,8 @@ function BotPage() {
 	}, []);
 
 	return (
-		<AuthGate>
-			<div className="min-h-screen bg-ink-00 p-6 text-ink-85">
+		<Shell wide>
+			<div>
 				<div className="mx-auto max-w-5xl space-y-6">
 					{/* Header */}
 					<div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -667,7 +667,7 @@ function BotPage() {
 					</section>
 				</div>
 			</div>
-		</AuthGate>
+		</Shell>
 	);
 }
 
