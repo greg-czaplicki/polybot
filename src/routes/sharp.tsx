@@ -56,15 +56,27 @@ const showAPlusOnly = false;
 // `Series <id>` via getSeriesLabel. Server-side sport resolution is dynamic
 // (see src/server/api/series-registry.ts).
 const SERIES_LABELS: Record<number, string> = {
+	// Ids mirror src/server/api/series-registry.ts (seasonal ids are
+	// per-season; unknown newer ids fall back to `S<id>`).
 	10187: "NFL",
 	12185: "NFL",
 	10345: "NBA",
-	10210: "College Football",
-	10470: "College Basketball",
+	10210: "NCAAF",
+	12756: "NCAAF",
+	10470: "NCAAB",
 	3: "MLB",
 	10346: "NHL",
-	10188: "Premier League",
+	10188: "EPL",
 	10189: "MLS",
+	10355: "CHAMP",
+	10193: "LALIGA",
+	10194: "BUNDES",
+	10203: "SERIEA",
+	10195: "LIGUE1",
+	10204: "UCL",
+	10365: "ATP",
+	10366: "WTA",
+	38: "MMA",
 };
 
 const USD_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -412,7 +424,7 @@ function getMarketGroupKey(entry: SharpMoneyCacheEntry): string {
 
 function getSeriesLabel(seriesId?: number): string | null {
 	if (!seriesId) return null;
-	return SERIES_LABELS[seriesId] ?? `Series ${seriesId}`;
+	return SERIES_LABELS[seriesId] ?? `S${seriesId}`;
 }
 
 type BotInspectResult = {
@@ -547,7 +559,7 @@ function SharpMoneyPage() {
 	// the downstream filter and sort paths still compile and we can reintroduce
 	// an override later if we want one.
 	const [showAllEntries] = useState(false);
-	const [showEdgeStats, setShowEdgeStats] = useState(true);
+	const [showEdgeStats, setShowEdgeStats] = useState(false);
 	const [botAlignedConditionOrder, setBotAlignedConditionOrder] = useState<
 		string[]
 	>([]);
@@ -1658,12 +1670,29 @@ function SharpMoneyPage() {
 								{healthStatus.label}
 							</span>
 						</div>
-						<span className="font-mono text-xxs tabular-nums text-ink-40">
-							updated{" "}
-							{cacheStats?.newestEntry
-								? formatRelativeTime(cacheStats.newestEntry)
-								: "—"}
-						</span>
+						<div className="flex items-center gap-3">
+							<span className="font-mono text-xxs tabular-nums text-ink-40">
+								updated{" "}
+								{cacheStats?.newestEntry
+									? formatRelativeTime(cacheStats.newestEntry)
+									: "—"}
+							</span>
+							<button
+								type="button"
+								onClick={handleRefresh}
+								disabled={isRefreshing || Boolean(pipelineStatus?.inProgress)}
+								className="inline-flex h-6 items-center gap-1.5 border border-ink-25 px-2 font-mono text-xxs font-semibold uppercase tracking-[0.15em] text-ink-70 transition-colors hover:bg-ink-15 hover:text-ink-95 disabled:opacity-50"
+							>
+								<RefreshCw
+									className={`h-3 w-3 ${isRefreshing || pipelineStatus?.inProgress ? "animate-spin" : ""}`}
+								/>
+								{pipelineStatus?.inProgress
+									? `scanning ${pipelineStatus.processed ?? 0}/${pipelineStatus.totalQueued ?? "?"}`
+									: isRefreshing
+										? "…"
+										: "rescan"}
+							</button>
+						</div>
 					</div>
 				</header>
 
@@ -2059,65 +2088,121 @@ function SharpMoneyPage() {
 						!showSortingState &&
 						!isLoading &&
 						(displayEntries.length > 0 || displayDimmedEntries.length > 0) && (
-							<div className="space-y-4">
-								{/* Show counts */}
-								{(entries.length > displayEntries.length || showAllEntries) && (
-									<div className="flex items-center justify-end gap-2 font-mono text-xxs tabular-nums text-ink-55">
-										<span>
-											{displayEntries.length}/{entries.length} passing
-											{displayDimmedEntries.length > 0
-												? ` · ${displayDimmedEntries.length} near-miss`
-												: ""}
-										</span>
-									</div>
-								)}
-								{displayEntries.map((entry) => (
-									<SharpMoneyCard
-										key={entry.id}
-										entry={entry}
-										pickMeta={pickStatusByConditionId[entry.conditionId]}
-										isExpanded={expandedMarkets.has(entry.id)}
-										onToggle={() => toggleMarket(entry)}
-										history={historyByConditionId[entry.conditionId]}
-										isHistoryLoading={historyLoading.has(entry.conditionId)}
-										signalScore={signalScoreByConditionId[entry.conditionId]}
-										gradeData={gradesByConditionId[entry.conditionId]}
-										maxVolume={maxVolume}
-										debugInfo={debugInfoById[entry.id]}
-										showDebug={showRefreshDebug}
-									/>
-								))}
-								{displayDimmedEntries.length > 0 && (
-									<>
-										<div
-											className="flex items-center gap-3 pt-2 font-mono text-xxs uppercase tracking-wider text-ink-40"
-											aria-label="Near-miss section"
-										>
-											<span className="h-px flex-1 bg-ink-15" aria-hidden />
-											<span>near-misses · below criteria</span>
-											<span className="h-px flex-1 bg-ink-15" aria-hidden />
-										</div>
-										{displayDimmedEntries.map((entry) => (
-											<SharpMoneyCard
-												key={entry.id}
-												entry={entry}
-												pickMeta={pickStatusByConditionId[entry.conditionId]}
-												isExpanded={expandedMarkets.has(entry.id)}
-												onToggle={() => toggleMarket(entry)}
-												history={historyByConditionId[entry.conditionId]}
-												isHistoryLoading={historyLoading.has(entry.conditionId)}
-												signalScore={
-													signalScoreByConditionId[entry.conditionId]
-												}
-												gradeData={gradesByConditionId[entry.conditionId]}
-												maxVolume={maxVolume}
-												debugInfo={debugInfoById[entry.id]}
-												showDebug={showRefreshDebug}
-												dimmed
-											/>
-										))}
-									</>
-								)}
+							<div className="border border-ink-15 bg-ink-00">
+								<div className="flex h-7 items-center justify-between border-b border-ink-15 px-3">
+									<h2 className="font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
+										Markets
+									</h2>
+									<span className="font-mono text-xxs tabular-nums text-ink-40">
+										{displayEntries.length}/{entries.length} passing
+										{displayDimmedEntries.length > 0
+											? ` · ${displayDimmedEntries.length} near-miss`
+											: ""}
+										{" · click a row for holders, history, bot inspect"}
+									</span>
+								</div>
+								<div className="overflow-x-auto">
+									<table className="w-full min-w-[900px] text-sm text-ink-85">
+										<thead>
+											<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
+												<th className="px-3 text-left font-medium">Mkt</th>
+												<th className="px-3 text-right font-medium">Starts</th>
+												<th className="px-3 text-left font-medium">Market</th>
+												<th className="px-3 text-left font-medium">
+													Sharp side
+												</th>
+												<th className="px-3 text-right font-medium">Px</th>
+												<th className="px-3 text-right font-medium">Grd</th>
+												<th className="px-3 text-right font-medium">Sig</th>
+												<th className="px-3 text-right font-medium">Edge</th>
+												<th className="px-3 text-right font-medium">Diff</th>
+												<th className="px-3 text-left font-medium">Conf</th>
+												<th className="px-3 text-left font-medium">Bet</th>
+											</tr>
+										</thead>
+										<tbody>
+											{displayEntries.map((entry) => (
+												<TapeRow
+													key={entry.id}
+													entry={entry}
+													pickMeta={pickStatusByConditionId[entry.conditionId]}
+													isExpanded={expandedMarkets.has(entry.id)}
+													onToggle={() => toggleMarket(entry)}
+													signalScore={
+														signalScoreByConditionId[entry.conditionId]
+													}
+													gradeData={gradesByConditionId[entry.conditionId]}
+													detail={
+														<SharpMoneyCard
+															entry={entry}
+															pickMeta={
+																pickStatusByConditionId[entry.conditionId]
+															}
+															isExpanded
+															onToggle={() => toggleMarket(entry)}
+															history={historyByConditionId[entry.conditionId]}
+															isHistoryLoading={historyLoading.has(
+																entry.conditionId,
+															)}
+															signalScore={
+																signalScoreByConditionId[entry.conditionId]
+															}
+															gradeData={gradesByConditionId[entry.conditionId]}
+															maxVolume={maxVolume}
+															debugInfo={debugInfoById[entry.id]}
+															showDebug={showRefreshDebug}
+														/>
+													}
+												/>
+											))}
+											{displayDimmedEntries.length > 0 && (
+												<tr>
+													<td
+														colSpan={11}
+														className="border-b border-ink-10 bg-ink-05 px-3 py-1 font-mono text-xxs uppercase tracking-wider text-ink-40"
+													>
+														near-misses · below criteria
+													</td>
+												</tr>
+											)}
+											{displayDimmedEntries.map((entry) => (
+												<TapeRow
+													key={entry.id}
+													entry={entry}
+													dimmed
+													pickMeta={pickStatusByConditionId[entry.conditionId]}
+													isExpanded={expandedMarkets.has(entry.id)}
+													onToggle={() => toggleMarket(entry)}
+													signalScore={
+														signalScoreByConditionId[entry.conditionId]
+													}
+													gradeData={gradesByConditionId[entry.conditionId]}
+													detail={
+														<SharpMoneyCard
+															entry={entry}
+															pickMeta={
+																pickStatusByConditionId[entry.conditionId]
+															}
+															isExpanded
+															onToggle={() => toggleMarket(entry)}
+															history={historyByConditionId[entry.conditionId]}
+															isHistoryLoading={historyLoading.has(
+																entry.conditionId,
+															)}
+															signalScore={
+																signalScoreByConditionId[entry.conditionId]
+															}
+															gradeData={gradesByConditionId[entry.conditionId]}
+															maxVolume={maxVolume}
+															debugInfo={debugInfoById[entry.id]}
+															showDebug={showRefreshDebug}
+														/>
+													}
+												/>
+											))}
+										</tbody>
+									</table>
+								</div>
 							</div>
 						)}
 				</main>
@@ -2176,6 +2261,172 @@ function toneForGrade(grade: string): GradeTone {
 				ring: "ring-ink-25",
 			};
 	}
+}
+
+/**
+ * One market on the tape. The row carries what a glance needs — where the
+ * sharp side is, its price, the grade stack, and whether the bot already
+ * bet it. Everything else (holders, history, bot inspect) is the card,
+ * rendered as the detail row when expanded.
+ */
+function TapeRow({
+	entry,
+	pickMeta,
+	isExpanded,
+	onToggle,
+	signalScore,
+	gradeData,
+	dimmed,
+	detail,
+}: {
+	entry: SharpMoneyCacheEntry;
+	pickMeta?: { status: "pending" | "win" | "loss" | "push"; pickedAt: number };
+	isExpanded: boolean;
+	onToggle: () => void;
+	signalScore?: number;
+	gradeData?: { grade: string; signalScore: number; warnings: string[] };
+	dimmed?: boolean;
+	detail: React.ReactNode;
+}) {
+	const sharp =
+		entry.sharpSide === "A"
+			? entry.sideA
+			: entry.sharpSide === "B"
+				? entry.sideB
+				: null;
+	const odds = sharp ? formatAmericanOdds(sharp.price) : null;
+	const scoreForGrade = signalScore ?? entry.edgeRating;
+	const grade =
+		gradeData?.grade ??
+		signalScoreToGradeLabel(scoreForGrade, {
+			edgeRating: entry.edgeRating,
+			scoreDifferential: entry.scoreDifferential,
+		});
+	const gradeClass =
+		grade === "A+" || grade === "A"
+			? "text-signal-pos"
+			: grade === "B"
+				? "text-ink-95"
+				: "text-ink-55";
+	const eventDate = parseEventTime(entry.eventTime);
+	const minutesToStart = eventDate
+		? Math.round((eventDate.getTime() - Date.now()) / 60000)
+		: null;
+	const startsText =
+		minutesToStart === null
+			? "—"
+			: minutesToStart < 0
+				? "live"
+				: minutesToStart < 60
+					? `${minutesToStart}m`
+					: minutesToStart < 60 * 36
+						? `${Math.floor(minutesToStart / 60)}h${minutesToStart % 60 ? ` ${minutesToStart % 60}m` : ""}`
+						: (formatEventTime(entry.eventTime) ?? "—");
+	const startsClass =
+		minutesToStart !== null && minutesToStart >= 0 && minutesToStart <= 60
+			? "text-signal-warn"
+			: minutesToStart !== null && minutesToStart < 0
+				? "text-signal-bad"
+				: "text-ink-70";
+	const pick = pickMeta?.status;
+	const pickText =
+		pick === "pending"
+			? "placed"
+			: pick === "win"
+				? "won"
+				: pick === "loss"
+					? "lost"
+					: pick === "push"
+						? "push"
+						: entry.isReady === false
+							? "not ready"
+							: "";
+	const pickClass =
+		pick === "pending" || pick === "win"
+			? "text-signal-pos"
+			: pick === "loss"
+				? "text-signal-bad"
+				: "text-ink-40";
+	const confClass =
+		entry.confidence === "HIGH"
+			? "text-ink-95"
+			: entry.confidence === "MEDIUM"
+				? "text-ink-70"
+				: "text-ink-40";
+	return (
+		<>
+			<tr
+				onClick={onToggle}
+				aria-expanded={isExpanded}
+				className={`h-7 cursor-pointer border-b border-ink-10 hover:bg-ink-05 ${
+					isExpanded ? "bg-ink-05" : ""
+				} ${dimmed ? "text-ink-55" : ""}`}
+			>
+				<td className="px-3 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
+					{getSeriesLabel(entry.sportSeriesId) ?? "—"}
+				</td>
+				<td
+					className={`px-3 text-right font-mono text-xs tabular-nums ${startsClass}`}
+				>
+					{startsText}
+				</td>
+				<td className="max-w-[22rem] truncate px-3 text-ink-95">
+					<span className="mr-1.5 inline-block w-2 text-ink-40">
+						{isExpanded ? "−" : "+"}
+					</span>
+					{entry.marketTitle}
+				</td>
+				<td className="max-w-[12rem] truncate px-3 text-ink-85">
+					{sharp ? sharp.label : <span className="text-ink-40">even</span>}
+				</td>
+				<td className="px-3 text-right font-mono tabular-nums">
+					{sharp?.price != null ? (
+						<>
+							{sharp.price.toFixed(2)}
+							{odds ? (
+								<span className="ml-1 text-xxs text-ink-40">{odds}</span>
+							) : null}
+						</>
+					) : (
+						"—"
+					)}
+				</td>
+				<td className={`px-3 text-right font-sans font-semibold ${gradeClass}`}>
+					{grade}
+				</td>
+				<td className="px-3 text-right font-mono tabular-nums">
+					{Number.isFinite(scoreForGrade) ? Math.round(scoreForGrade) : "—"}
+				</td>
+				<td
+					className={`px-3 text-right font-mono tabular-nums ${
+						entry.edgeRating >= MIN_EDGE_RATING ? "" : "text-ink-40"
+					}`}
+				>
+					{Math.round(entry.edgeRating)}
+				</td>
+				<td className="px-3 text-right font-mono tabular-nums text-ink-70">
+					{Math.round(entry.scoreDifferential)}
+				</td>
+				<td
+					className={`px-3 font-mono text-xxs uppercase tracking-[0.12em] ${confClass}`}
+				>
+					{entry.confidence.toLowerCase()}
+				</td>
+				<td
+					className={`px-3 font-mono text-xxs uppercase tracking-[0.12em] ${pickClass}`}
+				>
+					{pickText}
+				</td>
+			</tr>
+			{isExpanded ? (
+				<tr className="border-b border-ink-10">
+					<td colSpan={11} className="bg-ink-05/40 p-3">
+						{detail}
+					</td>
+				</tr>
+			) : null}
+		</>
+	);
 }
 
 function SharpMoneyCard({
