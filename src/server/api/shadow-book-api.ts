@@ -576,3 +576,41 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 		};
 	},
 );
+
+/**
+ * Latest gate decision per market over the last 36h — what the Tape shows
+ * in the Bet column when the bot did NOT bet: the reason it passed. One
+ * row per condition_id (most recent sighting wins).
+ */
+export const getRecentShadowReasonsFn = createServerFn({
+	method: "GET",
+}).handler(async ({ context }) => {
+	const db = getDb(context);
+	const since = Math.floor(Date.now() / 1000) - 36 * 3600;
+	const rows = await all<{
+		condition_id: string;
+		reject_reason: string;
+		created_at: number;
+		minutes_to_start: number | null;
+	}>(
+		db,
+		`SELECT condition_id, reject_reason, created_at, minutes_to_start
+		 FROM shadow_candidates
+		 WHERE created_at >= ?
+		 ORDER BY created_at DESC`,
+		since,
+	);
+	const byCondition: Record<
+		string,
+		{ reason: string; at: number; minutesToStart: number | null }
+	> = {};
+	for (const r of rows) {
+		if (!byCondition[r.condition_id])
+			byCondition[r.condition_id] = {
+				reason: r.reject_reason,
+				at: r.created_at,
+				minutesToStart: r.minutes_to_start,
+			};
+	}
+	return { byCondition };
+});

@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Shell } from "@/components/terminal/shell";
+import { reasonLabel } from "@/lib/shadow-labels";
 import {
 	computeSignalScoreFromHistory,
 	computeSignalScoreFromWindow,
@@ -26,6 +27,7 @@ import {
 	getBotInspectDefaultsFn,
 } from "../server/api/bot";
 import { listManualPicksFn } from "../server/api/manual-picks";
+import { getRecentShadowReasonsFn } from "../server/api/shadow-book-api";
 import {
 	fetchTrendingSportsMarketsFn,
 	getRuntimeMarketStatsFn,
@@ -564,6 +566,9 @@ function SharpMoneyPage() {
 		string[]
 	>([]);
 	const [botAlignedError, setBotAlignedError] = useState<string | null>(null);
+	const [gateByConditionId, setGateByConditionId] = useState<
+		Record<string, { reason: string; at: number }>
+	>({});
 	const [pickStatusByConditionId, setPickStatusByConditionId] = useState<
 		Record<
 			string,
@@ -813,6 +818,16 @@ function SharpMoneyPage() {
 
 	useEffect(() => {
 		let cancelled = false;
+		const loadGates = async () => {
+			try {
+				const result = await getRecentShadowReasonsFn();
+				if (cancelled) return;
+				setGateByConditionId(result.byCondition);
+			} catch (error) {
+				console.error("Failed to load gate decisions:", error);
+			}
+		};
+		void loadGates();
 		const loadPickStatus = async () => {
 			try {
 				const result = await listManualPicksFn({ data: { limit: 2000 } });
@@ -2127,7 +2142,7 @@ function SharpMoneyPage() {
 												<th className="hidden px-3 text-left font-medium md:table-cell">
 													Conf
 												</th>
-												<th className="px-3 text-left font-medium">Bet</th>
+												<th className="px-3 text-left font-medium">Bot</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -2142,6 +2157,7 @@ function SharpMoneyPage() {
 														signalScoreByConditionId[entry.conditionId]
 													}
 													gradeData={gradesByConditionId[entry.conditionId]}
+													gate={gateByConditionId[entry.conditionId]?.reason}
 													detail={
 														<SharpMoneyCard
 															entry={entry}
@@ -2187,6 +2203,7 @@ function SharpMoneyPage() {
 														signalScoreByConditionId[entry.conditionId]
 													}
 													gradeData={gradesByConditionId[entry.conditionId]}
+													gate={gateByConditionId[entry.conditionId]?.reason}
 													detail={
 														<SharpMoneyCard
 															entry={entry}
@@ -2295,6 +2312,8 @@ function TapeRow({
 	onToggle: () => void;
 	signalScore?: number;
 	gradeData?: { grade: string; signalScore: number; warnings: string[] };
+	/** Latest gate that rejected this market (shadow book), if the bot passed. */
+	gate?: string;
 	dimmed?: boolean;
 	detail: React.ReactNode;
 }) {
@@ -2348,9 +2367,11 @@ function TapeRow({
 					? "lost"
 					: pick === "push"
 						? "push"
-						: entry.isReady === false
-							? "not ready"
-							: "";
+						: gate
+							? reasonLabel(gate)
+							: entry.isReady === false
+								? "not ready"
+								: "";
 	const pickClass =
 		pick === "pending" || pick === "win"
 			? "text-signal-pos"
