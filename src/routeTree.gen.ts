@@ -15,9 +15,7 @@ import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as ShadowRouteImport } from './routes/shadow'
 import { Route as RuntimeRouteImport } from './routes/runtime'
-import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as DebugRouteImport } from './routes/debug'
 import { Route as CanonicalRouteImport } from './routes/canonical'
 import { Route as BotRouteImport } from './routes/bot'
 import { Route as IndexRouteImport } from './routes/index'
@@ -53,19 +51,9 @@ const RuntimeRoute = RuntimeRouteImport.update({
   path: '/runtime',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OpportunitiesRoute = OpportunitiesRouteImport.update({
-  id: '/opportunities',
-  path: '/opportunities',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DebugRoute = DebugRouteImport.update({
-  id: '/debug',
-  path: '/debug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CanonicalRoute = CanonicalRouteImport.update({
@@ -93,9 +81,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
-  '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
-  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -108,9 +94,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
-  '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
-  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -124,9 +108,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
-  '/debug': typeof DebugRoute
   '/login': typeof LoginRoute
-  '/opportunities': typeof OpportunitiesRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -141,9 +123,7 @@ export interface FileRouteTypes {
     | '/'
     | '/bot'
     | '/canonical'
-    | '/debug'
     | '/login'
-    | '/opportunities'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -156,9 +136,7 @@ export interface FileRouteTypes {
     | '/'
     | '/bot'
     | '/canonical'
-    | '/debug'
     | '/login'
-    | '/opportunities'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -171,9 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/bot'
     | '/canonical'
-    | '/debug'
     | '/login'
-    | '/opportunities'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -187,9 +163,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BotRoute: typeof BotRoute
   CanonicalRoute: typeof CanonicalRoute
-  DebugRoute: typeof DebugRoute
   LoginRoute: typeof LoginRoute
-  OpportunitiesRoute: typeof OpportunitiesRoute
   RuntimeRoute: typeof RuntimeRoute
   ShadowRoute: typeof ShadowRoute
   SharpRoute: typeof SharpRouteWithChildren
@@ -242,25 +216,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RuntimeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/opportunities': {
-      id: '/opportunities'
-      path: '/opportunities'
-      fullPath: '/opportunities'
-      preLoaderRoute: typeof OpportunitiesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/debug': {
-      id: '/debug'
-      path: '/debug'
-      fullPath: '/debug'
-      preLoaderRoute: typeof DebugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/canonical': {
@@ -308,9 +268,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BotRoute: BotRoute,
   CanonicalRoute: CanonicalRoute,
-  DebugRoute: DebugRoute,
   LoginRoute: LoginRoute,
-  OpportunitiesRoute: OpportunitiesRoute,
   RuntimeRoute: RuntimeRoute,
   ShadowRoute: ShadowRoute,
   SharpRoute: SharpRouteWithChildren,

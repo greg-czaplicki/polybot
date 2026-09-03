@@ -142,29 +142,17 @@ function StrategyPage() {
 							<h1 className="text-2xl font-semibold tracking-tight">
 								Strategy Analysis
 							</h1>
-							<p className="text-sm text-slate-400">
+							<p className="text-sm text-ink-55">
 								Pick performance by canonical context — which trends and setups
 								actually help?
 							</p>
 						</div>
-						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
-							<a
-								href="/stats"
-								className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-200 transition-colors hover:bg-slate-800/60"
-							>
-								Stats
-							</a>
-							<a
-								href="/runtime"
-								className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-200 transition-colors hover:bg-slate-800/60"
-							>
-								Runtime
-							</a>
+						<div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.2em] text-ink-55">
 							<button
 								type="button"
 								onClick={() => loadSection(activeSection)}
 								disabled={loading}
-								className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:opacity-50"
+								className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-brand-blue transition-colors hover:bg-brand-blue/20 disabled:opacity-50"
 							>
 								{loading ? "Loading..." : "Refresh"}
 							</button>
@@ -173,7 +161,7 @@ function StrategyPage() {
 
 					{/* Summary banner */}
 					{sectionData && (
-						<div className="mb-4 flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.2em] text-slate-400">
+						<div className="mb-4 flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.2em] text-ink-55">
 							<span>{sectionData.settledPicks} settled picks</span>
 							<span>{sectionData.enrichedPicks} with trend data</span>
 						</div>
@@ -188,8 +176,8 @@ function StrategyPage() {
 								onClick={() => handleTabClick(tab.key)}
 								className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition-colors ${
 									activeSection === tab.key
-										? "bg-cyan-500 text-white"
-										: "bg-slate-800/60 text-slate-300 hover:bg-slate-800"
+										? "bg-cyan-500 text-ink-95"
+										: "bg-ink-10 text-ink-70 hover:bg-ink-10"
 								}`}
 							>
 								{tab.label}

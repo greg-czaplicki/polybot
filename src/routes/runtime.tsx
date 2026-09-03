@@ -1853,12 +1853,6 @@ function RuntimePage() {
 								dominate by volume.
 							</p>
 						</div>
-						<a
-							href="/sharp"
-							className="inline-flex h-8 items-center justify-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-						>
-							Back to Sharp
-						</a>
 					</header>
 
 					<section className="rounded-lg bg-ink-05 p-6 ring-1 ring-inset ring-ink-15">

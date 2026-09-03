@@ -149,20 +149,7 @@ function WalletsPage() {
 								closing line. Skill = beating the close, repeatedly.
 							</p>
 						</div>
-						<div className="flex items-center gap-2">
-							<a
-								href="/stats"
-								className="inline-flex h-11 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
-							>
-								Stats
-							</a>
-							<a
-								href="/shadow"
-								className="inline-flex h-11 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue sm:h-8"
-							>
-								Shadow Book
-							</a>
-						</div>
+						<div className="flex items-center gap-2"></div>
 					</div>
 
 					{/* Totals strip */}

@@ -292,16 +292,13 @@ export function PlChartSection({
 	}
 
 	return (
-		<section
-			aria-labelledby="pl-charts-heading"
-			className="mb-6 flex flex-col gap-4"
-		>
-			<div className="flex flex-wrap items-baseline justify-between gap-2">
+		<section aria-labelledby="pl-charts-heading" className="flex flex-col">
+			<div className="flex flex-wrap items-baseline justify-between gap-2 px-3 py-2">
 				<h2
 					id="pl-charts-heading"
 					className="font-mono text-xxs font-semibold uppercase tracking-[0.2em] text-ink-55"
 				>
-					Profit / Loss
+					Net in range
 				</h2>
 				{chart && (
 					<span
@@ -315,19 +312,17 @@ export function PlChartSection({
 			</div>
 
 			{loadFailed && (
-				<div className="rounded-md bg-ink-05 p-4 font-mono text-sm text-ink-55 ring-1 ring-inset ring-ink-15">
+				<div className="px-3 py-3 font-mono text-sm text-ink-55">
 					failed to load chart data.
 				</div>
 			)}
 			{!loadFailed && !chart && (
-				<div className="rounded-md bg-ink-05 p-4 font-mono text-sm text-ink-55 ring-1 ring-inset ring-ink-15">
-					loading…
-				</div>
+				<div className="px-3 py-3 font-mono text-sm text-ink-55">loading…</div>
 			)}
 
 			{chart && (
 				<>
-					<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+					<div className="border-t border-ink-15 px-3 py-3">
 						<h3 className="mb-2 font-sans text-sm font-semibold text-ink-95">
 							Cumulative P/L
 							<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">
@@ -357,7 +352,7 @@ export function PlChartSection({
 						/>
 					</div>
 
-					<div className="rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+					<div className="border-t border-ink-15 px-3 py-3">
 						<h3 className="mb-2 font-sans text-sm font-semibold text-ink-95">
 							Cumulative P/L — dollars
 							<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">
@@ -398,8 +393,8 @@ export function PlChartSection({
 						)}
 					</div>
 
-					<div className="grid gap-4 lg:grid-cols-2">
-						<div className="min-w-0 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+					<div className="grid gap-px bg-ink-15 lg:grid-cols-2 [&>div]:bg-ink-00">
+						<div className="min-w-0 border-t border-ink-15 px-3 py-3">
 							<h3 className="mb-2 font-sans text-sm font-semibold text-ink-95">
 								Rolling 30-day P/L
 								<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">
@@ -422,7 +417,7 @@ export function PlChartSection({
 							/>
 						</div>
 
-						<div className="min-w-0 rounded-md bg-ink-05 p-4 ring-1 ring-inset ring-ink-15">
+						<div className="min-w-0 border-t border-ink-15 px-3 py-3">
 							<h3 className="mb-2 font-sans text-sm font-semibold text-ink-95">
 								Cumulative CLV
 								<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">

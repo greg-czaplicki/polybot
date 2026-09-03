@@ -9,7 +9,8 @@ import {
 	useState,
 } from "react";
 
-import { Shell } from "@/components/terminal/shell";
+import { Empty, Panel, Workspace } from "@/components/terminal/panel";
+import { Shell, ShellButton } from "@/components/terminal/shell";
 
 export const Route = createFileRoute("/bot")({
 	component: BotPage,
@@ -350,323 +351,273 @@ function BotPage() {
 	}, []);
 
 	return (
-		<Shell wide>
-			<div>
-				<div className="mx-auto max-w-5xl space-y-6">
-					{/* Header */}
-					<div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-						<div>
-							<h1 className="font-sans text-2xl font-semibold tracking-tight text-ink-95">
-								Bot Control
-							</h1>
-							<p className="mt-0.5 font-sans text-sm text-ink-70">
-								Manage the VPS bot service and inspect logs.
-							</p>
-						</div>
-						<div className="flex flex-wrap gap-2">
-							<button
-								type="button"
-								onClick={() => void loadStatus()}
-								disabled={statusLoading}
-								className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
-							>
-								{statusLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-								{statusLoading ? "refreshing…" : "refresh status"}
-							</button>
-							<button
-								type="button"
-								onClick={() => void loadLogs()}
-								disabled={logsLoading}
-								className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
-							>
-								{logsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-								{logsLoading ? "loading…" : "reload logs"}
-							</button>
-						</div>
-					</div>
+		<Shell
+			wide
+			actions={
+				<>
+					<ShellButton
+						onClick={() => void loadStatus()}
+						disabled={statusLoading}
+					>
+						{statusLoading ? "…" : "status"}
+					</ShellButton>
+					<ShellButton onClick={() => void loadLogs()} disabled={logsLoading}>
+						{logsLoading ? "…" : "logs"}
+					</ShellButton>
+				</>
+			}
+		>
+			{!canAuthed && (
+				// biome-ignore lint/a11y/useSemanticElements: role="status" on a div is the standard ARIA pattern for a transient notification region.
+				<div
+					role="status"
+					className="bg-signal-warn/10 px-3 py-2 text-sm text-signal-warn"
+				>
+					Authentication token missing. Log out and back in to enable bot
+					controls.
+				</div>
+			)}
 
-					{!canAuthed && (
-						// biome-ignore lint/a11y/useSemanticElements: role="status" on a div is the standard ARIA pattern for a transient notification region.
+			<Workspace>
+				{/* Service */}
+				<Panel
+					title="Service"
+					span={8}
+					meta={status?.service ?? "polywhaler-bot"}
+					tone={
+						status?.activeState === "active"
+							? "pos"
+							: status?.activeState
+								? "bad"
+								: undefined
+					}
+				>
+					{statusError && (
 						<div
-							role="status"
-							className="rounded-md bg-signal-warn/10 px-4 py-3 text-sm text-signal-warn ring-1 ring-inset ring-signal-warn/30"
+							role="alert"
+							className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
 						>
-							Authentication token missing. Log out and back in to enable bot
-							controls.
+							{statusError}
 						</div>
 					)}
-
-					<div className="grid gap-4 md:grid-cols-3">
-						{/* Service Status */}
-						<section
-							aria-labelledby="bot-status-heading"
-							className="space-y-4 rounded-md bg-ink-05 p-5 ring-1 ring-inset ring-ink-15 md:col-span-2"
-						>
-							<div className="flex items-baseline justify-between gap-2">
-								<h2
-									id="bot-status-heading"
-									className="font-sans text-base font-semibold text-ink-95"
-								>
-									Service Status
-								</h2>
-								<span className="font-mono text-xxs tabular-nums text-ink-55">
-									{status?.service ?? "polywhaler-bot"}
-								</span>
-							</div>
-
-							{statusError && (
-								<div
-									role="alert"
-									className="rounded-md bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35"
-								>
-									{statusError}
-								</div>
-							)}
-
-							<div className="grid gap-3 text-sm md:grid-cols-2">
-								<StatusCell label="Active" value={status?.activeState} />
-								<StatusCell label="Substate" value={status?.subState} />
-								<StatusCell label="Main PID" value={status?.mainPid} />
-								<StatusCell label="Exit Code" value={status?.execMainStatus} />
-								<div className="md:col-span-2">
-									<div className="font-mono text-xxs uppercase tracking-wider text-ink-55">
-										Started
-									</div>
-									<div className="mt-0.5 font-mono text-sm tabular-nums text-ink-85">
-										{status?.startedAt ?? "—"}
-									</div>
-								</div>
-							</div>
-
-							{/* biome-ignore lint/a11y/useSemanticElements: role="group" with
-							    aria-label is the right ARIA pattern for a non-landmark control cluster. */}
-							<div
-								className="flex flex-wrap gap-2"
-								role="group"
-								aria-label="Bot service actions"
-							>
-								<ActionButton
-									label="Start"
-									loadingLabel="Starting…"
-									isActive={actionLoading === "start"}
-									isLocked={actionLoading !== null && actionLoading !== "start"}
-									onClick={() => void runAction("start")}
-								/>
-								<ActionButton
-									label="Stop"
-									loadingLabel="Stopping…"
-									tone="bad"
-									isActive={actionLoading === "stop"}
-									isLocked={actionLoading !== null && actionLoading !== "stop"}
-									onClick={() => void runAction("stop")}
-								/>
-								<ActionButton
-									label="Restart"
-									loadingLabel="Restarting…"
-									isActive={actionLoading === "restart"}
-									isLocked={
-										actionLoading !== null && actionLoading !== "restart"
-									}
-									onClick={() => void runAction("restart")}
-								/>
-							</div>
-						</section>
-
-						{/* Config */}
-						<section
-							aria-labelledby="bot-config-heading"
-							className="space-y-3 rounded-md bg-ink-05 p-5 ring-1 ring-inset ring-ink-15"
-						>
-							<h2
-								id="bot-config-heading"
-								className="font-sans text-base font-semibold text-ink-95"
-							>
-								Config
-							</h2>
-
-							{envLoading && (
-								<div className="font-mono text-xs text-ink-55">
-									Loading env…
-								</div>
-							)}
-
-							{!envLoading && envPayload && (
-								<form onSubmit={saveEnv} className="space-y-3">
-									{envPayload.path && (
-										<div className="break-all font-mono text-xxs text-ink-55">
-											File: {envPayload.path}
-										</div>
-									)}
-									<div className="max-h-64 space-y-2 overflow-auto pr-1 md:max-h-[50vh]">
-										{Object.entries(envEdits).map(([key, value]) => {
-											const secret = isSecretKey(key);
-											const revealed = revealedSecrets.has(key);
-											const masked = secret && !revealed;
-											const isDirty = dirtyKeys.has(key);
-											return (
-												<div key={key} className="space-y-1">
-													<div className="flex items-center justify-between gap-2">
-														<label
-															htmlFor={`env-${key}`}
-															className="font-mono text-xxs uppercase tracking-wider text-ink-55"
-														>
-															{key}
-															{isDirty && (
-																<>
-																	<span
-																		className="ml-1 text-brand-blue"
-																		aria-hidden
-																	>
-																		●
-																	</span>
-																	<span className="sr-only">
-																		{" "}
-																		unsaved change
-																	</span>
-																</>
-															)}
-														</label>
-														{secret && (
-															<button
-																type="button"
-																onClick={() => toggleReveal(key)}
-																aria-label={
-																	revealed ? `Hide ${key}` : `Reveal ${key}`
-																}
-																aria-pressed={revealed}
-																className="inline-flex h-5 w-5 items-center justify-center rounded text-ink-55 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
-															>
-																{revealed ? (
-																	<EyeOff className="h-3 w-3" />
-																) : (
-																	<Eye className="h-3 w-3" />
-																)}
-															</button>
-														)}
-													</div>
-													<input
-														id={`env-${key}`}
-														type={masked ? "password" : "text"}
-														autoComplete="off"
-														spellCheck={false}
-														value={value}
-														onChange={(event) =>
-															setEnvEdits((prev) => ({
-																...prev,
-																[key]: event.target.value,
-															}))
-														}
-														className={`w-full rounded-md bg-ink-00 px-2 py-1 font-mono text-sm text-ink-95 ring-1 ring-inset transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue ${
-															isDirty ? "ring-brand-blue/40" : "ring-ink-25"
-														}`}
-													/>
-												</div>
-											);
-										})}
-									</div>
-									<button
-										type="submit"
-										disabled={envSaving || dirtyKeys.size === 0}
-										className={`inline-flex h-9 w-full items-center justify-center gap-2 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40 ${
-											dirtyKeys.size > 0
-												? "bg-brand-blue text-ink-00 hover:brightness-110"
-												: "text-ink-55 ring-1 ring-inset ring-ink-25"
-										}`}
-									>
-										{envSaving && <Loader2 className="h-3 w-3 animate-spin" />}
-										{envSaving
-											? "saving…"
-											: dirtyKeys.size > 0
-												? `save env (${dirtyKeys.size} changed)`
-												: "no changes"}
-									</button>
-								</form>
-							)}
-
-							{!envLoading && !envPayload && (
-								<div className="font-mono text-xs text-ink-55">
-									Env editing is not configured.
-								</div>
-							)}
-						</section>
+					<div className="grid grid-cols-2 gap-x-6 gap-y-3 px-3 py-3 text-sm sm:grid-cols-5">
+						<StatusCell label="Active" value={status?.activeState} />
+						<StatusCell label="Substate" value={status?.subState} />
+						<StatusCell label="Main PID" value={status?.mainPid} />
+						<StatusCell label="Exit code" value={status?.execMainStatus} />
+						<StatusCell label="Started" value={status?.startedAt} />
 					</div>
-
-					{/* Logs */}
-					<section
-						aria-labelledby="bot-logs-heading"
-						className="space-y-4 rounded-md bg-ink-05 p-5 ring-1 ring-inset ring-ink-15"
+					{/* biome-ignore lint/a11y/useSemanticElements: role="group" with
+					    aria-label is the right ARIA pattern for a non-landmark control cluster. */}
+					<div
+						className="flex flex-wrap gap-2 border-t border-ink-15 px-3 py-2"
+						role="group"
+						aria-label="Bot service actions"
 					>
-						<div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-							<h2
-								id="bot-logs-heading"
-								className="font-sans text-base font-semibold text-ink-95"
-							>
-								Logs
-							</h2>
-							<div className="flex gap-2">
+						<ActionButton
+							label="Start"
+							loadingLabel="Starting…"
+							isActive={actionLoading === "start"}
+							isLocked={actionLoading !== null && actionLoading !== "start"}
+							onClick={() => void runAction("start")}
+						/>
+						<ActionButton
+							label="Stop"
+							loadingLabel="Stopping…"
+							tone="bad"
+							isActive={actionLoading === "stop"}
+							isLocked={actionLoading !== null && actionLoading !== "stop"}
+							onClick={() => void runAction("stop")}
+						/>
+						<ActionButton
+							label="Restart"
+							loadingLabel="Restarting…"
+							isActive={actionLoading === "restart"}
+							isLocked={actionLoading !== null && actionLoading !== "restart"}
+							onClick={() => void runAction("restart")}
+						/>
+					</div>
+				</Panel>
+
+				{/* Config */}
+				<Panel
+					title="Config"
+					span={4}
+					meta={
+						envPayload?.path ? (
+							<span className="truncate" title={envPayload.path}>
+								{envPayload.path.split("/").pop()}
+							</span>
+						) : undefined
+					}
+				>
+					{envLoading && <Empty>Loading env…</Empty>}
+
+					{!envLoading && envPayload && (
+						<form onSubmit={saveEnv}>
+							<div className="max-h-72 overflow-auto md:max-h-[50vh]">
+								{Object.entries(envEdits).map(([key, value]) => {
+									const secret = isSecretKey(key);
+									const revealed = revealedSecrets.has(key);
+									const masked = secret && !revealed;
+									const isDirty = dirtyKeys.has(key);
+									return (
+										<div
+											key={key}
+											className="grid grid-cols-[minmax(0,11rem)_1fr_auto] items-center gap-2 border-b border-ink-10 px-3 py-1"
+										>
+											<label
+												htmlFor={`env-${key}`}
+												className="truncate font-mono text-xxs uppercase tracking-wider text-ink-55"
+												title={key}
+											>
+												{key}
+												{isDirty && (
+													<>
+														<span className="ml-1 text-brand-blue" aria-hidden>
+															●
+														</span>
+														<span className="sr-only"> unsaved change</span>
+													</>
+												)}
+											</label>
+											<input
+												id={`env-${key}`}
+												type={masked ? "password" : "text"}
+												autoComplete="off"
+												spellCheck={false}
+												value={value}
+												onChange={(event) =>
+													setEnvEdits((prev) => ({
+														...prev,
+														[key]: event.target.value,
+													}))
+												}
+												className={`w-full min-w-0 border-b bg-transparent px-1 py-0.5 font-mono text-xs text-ink-95 transition-colors focus-visible:outline-none ${
+													isDirty
+														? "border-brand-blue"
+														: "border-transparent focus-visible:border-ink-40"
+												}`}
+											/>
+											{secret ? (
+												<button
+													type="button"
+													onClick={() => toggleReveal(key)}
+													aria-label={
+														revealed ? `Hide ${key}` : `Reveal ${key}`
+													}
+													aria-pressed={revealed}
+													className="inline-flex h-5 w-5 items-center justify-center text-ink-55 transition-colors hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+												>
+													{revealed ? (
+														<EyeOff className="h-3 w-3" />
+													) : (
+														<Eye className="h-3 w-3" />
+													)}
+												</button>
+											) : (
+												<span className="w-5" />
+											)}
+										</div>
+									);
+								})}
+							</div>
+							<div className="px-3 py-2">
+								<button
+									type="submit"
+									disabled={envSaving || dirtyKeys.size === 0}
+									className={`inline-flex h-7 w-full items-center justify-center gap-2 px-3 font-mono text-xxs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40 ${
+										dirtyKeys.size > 0
+											? "bg-brand-blue text-ink-00 hover:brightness-110"
+											: "border border-ink-25 text-ink-55"
+									}`}
+								>
+									{envSaving && <Loader2 className="h-3 w-3 animate-spin" />}
+									{envSaving
+										? "saving…"
+										: dirtyKeys.size > 0
+											? `save env (${dirtyKeys.size} changed)`
+											: "no changes"}
+								</button>
+							</div>
+						</form>
+					)}
+
+					{!envLoading && !envPayload && (
+						<Empty>Env editing is not configured.</Empty>
+					)}
+				</Panel>
+
+				{/* Logs */}
+				<Panel
+					title="Logs"
+					span={12}
+					meta={
+						<span className="flex items-center gap-2">
+							{isStreaming ? (
+								<span className="flex items-center gap-1.5 text-brand-blue">
+									<span
+										className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-blue"
+										aria-hidden
+									/>
+									streaming
+								</span>
+							) : (
 								<button
 									type="button"
 									onClick={() => void startStream()}
-									disabled={isStreaming}
-									className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
+									className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95"
 								>
-									{isStreaming && (
-										<span
-											className="h-2 w-2 animate-pulse rounded-full bg-brand-blue"
-											aria-hidden
-										/>
-									)}
-									{isStreaming ? "streaming" : "start stream"}
+									start stream
 								</button>
-								<button
-									type="button"
-									onClick={stopStream}
-									disabled={!isStreaming}
-									className="inline-flex h-8 items-center rounded-md px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40"
-								>
-									stop stream
-								</button>
-							</div>
-						</div>
-
-						{logsError && (
-							<div
-								role="alert"
-								className="rounded-md bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad ring-1 ring-inset ring-signal-bad/35"
-							>
-								{logsError}
-							</div>
-						)}
-						{streamError && (
-							<div
-								role="alert"
-								className="rounded-md bg-signal-warn/10 px-3 py-2 text-sm text-signal-warn ring-1 ring-inset ring-signal-warn/30"
-							>
-								{streamError}
-							</div>
-						)}
-
-						<div
-							ref={logsContainerRef}
-							onScroll={handleLogsScroll}
-							role="log"
-							aria-label="Bot service logs"
-							aria-live="off"
-							className="max-h-96 overflow-auto rounded-md bg-ink-00 p-3 font-mono text-xs text-ink-85 md:max-h-[60vh]"
-						>
-							{logs.length === 0 ? (
-								<div className="text-ink-55">No logs yet.</div>
-							) : (
-								logs.map((entry) => (
-									<div key={entry.id} className="whitespace-pre-wrap">
-										{entry.line || " "}
-									</div>
-								))
 							)}
+							<button
+								type="button"
+								onClick={stopStream}
+								disabled={!isStreaming}
+								className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95 disabled:opacity-40"
+							>
+								stop
+							</button>
+						</span>
+					}
+				>
+					{logsError && (
+						<div
+							role="alert"
+							className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
+						>
+							{logsError}
 						</div>
-					</section>
-				</div>
-			</div>
+					)}
+					{streamError && (
+						<div
+							role="alert"
+							className="border-b border-ink-15 bg-signal-warn/10 px-3 py-2 text-sm text-signal-warn"
+						>
+							{streamError}
+						</div>
+					)}
+					<div
+						ref={logsContainerRef}
+						onScroll={handleLogsScroll}
+						role="log"
+						aria-label="Bot service logs"
+						aria-live="off"
+						className="max-h-96 overflow-auto px-3 py-2 font-mono text-xs leading-5 text-ink-85 md:max-h-[60vh]"
+					>
+						{logs.length === 0 ? (
+							<div className="text-ink-55">No logs yet.</div>
+						) : (
+							logs.map((entry) => (
+								<div key={entry.id} className="whitespace-pre-wrap">
+									{entry.line || " "}
+								</div>
+							))
+						)}
+					</div>
+				</Panel>
+			</Workspace>
 		</Shell>
 	);
 }
@@ -683,7 +634,7 @@ function StatusCell({
 			<div className="font-mono text-xxs uppercase tracking-wider text-ink-55">
 				{label}
 			</div>
-			<div className="mt-0.5 font-mono text-lg font-semibold tabular-nums text-ink-95">
+			<div className="mt-0.5 font-mono text-sm tabular-nums text-ink-95">
 				{value ?? "—"}
 			</div>
 		</div>
@@ -714,7 +665,7 @@ function ActionButton({
 			type="button"
 			onClick={onClick}
 			disabled={isActive || isLocked}
-			className={`inline-flex h-9 items-center gap-1.5 rounded-md px-3 font-mono text-xs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40 ${hoverTone}`}
+			className={`inline-flex h-7 items-center gap-1.5 px-3 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-85 ring-1 ring-inset ring-ink-25 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue disabled:opacity-40 ${hoverTone}`}
 		>
 			{isActive && <Loader2 className="h-3 w-3 animate-spin" />}
 			{isActive ? loadingLabel : label}

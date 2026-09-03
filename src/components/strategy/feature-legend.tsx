@@ -88,7 +88,7 @@ const POST_RESULT_FEATURES = [
 function SafetyBadge({ level }: { level: "safe" | "unsafe" }) {
 	if (level === "safe") {
 		return (
-			<span className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[0.55rem] font-semibold uppercase tracking-wide text-emerald-300">
+			<span className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[0.55rem] font-semibold uppercase tracking-wide text-signal-pos">
 				pre_pick
 			</span>
 		);
@@ -102,11 +102,11 @@ function SafetyBadge({ level }: { level: "safe" | "unsafe" }) {
 
 export function FeatureLegend() {
 	return (
-		<div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-			<div className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+		<div className="rounded-xl border border-ink-15 bg-ink-05/50 p-4">
+			<div className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-ink-55">
 				Feature Safety Reference
 			</div>
-			<p className="mb-4 text-[0.65rem] text-slate-500">
+			<p className="mb-4 text-[0.65rem] text-ink-40">
 				Features marked <SafetyBadge level="safe" /> are point-in-time safe and
 				can be used for modeling. Features marked <SafetyBadge level="unsafe" />{" "}
 				are only available after the game result and must never be used as model
@@ -116,21 +116,21 @@ export function FeatureLegend() {
 			<div className="grid gap-6 lg:grid-cols-2">
 				{/* Pre-pick features */}
 				<div>
-					<div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-emerald-400">
+					<div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-signal-pos">
 						Safe for Modeling (pre-pick)
 					</div>
 					<div className="space-y-1.5">
 						{PRE_PICK_FEATURES.map((f) => (
 							<div
 								key={f.name}
-								className="flex items-start gap-2 rounded-lg border border-slate-800/50 bg-slate-950/30 px-2.5 py-1.5"
+								className="flex items-start gap-2 rounded-lg border border-ink-15/50 bg-ink-00/30 px-2.5 py-1.5"
 							>
 								<SafetyBadge level="safe" />
 								<div className="min-w-0">
-									<div className="text-[0.7rem] font-semibold text-slate-200">
+									<div className="text-[0.7rem] font-semibold text-ink-85">
 										{f.name}
 									</div>
-									<div className="text-[0.6rem] text-slate-500">
+									<div className="text-[0.6rem] text-ink-40">
 										{f.description}
 									</div>
 								</div>
@@ -141,21 +141,21 @@ export function FeatureLegend() {
 
 				{/* Post-result features */}
 				<div>
-					<div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-red-400">
+					<div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-signal-bad">
 						Analysis Only (post-result)
 					</div>
 					<div className="space-y-1.5">
 						{POST_RESULT_FEATURES.map((f) => (
 							<div
 								key={f.name}
-								className="flex items-start gap-2 rounded-lg border border-slate-800/50 bg-slate-950/30 px-2.5 py-1.5"
+								className="flex items-start gap-2 rounded-lg border border-ink-15/50 bg-ink-00/30 px-2.5 py-1.5"
 							>
 								<SafetyBadge level="unsafe" />
 								<div className="min-w-0">
-									<div className="text-[0.7rem] font-semibold text-slate-200">
+									<div className="text-[0.7rem] font-semibold text-ink-85">
 										{f.name}
 									</div>
-									<div className="text-[0.6rem] text-slate-500">
+									<div className="text-[0.6rem] text-ink-40">
 										{f.description}
 									</div>
 								</div>
