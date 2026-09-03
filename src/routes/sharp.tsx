@@ -2303,6 +2303,7 @@ function TapeRow({
 	onToggle,
 	signalScore,
 	gradeData,
+	gate,
 	dimmed,
 	detail,
 }: {
