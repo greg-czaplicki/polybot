@@ -141,3 +141,29 @@ order at the back never fills; thin props/spreads fill but adversely
 (Chelsea −1.5: −11c/$). ATP +0.2c/$ on 6 fills. The tape's maker edge belongs
 to the queue front (incumbent bots). Plain market-making at this capital is
 not viable; the daily report continues for a full-window confirmation.
+
+## Addendum 4: streaks, wager sizing, counterparty (`study_sharp2.py`)
+
+Sharp = top decile by train outcome-P&L; test 8/24–9/9, sharp fills ≥ $100.
+
+Fill-level cuts look dramatic (squares on the opposite side $500–5k: +29% ROI,
+CLV +1.23c; hot & big & squares-opposite: +33%, z 3.4) but are inflated by
+repeat fills inside winning markets. **One bet per market**, the honest cut:
+
+| Feature (one bet/market) | Follow ROI | CLV | 8/24–9/1 | 9/1–9/9 |
+|---|---|---|---|---|
+| Baseline sharp fill | +2.7% (n=1,263) | +0.38c (z 2.5) | +8% | −2% |
+| Squares on opposite side ≥ $500 | +0.7% (n=185) | +0.91c (z 2.5) | +11% | −8% |
+| Hot streak > +10% trailing | +0.3% (n=811) | +0.61c (z 3.4) | +5% | −6% |
+| Hot AND squares opposite | +8.0% (n=92) | +1.18c (z 2.1) | +19% | −6% |
+| Sharp against crowd > $5k | −8.7% (n=419) | +0.56c | −12% | −6% |
+| Timing 1–4h | −9.3% (z −2.5) | +0.22c | −9% | −9% |
+
+Wager size vs the wallet's own median: no monotonic pattern.
+
+Reading: the features the user asked for do sharpen the signal, in CLV terms —
+counterparty and streak each roughly double the sharp wallets' closing-line
+edge, to ~1c. But 1c of CLV is ~2% ROI, and every ROI cut flips sign between
+the two halves. Nothing here is bettable as a taker at this sample; a ~1c
+edge is only keepable if executed passively (0 entry cost). ATP squares-
+opposite (+41%, CLV +5.7c, n=27) and NFL remain the cells to watch.
