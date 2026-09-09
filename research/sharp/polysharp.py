@@ -241,6 +241,59 @@ def build_signals(db, fills):
     return made
 
 
+# ---------------------------------------------------------------- push to the app (D1) — best effort, like the bot's status report
+def app_config():
+    env = {}
+    try:
+        for line in open(os.environ.get("BOT_ENV_PATH", "/root/polybot/.env")):
+            if "=" in line and not line.startswith("#"):
+                k, v = line.rstrip("\n").split("=", 1); env[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return env.get("BOT_BASE_URL", ""), env.get("BOT_API_KEY", "")
+
+
+def push(payload):
+    base, key = app_config()
+    if not base or not key:
+        print("push skipped: no BOT_BASE_URL/BOT_API_KEY"); return None
+    req = urllib.request.Request(f"{base}/api/bot/sharp-alerts", method="POST", data=json.dumps(payload).encode(),
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "polysharp/0.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            out = json.load(r); print("push:", out); return out
+    except Exception as e:  # noqa
+        print("push failed:", str(e)[:200]); return None
+
+
+def push_alerts(db, since_ts):
+    rows = db.execute("""SELECT a.condition_id, a.tx, a.question, a.side, a.price, a.usd, a.wallet_roi_t, a.streak, a.sq_opp_usd, a.start, a.ts, a.wallet,
+                                b.sport_hint, CASE a.side WHEN 0 THEN b.label0 ELSE b.label1 END, s.n, s.roi_mean
+                         FROM live_alerts a LEFT JOIN book.markets b ON b.condition_id=a.condition_id
+                         LEFT JOIN wallet_scores s ON s.wallet=a.wallet AND s.asof=(SELECT MAX(asof) FROM wallet_scores)
+                         WHERE a.ts >= ? ORDER BY a.ts""", (since_ts,)).fetchall()
+    if not rows: return
+    alerts = [dict(condition_id=r[0], tx=r[1], question=r[2], side=r[3], price=r[4], usd=r[5], wallet_roi_t=r[6], streak=r[7], sq_opp_usd=r[8],
+                   start=r[9], ts=r[10], wallet=r[11], sport=r[12], side_label=r[13], wallet_markets=r[14], wallet_roi=r[15]) for r in rows]
+    push({"alerts": alerts})
+
+
+def summary(db):
+    now = int(time.time())
+    rows = db.execute("SELECT sport, win, roi_follow, clv, start FROM signals WHERE settled=1").fetchall()
+    def agg(rs):
+        n = len(rs)
+        if not n: return {"n": 0}
+        roi = sum(r[2] for r in rs) / n; clvs = [r[3] for r in rs if r[3] is not None]
+        return {"n": n, "roi": round(roi, 4), "clv": round(sum(clvs) / len(clvs), 5) if clvs else None, "wins": sum(r[1] for r in rs)}
+    by = defaultdict(list)
+    for r in rows: by[r[0]].append(r)
+    return {"updatedAt": now, "all": agg(rows), "last14d": agg([r for r in rows if r[4] >= now - 14 * 86400]),
+            "sports": {s: agg(rs) for s, rs in by.items() if len(rs) >= 8},
+            "sharpWallets": db.execute("SELECT COUNT(*) FROM wallet_scores WHERE asof=(SELECT MAX(asof) FROM wallet_scores) AND tier='sharp'").fetchone()[0],
+            "snapshotAsof": db.execute("SELECT MAX(asof) FROM wallet_scores").fetchone()[0]}
+
+
 # ---------------------------------------------------------------- live
 def live(db):
     now = int(time.time())
@@ -265,6 +318,10 @@ def live(db):
                 new += r.rowcount
     db.commit()
     print(f"live: {len(up)} upcoming markets polled, {new} new sharp alerts")
+    if new:
+        db.execute("ATTACH DATABASE ? AS book", (BOOK_DB,))
+        push_alerts(db, now - 6 * 3600)
+        db.execute("DETACH DATABASE book")
     for r in db.execute("SELECT datetime(ts,'unixepoch'), question, side, price, usd, round(wallet_roi_t,1), round(streak,2), round(sq_opp_usd), datetime(start,'unixepoch') FROM live_alerts WHERE start > ? ORDER BY ts DESC LIMIT 15", (now,)):
         print("  ", r)
 
@@ -334,6 +391,7 @@ def daily(db):
     n_sig = build_signals(db, fills)
     print(f"daily: +{n_new} universe, {n_crawled} crawled, {len(fills)} labelled fills, snapshots made {snaps}, +{n_sig} signals, {time.time()-t0:.0f}s")
     report(db)
+    push({"summary": summary(db)})
 
 
 if __name__ == "__main__":

@@ -796,6 +796,122 @@ function TerminalPage() {
 					)}
 				</Panel>
 
+				{/* Sharp tape: ranked-wallet fills on upcoming markets (VPS polysharp → D1) */}
+				<Panel
+					title="Sharp tape · upcoming"
+					span={7}
+					meta={
+						data?.sharp.all
+							? `${data.sharp.sharpWallets ?? "—"} sharp wallets · ${data.sharp.all.n} signals · ROI ${pct(
+									(data.sharp.all.roi ?? 0) * 100,
+								)} · CLV ${
+									data.sharp.all.clv != null
+										? `${(data.sharp.all.clv * 100).toFixed(2)}c`
+										: "—"
+								}`
+							: "no polysharp report yet"
+					}
+				>
+					{data && data.sharpAlerts.length > 0 ? (
+						<Tape
+							minWidth="min-w-[560px]"
+							head={[
+								{ label: "Seen" },
+								{ label: "Market" },
+								{ label: "Side" },
+								{ label: "Px", align: "right" },
+								{ label: "$", align: "right" },
+								{ label: "Wallet", align: "right" },
+								{ label: "Form", align: "right" },
+								{ label: "Sq opp", align: "right" },
+								{ label: "Start" },
+							]}
+						>
+							{data.sharpAlerts.map((a) => (
+								<Row
+									key={`${a.conditionId}:${a.ts}:${a.side}:${a.price ?? ""}`}
+								>
+									<Cell className="whitespace-nowrap text-xs text-ink-55">
+										{ago(a.ts)}
+									</Cell>
+									<Cell
+										className="max-w-[16rem] truncate text-xs"
+										title={a.question ?? a.conditionId}
+									>
+										{a.sport ? (
+											<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
+												{a.sport}
+											</span>
+										) : null}
+										{a.question ?? a.conditionId.slice(0, 10)}
+									</Cell>
+									<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
+										{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
+									</Cell>
+									<Cell right className="font-mono text-xs">
+										{a.price != null ? `${Math.round(a.price * 100)}¢` : "—"}
+									</Cell>
+									<Cell right className="font-mono text-xs">
+										{a.usd != null ? `$${Math.round(a.usd)}` : "—"}
+									</Cell>
+									<Cell
+										right
+										className="font-mono text-xs"
+										title="wallet ROI t-stat · settled markets · ROI"
+									>
+										{a.walletRoiT != null ? `t${a.walletRoiT.toFixed(1)}` : "—"}
+										{a.walletMarkets != null ? (
+											<span className="ml-1 text-ink-40">
+												{a.walletMarkets}m
+												{a.walletRoi != null
+													? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(
+															a.walletRoi * 100,
+														)}%`
+													: ""}
+											</span>
+										) : null}
+									</Cell>
+									<Cell
+										right
+										className={`font-mono text-xs ${
+											a.streak != null && a.streak > 0.1
+												? "text-ink-95"
+												: a.streak != null && a.streak < -0.1
+													? "text-ink-40"
+													: ""
+										}`}
+										title="trailing-20 settled ROI"
+									>
+										{a.streak != null
+											? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
+											: "—"}
+									</Cell>
+									<Cell
+										right
+										className="font-mono text-xs"
+										title="square $ already on the opposite side"
+									>
+										{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
+											? `${a.sqOppUsd > 0 ? "+" : "−"}$${
+													Math.round(Math.abs(a.sqOppUsd) / 100) / 10
+												}k`
+											: "—"}
+									</Cell>
+									<Cell className="whitespace-nowrap text-xs text-ink-55">
+										{clock(a.start)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>
+							{isLoading && !data
+								? "Loading…"
+								: "No sharp fills on upcoming markets."}
+						</Empty>
+					)}
+				</Panel>
+
 				{/* P&L */}
 				<Panel
 					title={

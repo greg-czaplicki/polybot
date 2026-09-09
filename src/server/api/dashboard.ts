@@ -125,6 +125,41 @@ export interface DashboardTapeRow {
 	upcoming: number;
 }
 
+/** Sharp-wallet fill on an upcoming market, pushed by the VPS polysharp pipeline. */
+export interface DashboardSharpAlert {
+	conditionId: string;
+	question: string | null;
+	sport: string | null;
+	sideLabel: string | null;
+	side: number;
+	start: number;
+	ts: number;
+	price: number | null;
+	usd: number | null;
+	walletRoiT: number | null;
+	walletMarkets: number | null;
+	walletRoi: number | null;
+	streak: number | null;
+	sqOppUsd: number | null;
+}
+
+interface SharpCell {
+	n: number;
+	roi?: number;
+	clv?: number | null;
+	wins?: number;
+}
+
+/** Daily polysharp summary (bot_runtime_status key `polysharp`). */
+export interface DashboardSharpSummary {
+	updatedAt: number | null;
+	all: SharpCell | null;
+	last14d: SharpCell | null;
+	sports: Record<string, SharpCell>;
+	sharpWallets: number | null;
+	snapshotAsof: number | null;
+}
+
 const PICK_COLUMNS = `id, condition_id, market_title, event_time, picked_at,
 	grade, sharp_side, sharp_side_label, price, bet_type, sport_tag,
 	fill_status, status, roi, clv, settled_at`;
@@ -598,6 +633,79 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			lanesRecorded: lanes?.recorded ?? null,
 		};
 
+		// Sharp tape: fills by ranked wallets on markets that have not started.
+		// Table from migration 0041; degrade to an empty tape if it is missing.
+		let sharpAlerts: DashboardSharpAlert[] = [];
+		try {
+			const rows = await all<{
+				condition_id: string;
+				question: string | null;
+				sport: string | null;
+				side_label: string | null;
+				side: number;
+				start: number;
+				ts: number;
+				price: number | null;
+				usd: number | null;
+				wallet_roi_t: number | null;
+				wallet_markets: number | null;
+				wallet_roi: number | null;
+				streak: number | null;
+				sq_opp_usd: number | null;
+			}>(
+				db,
+				`SELECT condition_id, question, sport, side_label, side, start, ts, price, usd,
+				        wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd
+				 FROM sharp_alerts WHERE start >= ? ORDER BY ts DESC LIMIT 25`,
+				now - 900,
+			);
+			sharpAlerts = rows.map((r) => ({
+				conditionId: r.condition_id,
+				question: r.question,
+				sport: r.sport,
+				sideLabel: r.side_label,
+				side: r.side,
+				start: r.start,
+				ts: r.ts,
+				price: r.price,
+				usd: r.usd,
+				walletRoiT: r.wallet_roi_t,
+				walletMarkets: r.wallet_markets,
+				walletRoi: r.wallet_roi,
+				streak: r.streak,
+				sqOppUsd: r.sq_opp_usd,
+			}));
+		} catch {
+			sharpAlerts = [];
+		}
+		let sharp: DashboardSharpSummary = {
+			updatedAt: null,
+			all: null,
+			last14d: null,
+			sports: {},
+			sharpWallets: null,
+			snapshotAsof: null,
+		};
+		try {
+			const row = await first<{ value_json: string; updated_at: number }>(
+				db,
+				`SELECT value_json, updated_at FROM bot_runtime_status WHERE key = 'polysharp'`,
+			);
+			if (row?.value_json) {
+				const v = JSON.parse(row.value_json) as Partial<DashboardSharpSummary>;
+				sharp = {
+					updatedAt: row.updated_at,
+					all: v.all ?? null,
+					last14d: v.last14d ?? null,
+					sports: v.sports ?? {},
+					sharpWallets: v.sharpWallets ?? null,
+					snapshotAsof: v.snapshotAsof ?? null,
+				};
+			}
+		} catch {
+			/* keep defaults */
+		}
+
 		return {
 			computedAt: now,
 			health,
@@ -608,6 +716,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			liveBook,
 			windows,
 			tape,
+			sharpAlerts,
+			sharp,
 		};
 	},
 );

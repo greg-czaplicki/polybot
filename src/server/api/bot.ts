@@ -657,6 +657,25 @@ function requireBotAuth(request: Request, env: Env): BotAuthResult {
 	return { ok: true };
 }
 
+interface SharpAlertPayload {
+	condition_id: string;
+	tx?: string;
+	question?: string;
+	sport?: string;
+	side_label?: string;
+	start: number;
+	ts: number;
+	wallet: string;
+	side: 0 | 1;
+	price?: number;
+	usd?: number;
+	wallet_roi_t?: number;
+	wallet_markets?: number;
+	wallet_roi?: number;
+	streak?: number;
+	sq_opp_usd?: number;
+}
+
 async function parseJson<T>(request: Request): Promise<T | null> {
 	try {
 		return (await request.json()) as T;
@@ -2910,6 +2929,70 @@ export async function handleBotRequest(
 			nowUnixSeconds(),
 		);
 		return jsonResponse({ ok: true });
+	}
+
+	if (url.pathname === "/api/bot/sharp-alerts") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			alerts?: SharpAlertPayload[];
+			summary?: Record<string, unknown>;
+		}>(request);
+		if (!payload || (!Array.isArray(payload.alerts) && !payload.summary)) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const now = nowUnixSeconds();
+		let inserted = 0;
+		for (const a of (payload.alerts ?? []).slice(0, 500)) {
+			if (
+				typeof a?.condition_id !== "string" ||
+				typeof a.wallet !== "string" ||
+				typeof a.start !== "number" ||
+				typeof a.ts !== "number" ||
+				(a.side !== 0 && a.side !== 1)
+			)
+				continue;
+			const id = `${a.condition_id}:${a.tx ?? ""}:${a.wallet}:${a.side}:${a.price ?? ""}`;
+			const r = await run(
+				env.POLYWHALER_DB,
+				`INSERT OR IGNORE INTO sharp_alerts
+				 (id, condition_id, question, sport, side_label, start, ts, wallet, side, price, usd,
+				  wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd, received_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id,
+				a.condition_id,
+				typeof a.question === "string" ? a.question.slice(0, 200) : null,
+				typeof a.sport === "string" ? a.sport : null,
+				typeof a.side_label === "string" ? a.side_label.slice(0, 80) : null,
+				Math.floor(a.start),
+				Math.floor(a.ts),
+				a.wallet,
+				a.side,
+				typeof a.price === "number" ? a.price : null,
+				typeof a.usd === "number" ? a.usd : null,
+				typeof a.wallet_roi_t === "number" ? a.wallet_roi_t : null,
+				typeof a.wallet_markets === "number" ? a.wallet_markets : null,
+				typeof a.wallet_roi === "number" ? a.wallet_roi : null,
+				typeof a.streak === "number" ? a.streak : null,
+				typeof a.sq_opp_usd === "number" ? a.sq_opp_usd : null,
+				now,
+			);
+			inserted += Number(r.meta?.changes ?? 0);
+		}
+		if (payload.summary && typeof payload.summary === "object") {
+			await run(
+				env.POLYWHALER_DB,
+				`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+				 VALUES ('polysharp', ?, ?)
+				 ON CONFLICT(key) DO UPDATE SET
+				   value_json = excluded.value_json,
+				   updated_at = excluded.updated_at`,
+				JSON.stringify(payload.summary).slice(0, 20000),
+				now,
+			);
+		}
+		return jsonResponse({ ok: true, inserted });
 	}
 
 	if (url.pathname === "/api/bot/cache") {
