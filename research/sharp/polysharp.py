@@ -56,7 +56,7 @@ def tstat(xs):
     n = len(xs)
     if n < 2: return 0.0
     m = sum(xs) / n; v = sum((x - m) ** 2 for x in xs) / (n - 1)
-    return m / math.sqrt(v / n) if v > 0 else 0.0
+    return m / math.sqrt(v / n) if v > 1e-6 else 0.0
 
 
 # ---------------------------------------------------------------- universe + crawl
@@ -143,10 +143,30 @@ def monday(ts):
     return int((d - timedelta(days=d.weekday())).timestamp())
 
 
-def score_wallets(db, asof, fills):
-    """Snapshot per-wallet skill using fills whose market started >= SETTLE_LAG before asof."""
-    per = defaultdict(list)
+def per_market(fills):
+    """Collapse a wallet's fills to ONE observation per market (usd-weighted), so repeat fills cannot inflate t-stats."""
+    acc = {}
     for f in fills:
+        k = (f["wallet"], f["cid"])
+        a = acc.get(k)
+        if a is None:
+            acc[k] = dict(f, usd=f["usd"], _roi=f["roi"] * f["usd"], _clv=(f["clv"] * f["usd"]) if f["clv"] is not None else None, _clvw=f["usd"] if f["clv"] is not None else 0.0)
+        else:
+            a["usd"] += f["usd"]; a["_roi"] += f["roi"] * f["usd"]
+            if f["clv"] is not None:
+                a["_clv"] = (a["_clv"] or 0.0) + f["clv"] * f["usd"]; a["_clvw"] += f["usd"]
+    out = []
+    for a in acc.values():
+        a["roi"] = a["_roi"] / a["usd"]; a["clv"] = (a["_clv"] / a["_clvw"]) if a["_clvw"] > 0 else None
+        out.append(a)
+    out.sort(key=lambda f: f["ts"])
+    return out
+
+
+def score_wallets(db, asof, fills):
+    """Snapshot per-wallet skill on settled markets (one observation per market) whose start >= SETTLE_LAG before asof."""
+    per = defaultdict(list)
+    for f in per_market(fills):
         if f["start"] + SETTLE_LAG <= asof:
             per[f["wallet"]].append(f)
     rows = []
@@ -239,7 +259,7 @@ def live(db):
             if w in square: sq_net += sign * usd
             if w in sharp and usd >= MIN_FILL_USD and int(x["timestamp"]) < gs - PRE_SEC:
                 t, l20, med = sharp[w]
-                side_price = float(x["price"]) if True else None
+                side_price = float(x["price"])
                 r = db.execute("INSERT OR IGNORE INTO live_alerts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (cid, int(x["timestamp"]), w, x.get("transactionHash"), 0 if sign > 0 else 1, side_price, usd, t, l20, -sign * sq_net, q, gs))
                 new += r.rowcount
@@ -317,5 +337,5 @@ def daily(db):
 
 
 if __name__ == "__main__":
-    db = sqlite3.connect(DB); db.executescript(SCHEMA)
+    db = sqlite3.connect(DB, timeout=60); db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000"); db.executescript(SCHEMA)
     {"daily": daily, "live": live, "report": report}[sys.argv[1]](db)
