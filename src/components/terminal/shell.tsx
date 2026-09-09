@@ -25,6 +25,7 @@ const PRIMARY: {
 ];
 
 const RESEARCH: { href: string; label: string }[] = [
+	{ href: "/book", label: "Book detail" },
 	{ href: "/runtime", label: "Runtime stats" },
 	{ href: "/strategy", label: "Strategy context" },
 	{ href: "/wallets", label: "Wallets" },
