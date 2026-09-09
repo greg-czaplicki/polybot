@@ -24,7 +24,7 @@ DISCOVERY_S = int(os.environ.get("DISCOVERY_S", 300))
 LOOKAHEAD_S = int(os.environ.get("LOOKAHEAD_S", 24 * 3600))
 KEEP_AFTER_START_S = int(os.environ.get("KEEP_AFTER_START_S", 600))
 SNAPSHOT_LEVELS = 10
-DISCOVERY_DEPTH = int(os.environ.get("DISCOVERY_DEPTH", 4000))
+DISCOVERY_DEPTH = int(os.environ.get("DISCOVERY_DEPTH", 2100))  # Gamma 422s at offset >= 2100
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
