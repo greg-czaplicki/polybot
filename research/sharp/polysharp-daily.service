@@ -1,0 +1,6 @@
+[Unit]
+Description=polysharp daily: crawl settled tapes, snapshot wallet scores, build signals, report
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/polysharp.py daily

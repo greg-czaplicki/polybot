@@ -1,0 +1,6 @@
+[Unit]
+Description=polysharp live: flag sharp-wallet fills on markets starting within 3h
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/polysharp.py live

@@ -1,0 +1,7 @@
+[Unit]
+Description=polysharp daily at 11:45 UTC
+[Timer]
+OnCalendar=*-*-* 11:45:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
