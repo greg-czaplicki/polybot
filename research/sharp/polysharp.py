@@ -39,6 +39,83 @@ CREATE TABLE IF NOT EXISTS live_alerts (condition_id TEXT, ts INTEGER, wallet TE
 """
 
 
+def ensure_columns(db):
+    """Additive columns for event grouping; safe to run every start."""
+    for table, col, typ in [("markets", "event_key", "TEXT"), ("signals", "event_key", "TEXT"), ("live_alerts", "event_key", "TEXT"),
+                            ("live_alerts", "market_type", "TEXT"), ("live_alerts", "fills", "INTEGER"), ("live_alerts", "hedge", "INTEGER")]:
+        cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    db.execute("CREATE INDEX IF NOT EXISTS markets_event ON markets(event_key)")
+    db.execute("CREATE INDEX IF NOT EXISTS signals_event ON signals(event_key)")
+    db.commit()
+
+
+NON_TEAM = {"over", "under", "yes", "no"}
+
+
+def classify(question):
+    q = question or ""
+    if q.startswith("Spread:") or q.startswith("Set Handicap:") or "Handicap" in q: return "spread"
+    if "Team Total" in q: return "team_total"
+    if any(k in q for k in ("1H ", "1st Half", "1st Quarter", "1Q ", "First Half", "first inning", "1st Inning", "1st Set", "First Set", "2H ")): return "period"
+    if "O/U" in q or "Over/Under" in q: return "total"
+    if " vs" in q and ":" not in q.split(" vs")[0] + q.split(" vs")[-1].split(":")[0] and not q.endswith("?"): return "moneyline"
+    if " vs" in q and not q.endswith("?") and q.count(":") <= 1 and q.split(":")[0].strip().split(" ")[0].istitle() and " vs" in q.split(":")[-1]: return "moneyline"  # "Seville: A vs B"
+    return "prop"
+
+
+def team_tokens(question):
+    """Surnames / team words that identify the game inside a question."""
+    q = question or ""
+    if q.startswith("Spread:"):
+        name = q[len("Spread:"):].split("(")[0].strip()
+        return {name.split()[-1].lower()} if name else set()
+    if "Team Total" in q:
+        name = q.split("Team Total")[0].strip().rstrip(":").strip()
+        return {name.split()[-1].lower()} if name else set()
+    seg = None
+    for part in q.split(":"):
+        if " vs" in part:
+            seg = part; break
+    if seg is None: return set()
+    import re
+    names = re.split(r"\s+vs\.?\s+", seg.strip())
+    out = set()
+    for n in names:
+        n = re.sub(r"\(.*?\)", "", n).strip()
+        if n and n.lower() not in NON_TEAM:
+            out.add(n.split()[-1].lower())
+    return out
+
+
+def assign_event_keys(db, since=0):
+    """Union markets of the same (sport, start) that share a team token; key = smallest condition_id in the group."""
+    rows = db.execute("SELECT condition_id, sport, start, question FROM markets WHERE start >= ?", (since,)).fetchall()
+    groups = defaultdict(list)
+    for cid, sport, st, q in rows:
+        groups[(sport, st)].append((cid, team_tokens(q)))
+    updates = []
+    for (sport, st), ms in groups.items():
+        parent = {cid: cid for cid, _ in ms}
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]; x = parent[x]
+            return x
+        for i in range(len(ms)):
+            for j in range(i + 1, len(ms)):
+                if ms[i][1] and ms[j][1] and (ms[i][1] & ms[j][1]):
+                    parent[find(ms[i][0])] = find(ms[j][0])
+        roots = defaultdict(list)
+        for cid, _ in ms: roots[find(cid)].append(cid)
+        for members in roots.values():
+            key = f"{sport}:{st}:{min(members)[:12]}"
+            for cid in members: updates.append((key, cid))
+    db.executemany("UPDATE markets SET event_key=? WHERE condition_id=? AND (event_key IS NULL OR event_key<>?)", [(k, c, k) for k, c in updates])
+    db.commit()
+    return len(updates)
+
+
 def get(url, retries=4):
     for i in range(retries):
         try:
@@ -63,11 +140,18 @@ def tstat(xs):
 def update_universe(db):
     if not os.path.exists(BOOK_DB): return 0
     db.execute("ATTACH DATABASE ? AS book", (BOOK_DB,))
-    n = db.execute("""INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, token1, status, source)
-        SELECT condition_id, sport_hint, CASE WHEN question LIKE '%O/U%' OR question LIKE '%Over/Under%' THEN 'total'
-               WHEN question LIKE 'Spread:%' THEN 'spread' WHEN question LIKE '%:%' THEN 'prop' ELSE 'moneyline' END,
-               game_start, question, token0, token1, 'pending', 'polybook' FROM book.markets""").rowcount
-    db.commit(); db.execute("DETACH DATABASE book")
+    rows = db.execute("SELECT condition_id, sport_hint, game_start, question, token0, token1 FROM book.markets").fetchall()
+    db.execute("DETACH DATABASE book")
+    n = 0
+    for cid, sport, gs, q, t0, t1 in rows:
+        r = db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, token1, status, source) VALUES (?,?,?,?,?,?,?,'pending','polybook')",
+                       (cid, sport, gs, classify(q), q, t0, t1))
+        n += r.rowcount
+    # re-classify seed rows that only had moneyline/total from the old crawl
+    db.execute("UPDATE markets SET market_type=NULL WHERE market_type IN ('moneyline','total') AND question IS NOT NULL AND source='seed' AND event_key IS NULL")
+    for cid, q in db.execute("SELECT condition_id, question FROM markets WHERE market_type IS NULL AND question IS NOT NULL").fetchall():
+        db.execute("UPDATE markets SET market_type=? WHERE condition_id=?", (classify(q), cid))
+    db.commit()
     return n
 
 
@@ -214,29 +298,64 @@ def tiers_asof(db, ts):
 
 
 # ---------------------------------------------------------------- signals
+def direction(f, qinfo):
+    """Event-level direction of a fill: ('team', token) for ML/spread, ('ou', over|under) for totals, else None."""
+    mtype, q, labels = qinfo
+    lab = (labels[0] if f["sign"] > 0 else labels[1]) if labels else None
+    if mtype in ("total", "team_total", "period") and lab and lab.lower() in ("over", "under"):
+        return ("ou", lab.lower())
+    if mtype in ("moneyline", "spread") and lab and lab.lower() not in NON_TEAM:
+        return ("team", lab.split()[-1].lower())
+    return None
+
+
 def build_signals(db, fills):
-    """One row per market: first sharp fill >= MIN_FILL_USD, features from the tape up to that fill."""
-    by_mkt = defaultdict(list)
-    for f in fills: by_mkt[f["cid"]].append(f)
-    have = {r[0] for r in db.execute("SELECT condition_id FROM signals")}
-    made = 0
-    cache = {}
-    for cid, fs in by_mkt.items():
-        if cid in have: continue
-        sq_net = 0.0; all_net = 0.0; sig = None
+    """One row per EVENT: first sharp fill >= MIN_FILL_USD on a main line (moneyline or the event's biggest total),
+    from a wallet that is not hedging inside the event (both teams, or over AND under). Features from the tape up to that fill."""
+    ev_of = {}; qinfo = {}
+    labels = {}
+    if os.path.exists(BOOK_DB):
+        db.execute("ATTACH DATABASE ? AS book", (BOOK_DB,))
+        for cid, l0, l1 in db.execute("SELECT condition_id, label0, label1 FROM book.markets"): labels[cid] = (l0, l1)
+        db.execute("DETACH DATABASE book")
+    for cid, ek, mt, q in db.execute("SELECT condition_id, event_key, market_type, question FROM markets"):
+        ev_of[cid] = ek or cid; qinfo[cid] = (mt, q, labels.get(cid))
+    by_ev = defaultdict(list)
+    for f in fills: by_ev[ev_of.get(f["cid"], f["cid"])].append(f)
+    have = {r[0] for r in db.execute("SELECT event_key FROM signals WHERE event_key IS NOT NULL")} | {r[0] for r in db.execute("SELECT condition_id FROM signals")}
+    made = 0; cache = {}
+    for ek, fs in by_ev.items():
+        if ek in have: continue
+        # main lines: all moneylines + the single total with most pregame $ ; alt totals/spreads/props are context only
+        usd_by_total = defaultdict(float)
+        for f in fs:
+            if qinfo.get(f["cid"], (None,))[0] == "total": usd_by_total[f["cid"]] += f["usd"]
+        main_total = max(usd_by_total, key=usd_by_total.get) if usd_by_total else None
+        main = {f["cid"] for f in fs if qinfo.get(f["cid"], (None,))[0] == "moneyline" or f["cid"] == main_total}
+        if not main: continue
+        # hedgers: wallets with opposing directions anywhere in the event
+        dirs = defaultdict(set)
+        for f in fs:
+            d = direction(f, qinfo.get(f["cid"], (None, None, None)))
+            if d: dirs[f["wallet"]].add(d)
+        def hedger(w):
+            ds = dirs.get(w, set())
+            teams = {t for k, t in ds if k == "team"}; ous = {t for k, t in ds if k == "ou"}
+            return len(teams) > 1 or len(ous) > 1
+        sq_net = defaultdict(float); all_net = defaultdict(float); sig = None
         for f in fs:
             asof, sharp, square = cache.get(monday(f["ts"])) or cache.setdefault(monday(f["ts"]), tiers_asof(db, f["ts"]))
             if asof is None: break
-            if f["wallet"] in sharp and f["usd"] >= MIN_FILL_USD and sig is None:
-                t, l20, med = sharp[f["wallet"]]
-                sig = (cid, asof, f["sport"], f["mtype"], f["start"], f["ts"], f["wallet"], 0 if f["sign"] > 0 else 1, f["side_price"], f["side_price"] + ENTRY_COST,
-                       f["usd"], t, l20, (f["usd"] / med) if med else None, -f["sign"] * sq_net, f["sign"] * all_net, (f["start"] - f["ts"]) / 60,
-                       1, int(f["win"]), f["roi_follow"], f["clv"])
+            if f["cid"] in main and f["wallet"] in sharp and f["usd"] >= MIN_FILL_USD and not hedger(f["wallet"]):
+                t, l20, med = sharp[f["wallet"]]; cid = f["cid"]
+                sig = (cid, asof, f["sport"], qinfo[cid][0], f["start"], f["ts"], f["wallet"], 0 if f["sign"] > 0 else 1, f["side_price"], f["side_price"] + ENTRY_COST,
+                       f["usd"], t, l20, (f["usd"] / med) if med else None, -f["sign"] * sq_net[cid], f["sign"] * all_net[cid], (f["start"] - f["ts"]) / 60,
+                       1, int(f["win"]), f["roi_follow"], f["clv"], ek)
                 break
-            if f["wallet"] in square: sq_net += f["sign"] * f["usd"]
-            all_net += f["sign"] * f["usd"]
+            if f["wallet"] in square: sq_net[f["cid"]] += f["sign"] * f["usd"]
+            all_net[f["cid"]] += f["sign"] * f["usd"]
         if sig:
-            db.execute("INSERT OR IGNORE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", sig); made += 1
+            db.execute("INSERT OR IGNORE INTO signals (condition_id, asof, sport, market_type, start, fired_ts, wallet, side, fill_price, entry_price, usd, wallet_roi_t, streak, size_ratio, sq_opp_usd, crowd_same_usd, mins_to_start, settled, win, roi_follow, clv, event_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", sig); made += 1
     db.commit()
     return made
 
@@ -268,13 +387,14 @@ def push(payload):
 
 def push_alerts(db, since_ts):
     rows = db.execute("""SELECT a.condition_id, a.tx, a.question, a.side, a.price, a.usd, a.wallet_roi_t, a.streak, a.sq_opp_usd, a.start, a.ts, a.wallet,
-                                b.sport_hint, CASE a.side WHEN 0 THEN b.label0 ELSE b.label1 END, s.n, s.roi_mean
+                                b.sport_hint, CASE a.side WHEN 0 THEN b.label0 ELSE b.label1 END, s.n, s.roi_mean, a.event_key, a.market_type, a.fills, a.hedge
                          FROM live_alerts a LEFT JOIN book.markets b ON b.condition_id=a.condition_id
                          LEFT JOIN wallet_scores s ON s.wallet=a.wallet AND s.asof=(SELECT MAX(asof) FROM wallet_scores)
                          WHERE a.ts >= ? ORDER BY a.ts""", (since_ts,)).fetchall()
     if not rows: return
     alerts = [dict(condition_id=r[0], tx=r[1], question=r[2], side=r[3], price=r[4], usd=r[5], wallet_roi_t=r[6], streak=r[7], sq_opp_usd=r[8],
-                   start=r[9], ts=r[10], wallet=r[11], sport=r[12], side_label=r[13], wallet_markets=r[14], wallet_roi=r[15]) for r in rows]
+                   start=r[9], ts=r[10], wallet=r[11], sport=r[12], side_label=r[13], wallet_markets=r[14], wallet_roi=r[15],
+                   event_key=r[16], market_type=r[17], fills=r[18], hedge=r[19]) for r in rows]
     push({"alerts": alerts})
 
 
@@ -302,26 +422,53 @@ def live(db):
     if not os.path.exists(BOOK_DB): print("no polybook db"); return
     bdb = sqlite3.connect(BOOK_DB)
     up = bdb.execute("SELECT condition_id, question, token0, game_start FROM markets WHERE game_start BETWEEN ? AND ?", (now + PRE_SEC, now + LIVE_HOURS * 3600)).fetchall()
+    up_full = bdb.execute("SELECT condition_id, question, token0, game_start, label0, label1 FROM markets WHERE game_start BETWEEN ? AND ?", (now + PRE_SEC, now + LIVE_HOURS * 3600)).fetchall()
+    labels = {r[0]: (r[4], r[5]) for r in up_full}
+    # make sure these markets exist in our universe with event keys
+    for cid, q, tok0, gs, l0, l1 in up_full:
+        db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, status, source) VALUES (?,?,?,?,?,?,'pending','polybook')",
+                   (cid, None, classify(q), gs, q, tok0))
+    assign_event_keys(db, now - 86400)
+    ev_of = {r[0]: r[1] for r in db.execute("SELECT condition_id, event_key FROM markets WHERE start >= ?", (now - 86400,))}
+    mtype = {r[0]: r[1] for r in db.execute("SELECT condition_id, market_type FROM markets WHERE start >= ?", (now - 86400,))}
     new = 0
-    for cid, q, tok0, gs in up:
+    agg = {}   # (cid, wallet, side) -> dict
+    for cid, q, tok0, gs, l0, l1 in up_full:
         page = get(f"https://data-api.polymarket.com/trades?market={cid}&limit=200") or []; time.sleep(PAUSE)
         sq_net = 0.0
         for x in sorted(page, key=lambda x: x["timestamp"]):
             w = x.get("proxyWallet"); is0 = x.get("asset") == tok0; sign = 1 if ((x.get("side") == "BUY") == is0) else -1
-            usd = float(x["price"]) * float(x["size"])
+            usd = float(x["price"]) * float(x["size"]); ts = int(x["timestamp"])
             if w in square: sq_net += sign * usd
-            if w in sharp and usd >= MIN_FILL_USD and int(x["timestamp"]) < gs - PRE_SEC:
-                t, l20, med = sharp[w]
-                side_price = float(x["price"])
-                r = db.execute("INSERT OR IGNORE INTO live_alerts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (cid, int(x["timestamp"]), w, x.get("transactionHash"), 0 if sign > 0 else 1, side_price, usd, t, l20, -sign * sq_net, q, gs))
-                new += r.rowcount
+            if w in sharp and ts < gs - PRE_SEC:
+                k = (cid, w, 0 if sign > 0 else 1)
+                a = agg.get(k)
+                if a is None:
+                    agg[k] = dict(cid=cid, q=q, w=w, side=k[2], usd=usd, pxusd=float(x["price"]) * usd, n=1, ts=ts, tx=x.get("transactionHash"),
+                                  sq=-sign * sq_net, gs=gs, t=sharp[w][0], l20=sharp[w][1], sign=sign)
+                else:
+                    a["usd"] += usd; a["pxusd"] += float(x["price"]) * usd; a["n"] += 1; a["ts"] = max(a["ts"], ts)
+    # hedge flag: same wallet on opposing directions within the event
+    dirs = defaultdict(set)
+    for a in agg.values():
+        f = {"sign": a["sign"]}
+        d = direction(f, (mtype.get(a["cid"]), a["q"], labels.get(a["cid"])))
+        if d: dirs[(ev_of.get(a["cid"], a["cid"]), a["w"])].add(d)
+    for a in agg.values():
+        if a["usd"] < MIN_FILL_USD: continue
+        ds = dirs.get((ev_of.get(a["cid"], a["cid"]), a["w"]), set())
+        hedge = int(len({t for k, t in ds if k == "team"}) > 1 or len({t for k, t in ds if k == "ou"}) > 1)
+        r = db.execute("""INSERT INTO live_alerts (condition_id, ts, wallet, tx, side, price, usd, wallet_roi_t, streak, sq_opp_usd, question, start, event_key, market_type, fills, hedge)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          ON CONFLICT(condition_id, tx, wallet, side, price) DO UPDATE SET usd=excluded.usd, fills=excluded.fills, ts=excluded.ts, hedge=excluded.hedge, sq_opp_usd=excluded.sq_opp_usd""",
+                       (a["cid"], a["ts"], a["w"], f"agg:{a['cid'][:10]}:{a['w'][:10]}:{a['side']}", a["side"], a["pxusd"] / a["usd"], a["usd"], a["t"], a["l20"], a["sq"], a["q"], a["gs"],
+                        ev_of.get(a["cid"], a["cid"]), mtype.get(a["cid"]), a["n"], hedge))
+        new += r.rowcount
     db.commit()
     print(f"live: {len(up)} upcoming markets polled, {new} new sharp alerts")
-    if new:
-        db.execute("ATTACH DATABASE ? AS book", (BOOK_DB,))
-        push_alerts(db, now - 6 * 3600)
-        db.execute("DETACH DATABASE book")
+    db.execute("ATTACH DATABASE ? AS book", (BOOK_DB,))
+    push_alerts(db, now - 6 * 3600)
+    db.execute("DETACH DATABASE book")
     for r in db.execute("SELECT datetime(ts,'unixepoch'), question, side, price, usd, round(wallet_roi_t,1), round(streak,2), round(sq_opp_usd), datetime(start,'unixepoch') FROM live_alerts WHERE start > ? ORDER BY ts DESC LIMIT 15", (now,)):
         print("  ", r)
 
@@ -386,14 +533,15 @@ def report(db):
 def daily(db):
     t0 = time.time()
     n_new = update_universe(db); n_crawled = crawl(db)
+    n_ev = assign_event_keys(db)
     fills = load_fills(db)
     snaps = ensure_snapshots(db, fills)
     n_sig = build_signals(db, fills)
-    print(f"daily: +{n_new} universe, {n_crawled} crawled, {len(fills)} labelled fills, snapshots made {snaps}, +{n_sig} signals, {time.time()-t0:.0f}s")
+    print(f"daily: +{n_new} universe, {n_crawled} crawled, {n_ev} event keys, {len(fills)} labelled fills, snapshots made {snaps}, +{n_sig} signals, {time.time()-t0:.0f}s")
     report(db)
     push({"summary": summary(db)})
 
 
 if __name__ == "__main__":
-    db = sqlite3.connect(DB, timeout=60); db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000"); db.executescript(SCHEMA)
+    db = sqlite3.connect(DB, timeout=60); db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000"); db.executescript(SCHEMA); ensure_columns(db)
     {"daily": daily, "live": live, "report": report}[sys.argv[1]](db)

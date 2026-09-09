@@ -237,6 +237,53 @@ function _verdictRows(
 	return rows.sort((a, b) => rank[a.verdict] - rank[b.verdict] || b.n - a.n);
 }
 
+/** Short label for a market inside its event: ML, Spread −4.5, O/U 44.5, TT O/U 17.5, 1H O/U 22.5. */
+function lineLabel(question: string | null, marketType: string | null): string {
+	const q = question ?? "";
+	const num = q.match(/O\/U\s*([\d.]+)/)?.[1];
+	if (marketType === "spread") {
+		const m = q.match(/\(([-+][\d.]+)\)/);
+		return `Spread ${m ? m[1].replace("-", "−") : ""}`.trim();
+	}
+	if (marketType === "team_total") return `TT O/U ${num ?? ""}`.trim();
+	if (marketType === "period")
+		return `${q.includes("1H") || q.includes("1st Half") ? "1H" : "Per"} O/U ${num ?? ""}`.trim();
+	if (marketType === "total") return `O/U ${num ?? ""}`.trim();
+	if (marketType === "moneyline") return "ML";
+	return q.split(":")[0].slice(0, 18);
+}
+
+interface SharpEvent {
+	key: string;
+	title: string;
+	sport: string | null;
+	start: number;
+	rows: Dashboard["sharpAlerts"];
+}
+
+function groupSharpEvents(alerts: Dashboard["sharpAlerts"]): SharpEvent[] {
+	const byKey = new Map<string, SharpEvent>();
+	for (const a of alerts) {
+		const key = a.eventKey ?? a.conditionId;
+		let ev = byKey.get(key);
+		if (!ev) {
+			ev = { key, title: "", sport: a.sport, start: a.start, rows: [] };
+			byKey.set(key, ev);
+		}
+		ev.rows.push(a);
+		// Prefer the moneyline's "A vs. B" as the event title; else the first question's matchup segment.
+		const q = a.question ?? "";
+		const seg = q.split(":").find((p) => / vs\.? /.test(p)) ?? q;
+		if (a.marketType === "moneyline" || !ev.title) ev.title = seg.trim();
+	}
+	return [...byKey.values()]
+		.map((ev) => ({
+			...ev,
+			rows: [...ev.rows].sort((x, y) => (y.usd ?? 0) - (x.usd ?? 0)),
+		}))
+		.sort((x, y) => x.start - y.start);
+}
+
 function TerminalPage() {
 	const [data, setData] = useState<Dashboard | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
@@ -498,90 +545,121 @@ function TerminalPage() {
 							minWidth="min-w-[560px]"
 							head={[
 								{ label: "Seen" },
-								{ label: "Market" },
+								{ label: "Line" },
 								{ label: "Side" },
 								{ label: "Px", align: "right" },
 								{ label: "$", align: "right" },
 								{ label: "Wallet", align: "right" },
 								{ label: "Form", align: "right" },
 								{ label: "Sq opp", align: "right" },
-								{ label: "Start" },
+								{ label: "Type" },
 							]}
 						>
-							{data.sharpAlerts.map((a) => (
-								<Row
-									key={`${a.conditionId}:${a.ts}:${a.side}:${a.price ?? ""}`}
-								>
-									<Cell className="whitespace-nowrap text-xs text-ink-55">
-										{ago(a.ts)}
-									</Cell>
-									<Cell
-										className="max-w-[16rem] truncate text-xs"
-										title={a.question ?? a.conditionId}
-									>
-										{a.sport ? (
-											<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
-												{a.sport}
-											</span>
-										) : null}
-										{a.question ?? a.conditionId.slice(0, 10)}
-									</Cell>
-									<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
-										{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
-									</Cell>
-									<Cell right className="font-mono text-xs">
-										{a.price != null ? `${Math.round(a.price * 100)}¢` : "—"}
-									</Cell>
-									<Cell right className="font-mono text-xs">
-										{a.usd != null ? `$${Math.round(a.usd)}` : "—"}
-									</Cell>
-									<Cell
-										right
-										className="font-mono text-xs"
-										title="wallet ROI t-stat · settled markets · ROI"
-									>
-										{a.walletRoiT != null ? `t${a.walletRoiT.toFixed(1)}` : "—"}
-										{a.walletMarkets != null ? (
-											<span className="ml-1 text-ink-40">
-												{a.walletMarkets}m
-												{a.walletRoi != null
-													? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(
-															a.walletRoi * 100,
-														)}%`
-													: ""}
-											</span>
-										) : null}
-									</Cell>
-									<Cell
-										right
-										className={`font-mono text-xs ${
-											a.streak != null && a.streak > 0.1
-												? "text-ink-95"
-												: a.streak != null && a.streak < -0.1
-													? "text-ink-40"
-													: ""
-										}`}
-										title="trailing-20 settled ROI"
-									>
-										{a.streak != null
-											? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
-											: "—"}
-									</Cell>
-									<Cell
-										right
-										className="font-mono text-xs"
-										title="square $ already on the opposite side"
-									>
-										{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
-											? `${a.sqOppUsd > 0 ? "+" : "−"}$${
-													Math.round(Math.abs(a.sqOppUsd) / 100) / 10
-												}k`
-											: "—"}
-									</Cell>
-									<Cell className="whitespace-nowrap text-xs text-ink-55">
-										{clock(a.start)}
-									</Cell>
-								</Row>
+							{groupSharpEvents(data.sharpAlerts).map((ev) => (
+								<Fragment key={ev.key}>
+									<Row>
+										<Cell className="whitespace-nowrap text-xs text-ink-40">
+											{clock(ev.start)}
+										</Cell>
+										<Cell className="text-xs font-semibold text-ink-85">
+											{ev.sport ? (
+												<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
+													{ev.sport}
+												</span>
+											) : null}
+											{ev.title}
+										</Cell>
+										<Cell className="text-xxs text-ink-40" colSpan={7}>
+											{ev.rows.length} position{ev.rows.length === 1 ? "" : "s"}{" "}
+											· {new Set(ev.rows.map((r) => r.conditionId)).size} market
+											{new Set(ev.rows.map((r) => r.conditionId)).size === 1
+												? ""
+												: "s"}
+											{ev.rows.some((r) => r.hedge) ? " · hedge present" : ""}
+										</Cell>
+									</Row>
+									{ev.rows.map((a) => (
+										<Row
+											key={`${a.conditionId}:${a.side}:${a.ts}`}
+											className={a.hedge ? "opacity-60" : ""}
+										>
+											<Cell className="whitespace-nowrap text-xs text-ink-55">
+												{ago(a.ts)}
+											</Cell>
+											<Cell
+												className="pl-4 font-mono text-xs text-ink-70"
+												title={a.question ?? ""}
+											>
+												{lineLabel(a.question, a.marketType)}
+											</Cell>
+											<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
+												{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
+												{a.hedge ? (
+													<span className="ml-1 font-mono text-xxs uppercase text-signal-warn">
+														hedge
+													</span>
+												) : null}
+											</Cell>
+											<Cell right className="font-mono text-xs">
+												{a.price != null
+													? `${Math.round(a.price * 100)}¢`
+													: "—"}
+											</Cell>
+											<Cell right className="font-mono text-xs">
+												{a.usd != null
+													? `$${Math.round(a.usd).toLocaleString()}`
+													: "—"}
+												{a.fills != null && a.fills > 1 ? (
+													<span className="ml-1 text-ink-40">×{a.fills}</span>
+												) : null}
+											</Cell>
+											<Cell
+												right
+												className="font-mono text-xs"
+												title="wallet ROI t-stat · settled markets · ROI"
+											>
+												{a.walletRoiT != null
+													? `t${a.walletRoiT.toFixed(1)}`
+													: "—"}
+												{a.walletMarkets != null ? (
+													<span className="ml-1 text-ink-40">
+														{a.walletMarkets}m
+														{a.walletRoi != null
+															? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
+															: ""}
+													</span>
+												) : null}
+											</Cell>
+											<Cell
+												right
+												className={`font-mono text-xs ${
+													a.streak != null && a.streak > 0.1
+														? "text-ink-95"
+														: a.streak != null && a.streak < -0.1
+															? "text-ink-40"
+															: ""
+												}`}
+												title="trailing-20 settled ROI"
+											>
+												{a.streak != null
+													? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
+													: "—"}
+											</Cell>
+											<Cell
+												right
+												className="font-mono text-xs"
+												title="square $ already on the opposite side"
+											>
+												{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
+													? `${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
+													: "—"}
+											</Cell>
+											<Cell className="text-xs text-ink-40">
+												{a.marketType ?? ""}
+											</Cell>
+										</Row>
+									))}
+								</Fragment>
 							))}
 						</Tape>
 					) : (

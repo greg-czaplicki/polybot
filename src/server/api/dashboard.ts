@@ -141,6 +141,11 @@ export interface DashboardSharpAlert {
 	walletRoi: number | null;
 	streak: number | null;
 	sqOppUsd: number | null;
+	eventKey: string | null;
+	marketType: string | null;
+	fills: number | null;
+	/** Wallet holds opposing directions inside this event (middle/arb), not a side. */
+	hedge: boolean;
 }
 
 interface SharpCell {
@@ -652,11 +657,16 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				wallet_roi: number | null;
 				streak: number | null;
 				sq_opp_usd: number | null;
+				event_key: string | null;
+				market_type: string | null;
+				fills: number | null;
+				hedge: number | null;
 			}>(
 				db,
 				`SELECT condition_id, question, sport, side_label, side, start, ts, price, usd,
-				        wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd
-				 FROM sharp_alerts WHERE start >= ? ORDER BY ts DESC LIMIT 25`,
+				        wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd,
+				        event_key, market_type, fills, hedge
+				 FROM sharp_alerts WHERE start >= ? ORDER BY start, event_key, wallet, ts DESC LIMIT 60`,
 				now - 900,
 			);
 			sharpAlerts = rows.map((r) => ({
@@ -674,6 +684,10 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				walletRoi: r.wallet_roi,
 				streak: r.streak,
 				sqOppUsd: r.sq_opp_usd,
+				eventKey: r.event_key,
+				marketType: r.market_type,
+				fills: r.fills,
+				hedge: r.hedge === 1,
 			}));
 		} catch {
 			sharpAlerts = [];

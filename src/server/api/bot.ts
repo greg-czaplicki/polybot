@@ -674,6 +674,10 @@ interface SharpAlertPayload {
 	wallet_roi?: number;
 	streak?: number;
 	sq_opp_usd?: number;
+	event_key?: string;
+	market_type?: string;
+	fills?: number;
+	hedge?: number;
 }
 
 async function parseJson<T>(request: Request): Promise<T | null> {
@@ -2953,13 +2957,20 @@ export async function handleBotRequest(
 				(a.side !== 0 && a.side !== 1)
 			)
 				continue;
-			const id = `${a.condition_id}:${a.tx ?? ""}:${a.wallet}:${a.side}:${a.price ?? ""}`;
+			// One row per (market, wallet, side); repeat fills update the aggregate.
+			const id = `${a.condition_id}:${a.wallet}:${a.side}`;
 			const r = await run(
 				env.POLYWHALER_DB,
-				`INSERT OR IGNORE INTO sharp_alerts
+				`INSERT INTO sharp_alerts
 				 (id, condition_id, question, sport, side_label, start, ts, wallet, side, price, usd,
-				  wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd, received_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd, received_at,
+				  event_key, market_type, fills, hedge)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, price = excluded.price, usd = excluded.usd,
+				   sq_opp_usd = excluded.sq_opp_usd, fills = excluded.fills, hedge = excluded.hedge,
+				   event_key = COALESCE(excluded.event_key, sharp_alerts.event_key),
+				   side_label = COALESCE(excluded.side_label, sharp_alerts.side_label),
+				   received_at = excluded.received_at`,
 				id,
 				a.condition_id,
 				typeof a.question === "string" ? a.question.slice(0, 200) : null,
@@ -2977,6 +2988,10 @@ export async function handleBotRequest(
 				typeof a.streak === "number" ? a.streak : null,
 				typeof a.sq_opp_usd === "number" ? a.sq_opp_usd : null,
 				now,
+				typeof a.event_key === "string" ? a.event_key : null,
+				typeof a.market_type === "string" ? a.market_type : null,
+				typeof a.fills === "number" ? Math.floor(a.fills) : null,
+				a.hedge === 1 ? 1 : 0,
 			);
 			inserted += Number(r.meta?.changes ?? 0);
 		}
