@@ -25,3 +25,4 @@ __pycache__/
 .dev.vars
 data/tennis/.venv/
 data/tennis/matches_*.csv
+research/exchange/data/
