@@ -125,8 +125,16 @@ export function resolveWalletIdentity(
 		metadata.status === "lookup_error"
 	)
 		return fallback;
-	if (metadata.status !== "identified")
-		return { ...fallback, status: metadata.status };
+	if (metadata.status !== "identified") {
+		// Definitive Gamma verdicts exclude the trade; anything else that merely
+		// failed to classify keeps v1's conservative cached-label path (charter).
+		const definitive =
+			metadata.status === "market_inactive" ||
+			metadata.status === "unsupported_sport";
+		return definitive || !cached
+			? { ...fallback, status: metadata.status }
+			: fallback;
+	}
 	// Snapshot JSON is written only by the validated parser, never by API consumers.
 	const market = JSON.parse(
 		metadata.snapshot_json ?? "null",
@@ -175,10 +183,6 @@ export async function refreshWalletMetadata(db: Db) {
 				row.condition_id,
 				seconds(),
 			);
-			if (parsed.status === "invalid_metadata") {
-				errors++;
-				errorMessage = "Invalid Gamma identity response";
-			}
 		} catch (error) {
 			errors++;
 			errorMessage = String(error).slice(0, 300);

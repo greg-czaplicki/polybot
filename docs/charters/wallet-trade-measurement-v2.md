@@ -110,3 +110,11 @@ Artifacts: migration 0040, bounded identity/close services, read-only aggregate
 digest without wallet addresses, SQLite timing/idempotence/aggregation tests,
 deployment audit. Public contracts: [Gamma markets](https://docs.polymarket.com/api-reference/markets/list-markets)
 and [CLOB book](https://docs.polymarket.com/api-reference/market-data/get-order-book).
+
+## Amendment 2026-09-09 (tightening only)
+
+Measurement additionally requires the frozen scheduled start to be corroborated
+by Gamma `gameStartTime` (and the token to be the Gamma token for the recorded
+side) before a close is requested or a row is settled. Rows without usable
+metadata wait; refuted or never-confirmed rows are `invalid_snapshot`. This
+narrows the measurable set and changes no threshold, weighting or read date.

@@ -162,6 +162,36 @@ function history(
 			b,
 		);
 }
+function metadata(
+	condition = CONDITION,
+	event: number = NOW - 120,
+	status = "identified",
+	tokens = ["123", "456"],
+) {
+	sqlite
+		.prepare(`INSERT OR REPLACE INTO wallet_trade_market_metadata
+		(condition_id, fetched_at, retry_at, status, snapshot_json, error) VALUES (?, ?, ?, ?, ?, NULL)`)
+		.run(
+			condition,
+			NOW - 3000,
+			NOW + 3000,
+			status,
+			status === "identified"
+				? JSON.stringify({
+						condition_id: condition,
+						sport_series_id: 3,
+						event_time: new Date(event * 1000).toISOString(),
+						side_a_label: "Team",
+						side_b_label: "Other",
+						token_a: tokens[0],
+						token_b: tokens[1],
+						event_id: "12",
+						identity_source: "gamma_token",
+						metadata_at: NOW - 3000,
+					})
+				: null,
+		);
+}
 function measurement(key: string, clv: number, source = "clob_midpoint") {
 	sqlite
 		.prepare(`INSERT INTO wallet_trade_measurements
@@ -281,6 +311,58 @@ describe("future-only stable identity", () => {
 			).status,
 		).toBe("metadata_conflict");
 	});
+	it("retains the cached path when Gamma metadata is unusable, but honors definitive exclusions", () => {
+		const parsed = parseWalletMetadata([gamma], CONDITION, NOW);
+		if (!parsed.market) throw new Error("fixture");
+		const cached = { ...parsed.market, side_a_label: "Tournament: Team" };
+		const base = {
+			condition_id: CONDITION,
+			fetched_at: NOW,
+			snapshot_json: null,
+		};
+		for (const status of [
+			"unclassified",
+			"unsupported_series",
+			"unknown_event_time",
+			"invalid_metadata",
+		]) {
+			const resolved = resolveWalletIdentity(
+				TRADE,
+				cached,
+				{ ...base, status },
+				NOW,
+			);
+			expect(resolved.status).toBeUndefined();
+			expect(resolved.market?.identity_source).toBe("cache_label");
+			expect(
+				resolveWalletIdentity(TRADE, undefined, { ...base, status }, NOW)
+					.status,
+			).toBe(status);
+		}
+		for (const status of ["market_inactive", "unsupported_sport"])
+			expect(
+				resolveWalletIdentity(TRADE, cached, { ...base, status }, NOW).status,
+			).toBe(status);
+	});
+	it("caches unmatched or non-binary Gamma responses for six hours without a run error", async () => {
+		observation("one");
+		fetchMock.mockResolvedValue(Response.json([]));
+		expect(await refreshWalletMetadata(db)).toEqual({
+			attempted: 1,
+			errors: 0,
+		});
+		expect(
+			sqlite
+				.prepare(
+					"SELECT status, retry_at, error FROM wallet_trade_market_metadata",
+				)
+				.get(),
+		).toMatchObject({
+			status: "invalid_metadata",
+			retry_at: NOW + 21600,
+			error: null,
+		});
+	});
 	it("limits enrichment to two conditions and backs off failures", async () => {
 		observation("one");
 		observation("two", { condition: TX, token: "456" });
@@ -355,6 +437,7 @@ describe("future-only stable identity", () => {
 describe("pregame close boundaries", () => {
 	it("continues recorded close capture after cohort expiry without polling wallets", async () => {
 		observation("one", { event: NOW + 300 });
+		metadata(CONDITION, NOW + 300);
 		sqlite
 			.prepare(
 				"UPDATE wallet_trade_pilot SET enrolled_at=?, expires_at=?, cohort_json='[]'",
@@ -395,6 +478,7 @@ describe("pregame close boundaries", () => {
 	});
 	it("keeps a valid close when a subsequent attempt fails", async () => {
 		observation("one", { event: NOW + 300 });
+		metadata(CONDITION, NOW + 300);
 		fetchMock.mockResolvedValueOnce(Response.json(book));
 		expect(await captureWalletCloses(db)).toMatchObject({
 			attempted: 1,
@@ -421,6 +505,7 @@ describe("pregame close boundaries", () => {
 	it("caps close requests and does not capture at/after start", async () => {
 		for (let i = 0; i < 4; i++)
 			observation(`row${i}`, { token: String(i), event: NOW + 300 });
+		metadata(CONDITION, NOW + 300);
 		fetchMock.mockImplementation(async (input) =>
 			Response.json({
 				...book,
@@ -436,11 +521,27 @@ describe("pregame close boundaries", () => {
 	});
 	it("rejects a response received after start even if its source time was before start", async () => {
 		observation("one", { event: NOW + 1 });
+		metadata(CONDITION, NOW + 1);
 		fetchMock.mockImplementation(async () => {
 			vi.setSystemTime((NOW + 2) * 1000);
 			return Response.json(book);
 		});
 		expect(await captureWalletCloses(db)).toMatchObject({ captured: 0 });
+	});
+	it("does not request closes for rows whose frozen start Gamma has not confirmed", async () => {
+		observation("unconfirmed", { event: NOW + 300 });
+		observation("refuted", { condition: "refuted", event: NOW + 300 });
+		metadata("refuted", NOW + 400);
+		observation("confirmed", { condition: TX, token: "456", event: NOW + 300 });
+		metadata(TX, NOW + 300, "identified", ["456", "789"]);
+		fetchMock.mockImplementation(async () =>
+			Response.json({ ...book, market: TX, asset_id: "456" }),
+		);
+		expect(await captureWalletCloses(db)).toMatchObject({
+			attempted: 1,
+			captured: 1,
+		});
+		expect(String(fetchMock.mock.calls[0][0])).toContain("token_id=456");
 	});
 });
 
@@ -448,6 +549,7 @@ describe("settlement against real SQLite", () => {
 	it("prefers the captured midpoint and never changes a finalized measurement", async () => {
 		const event = NOW + 300;
 		observation("one", { event });
+		metadata(CONDITION, event);
 		fetchMock.mockResolvedValue(Response.json(book));
 		await captureWalletCloses(db);
 		history(CONDITION, event, event - 1, 0.9);
@@ -475,7 +577,8 @@ describe("settlement against real SQLite", () => {
 	});
 	it("selects the latest valid side price, excluding stale, null and post-start history", async () => {
 		const event = NOW - 120;
-		observation("one", { side: "B" });
+		observation("one", { side: "B", token: "456" });
+		metadata(CONDITION, event);
 		history(CONDITION, event, event - 601, 0.1, 0.9);
 		history(CONDITION, event, event - 300, 0.4, 0.6);
 		history(CONDITION, event, event, 0.2, 0.8);
@@ -493,12 +596,15 @@ describe("settlement against real SQLite", () => {
 		});
 	});
 	it("does not starve newer closes behind 50 missing ones; expires missing without zero CLV", async () => {
-		for (let i = 0; i < 50; i++)
+		for (let i = 0; i < 50; i++) {
 			observation(`missing${i}`, {
 				condition: `missing${i}`,
 				event: NOW - 86400,
 			});
+			metadata(`missing${i}`, NOW - 86400);
+		}
 		observation("valid");
+		metadata();
 		history(CONDITION, NOW - 120, NOW - 180, 0.6);
 		expect(await settleWalletTradeCloses(db)).toMatchObject({
 			checked: 1,
@@ -516,15 +622,63 @@ describe("settlement against real SQLite", () => {
 	});
 	it("rejects revised schedules/labels, post-quote timing violations and zero prices", async () => {
 		observation("schedule");
+		metadata();
 		history(CONDITION, NOW - 119, NOW - 180, 0.6);
 		observation("labels", { condition: "labels" });
+		metadata("labels");
 		history("labels", NOW - 120, NOW - 180, 0.6, 0.4, ["Other", "Team"]);
 		observation("zero", { condition: "zero" });
+		metadata("zero");
 		history("zero", NOW - 120, NOW - 180, 0);
 		observation("invalid", { condition: "invalid" });
+		metadata("invalid");
 		sqlite.exec(
 			"UPDATE wallet_trade_observations SET quote_received_at=event_time WHERE trade_key='invalid'",
 		);
+		expect(await settleWalletTradeCloses(db)).toMatchObject({
+			checked: 1,
+			invalid: 1,
+		});
+	});
+	it("measures only after Gamma confirms the frozen start and token side; unconfirmed rows wait", async () => {
+		const event = NOW - 120;
+		observation("confirmed");
+		metadata(CONDITION, event);
+		observation("refuted", { condition: "refuted" });
+		metadata("refuted", event + 86400);
+		observation("wrongside", { condition: "wrongside" });
+		metadata("wrongside", event, "identified", ["456", "123"]);
+		observation("unknown", { condition: "unknown" });
+		metadata("unknown", event, "unknown_event_time");
+		observation("waiting", { condition: "waiting" });
+		for (const condition of [
+			CONDITION,
+			"refuted",
+			"wrongside",
+			"unknown",
+			"waiting",
+		])
+			history(condition, event, event - 180, 0.6);
+		expect(await settleWalletTradeCloses(db)).toEqual({
+			checked: 4,
+			measured: 1,
+			missing: 0,
+			invalid: 3,
+		});
+		expect(
+			sqlite
+				.prepare(
+					"SELECT trade_key FROM wallet_trade_measurements WHERE status='measured'",
+				)
+				.get()?.trade_key,
+		).toBe("confirmed");
+		metadata("waiting", event);
+		expect(await settleWalletTradeCloses(db)).toMatchObject({
+			checked: 1,
+			measured: 1,
+		});
+		observation("expired", { condition: "expired", event: NOW - 8 * 86400 });
+		history("expired", NOW - 8 * 86400, NOW - 8 * 86400 - 180, 0.6);
 		expect(await settleWalletTradeCloses(db)).toMatchObject({
 			checked: 1,
 			invalid: 1,

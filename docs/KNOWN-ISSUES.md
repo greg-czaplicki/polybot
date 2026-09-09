@@ -11,7 +11,9 @@ fixing commit.
   `clob_midpoint` and `history_ask_proxy` must not be pooled; both are gross
   marks, not executable exits or profits. Frozen Polymarket tennis start times
   can represent sessions, so tennis marks are not verified match closes.
-  Unknown event IDs are excluded from event-weighted metrics. See
+  Unknown event IDs are excluded from event-weighted metrics. Measurement
+  requires Gamma-confirmed start times (cache `event_time` can be a resolution
+  date for markets without `startTime`; fixed 2026-09-09 post-deploy). See
   `docs/charters/wallet-trade-measurement-v2.md` for timing and evaluation rules.
 
 - **Player-prop shadow coverage starts 2026-09-02.** Titles like "Drake

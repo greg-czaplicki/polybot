@@ -86,3 +86,33 @@ Emergency pause (preserves observations and does not affect live betting):
 `UPDATE wallet_trade_pilot SET enabled=0 WHERE id=1;`
 An already-running sweep may finish. Resume with enabled=1 without deleting the
 cohort; expiry remains enforced. Never restart the pilot by clearing its tables.
+
+## Post-deploy review fixes (same day)
+
+An independent code review of the v2 deploy found one measurement leak and two
+charter deviations. Fixed, tested (4 new tests, 370 total) and redeployed.
+
+- **Frozen start could be a resolution date.** The sports cache derives
+  `event_time` from `startTime ?? endDate`. A market with no start time froze
+  its resolution date as the "start", so an in-game buy could pass the
+  15-minute check and the "close" would be captured after the game at ~0/1.
+  Gamma `gameStartTime` catches this, but identity is resolved after trade
+  processing, so the first sighting of every new condition used the cache.
+  Fix: close capture and settlement now require Gamma metadata to be
+  `identified` with a `gameStartTime` equal to the frozen start (settlement
+  also requires the observation's token to be the Gamma token for its side).
+  Unconfirmed rows wait for metadata; refuted rows and rows still unconfirmed
+  at the seven-day expiry settle as `invalid_snapshot`. All 8 quoted rows at
+  fix time were confirmed, so no measurable row was lost.
+- **Unusable Gamma metadata overrode the cached path.** Charter says retain
+  v1's cached-label path when metadata is unusable. Now only definitive
+  verdicts (`market_inactive`, `unsupported_sport`) exclude a trade; other
+  non-identified statuses fall back to the cache when a cached market exists.
+- **Non-binary or unmatched Gamma responses counted as run errors** (4 of the
+  first 17 v2 runs), polluting the clean-run gate. They are now cached for six
+  hours like other terminal statuses and not counted.
+
+Known remaining limits from the review, not changed: two arbitrary wallets
+per sport chosen by recency, not skill; two close requests per run cannot
+cover a same-kickoff slate; repeat fills of one token can consume the
+six-quote budget in a single run.

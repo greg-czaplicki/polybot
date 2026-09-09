@@ -67,7 +67,11 @@ export async function captureWalletCloses(db: Db) {
 		db,
 		`
 		SELECT o.condition_id, o.token_id, o.event_time
-		FROM wallet_trade_observations o LEFT JOIN wallet_trade_close_books c
+		FROM wallet_trade_observations o
+		JOIN wallet_trade_market_metadata md ON md.condition_id=o.condition_id
+		 AND md.status='identified'
+		 AND CAST(strftime('%s', json_extract(md.snapshot_json,'$.event_time')) AS INTEGER)=o.event_time
+		LEFT JOIN wallet_trade_close_books c
 		ON c.condition_id=o.condition_id AND c.token_id=o.token_id AND c.event_time=o.event_time
 		WHERE o.quote_status='quoted' AND o.event_time > ? AND o.event_time <= ?
 		GROUP BY o.condition_id, o.token_id, o.event_time
@@ -139,13 +143,25 @@ export async function captureWalletCloses(db: Db) {
 	return { attempted: due.length, captured, errors };
 }
 
-/** Bind: now-60, now-7days, limit. Missing history never occupies the batch. */
+/**
+ * Bind: now-60, now-7days, limit. Missing history never occupies the batch.
+ * `confirmed`: the frozen start and token side must be corroborated by Gamma
+ * metadata (the cache falls back to the resolution date when a market has no
+ * start time, which would let in-game buys through and mark a post-game
+ * "close"). 1 = confirmed, 0 = refuted or terminal non-identified metadata,
+ * NULL = no usable metadata yet (row waits, then invalidates at expiry).
+ */
 export const WALLET_TRADE_SETTLEMENT_SQL = `WITH due AS (
 	SELECT o.*,
 		CASE WHEN o.action='BUY' AND o.follow_price>0 AND o.follow_price<1
 		 AND o.wallet_price>0 AND o.wallet_price<1 AND o.best_ask>0 AND o.best_ask<1
 		 AND o.quote_received_at>=o.detected_at AND o.detected_at>=o.trade_at
 		 AND o.quote_received_at<=o.event_time-900 THEN 1 ELSE 0 END valid,
+		CASE WHEN md.status='identified' THEN
+		 CASE WHEN CAST(strftime('%s', json_extract(md.snapshot_json,'$.event_time')) AS INTEGER)=o.event_time
+		  AND CASE o.market_side WHEN 'A' THEN json_extract(md.snapshot_json,'$.token_a')
+		   WHEN 'B' THEN json_extract(md.snapshot_json,'$.token_b') END=o.token_id THEN 1 ELSE 0 END
+		 WHEN md.status IS NULL OR md.status='lookup_error' THEN NULL ELSE 0 END confirmed,
 		c.received_at book_close_at, c.close_midpoint book_close_price,
 		(SELECT h.recorded_at FROM sharp_money_history h
 		 WHERE h.condition_id=o.condition_id
@@ -159,6 +175,7 @@ export const WALLET_TRADE_SETTLEMENT_SQL = `WITH due AS (
 		 ORDER BY h.recorded_at DESC LIMIT 1) history_close_at
 	FROM wallet_trade_observations o
 	LEFT JOIN wallet_trade_measurements m USING(trade_key)
+	LEFT JOIN wallet_trade_market_metadata md ON md.condition_id=o.condition_id
 	LEFT JOIN wallet_trade_close_books c ON c.condition_id=o.condition_id
 	 AND c.token_id=o.token_id AND c.event_time=o.event_time
 	 AND c.received_at>=o.event_time-600 AND c.received_at<o.event_time
@@ -175,8 +192,8 @@ export const WALLET_TRADE_SETTLEMENT_SQL = `WITH due AS (
 	FROM due LEFT JOIN sharp_money_history h
 	 ON h.condition_id=due.condition_id AND h.recorded_at=due.history_close_at
 )
-SELECT trade_key, valid, source, close_at, close_price, follow_price, wallet_price, best_ask
-FROM priced WHERE valid=0 OR close_price IS NOT NULL OR event_time < ?
+SELECT trade_key, valid, confirmed, source, close_at, close_price, follow_price, wallet_price, best_ask
+FROM priced WHERE valid=0 OR confirmed=0 OR (confirmed=1 AND close_price IS NOT NULL) OR event_time < ?
 ORDER BY event_time, trade_key LIMIT ?`;
 
 export async function settleWalletTradeCloses(db: Db) {
@@ -184,6 +201,7 @@ export async function settleWalletTradeCloses(db: Db) {
 	const rows = await all<{
 		trade_key: string;
 		valid: number;
+		confirmed: number | null;
 		source: string | null;
 		close_at: number | null;
 		close_price: number | null;
@@ -196,7 +214,7 @@ export async function settleWalletTradeCloses(db: Db) {
 	let invalid = 0;
 	for (const row of rows) {
 		let status = "measured";
-		if (!row.valid) status = "invalid_snapshot";
+		if (!row.valid || row.confirmed !== 1) status = "invalid_snapshot";
 		else if (row.close_price === null) status = "missing_close";
 		const close = status === "measured" ? row.close_price : null;
 		const inserted = await run(
