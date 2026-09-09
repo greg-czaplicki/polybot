@@ -222,18 +222,23 @@ def run_market(cid, question, t0, t1, tick, gs, sport):
                 proceeds=proceeds, exits=exits)
 
 
-res = [r for r in (run_market(*m) for m in markets) if r]
-print(f"paper MM [{POLICY} passive_exit={PASSIVE_EXIT} improve_exit={PASSIVE_IMPROVE}]: {len(res)} markets with pregame data (game_start >= {time.strftime('%Y-%m-%d %H:%M', time.gmtime(SINCE)) if SINCE else 'any'}); quote ${QUOTE_USD:.0f}/side, inv cap ${INV_CAP_USD:.0f}/token, exit T-{EXIT_MIN}m, quoting from T-{START_MIN}m")
-def agg(rows, name):
-    if not rows: return
-    f = sum(r["filled_usd"] for r in rows); pf = sum(r["pnl_flat"] for r in rows); pm = sum(r["pnl_mid"] for r in rows)
-    fills = sum(r["fills"] for r in rows); qm = sum(r["quoting_min"] for r in rows); pairs = sum(r["pairs_usd"] for r in rows)
-    inv = sum(r["inv_end_usd"] for r in rows); pe = sum(r["proceeds"] for r in rows); ex = sum(r["exits"] for r in rows)
-    print(f"  {name:8s} mkts={len(rows):3d} fills={fills:4d} filled=${f:8.0f} passive-exited=${pe:6.0f}({ex}) pairs=${pairs:5.0f} crossed-at-exit=${inv:6.0f} | P&L flatten ${pf:+7.2f} ({(pf/f*100 if f else 0):+.2f}c/$) mid ${pm:+7.2f} ({(pm/f*100 if f else 0):+.2f}c/$) | fills/quoting-hour {fills/(qm/60) if qm else 0:.1f}  $filled/quoting-hour ${f/(qm/60) if qm else 0:.0f}")
-agg(res, "ALL")
-by = defaultdict(list)
-for r in res: by[r["sport"]].append(r)
-for s, rows in sorted(by.items(), key=lambda kv: -len(kv[1])): agg(rows, s)
-print("\nworst / best markets by flatten P&L:")
-for r in sorted(res, key=lambda r: r["pnl_flat"])[:3] + sorted(res, key=lambda r: -r["pnl_flat"])[:3]:
-    print(f"  {r['pnl_flat']:+7.2f}  filled ${r['filled_usd']:6.0f} fills {r['fills']:3d}  {r['sport']:6s} {r['q'][:60]}")
+def main():
+    res = [r for r in (run_market(*m) for m in markets) if r]
+    print(f"paper MM [{POLICY} passive_exit={PASSIVE_EXIT} improve_exit={PASSIVE_IMPROVE}]: {len(res)} markets with pregame data (game_start >= {time.strftime('%Y-%m-%d %H:%M', time.gmtime(SINCE)) if SINCE else 'any'}); quote ${QUOTE_USD:.0f}/side, inv cap ${INV_CAP_USD:.0f}/token, exit T-{EXIT_MIN}m, quoting from T-{START_MIN}m")
+    def agg(rows, name):
+        if not rows: return
+        f = sum(r["filled_usd"] for r in rows); pf = sum(r["pnl_flat"] for r in rows); pm = sum(r["pnl_mid"] for r in rows)
+        fills = sum(r["fills"] for r in rows); qm = sum(r["quoting_min"] for r in rows); pairs = sum(r["pairs_usd"] for r in rows)
+        inv = sum(r["inv_end_usd"] for r in rows); pe = sum(r["proceeds"] for r in rows); ex = sum(r["exits"] for r in rows)
+        print(f"  {name:8s} mkts={len(rows):3d} fills={fills:4d} filled=${f:8.0f} passive-exited=${pe:6.0f}({ex}) pairs=${pairs:5.0f} crossed-at-exit=${inv:6.0f} | P&L flatten ${pf:+7.2f} ({(pf/f*100 if f else 0):+.2f}c/$) mid ${pm:+7.2f} ({(pm/f*100 if f else 0):+.2f}c/$) | fills/quoting-hour {fills/(qm/60) if qm else 0:.1f}  $filled/quoting-hour ${f/(qm/60) if qm else 0:.0f}")
+    agg(res, "ALL")
+    by = defaultdict(list)
+    for r in res: by[r["sport"]].append(r)
+    for s, rows in sorted(by.items(), key=lambda kv: -len(kv[1])): agg(rows, s)
+    print("\nworst / best markets by flatten P&L:")
+    for r in sorted(res, key=lambda r: r["pnl_flat"])[:3] + sorted(res, key=lambda r: -r["pnl_flat"])[:3]:
+        print(f"  {r['pnl_flat']:+7.2f}  filled ${r['filled_usd']:6.0f} fills {r['fills']:3d}  {r['sport']:6s} {r['q'][:60]}")
+
+
+if __name__ == "__main__":
+    main()

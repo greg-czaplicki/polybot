@@ -10,6 +10,8 @@ OUT=/root/polybook/data/reports/$(date -u +%F).txt
     echo; echo "### QUOTE_USD=$Q INV_CAP_USD=$((Q*3))"
     QUOTE_USD=$Q INV_CAP_USD=$((Q*3)) /root/polyarb/.venv/bin/python /root/polybook/paper_mm.py /root/polybook/data/polybook.db $SINCE
   done
+  echo; echo "### sharp-follow execution replay (last 24h): $10 bid at the sharp's price, 60s after their fill, cancel T-15m"
+  /root/polyarb/.venv/bin/python /root/polybook/follow_sim.py /root/polybook/data/polybook.db $SINCE
   echo; echo "### recorder health (last 24h): rows/min avg, trades/min avg"
   /root/polyarb/.venv/bin/python -c "
 import sqlite3,time; db=sqlite3.connect('/root/polybook/data/polybook.db'); s=int(time.time())-86400
