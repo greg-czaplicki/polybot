@@ -73,7 +73,7 @@ earlier review remain separate follow-up work; neither is fixed by this change.
   errors outside these changes (server-function typing and Cloudflare bindings,
   among others); this release does not claim a clean repository typecheck.
 - Deployed worker version `db71bea5-7684-4606-859a-d71d74e6012b` on September 9.
-  Source changes remain in the local working tree; no strategy era bump.
+  Source committed in `caaec6d`; no strategy era bump.
 - Post-deploy health endpoint returned HTTP 200, no alert or chronic errors.
   Production wrote `football_coverage` at 12:10:36 UTC (NFL demand detected,
   outside scheduled windows, eight requests spent, 153 credits, no backoff).

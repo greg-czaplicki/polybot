@@ -71,10 +71,16 @@ future/stale metadata, enrichment bounds/backoff, immutable observations,
 close boundaries/failures, expiry/pause behavior, missing-history starvation,
 settlement replay, first-signal censorship, event weighting and privacy.
 
-Migration 0040 is additive and must be applied through the D1 migration ledger
-to polywhaler-db only. Deploy the source-stamped production build to
-tanstack-start-app. Inspect `/api/wallet-trade-digest` plus `/api/shadow-digest`
-after deployment; a successful heartbeat is not evidence of trading edge.
+Migration 0040 is additive and was applied through the D1 migration ledger to
+polywhaler-db at 12:59:09 UTC on September 9 (ledger row present, none pending).
+Source commit `9c05864`; Worker version `83fcf535-3248-4bab-aa5a-6d350e17194b`
+deployed at 12:59:59 UTC.
+
+Post-deploy check at 13:09 UTC: `/api/wallet-trade-digest` returned HTTP 200,
+stage `collecting`, 12 wallets enrolled, five v2 polls with zero errors and zero
+eligible buys yet (minutes after deploy, expected). `/api/shadow-digest` returned
+HTTP 200, `health.alert=false`, 239/240 runs successful in 24h, no chronic
+errors. A successful heartbeat is not evidence of trading edge.
 
 Emergency pause (preserves observations and does not affect live betting):
 `UPDATE wallet_trade_pilot SET enabled=0 WHERE id=1;`

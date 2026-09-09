@@ -71,8 +71,8 @@ TypeScript failures remain outside this change; no claim of a clean typecheck.
 
 Deployed version `695c6250-b819-4c7c-8477-8cdcce63fb5f`. Production health returned
 HTTP 200 with no alert. At 12:18:56 UTC, the cron closed 50 wallet entries after
-deployment, confirming the backlog is being processed. Source changes remain
-in the working tree.
+deployment, confirming the backlog is being processed. Source committed in
+`caaec6d`.
 
 Owner constraint added during verification: no paid odds API subscriptions or
 upgrades. Future planning should center on Polymarket wallet/price data and use
