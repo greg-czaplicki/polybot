@@ -11,6 +11,7 @@ import {
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { handleShadowDigestRequest } from "./server/api/shadow-digest";
+import { handleWalletTradeDigestRequest } from "./server/api/wallet-trade-digest";
 import { extractAuthToken, verifyAuthToken } from "./server/auth-token";
 import type { Env, RequestContext } from "./server/env";
 import { captureBookClosesForPicks } from "./server/pipeline/book-odds";
@@ -60,6 +61,11 @@ const serverEntry = {
 		if (shadowDigestResponse) {
 			return shadowDigestResponse;
 		}
+		const walletDigestResponse = await handleWalletTradeDigestRequest(
+			request,
+			env,
+		);
+		if (walletDigestResponse) return walletDigestResponse;
 
 		const loginResponse = await handleLoginRequest(request, env);
 		if (loginResponse) {

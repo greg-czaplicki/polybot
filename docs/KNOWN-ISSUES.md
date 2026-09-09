@@ -5,6 +5,15 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Wallet-trade pilot is instrumentation, not a live strategy.** v1 starts
+  2026-09-09; v2 adds future-only Gamma identity and native close measurements.
+  Preserve collection versions, first-signal missingness and event grouping.
+  `clob_midpoint` and `history_ask_proxy` must not be pooled; both are gross
+  marks, not executable exits or profits. Frozen Polymarket tennis start times
+  can represent sessions, so tennis marks are not verified match closes.
+  Unknown event IDs are excluded from event-weighted metrics. See
+  `docs/charters/wallet-trade-measurement-v2.md` for timing and evaluation rules.
+
 - **Player-prop shadow coverage starts 2026-09-02.** Titles like "Drake
   Maye: Passing Yards O/U 249.5" were dropped at discovery from the first
   commit (`isMainMarketTitle`), so no prop-subtype read before this date

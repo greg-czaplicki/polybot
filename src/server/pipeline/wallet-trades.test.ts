@@ -58,7 +58,9 @@ beforeEach(() => {
 	for (const file of [
 		"0025_add_wallet_entries.sql",
 		"0001_sharp_base.sql",
+		"0004_add_sharp_history.sql",
 		"0039_wallet_trade_pilot.sql",
+		"0040_wallet_trade_measurement.sql",
 	])
 		sqlite.exec(readFileSync(`migrations/${file}`, "utf8"));
 	db = {
@@ -96,6 +98,16 @@ function seed() {
 		.run(CONDITION, market.event_time, NOW);
 	fetchMock.mockImplementation(async (input) => {
 		const url = new URL(String(input));
+		if (url.hostname.startsWith("gamma"))
+			return Response.json([
+				{
+					conditionId: CONDITION,
+					outcomes: '["Yes","No"]',
+					clobTokenIds: '["12345","67890"]',
+					gameStartTime: market.event_time,
+					events: [{ id: "12", series: [{ id: "3" }] }],
+				},
+			]);
 		return Response.json(
 			url.hostname.startsWith("data-api") ? [rawTrade] : book,
 		);
@@ -222,7 +234,7 @@ describe("collector with real SQLite", () => {
 			eligible: 0,
 			quoted: 0,
 		});
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2); // Trade poll + future-only metadata.
 	});
 	it("freezes enrollment, captures once, and never substitutes a later quote", async () => {
 		seed();
@@ -253,7 +265,7 @@ describe("collector with real SQLite", () => {
 		const dataUrl = new URL(String(fetchMock.mock.calls[0][0]));
 		expect(dataUrl.searchParams.get("takerOnly")).toBe("false");
 		expect(dataUrl.searchParams.get("start")).toBe(String(NOW));
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 	it("persists quote failures and will not retry them on replay", async () => {
 		seed();
@@ -273,7 +285,7 @@ describe("collector with real SQLite", () => {
 				)
 				.get(),
 		).toMatchObject({ quote_status: "quote_error", follow_price: null });
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 	it("bounds pages, inserts, and quotes; permanently remembers truncated trades", async () => {
 		seed();
@@ -299,7 +311,7 @@ describe("collector with real SQLite", () => {
 			inserted: 0,
 			duplicates: 100,
 		});
-		expect(fetchMock).toHaveBeenCalledTimes(8);
+		expect(fetchMock).toHaveBeenCalledTimes(9);
 	});
 	it("reports trade API failures and poll gaps without fabricating trades", async () => {
 		seed();

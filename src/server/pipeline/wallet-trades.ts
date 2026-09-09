@@ -1,18 +1,29 @@
-import { resolveSportTagFromSeriesId } from "../api/series-registry";
 import { all, type Db, first, run } from "../db/client";
+import {
+	captureWalletCloses,
+	settleWalletTradeCloses,
+} from "./wallet-trade-closes";
+import {
+	type WalletMarket as Market,
+	object,
+	pilotSport,
+	positive,
+	publicJson,
+	WALLET_PILOT_SPORTS as SPORTS,
+	seconds,
+	type WalletTrade,
+} from "./wallet-trade-common";
+import {
+	refreshWalletMetadata,
+	resolveWalletIdentity,
+	type WalletMetadata,
+} from "./wallet-trade-identity";
 
-const SPORTS = new Set(["mlb", "nfl", "ncaaf", "epl", "atp", "wta"]);
+export type { WalletTrade } from "./wallet-trade-common";
+
 const WINDOW = 15 * 60;
 const ADDRESS = /^0x[\da-f]{40}$/i;
 const HASH = /^0x[\da-f]{64}$/i;
-const seconds = () => Math.floor(Date.now() / 1000);
-
-// This seven-day pilot runs in a cold DO without recurring Gamma discovery.
-// Verified against Gamma /series/12756 on 2026-09-09; no live registry changes.
-function pilotSport(seriesId: number): string | null {
-	if (seriesId === 12756) return "ncaaf";
-	return resolveSportTagFromSeriesId(seriesId);
-}
 
 type Wallet = {
 	address: string;
@@ -27,31 +38,6 @@ type Pilot = {
 	cohort_json: string | null;
 	cursor: number;
 };
-export type WalletTrade = {
-	wallet: string;
-	tx: string;
-	condition: string;
-	token: string;
-	action: "BUY" | "SELL";
-	outcome: string;
-	at: number;
-	price: number;
-	size: number;
-};
-type Market = {
-	condition_id: string;
-	sport_series_id: number;
-	event_time: string | null;
-	side_a_label: string;
-	side_b_label: string;
-};
-type RecordValue = Record<string, unknown>;
-const object = (value: unknown): RecordValue | null =>
-	value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as RecordValue)
-		: null;
-const positive = (value: unknown): value is number =>
-	typeof value === "number" && Number.isFinite(value) && value > 0;
 
 export function parseWalletTrade(
 	value: unknown,
@@ -257,12 +243,6 @@ async function enroll(db: Db, now: number): Promise<Wallet[]> {
 	return cohort;
 }
 
-async function publicJson(url: URL): Promise<unknown> {
-	const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
-	return response.json();
-}
-
 /** Dedicated shadow collector; never imports order placement or live scoring. */
 export async function collectWalletTrades(db: Db) {
 	const now = seconds();
@@ -271,7 +251,7 @@ export async function collectWalletTrades(db: Db) {
 		db,
 		`UPDATE wallet_trade_pilot
 		SET lease_token=?, lease_until=?, last_run_at=?
-		WHERE id=1 AND lease_until <= ? AND last_run_at <= ?`,
+		WHERE id=1 AND enabled=1 AND lease_until <= ? AND last_run_at <= ?`,
 		token,
 		now + 300,
 		now,
@@ -281,6 +261,8 @@ export async function collectWalletTrades(db: Db) {
 	if (Number(acquired.meta?.changes ?? 0) !== 1)
 		return { ran: false, reason: "busy_or_cooldown" };
 	const report = {
+		collectionVersion: 2,
+		metadata: { attempted: 0, errors: 0 },
 		wallets: 0,
 		received: 0,
 		invalid: 0,
@@ -307,11 +289,23 @@ export async function collectWalletTrades(db: Db) {
 			"SELECT * FROM wallet_trade_pilot WHERE id=1",
 		);
 		if (!state) throw new Error("Missing pilot state");
-		if (state.expires_at !== null && state.expires_at <= now)
-			return { ran: false, reason: "expired" };
+		// Existing quote labels continue to settle after enrollment expires.
+		const maintenance = {
+			settlement: await settleWalletTradeCloses(db),
+			closes: await captureWalletCloses(db),
+		};
 		await run(
 			db,
-			"INSERT INTO wallet_trade_polls (run_id, started_at) VALUES (?, ?)",
+			"UPDATE wallet_trade_pilot SET maintenance_at=?, maintenance_json=? WHERE id=1 AND lease_token=?",
+			seconds(),
+			JSON.stringify(maintenance),
+			token,
+		);
+		if (state.expires_at !== null && state.expires_at <= now)
+			return { ran: false, reason: "expired", maintenance };
+		await run(
+			db,
+			"INSERT INTO wallet_trade_polls (run_id, started_at, collection_version) VALUES (?, ?, 2)",
 			token,
 			now,
 		);
@@ -414,24 +408,41 @@ export async function collectWalletTrades(db: Db) {
 							...ids,
 						)
 					: [];
+				const metadata = ids.length
+					? await all<WalletMetadata>(
+							db,
+							`SELECT condition_id, fetched_at, status, snapshot_json FROM wallet_trade_market_metadata
+					 WHERE condition_id IN (${ids.map(() => "?").join(",")})`,
+							...ids,
+						)
+					: [];
 				for (const [key, trade] of selected) {
-					const market = markets.find(
+					const cached = markets.find(
 						(row) => row.condition_id === trade.condition,
 					);
-					const classification = classifyWalletTrade(trade, market, detected);
+					const identity = resolveWalletIdentity(
+						trade,
+						cached,
+						metadata.find((row) => row.condition_id === trade.condition),
+						detected,
+					);
+					const market = identity.market;
+					const classification = classifyWalletTrade(
+						identity.trade,
+						market,
+						detected,
+					);
+					if (identity.status) classification.status = identity.status;
 					const eligible = classification.status === "eligible";
-					let status = eligible
-						? quoteBudget > 0
-							? "pending"
-							: "quote_budget"
-						: classification.status;
+					let status = classification.status;
+					if (eligible) status = quoteBudget > 0 ? "pending" : "quote_budget";
 					const inserted = await run(
 						db,
 						`INSERT OR IGNORE INTO wallet_trade_observations
 						(trade_key, run_id, wallet_address, transaction_hash, condition_id, token_id,
 						action, outcome, trade_at, detected_at, wallet_price, shares, notional, sport,
-						event_time, market_side, market_snapshot_json, quote_status)
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						event_time, market_side, market_snapshot_json, quote_status, collection_version)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)`,
 						key,
 						token,
 						trade.wallet,
@@ -503,6 +514,9 @@ export async function collectWalletTrades(db: Db) {
 				console.error("[wallet-trades] Poll failed", poll.error);
 			}
 		}
+		// Deliberately after detection: new metadata never repairs this run's quotes.
+		report.metadata = await refreshWalletMetadata(db);
+		report.errors += report.metadata.errors;
 		await run(
 			db,
 			`UPDATE wallet_trade_pilot SET cohort_json=?, cursor=? WHERE id=1 AND lease_token=?`,

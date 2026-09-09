@@ -64,3 +64,8 @@ Emergency stop (pilot only, preserves all observations): set `expires_at` to
 the current Unix second for `wallet_trade_pilot.id=1`. A current in-flight run may
 finish; subsequent runs make no trade/book requests. Do not delete the cohort to
 restart it: write a new charter/cohort version instead.
+
+V2 operational update: expiry stops new wallet polls and metadata lookups, but
+already-recorded quotes continue receiving close capture/settlement. To pause
+ALL pilot work after migration 0040, set `wallet_trade_pilot.enabled=0 WHERE id=1`
+instead. An in-flight run may finish; this does not affect live betting.
