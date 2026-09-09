@@ -1,0 +1,15 @@
+# /etc/systemd/system/polybook.service — pregame order-book recorder; read-only, separate from polywhaler-bot and polyarb
+[Unit]
+Description=polybook pregame CLOB order-book recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/polybook
+ExecStart=/root/polyarb/.venv/bin/python /root/polybook/bookrec.py
+Restart=always
+RestartSec=10
+Environment=BOOK_DB=/root/polybook/data/polybook.db
+
+[Install]
+WantedBy=multi-user.target
