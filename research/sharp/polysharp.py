@@ -269,9 +269,13 @@ def report(db):
     now = int(time.time())
     cols = ["cid", "sport", "mtype", "start", "side", "usd", "streak", "size_ratio", "sq_opp", "crowd", "mins", "win", "roi", "clv"]
     rows = [dict(zip(cols, r)) for r in db.execute("SELECT condition_id, sport, market_type, start, side, usd, streak, size_ratio, sq_opp_usd, crowd_same_usd, mins_to_start, win, roi_follow, clv FROM signals WHERE settled=1")]
-    lines = [f"polysharp report {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(now))}",
-             f"markets: {db.execute('SELECT COUNT(*) FROM markets WHERE status=\"done\"').fetchone()[0]} settled, {db.execute('SELECT COUNT(*) FROM markets WHERE status=\"pending\"').fetchone()[0]} pending; "
-             f"trades {db.execute('SELECT COUNT(*) FROM trades').fetchone()[0]}; snapshots {db.execute('SELECT COUNT(DISTINCT asof) FROM wallet_scores').fetchone()[0]}; signals settled {len(rows)}",
+    n_done = db.execute("SELECT COUNT(*) FROM markets WHERE status='done'").fetchone()[0]
+    n_pend = db.execute("SELECT COUNT(*) FROM markets WHERE status='pending'").fetchone()[0]
+    n_tr = db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    n_snap = db.execute("SELECT COUNT(DISTINCT asof) FROM wallet_scores").fetchone()[0]
+    stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now))
+    lines = [f"polysharp report {stamp}",
+             f"markets: {n_done} settled, {n_pend} pending; trades {n_tr}; snapshots {n_snap}; signals settled {len(rows)}",
              "", "ONE BET PER MARKET (first sharp fill >= $100, entry = fill + 0.5c, held to resolution)"]
     def line(name, rs):
         m, se, n = cl(rs, "roi"); c = cl(rs, "clv")
