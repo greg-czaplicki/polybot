@@ -1,0 +1,5 @@
+[Unit]
+Description=polybook daily paper market-maker report
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/polybook/polybook-report.sh

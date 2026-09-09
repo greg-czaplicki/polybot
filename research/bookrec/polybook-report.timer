@@ -1,0 +1,7 @@
+[Unit]
+Description=Run polybook paper-MM report daily at 11:30 UTC (after the US slate settles)
+[Timer]
+OnCalendar=*-*-* 11:30:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

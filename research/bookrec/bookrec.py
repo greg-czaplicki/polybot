@@ -24,6 +24,7 @@ DISCOVERY_S = int(os.environ.get("DISCOVERY_S", 300))
 LOOKAHEAD_S = int(os.environ.get("LOOKAHEAD_S", 24 * 3600))
 KEEP_AFTER_START_S = int(os.environ.get("KEEP_AFTER_START_S", 600))
 SNAPSHOT_LEVELS = 10
+KEEP_LEVELS = int(os.environ.get("KEEP_LEVELS", 5))  # persist level changes only this close to the top of book
 DISCOVERY_DEPTH = int(os.environ.get("DISCOVERY_DEPTH", 2100))  # Gamma 422s at offset >= 2100
 
 SCHEMA = """
@@ -65,6 +66,7 @@ class Store:
         self.buf = []
         self.events_1m = 0
         self.trades_1m = 0
+        self.dropped = 0
 
     def event(self, recv_ms, exch_ms, asset, typ, side=None, price=None, size=None, payload=None):
         self.buf.append((recv_ms, exch_ms, asset, typ, side, price, size, payload))
@@ -109,15 +111,23 @@ class Books:
         }
 
     def change(self, asset, side, price, size):
+        """Apply a level change; return True if the level is within KEEP_LEVELS of the top of its side (worth persisting)."""
         bk = self.b.get(asset)
         if bk is None:
-            return
+            return False
         d = bk["bids"] if side == "BUY" else bk["asks"]
         if size <= 0:
             d.pop(price, None)
         else:
             d[price] = size
         bk["n"] += 1
+        if not d:
+            return True
+        if side == "BUY":
+            rank = sum(1 for p in d if p > price)
+        else:
+            rank = sum(1 for p in d if p < price)
+        return rank < KEEP_LEVELS
 
     def summary_rows(self, minute):
         rows = []
@@ -212,8 +222,10 @@ class Recorder:
                 for ch in e.get("price_changes", e.get("changes", [])):
                     a = ch.get("asset_id", asset)
                     side, price, size = ch["side"], float(ch["price"]), float(ch["size"])
-                    self.books.change(a, side, price, size)
-                    self.store.event(recv_ms, exch_ms, a, "change", side, price, size)
+                    if self.books.change(a, side, price, size):
+                        self.store.event(recv_ms, exch_ms, a, "change", side, price, size)
+                    else:
+                        self.store.dropped += 1
             elif et == "last_trade_price":
                 self.store.event(recv_ms, exch_ms, asset, "trade", e.get("side"),
                                  float(e.get("price") or 0), float(e.get("size") or 0),
@@ -289,7 +301,8 @@ async def main():
                 store.tob(rec.books.summary_rows(last_minute))
                 store.health(int(last_minute * 60), len(markets), len(rec.assets), len(rec.tasks),
                              store.events_1m, store.trades_1m, rec.rtt)
-                store.events_1m = store.trades_1m = 0
+                log.info("minute: %d events kept, %d deep changes dropped, %d trades", store.events_1m, store.dropped, store.trades_1m)
+                store.events_1m = store.trades_1m = store.dropped = 0
                 last_minute = minute
             store.flush()
             await asyncio.sleep(1)
