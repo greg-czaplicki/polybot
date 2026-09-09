@@ -87,3 +87,26 @@ has run is a taker strategy.
 2. Honest paper market-maker on that feed: join best bid/ask both sides,
    small size, flatten at T−15m; measure fill rate, realized spread, inventory.
 3. Only then a live quoter at minimum size. Era bump; new charter.
+
+## Addendum (same day): side-selection features tested on the tape
+
+Wallet informedness (`study_wallets.py`): rank wallets by pregame fill CLV
+(fill → scheduled-start price) in train (starts < 8/24), measure test (≥ 8/24).
+Monotonic and persistent but small: bottom decile −0.56c, top decile +0.30c
+(z 2.5, 149 wallets, $23M test flow); top decile fills ≥ $200 +0.50c; NFL
+top-decile +2.0c (z 4.3, n=362, one week). Top-20 wallets: +0.29c, spread
+−8.5c..+3.3c. Their 15-minute mark is negative (−0.27c): they pay spread and
+are right only by the close. Takers as a group: −0.22c/−0.35c vs the close.
+Following costs ≈ 1.75c/share (0.5c spread + 1.25c fee at p=.5) → no
+wallet-following taker strategy clears costs; NFL is the one to watch.
+
+Price-path features (`study_drift.py`, 3,324 markets): momentum T−6h→T−1h
+does not continue (corr −0.04; sign flips by sport). Favorite-longshot:
+token0 priced <20c at T−6h drifts +3.5c by start (z 4.3, n=178), 20–35c
++0.9c (z 3.5), >80c −1.1c. Likely partly a stale/wide-mid artifact on thin
+longshot books — verify with the live book recorder (is the ask actually
+there at T−6h?) before treating it as a signal. Median |open→close| move is
+2.5–3.5c in soccer/NFL, less in MLB.
+
+Conclusion: every side signal found is < the taker fee. The same signals cost
+nothing as a MAKER (post on the favored side, earn spread + drift).
