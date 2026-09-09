@@ -212,7 +212,7 @@ def load_fills(db, max_start=None):
         if not (0.05 < side_price < 0.95): continue
         side_win = (win0 == 1) if sign > 0 else (win0 == 0)
         c = close.get(cid)
-        out.append(dict(cid=cid, wallet=w, sign=sign, p0=p0, side_price=side_price, usd=price * size, ts=ts, sport=sport, mtype=mtype, start=st,
+        out.append(dict(cid=cid, wallet=w, sign=sign, buy=(side == "BUY"), is0=is0, p0=p0, side_price=side_price, usd=price * size, ts=ts, sport=sport, mtype=mtype, start=st,
                         win=side_win, roi=(1 / side_price - 1) if side_win else -1.0,
                         roi_follow=(1 / (side_price + ENTRY_COST) - 1) if side_win else -1.0,
                         clv=(sign * (c - p0)) if c is not None else None))
@@ -298,6 +298,31 @@ def tiers_asof(db, ts):
 
 
 # ---------------------------------------------------------------- signals
+def asset_dir(is0, qinfo):
+    """Direction of the ASSET traded (token0 or token1): ('team', token) / ('ou', over|under) / None."""
+    mtype, q, labels = qinfo
+    if not labels: return None
+    lab = labels[0] if is0 else labels[1]
+    if not lab: return None
+    if mtype in ("total", "team_total", "period") and lab.lower() in ("over", "under"): return ("ou", lab.lower())
+    if mtype in ("moneyline", "spread") and lab.lower() not in NON_TEAM: return ("team", lab.split()[-1].lower())
+    return None
+
+
+def net_hedgers(entries, qinfo_of):
+    """entries: iterable of (wallet, cid, is0, buy, usd). Returns set of wallets NET LONG opposing directions."""
+    net = defaultdict(lambda: defaultdict(float))
+    for w, cid, is0, buy, usd in entries:
+        d = asset_dir(is0, qinfo_of(cid))
+        if d is None: continue
+        net[w][d] += usd if buy else -usd
+    out = set()
+    for w, dd in net.items():
+        longs = {d for d, v in dd.items() if v > 0}
+        if len({t for k, t in longs if k == "team"}) > 1 or len({t for k, t in longs if k == "ou"}) > 1: out.add(w)
+    return out
+
+
 def direction(f, qinfo):
     """Event-level direction of a fill: ('team', token) for ML/spread, ('ou', over|under) for totals, else None."""
     mtype, q, labels = qinfo
@@ -333,15 +358,8 @@ def build_signals(db, fills):
         main_total = max(usd_by_total, key=usd_by_total.get) if usd_by_total else None
         main = {f["cid"] for f in fs if qinfo.get(f["cid"], (None,))[0] == "moneyline" or f["cid"] == main_total}
         if not main: continue
-        # hedgers: wallets with opposing directions anywhere in the event
-        dirs = defaultdict(set)
-        for f in fs:
-            d = direction(f, qinfo.get(f["cid"], (None, None, None)))
-            if d: dirs[f["wallet"]].add(d)
-        def hedger(w):
-            ds = dirs.get(w, set())
-            teams = {t for k, t in ds if k == "team"}; ous = {t for k, t in ds if k == "ou"}
-            return len(teams) > 1 or len(ous) > 1
+        hedgers = net_hedgers(((f["wallet"], f["cid"], f["is0"], f["buy"], f["usd"]) for f in fs), lambda c: qinfo.get(c, (None, None, None)))
+        def hedger(w): return w in hedgers
         sq_net = defaultdict(float); all_net = defaultdict(float); sig = None
         for f in fs:
             asof, sharp, square = cache.get(monday(f["ts"])) or cache.setdefault(monday(f["ts"]), tiers_asof(db, f["ts"]))
@@ -433,6 +451,7 @@ def live(db):
     mtype = {r[0]: r[1] for r in db.execute("SELECT condition_id, market_type FROM markets WHERE start >= ?", (now - 86400,))}
     new = 0
     agg = {}   # (cid, wallet, side) -> dict
+    raw_fills = []   # (cid, wallet, is0, buy, usd) for every sharp-wallet trade, buys and sells
     for cid, q, tok0, gs, l0, l1 in up_full:
         page = get(f"https://data-api.polymarket.com/trades?market={cid}&limit=200") or []; time.sleep(PAUSE)
         sq_net = 0.0
@@ -441,6 +460,7 @@ def live(db):
             usd = float(x["price"]) * float(x["size"]); ts = int(x["timestamp"])
             if w in square: sq_net += sign * usd
             if w in sharp and ts < gs - PRE_SEC:
+                raw_fills.append((cid, w, is0, x.get("side") == "BUY", usd))
                 k = (cid, w, 0 if sign > 0 else 1)
                 a = agg.get(k)
                 if a is None:
@@ -448,16 +468,16 @@ def live(db):
                                   sq=-sign * sq_net, gs=gs, t=sharp[w][0], l20=sharp[w][1], sign=sign)
                 else:
                     a["usd"] += usd; a["pxusd"] += float(x["price"]) * usd; a["n"] += 1; a["ts"] = max(a["ts"], ts)
-    # hedge flag: same wallet on opposing directions within the event
-    dirs = defaultdict(set)
-    for a in agg.values():
-        f = {"sign": a["sign"]}
-        d = direction(f, (mtype.get(a["cid"]), a["q"], labels.get(a["cid"])))
-        if d: dirs[(ev_of.get(a["cid"], a["cid"]), a["w"])].add(d)
+    # hedge flag: wallet NET LONG opposing directions within the event (exits are not hedges)
+    by_event = defaultdict(list)
+    for (cid, w, is0, buy, usd) in raw_fills:
+        by_event[ev_of.get(cid, cid)].append((w, cid, is0, buy, usd))
+    hedgers = {}
+    for ek, entries in by_event.items():
+        for w in net_hedgers(entries, lambda c: (mtype.get(c), None, labels.get(c))): hedgers[(ek, w)] = True
     for a in agg.values():
         if a["usd"] < MIN_FILL_USD: continue
-        ds = dirs.get((ev_of.get(a["cid"], a["cid"]), a["w"]), set())
-        hedge = int(len({t for k, t in ds if k == "team"}) > 1 or len({t for k, t in ds if k == "ou"}) > 1)
+        hedge = int(hedgers.get((ev_of.get(a["cid"], a["cid"]), a["w"]), False))
         r = db.execute("""INSERT INTO live_alerts (condition_id, ts, wallet, tx, side, price, usd, wallet_roi_t, streak, sq_opp_usd, question, start, event_key, market_type, fills, hedge)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(condition_id, tx, wallet, side, price) DO UPDATE SET usd=excluded.usd, fills=excluded.fills, ts=excluded.ts, hedge=excluded.hedge, sq_opp_usd=excluded.sq_opp_usd""",
