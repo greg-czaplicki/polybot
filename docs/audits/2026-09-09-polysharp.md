@@ -44,3 +44,28 @@ The standing read: sharp wallets carry ~0.5c of closing-line edge and no
 bettable ROI at these samples. The pipeline exists to detect the moment
 that changes, per sport, within weeks (NFL regular season is the registered
 cell), and to feed a passive-entry executor if it does.
+
+## Same-day fix: events, repeat fills, hedgers
+
+The first tape showed one wallet's seven fills on Seahawks −4.5 as seven rows
+and one game as nine markets, including a wallet running a totals middle
+(Over 42.5 + Under 44.5/46.5). Changes:
+
+- **Events.** Markets are grouped into events by (sport, start) plus shared
+  team tokens (surname/team word parsed from the question; spreads and team
+  totals carry one team, moneylines and totals both). 3,759 markets → one
+  event key each; 732 events have several markets.
+- **Market types.** moneyline / total / spread / team_total / period / prop
+  from the question text (old crawl had only ML/total).
+- **Signals are one per EVENT**, on main lines only (moneyline, or the
+  event's largest-volume total). A wallet holding opposing directions inside
+  the event (both teams, or Over and Under across the totals ladder) is a
+  hedger and cannot fire a signal. Signal count fell 1,892 → 835; ALL ROI
+  +0.4%, CLV +0.3c (z 2.6).
+- **Live alerts are aggregated** per (market, wallet, side): total $, fill
+  count, VWAP, latest time, hedge flag. Pushed as an upsert; D1 id =
+  market:wallet:side (migration 0042 adds event_key, market_type, fills,
+  hedge). The terminal groups rows by event with a header line and dims
+  hedged positions.
+
+Patriots–Seahawks on 9/9: 19 positions across 9 markets; 12 flagged hedge.

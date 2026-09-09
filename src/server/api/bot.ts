@@ -2969,6 +2969,7 @@ export async function handleBotRequest(
 				 ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, price = excluded.price, usd = excluded.usd,
 				   sq_opp_usd = excluded.sq_opp_usd, fills = excluded.fills, hedge = excluded.hedge,
 				   event_key = COALESCE(excluded.event_key, sharp_alerts.event_key),
+				   market_type = COALESCE(excluded.market_type, sharp_alerts.market_type),
 				   side_label = COALESCE(excluded.side_label, sharp_alerts.side_label),
 				   received_at = excluded.received_at`,
 				id,
