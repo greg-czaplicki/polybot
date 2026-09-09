@@ -34,6 +34,9 @@ CREATE INDEX IF NOT EXISTS ws_asof_tier ON wallet_scores(asof, tier);
 CREATE TABLE IF NOT EXISTS signals (condition_id TEXT PRIMARY KEY, asof INTEGER, sport TEXT, market_type TEXT, start INTEGER, fired_ts INTEGER,
   wallet TEXT, side INTEGER, fill_price REAL, entry_price REAL, usd REAL, wallet_roi_t REAL, streak REAL, size_ratio REAL,
   sq_opp_usd REAL, crowd_same_usd REAL, mins_to_start REAL, settled INTEGER DEFAULT 0, win INTEGER, roi_follow REAL, clv REAL);
+CREATE TABLE IF NOT EXISTS event_signals (rule TEXT NOT NULL, event_key TEXT NOT NULL, condition_id TEXT, sport TEXT, market_type TEXT,
+  start INTEGER, fired_ts INTEGER, wallet TEXT, side INTEGER, entry_price REAL, usd REAL, win INTEGER, roi_follow REAL, clv REAL,
+  PRIMARY KEY (rule, event_key));
 CREATE TABLE IF NOT EXISTS live_alerts (condition_id TEXT, ts INTEGER, wallet TEXT, tx TEXT, side INTEGER, price REAL, usd REAL,
   wallet_roi_t REAL, streak REAL, sq_opp_usd REAL, question TEXT, start INTEGER, PRIMARY KEY (condition_id, tx, wallet, side, price));
 """
@@ -335,6 +338,12 @@ def direction(f, qinfo):
 
 
 def build_signals(db, fills):
+    _w0 = {r[0]: r[1] for r in db.execute("SELECT condition_id, winner0 FROM markets WHERE winner0 IS NOT NULL")}
+    _close = {}
+    for cid, ts, p in db.execute("SELECT p.condition_id, p.ts, p.p FROM prices p JOIN markets m ON m.condition_id=p.condition_id WHERE p.ts BETWEEN m.start-120 AND m.start ORDER BY p.ts"):
+        _close[cid] = p
+    def w0_of(cid): return _w0.get(cid)
+    def close_of(cid): return _close.get(cid)
     """One row per EVENT: first sharp fill >= MIN_FILL_USD on a main line (moneyline or the event's biggest total),
     from a wallet that is not hedging inside the event (both teams, or over AND under). Features from the tape up to that fill."""
     ev_of = {}; qinfo = {}
@@ -351,13 +360,17 @@ def build_signals(db, fills):
     made = 0; cache = {}
     for ek, fs in by_ev.items():
         if ek in have: continue
-        # main lines: all moneylines + the single total with most pregame $ ; alt totals/spreads/props are context only
-        usd_by_total = defaultdict(float)
+        # primary lines: the moneyline, the spread priced nearest 50/50, the total priced nearest 50/50 (others are alternates)
+        mean_p0 = defaultdict(lambda: [0.0, 0.0])
         for f in fs:
-            if qinfo.get(f["cid"], (None,))[0] == "total": usd_by_total[f["cid"]] += f["usd"]
-        main_total = max(usd_by_total, key=usd_by_total.get) if usd_by_total else None
-        main = {f["cid"] for f in fs if qinfo.get(f["cid"], (None,))[0] == "moneyline" or f["cid"] == main_total}
-        if not main: continue
+            mean_p0[f["cid"]][0] += f["p0"] * f["usd"]; mean_p0[f["cid"]][1] += f["usd"]
+        def primary(kind):
+            cands = [c for c in mean_p0 if qinfo.get(c, (None,))[0] == kind and mean_p0[c][1] > 0]
+            return min(cands, key=lambda c: abs(mean_p0[c][0] / mean_p0[c][1] - 0.5)) if cands else None
+        main_total = primary("total"); main_spread = primary("spread")
+        main = {f["cid"] for f in fs if qinfo.get(f["cid"], (None,))[0] == "moneyline"} | {c for c in (main_total,) if c}
+        main_all = main | {c for c in (main_spread,) if c}
+        if not main_all: continue
         hedgers = net_hedgers(((f["wallet"], f["cid"], f["is0"], f["buy"], f["usd"]) for f in fs), lambda c: qinfo.get(c, (None, None, None)))
         def hedger(w): return w in hedgers
         sq_net = defaultdict(float); all_net = defaultdict(float); sig = None
@@ -374,6 +387,34 @@ def build_signals(db, fills):
             all_net[f["cid"]] += f["sign"] * f["usd"]
         if sig:
             db.execute("INSERT OR IGNORE INTO signals (condition_id, asof, sport, market_type, start, fired_ts, wallet, side, fill_price, entry_price, usd, wallet_roi_t, streak, size_ratio, sq_opp_usd, crowd_same_usd, mins_to_start, settled, win, roi_follow, clv, event_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", sig); made += 1
+        # ---- rule variants on primary lines (ML + primary spread + primary total), same wallets, same hedger exclusion
+        elig = [f for f in fs if f["cid"] in main_all and f["usd"] >= MIN_FILL_USD and not hedger(f["wallet"])]
+        def is_sharp(f):
+            asof, sharp, _ = cache.get(monday(f["ts"])) or cache.setdefault(monday(f["ts"]), tiers_asof(db, f["ts"]))
+            return asof is not None and f["wallet"] in sharp
+        elig = [f for f in elig if is_sharp(f)]
+        if elig:
+            st = fs[0]["start"]
+            # A: first sharp fill on any primary line, entered at its price
+            f = elig[0]
+            db.execute("INSERT OR IGNORE INTO event_signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       ("A_first_primary", ek, f["cid"], f["sport"], qinfo[f["cid"]][0], st, f["ts"], f["wallet"], 0 if f["sign"] > 0 else 1,
+                        f["side_price"] + ENTRY_COST, f["usd"], int(f["win"]), f["roi_follow"], f["clv"]))
+            # B: by T-60m, the (market, side) with the most sharp $ ; entered at the T-60m price of that side
+            pre = [f for f in elig if f["ts"] <= st - 3600]
+            if pre:
+                tot = defaultdict(float)
+                for f in pre: tot[(f["cid"], f["sign"])] += f["usd"]
+                (cid, sign), usd = max(tot.items(), key=lambda kv: kv[1])
+                row = db.execute("SELECT p FROM prices WHERE condition_id=? AND ts<=? ORDER BY ts DESC LIMIT 1", (cid, st - 3600)).fetchone()
+                if row:
+                    p0 = row[0]; side_price = p0 if sign > 0 else 1 - p0
+                    if 0.05 < side_price < 0.95:
+                        win0 = w0_of(cid); win = (win0 == 1) if sign > 0 else (win0 == 0)
+                        c = close_of(cid); clv = (sign * (c - p0)) if c is not None else None
+                        db.execute("INSERT OR IGNORE INTO event_signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                   ("B_max_money_T60", ek, cid, pre[0]["sport"], qinfo[cid][0], st, st - 3600, None, 0 if sign > 0 else 1,
+                                    side_price + ENTRY_COST, usd, int(win), (1 / (side_price + ENTRY_COST) - 1) if win else -1.0, clv))
     db.commit()
     return made
 
@@ -541,6 +582,17 @@ def report(db):
     line("fired < 1h before start", [r for r in rows if (r["mins"] or 0) <= 60])
     line("moneyline only", [r for r in rows if r["mtype"] == "moneyline"])
     line("totals only", [r for r in rows if r["mtype"] == "total"])
+    lines.append(""); lines.append("RULE VARIANTS on primary lines (ML + primary spread + primary total), one bet per event:")
+    for rule in ["A_first_primary", "B_max_money_T60"]:
+        rs = [dict(cid=r[0], sport=r[1], start=r[2], win=r[3], roi=r[4], clv=r[5], mtype=r[6]) for r in
+              db.execute("SELECT event_key, sport, start, win, roi_follow, clv, market_type FROM event_signals WHERE rule=? AND win IS NOT NULL", (rule,))]
+        line(rule, rs)
+        for s_ in ["mlb", "nfl", "atp", "epl"]:
+            rs2 = [r for r in rs if r["sport"] == s_]
+            if len(rs2) >= 20: line(f"  {rule[:1]} {s_}", rs2)
+        for mt in ["moneyline", "spread", "total"]:
+            rs3 = [r for r in rs if r["mtype"] == mt]
+            if len(rs3) >= 20: line(f"  {rule[:1]} {mt}", rs3)
     lines.append(""); lines.append("LIVE ALERTS (upcoming markets, sharp fills seen):")
     for r in db.execute("SELECT datetime(ts,'unixepoch'), question, side, price, round(usd), round(wallet_roi_t,1), round(streak,2), round(sq_opp_usd), datetime(start,'unixepoch') FROM live_alerts WHERE start > ? ORDER BY ts DESC LIMIT 20", (now,)):
         lines.append(f"  {r}")
@@ -554,6 +606,7 @@ def daily(db):
     t0 = time.time()
     n_new = update_universe(db); n_crawled = crawl(db)
     n_ev = assign_event_keys(db)
+    db.execute("DELETE FROM event_signals"); db.execute("DELETE FROM signals"); db.commit()   # cheap to rebuild; keeps rules consistent
     fills = load_fills(db)
     snaps = ensure_snapshots(db, fills)
     n_sig = build_signals(db, fills)
