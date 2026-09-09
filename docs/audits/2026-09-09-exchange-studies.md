@@ -110,3 +110,34 @@ there at T−6h?) before treating it as a signal. Median |open→close| move is
 
 Conclusion: every side signal found is < the taker fee. The same signals cost
 nothing as a MAKER (post on the favored side, earn spread + drift).
+
+## Addendum 2: sharp-wallet follow, held to resolution (`study_sharp.py`)
+
+Wallets ranked in train (starts < 8/24, ≥20 fills) by CLV t-stat or by
+outcome-P&L t-stat; test (starts ≥ 8/24, 1,744 markets): copy each top-decile
+wallet's pregame fill ≥ $200 at its price + 0.5c, hold to resolution.
+
+| Ranking | Top-decile follow ROI | one bet per market | net sharp-minus-square flow ≥ $500 |
+|---|---|---|---|
+| CLV | −2.0% (z −0.5, 11,394 fills, 1,442 mkts) | −1.0% (n=1,442) | −0.1% (n=1,302) |
+| Outcome P&L | +7.5% (z 1.6, 6,492 fills, 1,085 mkts) | 0.0% (n=1,085) | −2.7% (n=1,047) |
+
+Per sport, everything is inside noise except NFL: +30% / +47% (z 2.1 / 3.6)
+on ~36 markets, which in this window are PRESEASON games. All takers in the
+test period: own ROI +0.4%, CLV −0.34c.
+
+Reading: wallet skill is real (top decile CLV +0.3–0.5c, persistent OOS) but
+half a cent of CLV is ≈ 1% of ROI, invisible at 1,000 markets and not
+bettable. Sharp-minus-square aggregate flow is null. NFL is the only cell
+worth a registered test: NFL regular-season markets accrue ~250 by week 4;
+the tape crawl can score it weekly with no shadow book involved.
+
+## Addendum 3: first paper market-maker cut (VPS recorder, evening of 9/9)
+
+188 markets, mostly partial windows. JOIN / IMPROVE / THIN policies with
+passive exits: −3.9 / −3.9 / −4.8c per $ filled, 31–35 fills. Liquid books
+carry $21k (MLB), $50k (NFL), $11k (ATP) at the touch on 1c spreads → a new
+order at the back never fills; thin props/spreads fill but adversely
+(Chelsea −1.5: −11c/$). ATP +0.2c/$ on 6 fills. The tape's maker edge belongs
+to the queue front (incumbent bots). Plain market-making at this capital is
+not viable; the daily report continues for a full-window confirmation.
