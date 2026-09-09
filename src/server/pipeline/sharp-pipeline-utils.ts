@@ -19,3 +19,9 @@ export function getCanonicalSyncStub(env: Env) {
   const id = env.SHARP_PIPELINE.idFromName(CANONICAL_SYNC_DO_ID)
   return env.SHARP_PIPELINE.get(id, { locationHint: 'enam' })
 }
+
+/** Independent, bounded shadow collector; no shared live pipeline budget. */
+export function getWalletTradeStub(env: Env) {
+  const id = env.SHARP_PIPELINE.idFromName('wallet-trade-pilot-enam-v1')
+  return env.SHARP_PIPELINE.get(id, { locationHint: 'enam' })
+}

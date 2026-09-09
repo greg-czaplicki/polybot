@@ -30,6 +30,7 @@ import {
 import {
 	getCanonicalSyncStub,
 	getPipelineStub,
+	getWalletTradeStub,
 } from "./server/pipeline/sharp-pipeline-utils";
 import {
 	backfillMissingSnapshots,
@@ -340,6 +341,17 @@ const serverEntry = {
 		return startFetch(request, { context });
 	},
 	scheduled(_event: ScheduledEvent, env: Env, executionCtx: ExecutionContext) {
+		executionCtx.waitUntil(
+			getWalletTradeStub(env)
+				.fetch("https://sharp-pipeline/wallet-trades", { method: "POST" })
+				.then(async (response) => {
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					console.log("[wallet-trades] Shadow pilot", await response.json());
+				})
+				.catch((error) =>
+					console.error("[wallet-trades] Collector failed", error),
+				),
+		);
 		const stub = getPipelineStub(env);
 		executionCtx.waitUntil(
 			stub

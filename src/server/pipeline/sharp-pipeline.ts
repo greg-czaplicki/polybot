@@ -12,6 +12,7 @@ import {
   runCanonicalSync,
 } from './canonical-sync'
 import { getPipelineStub } from './sharp-pipeline-utils'
+import { collectWalletTrades } from './wallet-trades'
 
 export type SharpPipelineJob = {
   conditionId: string
@@ -52,6 +53,9 @@ export class SharpPipeline extends DurableObject {
 
   async fetch(request: Request) {
     const url = new URL(request.url)
+    if (url.pathname === '/wallet-trades' && request.method === 'POST') {
+      return Response.json(await collectWalletTrades(this.env.POLYWHALER_DB))
+    }
     if (url.pathname === '/status') {
       const status =
         (await this.state.storage.get<PipelineStatus>('status')) ??
