@@ -318,6 +318,28 @@ const ODDSPAPI_CAPS: FetchCaps = {
 	liveClose: 8,
 	perSport: 4,
 };
+
+/** Protect one pregame quote and one close for an upcoming football slate.
+ * Live closes retain priority. This reallocates the existing budget. */
+export function footballReserveBlocksFetch(
+	footballDue: boolean,
+	footballSpent: number,
+	fetches: number,
+	cap: number,
+): boolean {
+	const reserve = footballDue ? Math.max(0, 2 - footballSpent) : 0;
+	return reserve > 0 && fetches >= cap - reserve;
+}
+
+export function footballScheduledMayFetch(
+	pregame: boolean,
+	closing: boolean,
+	spent: number,
+	fetches: number,
+	cap: number,
+): boolean {
+	return fetches < cap && ((closing && spent < 2) || (pregame && spent < 1));
+}
 const FETCH_WINDOW_SECONDS = 24 * 3600;
 /** After any pinnapi request fails (auth, 429, 5xx, network) no pinnapi
  * request is made for this long — a failed fetch caches nothing, so
@@ -1318,7 +1340,7 @@ export async function capturePinnacleOddsForPicks(
 		   AND market_type IN ('moneyline','total')
 		   AND pin_close_captured_at IS NULL
 		   AND event_time BETWEEN ? AND ?
-		 ORDER BY event_time ASC
+		 ORDER BY ROW_NUMBER() OVER (PARTITION BY sport_tag ORDER BY event_time, id), event_time
 		 LIMIT 20`,
 		now - CLOSE_WINDOW_AFTER_SECONDS,
 		now + CLOSE_WINDOW_BEFORE_SECONDS,
@@ -1336,18 +1358,41 @@ export async function capturePinnacleOddsForPicks(
 		   AND created_at > ?
 		   AND event_time > ?
 		   AND reject_reason NOT IN (${timingPlaceholders})
-		 ORDER BY created_at ASC
+		 ORDER BY ROW_NUMBER() OVER (PARTITION BY sport_tag ORDER BY created_at, id), created_at
 		 LIMIT ?`,
 		now - ANCHOR_MAX_AGE_SECONDS,
 		now,
 		...TIMING_REJECT_REASONS,
 		SHADOW_ANCHOR_LIMIT,
 	);
+	// Schedule from observed markets, including outside-window shadows:
+	// quote collection must not depend on a holder signal passing its gates.
+	const footballDemand = await all<{
+		sport_tag: string;
+		pregame: number;
+		closing: number;
+	}>(
+		db,
+		`SELECT sport_tag,
+		MAX(event_time BETWEEN ? AND ?) AS pregame,
+		MAX(event_time BETWEEN ? AND ?) AS closing
+		FROM shadow_candidates
+		WHERE sport_tag IN ('nfl','ncaaf') AND status = 'pending'
+		AND market_type IN ('moneyline','total')
+		AND event_time BETWEEN ? AND ? GROUP BY sport_tag`,
+		now + 45 * 60,
+		now + 90 * 60,
+		now,
+		now + 10 * 60,
+		now,
+		now + 24 * 3600,
+	);
 
 	if (
 		rows.length === 0 &&
 		shadowRows.length === 0 &&
-		shadowAnchorRows.length === 0
+		shadowAnchorRows.length === 0 &&
+		!footballDemand.some((d) => d.pregame || d.closing)
 	)
 		return empty;
 
@@ -1464,6 +1509,35 @@ export async function capturePinnacleOddsForPicks(
 					: caps.shadow;
 		if (providerBackoff) return false;
 		const spent = perSport.get(sportLogKey(tag)) ?? 0;
+		if (provider === "oddspapi") {
+			const footballSpent = perSport.get("oddspapi:football") ?? 0;
+			const football = sportLogKey(tag) === "oddspapi:football";
+			const liveClose = role === "live-close";
+			if (
+				!football &&
+				!liveClose &&
+				footballReserveBlocksFetch(
+					footballDemand.length > 0,
+					footballSpent,
+					fetchesInWindow,
+					caps.liveClose,
+				)
+			)
+				return false;
+			if (football && role.startsWith("shadow")) {
+				const closing = footballDemand.some((d) => d.closing);
+				const pregame = footballDemand.some((d) => d.pregame);
+				// At most one scheduled pregame request; preserve the second
+				// slot for the close. Both football leagues share one request.
+				return footballScheduledMayFetch(
+					pregame,
+					closing,
+					footballSpent,
+					fetchesInWindow,
+					caps.liveClose,
+				);
+			}
+		}
 		if (
 			fetchesInWindow >= cap &&
 			!(
@@ -1776,6 +1850,7 @@ export async function capturePinnacleOddsForPicks(
 		return null;
 	};
 
+	const footballCoverage: Record<string, string> = {};
 	let anchors = 0;
 	let closes = 0;
 	let shadowCloses = 0;
@@ -1989,6 +2064,36 @@ export async function capturePinnacleOddsForPicks(
 		);
 		shadowCloses += 1;
 	}
+
+	// Scheduled pregame quotes also warm the independent price lane.
+	// Run after live and shadow closes so close capture takes precedence.
+	for (const demand of footballDemand) {
+		if (!tracked(demand.sport_tag) || (!demand.pregame && !demand.closing))
+			continue;
+		const feed = await getFeed(
+			demand.sport_tag,
+			demand.closing ? "shadow-close" : "shadow-anchor",
+		);
+		footballCoverage[demand.sport_tag] =
+			feed && now - feed.fetchedAt <= 20 * 60 ? "fresh" : "no_fresh_quote";
+	}
+	await run(
+		db,
+		`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+		VALUES ('football_coverage', ?, ?) ON CONFLICT(key) DO UPDATE SET
+		value_json = excluded.value_json, updated_at = excluded.updated_at`,
+		JSON.stringify({
+			demand: footballDemand,
+			coverage: footballCoverage,
+			provider,
+			fetches24h: fetchesInWindow,
+			creditsRemaining: credits.remaining,
+			providerBackoff,
+		}),
+		now,
+	).catch((error) =>
+		console.warn("[pinnacle-odds] football coverage write failed", error),
+	);
 
 	// ---- Shadow anchors ------------------------------------------------
 	for (const row of shadowAnchorRows) {

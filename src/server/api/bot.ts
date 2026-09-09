@@ -1966,7 +1966,11 @@ async function listBotCandidates(
 	// entry fails the pre-filter must still record its shadows (a lone game
 	// already inside the timing window would otherwise never be recorded).
 	const recordShadowBook = async () => {
-		if (inspectConditionId || shadowInputs.length === 0) return;
+		if (inspectConditionId) return;
+		if (shadowInputs.length === 0) {
+			debug.paperLanes = await evaluatePinDivergenceLanes(db, []);
+			return;
+		}
 		try {
 			// Enrichment only for first sightings (rows the INSERT OR IGNORE
 			// will actually keep) — repeat sightings on later ticks skip the

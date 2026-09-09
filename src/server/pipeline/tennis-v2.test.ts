@@ -1,10 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { all, type Db, run } from "../db/client";
 import type { OddsApiEvent } from "./pinnacle-odds";
 import {
+	evaluatePinDivergenceLanes,
 	evaluateR1ForEntry,
 	R1_MIN_MINUTES_TO_START,
 	type TennisV2Entry,
 } from "./tennis-v2";
+
+vi.mock("../db/client", () => ({ all: vi.fn(), run: vi.fn(async () => ({})) }));
+vi.mock("./shadow-book", () => ({
+	recordShadowCandidates: vi.fn(async () => 1),
+}));
+afterEach(() => {
+	vi.useRealTimers();
+	vi.clearAllMocks();
+});
 
 const NOW = 1_790_000_000;
 const IN_TWO_HOURS = new Date((NOW + 2 * 3600) * 1000).toISOString();
@@ -47,6 +58,11 @@ function entry(overrides?: Partial<TennisV2Entry>): TennisV2Entry {
 }
 
 describe("evaluateR1ForEntry", () => {
+	it("explains mismatches without changing the decision", () => {
+		const rejected = vi.fn();
+		expect(evaluateR1ForEntry(entry(), [], NOW, rejected)).toBeNull();
+		expect(rejected).toHaveBeenCalledWith("unmatched_event");
+	});
 	it("fires on the underpriced side when divergence >= theta1", () => {
 		const d = evaluateR1ForEntry(entry(), [event()], NOW);
 		expect(d).not.toBeNull();
@@ -89,7 +105,11 @@ describe("evaluateR1ForEntry", () => {
 
 	it("tolerates session-start vs match-slot drift within 6h", () => {
 		const slot = new Date((NOW + 5 * 3600) * 1000).toISOString();
-		const d = evaluateR1ForEntry(entry(), [event({ commence_time: slot })], NOW);
+		const d = evaluateR1ForEntry(
+			entry(),
+			[event({ commence_time: slot })],
+			NOW,
+		);
 		expect(d).not.toBeNull();
 	});
 
@@ -190,5 +210,52 @@ describe("evaluateR1ForEntry", () => {
 			NOW,
 		);
 		expect(d).toBeNull();
+	});
+});
+
+describe("paper lane diagnostics", () => {
+	it("persists missing and stale feed reasons even when nothing is evaluated", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW * 1000);
+		vi.mocked(all).mockResolvedValue([
+			{ sport_tag: "wta", fetched_at: NOW - 1201, events_json: "[]" },
+		]);
+		const stats = await evaluatePinDivergenceLanes({} as Db, [
+			entry(),
+			entry({ sportTag: "nfl" }),
+		]);
+		expect(stats.evaluated).toBe(0);
+		expect(stats.bySport.wta.rejected.stale_feed).toBe(1);
+		expect(stats.bySport.nfl.rejected.missing_feed).toBe(1);
+		expect(run).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.stringContaining("paper_lanes"),
+			expect.stringContaining("stale_feed"),
+			NOW,
+		);
+	});
+	it("records no-discount evaluations separately from missing coverage", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW * 1000);
+		vi.mocked(all).mockResolvedValue([
+			{
+				sport_tag: "wta",
+				fetched_at: NOW,
+				events_json: JSON.stringify([event()]),
+			},
+		]);
+		const stats = await evaluatePinDivergenceLanes({} as Db, [
+			entry({ sideA: { label: "Aryna Sabalenka", price: 0.46 } }),
+		]);
+		expect(stats.evaluated).toBe(1);
+		expect(stats.bySport.wta.rejected.no_discount_in_price_band).toBe(1);
+	});
+	it("writes a heartbeat for empty ticks and database failures", async () => {
+		await evaluatePinDivergenceLanes({} as Db, []);
+		expect(run).toHaveBeenCalledTimes(1);
+		vi.mocked(all).mockRejectedValueOnce(new Error("lookup failed"));
+		const stats = await evaluatePinDivergenceLanes({} as Db, [entry()]);
+		expect(stats.error).toBe("lookup failed");
+		expect(run).toHaveBeenCalledTimes(2);
 	});
 });

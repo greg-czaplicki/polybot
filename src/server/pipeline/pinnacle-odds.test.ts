@@ -7,6 +7,8 @@ import {
 import {
 	extractPinnaclePrices,
 	type FetchCaps,
+	footballReserveBlocksFetch,
+	footballScheduledMayFetch,
 	matchOddsApiEvent,
 	type OddsApiEvent,
 	parseTitleTeams,
@@ -17,6 +19,24 @@ import {
 } from "./pinnacle-odds";
 
 const T0 = 1786400000; // arbitrary fixed event time (seconds)
+
+describe("football quote scheduling", () => {
+	it("reserves two unused slots on football days without raising the cap", () => {
+		expect(footballReserveBlocksFetch(true, 0, 6, 8)).toBe(true);
+		expect(footballReserveBlocksFetch(true, 0, 5, 8)).toBe(false);
+		expect(footballReserveBlocksFetch(true, 1, 7, 8)).toBe(true);
+		expect(footballReserveBlocksFetch(false, 0, 7, 8)).toBe(false);
+		expect(footballReserveBlocksFetch(true, 2, 7, 8)).toBe(false);
+	});
+	it("allows one pregame fetch and saves the second for the close", () => {
+		expect(footballScheduledMayFetch(true, false, 0, 6, 8)).toBe(true);
+		expect(footballScheduledMayFetch(true, false, 1, 7, 8)).toBe(false);
+		expect(footballScheduledMayFetch(false, true, 1, 7, 8)).toBe(true);
+		expect(footballScheduledMayFetch(false, true, 2, 7, 8)).toBe(false);
+		expect(footballScheduledMayFetch(false, true, 1, 8, 8)).toBe(false);
+		expect(footballScheduledMayFetch(false, false, 0, 0, 8)).toBe(false);
+	});
+});
 
 function iso(seconds: number): string {
 	return new Date(seconds * 1000).toISOString();

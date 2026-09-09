@@ -6,6 +6,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { all, first } from "../db/client";
 import { getDb } from "../env";
+import {
+	WALLET_LEADERBOARD_SQL,
+	WALLET_SPORT_CLV_SQL,
+} from "../repositories/wallet-clv";
 import { resolveSportTagFromSeriesId } from "./series-registry";
 
 export interface WalletClvTotals {
@@ -38,6 +42,7 @@ export interface WalletEntryRow {
 export interface WalletLeaderboardRow {
 	walletAddress: string;
 	entries: number;
+	/** Fully processed distinct markets with measured CLV, not increments. */
 	closed: number;
 	avgClv: number;
 	avgRelClv: number | null;
@@ -139,38 +144,21 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			 LIMIT 40`,
 		);
 
-		// Skill needs repetition: require >=3 settled entries before a wallet
-		// earns a leaderboard row. Ranked by RELATIVE CLV (clv / entry_price):
-		// a 2¢ beat on a 10¢ entry is a 20% edge, on a 90¢ entry it's noise —
-		// absolute cents would bias the ranking toward mid-priced entries.
+		// Require three distinct measured markets. Combine cash/share increments
+		// within a market, then give each market equal weight in the ranking.
 		const leaderboardRows = await all<{
 			wallet_address: string;
 			entries: number;
+			markets: number;
 			closed: number;
 			avg_clv: number;
 			avg_rel_clv: number | null;
 			beat_close: number;
 			total_delta: number;
 			last_seen: number;
-		}>(
-			db,
-			`SELECT wallet_address,
-			        COUNT(*) AS entries,
-			        SUM(status = 'closed') AS closed,
-			        AVG(CASE WHEN status = 'closed' THEN clv END) AS avg_clv,
-			        AVG(CASE WHEN status = 'closed' AND entry_price > 0 THEN clv / entry_price END) AS avg_rel_clv,
-			        SUM(CASE WHEN status = 'closed' AND clv > 0 THEN 1 ELSE 0 END) AS beat_close,
-			        SUM(delta_usd) AS total_delta,
-			        MAX(observed_at) AS last_seen
-			 FROM wallet_entries
-			 GROUP BY wallet_address
-			 HAVING SUM(status = 'closed') >= 3
-			 ORDER BY avg_rel_clv DESC
-			 LIMIT 25`,
-		);
+		}>(db, WALLET_LEADERBOARD_SQL);
 
-		// Per-wallet sport mix (wallets with >=3 entries — covers every
-		// leaderboard wallet). Grouped by raw series id and merged into sport
+		// Per-wallet sport mix, grouped by raw series id and merged into sport
 		// tags in JS: per-season ids (nfl-2025 vs nfl-2026) share one tag, and
 		// SQLite can't apply the registry mapping. Sums, not AVGs, so tag-level
 		// merges recombine exactly.
@@ -186,26 +174,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 			beat_close: number;
 			total_delta: number;
 			last_seen: number;
-		}>(
-			db,
-			`SELECT wallet_address, sport_series_id,
-			        COUNT(*) AS n,
-			        COUNT(DISTINCT condition_id) AS markets,
-			        SUM(status = 'closed') AS closed,
-			        SUM(CASE WHEN status = 'closed' THEN clv END) AS clv_sum,
-			        SUM(CASE WHEN status = 'closed' AND entry_price > 0 THEN clv / entry_price END) AS rel_clv_sum,
-			        SUM(CASE WHEN status = 'closed' AND entry_price > 0 THEN 1 ELSE 0 END) AS rel_clv_n,
-			        SUM(CASE WHEN status = 'closed' AND clv > 0 THEN 1 ELSE 0 END) AS beat_close,
-			        SUM(delta_usd) AS total_delta,
-			        MAX(observed_at) AS last_seen
-			 FROM wallet_entries
-			 WHERE sport_series_id IS NOT NULL
-			   AND wallet_address IN (
-			     SELECT wallet_address FROM wallet_entries
-			     GROUP BY wallet_address HAVING COUNT(*) >= 3
-			   )
-			 GROUP BY wallet_address, sport_series_id`,
-		);
+		}>(db, WALLET_SPORT_CLV_SQL);
 
 		const mixByWallet = new Map<string, WalletSportMix>();
 		// Per-wallet per-tag DISTINCT MARKET counts (a condition_id belongs to
@@ -332,7 +301,7 @@ export const getWalletClvSummaryFn = createServerFn({ method: "GET" }).handler(
 				topSport: mix?.topSport ?? null,
 				topSportShare: mix?.topSportShare ?? null,
 				sportsCount: mix?.sportsCount ?? 0,
-				markets: mix?.markets ?? 0,
+				markets: row.markets,
 			};
 		});
 

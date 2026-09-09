@@ -102,8 +102,14 @@ export function evaluateR1ForEntry(
 	entry: TennisV2Entry,
 	events: OddsApiEvent[],
 	now: number,
+	onReject?: (reason: string) => void,
 ): R1Decision | null {
-	if (getMarketTypeLabel(entry.marketTitle) !== "moneyline") return null;
+	const reject = (reason: string): null => {
+		onReject?.(reason);
+		return null;
+	};
+	if (getMarketTypeLabel(entry.marketTitle) !== "moneyline")
+		return reject("market_type");
 	const a = entry.sideA;
 	const b = entry.sideB;
 	if (
@@ -114,15 +120,16 @@ export function evaluateR1ForEntry(
 		!a.label ||
 		!b.label
 	)
-		return null;
+		return reject("missing_price_or_label");
 	const eventTime = entry.eventTime
 		? Math.floor(Date.parse(entry.eventTime) / 1000)
 		: Number.NaN;
-	if (!Number.isFinite(eventTime)) return null;
-	if (eventTime - now < R1_MIN_MINUTES_TO_START * 60) return null;
+	if (!Number.isFinite(eventTime)) return reject("missing_event_time");
+	if (eventTime - now < R1_MIN_MINUTES_TO_START * 60)
+		return reject("too_close_to_start");
 
 	const teams = parseTitleTeams(entry.marketTitle);
-	if (!teams) return null;
+	if (!teams) return reject("unparsed_matchup");
 	const event = matchOddsApiEvent(events, {
 		homeName: teams.teamA,
 		awayName: teams.teamB,
@@ -131,7 +138,7 @@ export function evaluateR1ForEntry(
 			? TENNIS_MATCH_GAP_SECONDS
 			: undefined,
 	});
-	if (!event) return null;
+	if (!event) return reject("unmatched_event");
 
 	// De-vig each side independently: with a draw outcome (soccer) the
 	// two sides' fair probs sum to < 1, so no side is the complement of
@@ -145,7 +152,8 @@ export function evaluateR1ForEntry(
 		}).fairProb;
 	const fairHome = fairFor("home");
 	const fairAway = fairFor("away");
-	if (fairHome === null || fairAway === null) return null;
+	if (fairHome === null || fairAway === null)
+		return reject("missing_pinnacle_prices");
 
 	// Map PM sides onto the matched event's participants by name.
 	const sideFair = (label: string): number | null =>
@@ -156,13 +164,13 @@ export function evaluateR1ForEntry(
 				: null;
 	const fairA = sideFair(a.label);
 	const fairB = sideFair(b.label);
-	if (fairA === null || fairB === null) return null;
+	if (fairA === null || fairB === null) return reject("unmatched_side");
 	// Both labels resolving to the SAME participant would double-count.
 	if (
 		teamNamesMatch(a.label, event.home_team) ===
 		teamNamesMatch(b.label, event.home_team)
 	)
-		return null;
+		return reject("duplicate_side");
 
 	const candidates: R1Decision[] = [];
 	const consider = (side: "A" | "B", s: TennisV2Side, fair: number) => {
@@ -185,7 +193,7 @@ export function evaluateR1ForEntry(
 	consider("A", a, fairA);
 	consider("B", b, fairB);
 	candidates.sort((x, y) => y.divergence - x.divergence);
-	return candidates[0] ?? null;
+	return candidates[0] ?? reject("no_discount_in_price_band");
 }
 
 /**
@@ -204,6 +212,16 @@ export interface PaperLaneStats {
 	fired: number;
 	/** New paper rows written this tick. */
 	recorded: number;
+	bySport: Record<
+		string,
+		{
+			eligible: number;
+			evaluated: number;
+			fired: number;
+			rejected: Record<string, number>;
+		}
+	>;
+	error?: string;
 }
 const EMPTY_STATS: PaperLaneStats = {
 	eligible: 0,
@@ -211,11 +229,12 @@ const EMPTY_STATS: PaperLaneStats = {
 	evaluated: 0,
 	fired: 0,
 	recorded: 0,
+	bySport: {},
 };
 
 /** Durable heartbeat (bot_runtime_status key `paper_lanes`): worker logs
  * are not retained, so this is the only evidence the lanes ran. Written
- * only on ticks that evaluated at least one entry against a fresh feed. */
+ * on every tick, including missing feeds and failures. */
 async function writeLaneHeartbeat(
 	db: Db,
 	now: number,
@@ -241,13 +260,23 @@ export async function evaluatePinDivergenceLanes(
 	db: Db,
 	entries: TennisV2Entry[],
 ): Promise<PaperLaneStats> {
-	const stats: PaperLaneStats = { ...EMPTY_STATS };
+	const stats: PaperLaneStats = { ...EMPTY_STATS, bySport: {} };
+	const now = nowUnixSeconds();
 	try {
-		const now = nowUnixSeconds();
 		const eligible = entries.filter(
 			(e) => e.sportTag !== null && LANE_BY_TAG[e.sportTag] !== undefined,
 		);
 		stats.eligible = eligible.length;
+		for (const entry of eligible) {
+			const tag = entry.sportTag as string;
+			stats.bySport[tag] ??= {
+				eligible: 0,
+				evaluated: 0,
+				fired: 0,
+				rejected: {},
+			};
+			stats.bySport[tag].eligible += 1;
+		}
 		if (eligible.length === 0) return stats;
 		const tags = [...new Set(eligible.map((e) => e.sportTag as string))];
 		const feeds = await all<{
@@ -258,16 +287,22 @@ export async function evaluatePinDivergenceLanes(
 			db,
 			`SELECT sport_tag, fetched_at, events_json FROM pinnacle_feed_cache
 			 WHERE sport_tag IN (${tags.map(() => "?").join(",")})
-			   AND fetched_at > ?`,
+			`,
 			...tags,
-			now - R1_MAX_QUOTE_AGE_SECONDS,
 		);
-		if (feeds.length === 0) return stats;
+		const feedFailures = new Map<string, string>();
 		const eventsByTag = new Map<
 			string,
 			{ at: number; events: OddsApiEvent[] }
 		>();
 		for (const feed of feeds) {
+			if (
+				feed.fetched_at > now ||
+				now - feed.fetched_at > R1_MAX_QUOTE_AGE_SECONDS
+			) {
+				feedFailures.set(feed.sport_tag, "stale_feed");
+				continue;
+			}
 			try {
 				const events = JSON.parse(feed.events_json) as OddsApiEvent[];
 				if (Array.isArray(events) && events.length > 0)
@@ -275,21 +310,31 @@ export async function evaluatePinDivergenceLanes(
 						at: feed.fetched_at,
 						events,
 					});
+				else feedFailures.set(feed.sport_tag, "empty_feed");
 			} catch {
-				// unparseable cache row: skip the league this tick
+				feedFailures.set(feed.sport_tag, "invalid_feed");
 			}
 		}
 		stats.freshFeeds = eventsByTag.size;
-		if (eventsByTag.size === 0) return stats;
 
 		const inputs = [];
 		for (const entry of eligible) {
-			const feed = eventsByTag.get(entry.sportTag as string);
-			if (!feed) continue;
+			const tag = entry.sportTag as string;
+			const sport = stats.bySport[tag];
+			const reject = (reason: string) => {
+				sport.rejected[reason] = (sport.rejected[reason] ?? 0) + 1;
+			};
+			const feed = eventsByTag.get(tag);
+			if (!feed) {
+				reject(feedFailures.get(tag) ?? "missing_feed");
+				continue;
+			}
 			stats.evaluated += 1;
-			const decision = evaluateR1ForEntry(entry, feed.events, now);
+			sport.evaluated += 1;
+			const decision = evaluateR1ForEntry(entry, feed.events, now, reject);
 			if (!decision) continue;
 			stats.fired += 1;
+			sport.fired += 1;
 			const eventTime = Math.floor(
 				Date.parse(entry.eventTime as string) / 1000,
 			);
@@ -322,10 +367,12 @@ export async function evaluatePinDivergenceLanes(
 					`[pin-divergence] recorded ${stats.recorded} paper rows across lanes`,
 				);
 		}
-		if (stats.evaluated > 0) await writeLaneHeartbeat(db, now, stats);
 		return stats;
 	} catch (error) {
+		stats.error = error instanceof Error ? error.message : String(error);
 		console.warn("[pin-divergence] lane evaluation failed:", error);
 		return stats;
+	} finally {
+		await writeLaneHeartbeat(db, now, stats);
 	}
 }

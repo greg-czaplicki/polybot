@@ -4,8 +4,8 @@
  * Records per-wallet market ENTRIES by diffing each market's top-holder
  * snapshot against the previous pipeline tick, then settles them against
  * the pre-event closing price from sharp_money_history. The output —
- * per-wallet CLV over many graded entries — is a far stronger skill signal
- * than leaderboard PnL, but it is data collection only: nothing in the
+ * per-wallet CLV over many graded entries — is a candidate skill measure
+ * under evaluation. It is data collection only: nothing in the
  * picking path reads wallet_entries yet.
  *
  * Diff semantics: holder `amount` is USD (shares × price), so a price move
@@ -21,8 +21,6 @@
 import type { Db } from "../db/client";
 import { all, run } from "../db/client";
 import { nowUnixSeconds } from "../env";
-import { findPriceAtOrBefore } from "../repositories/manual-picks";
-import { listSharpMoneyHistoryByConditionIds } from "../repositories/sharp-money";
 
 /** Ignore position growth below this — dust and rounding noise. */
 const MIN_DELTA_USD = 100;
@@ -32,6 +30,25 @@ const MIN_LEAD_SECONDS = 60;
 const CLOSE_MAX_STALENESS_SECONDS = 3600;
 /** Entries with no resolvable close after this long are voided. */
 const VOID_AFTER_SECONDS = 7 * 86400;
+
+/** Missing closes do not occupy the batch. The correlated lookup uses the
+ * history's condition/time index and never accepts a post-start price.
+ * Bind: minimum event age cutoff, void deadline, batch limit. */
+export const WALLET_ENTRIES_TO_SETTLE_SQL = `
+	WITH closable AS (
+		SELECT w.id, w.entry_price, w.event_time,
+			(SELECT CASE w.side WHEN 'A' THEN h.side_a_price WHEN 'B' THEN h.side_b_price END
+			 FROM sharp_money_history h
+			 WHERE h.condition_id = w.condition_id
+			 AND h.recorded_at BETWEEN w.event_time - ${CLOSE_MAX_STALENESS_SECONDS} AND w.event_time
+			 AND CASE w.side WHEN 'A' THEN h.side_a_price WHEN 'B' THEN h.side_b_price END > 0
+			 ORDER BY h.recorded_at DESC LIMIT 1) AS close_price
+		FROM wallet_entries w
+		WHERE w.status = 'open' AND w.event_time < ?
+	)
+	SELECT id, entry_price, event_time, close_price FROM closable
+	WHERE close_price IS NOT NULL OR event_time < ?
+	ORDER BY event_time, id LIMIT ?`;
 
 export interface HolderPosition {
 	proxyWallet: string;
@@ -251,70 +268,42 @@ export async function settleWalletEntries(
 
 	const open = await all<{
 		id: number;
-		condition_id: string;
-		side: string;
 		entry_price: number;
 		event_time: number;
+		close_price: number | null;
 	}>(
 		db,
-		`SELECT id, condition_id, side, entry_price, event_time
-		 FROM wallet_entries
-		 WHERE status = 'open' AND event_time < ?
-		 ORDER BY event_time ASC
-		 LIMIT ?`,
+		WALLET_ENTRIES_TO_SETTLE_SQL,
 		now - CLOSE_MAX_STALENESS_SECONDS,
+		now - VOID_AFTER_SECONDS,
 		limit,
 	);
 	if (open.length === 0) return { checked: 0, updated: 0, voided: 0 };
 
-	const conditionIds = Array.from(new Set(open.map((row) => row.condition_id)));
-	const earliestEvent = Math.min(...open.map((row) => row.event_time));
-	let history: Awaited<ReturnType<typeof listSharpMoneyHistoryByConditionIds>> =
-		{};
-	try {
-		history = await listSharpMoneyHistoryByConditionIds(
-			db,
-			conditionIds,
-			earliestEvent - 4 * 3600,
-		);
-	} catch (error) {
-		console.warn("[wallet-clv] history lookup failed", error);
-		return { checked: open.length, updated: 0, voided: 0 };
-	}
-
 	let updated = 0;
 	let voided = 0;
 	for (const row of open) {
-		const rows = history[row.condition_id];
-		const close =
-			rows && rows.length > 0 && (row.side === "A" || row.side === "B")
-				? findPriceAtOrBefore(
-						rows,
-						row.side,
-						row.event_time,
-						CLOSE_MAX_STALENESS_SECONDS,
-					)
-				: null;
+		const close = row.close_price;
 		if (close !== null) {
-			await run(
+			const result = await run(
 				db,
 				`UPDATE wallet_entries
 				 SET status = 'closed', close_price = ?, clv = ?, settled_at = ?
-				 WHERE id = ?`,
+				 WHERE id = ? AND status = 'open'`,
 				close,
 				close - row.entry_price,
 				now,
 				row.id,
 			);
-			updated += 1;
+			updated += Number(result.meta?.changes ?? 0);
 		} else if (now - row.event_time > VOID_AFTER_SECONDS) {
-			await run(
+			const result = await run(
 				db,
-				`UPDATE wallet_entries SET status = 'void', settled_at = ? WHERE id = ?`,
+				`UPDATE wallet_entries SET status = 'void', settled_at = ? WHERE id = ? AND status = 'open'`,
 				now,
 				row.id,
 			);
-			voided += 1;
+			voided += Number(result.meta?.changes ?? 0);
 		}
 	}
 	return { checked: open.length, updated, voided };
