@@ -11,6 +11,7 @@ import {
 import { settlePendingManualPicks } from "./server/api/manual-picks";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { handleShadowDigestRequest } from "./server/api/shadow-digest";
+import { handleSportEdgeRequest } from "./server/api/sport-edge";
 import { handleWalletTradeDigestRequest } from "./server/api/wallet-trade-digest";
 import { extractAuthToken, verifyAuthToken } from "./server/auth-token";
 import type { Env, RequestContext } from "./server/env";
@@ -66,6 +67,8 @@ const serverEntry = {
 			env,
 		);
 		if (walletDigestResponse) return walletDigestResponse;
+		const sportEdgeResponse = await handleSportEdgeRequest(request, env);
+		if (sportEdgeResponse) return sportEdgeResponse;
 
 		const loginResponse = await handleLoginRequest(request, env);
 		if (loginResponse) {

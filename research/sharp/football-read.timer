@@ -1,0 +1,7 @@
+[Unit]
+Description=weekly football read, Mondays 12:00 UTC (after the daily polysharp report)
+[Timer]
+OnCalendar=Mon *-*-* 12:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

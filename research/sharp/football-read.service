@@ -1,0 +1,5 @@
+[Unit]
+Description=weekly NFL/NCAAF shadow read
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/polysharp/football-read.sh
