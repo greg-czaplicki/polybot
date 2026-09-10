@@ -148,7 +148,7 @@ def update_universe(db):
     n = 0
     for cid, sport, gs, q, t0, t1 in rows:
         r = db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, token1, status, source) VALUES (?,?,?,?,?,?,?,'pending','polybook')",
-                       (cid, sport, gs, classify(q), q, t0, t1))
+                       (cid, sport, classify(q), gs, q, t0, t1))
         n += r.rowcount
     # re-classify seed rows that only had moneyline/total from the old crawl
     db.execute("UPDATE markets SET market_type=NULL WHERE market_type IN ('moneyline','total') AND question IS NOT NULL AND source='seed' AND event_key IS NULL")
