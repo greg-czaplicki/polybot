@@ -112,10 +112,23 @@ export function isPlayerPropTitle(title: string): boolean {
  * Classifies a market title into a bet type. Shared by the candidate scan
  * (grading, policy segments) and the shadow book (rejected-candidate rows).
  */
+const ESPORTS_PREFIX_PATTERN =
+	/^(counter-strike|cs2|lol|league of legends|dota 2|valorant|rocket league)\s*:/i;
+const ESPORTS_DERIVATIVE_PATTERN =
+	/\b(map|game)\s*\d+\b|map handicap|odd\/even|games total|maps total|total kills|total rounds|first blood|pistol/i;
+
 export function getMarketTypeLabel(
 	marketTitle: string,
 ): "total" | "spread" | "moneyline" | "prop" | "other" {
 	const lower = marketTitle.toLowerCase();
+	// Esports (era v13): "Counter-Strike: A vs B (BO3) - Event" is the match
+	// winner; map/game winners, map handicaps, games totals and odd/even
+	// markets are derivatives and classify as props.
+	if (ESPORTS_PREFIX_PATTERN.test(marketTitle)) {
+		if (ESPORTS_DERIVATIVE_PATTERN.test(marketTitle)) return "prop";
+		if (/\bvs\.?\b/i.test(marketTitle)) return "moneyline";
+		return "other";
+	}
 	// Prop patterns must win over the core-type keywords: team totals and
 	// period markets contain "total"/"o/u"/"spread"/"moneyline" and would
 	// otherwise classify as pickable full-game markets (era v7).

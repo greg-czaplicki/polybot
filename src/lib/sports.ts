@@ -26,6 +26,10 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10204: "ucl", // ucl-2025
 	10365: "atp",
 	10366: "wta",
+	10310: "cs2", // counter-strike (evergreen)
+	10311: "lol", // league-of-legends
+	10309: "dota2", // dota-2
+	10369: "valorant",
 };
 
 interface SportTagDefinition {
@@ -346,6 +350,30 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
 		label: "NRL",
 		slugMarkers: ["nrl-"],
 		keywords: ["nrl", "state of origin"],
+	},
+	{
+		tag: "cs2",
+		label: "CS2",
+		slugMarkers: ["cs2-"],
+		keywords: ["counter-strike", "cs2", "csgo"],
+	},
+	{
+		tag: "lol",
+		label: "LoL",
+		slugMarkers: ["lol-"],
+		keywords: ["league of legends", "lol:", "lck", "lec", "lpl", "worlds"],
+	},
+	{
+		tag: "dota2",
+		label: "Dota 2",
+		slugMarkers: ["dota2-"],
+		keywords: ["dota 2", "dota2"],
+	},
+	{
+		tag: "valorant",
+		label: "Valorant",
+		slugMarkers: ["val-"],
+		keywords: ["valorant"],
 	},
 ];
 

@@ -162,3 +162,28 @@ describe("extractSpreadFromTitle", () => {
 		).toBe(4.5);
 	});
 });
+
+describe("esports market types (era v13)", () => {
+	it("classifies match winners as moneyline and derivatives as props", () => {
+		expect(
+			getMarketTypeLabel(
+				"Counter-Strike: MIBR vs BetBoom Team (BO3) - PGL Masters Bucharest: NA Qualifier",
+			),
+		).toBe("moneyline");
+		expect(
+			getMarketTypeLabel(
+				"LoL: T1 Academy vs Dplus KIA Challengers (BO5) - LCK Challengers League Playoffs",
+			),
+		).toBe("moneyline");
+		for (const t of [
+			"Counter-Strike: MIBR vs BetBoom Team - Map 1 Winner",
+			"LoL: T1 Academy vs Dplus KIA Challengers - Game 1 Winner",
+			"Dota 2: Shizageddon vs Nemiga Gaming - Game 2 Winner",
+			"Valorant: TEC Esports vs All Gamers - Map 3 Winner",
+			"Counter-Strike: Map Handicap: INF (-1.5) vs against All authority (+1.5)",
+			"Counter-Strike: Map 1: Odd/Even Total Kills?",
+			"Counter-Strike: Games Total: O/U 2.5",
+		])
+			expect(getMarketTypeLabel(t)).toBe("prop");
+	});
+});

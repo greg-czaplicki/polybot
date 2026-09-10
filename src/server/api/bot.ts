@@ -802,7 +802,18 @@ function getSportPolicyKey(sportSeriesId?: number): string {
 // ordering as NHL puck lines), so the probation cohort stays two-way
 // markets only; the ncaab_penalty ranking adjustment is moot while on
 // probation.
+// EPL + MLS (2026-09-10, era v13): soccer paused to shadow-only — the EPL
+// all-five-gates cohort read −62% (z −3.4) on 21 games; 3 live soccer picks
+// since 7/20. Esports (cs2/lol/dota2/valorant) enter shadow-only the same
+// day, first rows ever. Promotion path: the pre-registered per-sport read
+// (docs/audits/2026-09-10-football-plan.md), both readouts, one row per game.
 const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
+	"epl",
+	"mls",
+	"cs2",
+	"lol",
+	"dota2",
+	"valorant",
 	"nhl",
 	"ncaaf",
 	"nfl",

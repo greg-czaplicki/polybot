@@ -51,19 +51,55 @@ export type SeriesSportConfig =
  */
 export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 	// 12185 = nfl-2026 (minted by 2026-08-05); 10187 = nfl-2025, still active.
-	{ tag: "nfl", kind: "seasonal", slugBase: "nfl", fallbackIds: [10187, 12185], target: true },
-	{ tag: "nba", kind: "seasonal", slugBase: "nba", fallbackIds: [10345], target: true },
+	{
+		tag: "nfl",
+		kind: "seasonal",
+		slugBase: "nfl",
+		fallbackIds: [10187, 12185],
+		target: true,
+	},
+	{
+		tag: "nba",
+		kind: "seasonal",
+		slugBase: "nba",
+		fallbackIds: [10345],
+		target: true,
+	},
 	// Tag is "ncaaf" (canonical DB convention: teams/games sport_tag), but the
 	// Gamma series slug base is "cfb" (cfb-2025, cfb-2026, ...).
-	{ tag: "ncaaf", kind: "seasonal", slugBase: "cfb", fallbackIds: [10210], target: true },
+	{
+		tag: "ncaaf",
+		kind: "seasonal",
+		slugBase: "cfb",
+		fallbackIds: [10210],
+		target: true,
+	},
 	{ tag: "ncaab", kind: "static", seriesId: 10470, target: true },
 	{ tag: "mlb", kind: "static", seriesId: 3, target: true },
 	// NHL shadow-settles behind nhl_league_probation (2026-08-25; was a hard
 	// nhl_sport_excluded reject from 2026-03-19) so the 2026-27 season builds
 	// a would-have-bet cohort under current gates.
-	{ tag: "nhl", kind: "seasonal", slugBase: "nhl", fallbackIds: [10346], target: true },
-	{ tag: "epl", kind: "seasonal", slugBase: "premier-league", fallbackIds: [10188], target: true },
-	{ tag: "mls", kind: "seasonal", slugBase: "mls", fallbackIds: [10189], target: true },
+	{
+		tag: "nhl",
+		kind: "seasonal",
+		slugBase: "nhl",
+		fallbackIds: [10346],
+		target: true,
+	},
+	{
+		tag: "epl",
+		kind: "seasonal",
+		slugBase: "premier-league",
+		fallbackIds: [10188],
+		target: true,
+	},
+	{
+		tag: "mls",
+		kind: "seasonal",
+		slugBase: "mls",
+		fallbackIds: [10189],
+		target: true,
+	},
 	// EFL Championship uses an evergreen slug (`efl-championship`, no season
 	// suffix — verified 2026-08-18), so it's static, not seasonal. Ingested
 	// for the shadow book only: the {championship,atp,wta} league-probation
@@ -76,16 +112,53 @@ export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 	// which discovery finds via the year-window probe. UCL has no ESPN
 	// linkage or team seeding yet (league-phase field not drawn until late
 	// Aug); its games only link when both clubs are seeded domestically.
-	{ tag: "laliga", kind: "seasonal", slugBase: "la-liga", fallbackIds: [10193], target: true },
-	{ tag: "bundesliga", kind: "seasonal", slugBase: "bundesliga", fallbackIds: [10194], target: true },
-	{ tag: "seriea", kind: "seasonal", slugBase: "serie-a", fallbackIds: [10203], target: true },
-	{ tag: "ligue1", kind: "seasonal", slugBase: "ligue-1", fallbackIds: [10195], target: true },
-	{ tag: "ucl", kind: "seasonal", slugBase: "ucl", fallbackIds: [10204], target: true },
+	{
+		tag: "laliga",
+		kind: "seasonal",
+		slugBase: "la-liga",
+		fallbackIds: [10193],
+		target: true,
+	},
+	{
+		tag: "bundesliga",
+		kind: "seasonal",
+		slugBase: "bundesliga",
+		fallbackIds: [10194],
+		target: true,
+	},
+	{
+		tag: "seriea",
+		kind: "seasonal",
+		slugBase: "serie-a",
+		fallbackIds: [10203],
+		target: true,
+	},
+	{
+		tag: "ligue1",
+		kind: "seasonal",
+		slugBase: "ligue-1",
+		fallbackIds: [10195],
+		target: true,
+	},
+	{
+		tag: "ucl",
+		kind: "seasonal",
+		slugBase: "ucl",
+		fallbackIds: [10204],
+		target: true,
+	},
 	// Tennis: per-match markets live under the evergreen atp/wta series (no
 	// per-tournament series; US Open matches flow through these). Shadow-only
 	// via the same league-probation gate.
 	{ tag: "atp", kind: "static", seriesId: 10365, target: true },
 	{ tag: "wta", kind: "static", seriesId: 10366, target: true },
+	// Esports (2026-09-10, era v13): evergreen Gamma series, shadow-only via
+	// league probation. Match winners are "Game: A vs B (BO3) - Event"; map /
+	// game winners, map handicaps and odd/even markets classify as props.
+	{ tag: "cs2", kind: "static", seriesId: 10310, target: true },
+	{ tag: "lol", kind: "static", seriesId: 10311, target: true },
+	{ tag: "dota2", kind: "static", seriesId: 10309, target: true },
+	{ tag: "valorant", kind: "static", seriesId: 10369, target: true },
 	// Label-only sports (not fetched by runtime sync).
 	// Gamma's UFC games series. (The old SPORTS_SERIES_IDS map pointed `mma`
 	// at 10500, which is actually a Netflix stock-price series.)
@@ -154,7 +227,9 @@ function finalizeRegistry(
 	return {
 		resolvedAt: Date.now(),
 		series,
-		targetSeriesIds: [...new Set(series.filter((s) => s.target).map((s) => s.seriesId))],
+		targetSeriesIds: [
+			...new Set(series.filter((s) => s.target).map((s) => s.seriesId)),
+		],
 		idToTag: new Map(series.map((s) => [s.seriesId, s.tag])),
 		discoveryFailures,
 	};
@@ -173,7 +248,11 @@ async function probeSeriesSlug(slug: string): Promise<GammaSeries | null> {
 	if (!Array.isArray(body) || body.length === 0) return null;
 	const match = body.find((s) => s.slug === slug);
 	if (!match) return null;
-	if (match.active === false || match.closed === true || match.archived === true) {
+	if (
+		match.active === false ||
+		match.closed === true ||
+		match.archived === true
+	) {
 		return null;
 	}
 	const id = Number(match.id);
@@ -257,7 +336,10 @@ export async function resolveSeriesRegistry(options?: {
 			});
 			continue;
 		}
-		const { resolved, failed } = await discoverSeasonalSeries(config, seasonYears);
+		const { resolved, failed } = await discoverSeasonalSeries(
+			config,
+			seasonYears,
+		);
 		series.push(...resolved);
 		if (failed) {
 			discoveryFailures.push(config.tag);

@@ -18,6 +18,7 @@ import { Route as RuntimeRouteImport } from './routes/runtime'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as CanonicalRouteImport } from './routes/canonical'
 import { Route as BotRouteImport } from './routes/bot'
+import { Route as BookRouteImport } from './routes/book'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SharpMarketConditionIdRouteImport } from './routes/sharp.market.$conditionId'
 
@@ -66,6 +67,11 @@ const BotRoute = BotRouteImport.update({
   path: '/bot',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BookRoute = BookRouteImport.update({
+  id: '/book',
+  path: '/book',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -79,6 +85,7 @@ const SharpMarketConditionIdRoute = SharpMarketConditionIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/book': typeof BookRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
@@ -92,6 +99,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/book': typeof BookRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
@@ -106,6 +114,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/book': typeof BookRoute
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/book'
     | '/bot'
     | '/canonical'
     | '/login'
@@ -134,6 +144,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/book'
     | '/bot'
     | '/canonical'
     | '/login'
@@ -147,6 +158,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/book'
     | '/bot'
     | '/canonical'
     | '/login'
@@ -161,6 +173,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BookRoute: typeof BookRoute
   BotRoute: typeof BotRoute
   CanonicalRoute: typeof CanonicalRoute
   LoginRoute: typeof LoginRoute
@@ -237,6 +250,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BotRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/book': {
+      id: '/book'
+      path: '/book'
+      fullPath: '/book'
+      preLoaderRoute: typeof BookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -266,6 +286,7 @@ const SharpRouteWithChildren = SharpRoute._addFileChildren(SharpRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BookRoute: BookRoute,
   BotRoute: BotRoute,
   CanonicalRoute: CanonicalRoute,
   LoginRoute: LoginRoute,
