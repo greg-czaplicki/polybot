@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS signals (condition_id TEXT PRIMARY KEY, asof INTEGER,
 CREATE TABLE IF NOT EXISTS event_signals (rule TEXT NOT NULL, event_key TEXT NOT NULL, condition_id TEXT, sport TEXT, market_type TEXT,
   start INTEGER, fired_ts INTEGER, wallet TEXT, side INTEGER, entry_price REAL, usd REAL, win INTEGER, roi_follow REAL, clv REAL,
   PRIMARY KEY (rule, event_key));
+CREATE TABLE IF NOT EXISTS watchlist (wallet TEXT PRIMARY KEY, note TEXT, added_at INTEGER);
 CREATE TABLE IF NOT EXISTS live_alerts (condition_id TEXT, ts INTEGER, wallet TEXT, tx TEXT, side INTEGER, price REAL, usd REAL,
   wallet_roi_t REAL, streak REAL, sq_opp_usd REAL, question TEXT, start INTEGER, PRIMARY KEY (condition_id, tx, wallet, side, price));
 """
@@ -289,7 +290,7 @@ def ensure_snapshots(db, fills):
     return made
 
 
-def tiers_asof(db, ts):
+def tiers_asof(db, ts, include_watchlist=False):
     row = db.execute("SELECT MAX(asof) FROM wallet_scores WHERE asof <= ?", (ts,)).fetchone()
     if not row or row[0] is None: return None, {}, {}
     asof = row[0]
@@ -297,6 +298,9 @@ def tiers_asof(db, ts):
     for w, t, tier, l20, med in db.execute("SELECT wallet, roi_t, tier, last20_roi, median_usd FROM wallet_scores WHERE asof=? AND tier IN ('sharp','square')", (asof,)):
         if tier == "sharp": sharp[w] = (t, l20, med)
         else: square.add(w)
+    if include_watchlist:   # hand-picked wallets always alert on the live tape; never part of the scored signals
+        for (w,) in db.execute("SELECT wallet FROM watchlist"):
+            if w not in sharp: sharp[w] = (0.0, 0.0, None)
     return asof, sharp, square
 
 
@@ -476,7 +480,7 @@ def summary(db):
 # ---------------------------------------------------------------- live
 def live(db):
     now = int(time.time())
-    asof, sharp, square = tiers_asof(db, now)
+    asof, sharp, square = tiers_asof(db, now, include_watchlist=True)
     if not sharp: print("no wallet snapshot yet"); return
     if not os.path.exists(BOOK_DB): print("no polybook db"); return
     bdb = sqlite3.connect(BOOK_DB)

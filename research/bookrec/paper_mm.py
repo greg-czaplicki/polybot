@@ -18,7 +18,8 @@ INV_CAP_USD = float(os.environ.get("INV_CAP_USD", 60))
 EXIT_MIN = int(os.environ.get("EXIT_MIN", 15))
 START_MIN = int(os.environ.get("START_MIN", 360))   # begin quoting this many minutes before start
 REJOIN_TICKS = 1
-POLICY = os.environ.get("POLICY", "JOIN")          # JOIN: back of best-bid queue | IMPROVE: bid one tick above best when spread >= 2 ticks | THIN: join only if queue ahead <= MAXQ_USD
+POLICY = os.environ.get("POLICY", "JOIN")          # JOIN | IMPROVE | THIN | DOG (bid only the underdog token, improved when spread >= 2 ticks)
+EXCLUDE_TITLE = os.environ.get("EXCLUDE_TITLE", "")  # regex; markets whose question matches are skipped (e.g. tier-3 esports)
 MAXQ_USD = float(os.environ.get("MAXQ_USD", 200))
 PASSIVE_EXIT = os.environ.get("PASSIVE_EXIT", "1") == "1"      # rest inventory at the ask instead of holding to T-EXIT
 PASSIVE_IMPROVE = os.environ.get("PASSIVE_IMPROVE", "1") == "1"  # exit one tick inside the spread when it is >= 2 ticks
@@ -29,6 +30,9 @@ now = time.time()
 SPORTS = [s for s in os.environ.get("SPORTS", "").split(",") if s]   # optional filter, e.g. SPORTS=cs2,lol,dota2,val
 markets = db.execute("SELECT condition_id, question, token0, token1, tick, game_start, sport_hint FROM markets WHERE game_start <= ? AND game_start >= ?", (now, SINCE)).fetchall()
 if SPORTS: markets = [m for m in markets if m[6] in SPORTS]
+if EXCLUDE_TITLE:
+    import re as _re
+    markets = [m for m in markets if not _re.search(EXCLUDE_TITLE, m[1] or "", _re.I)]
 
 
 def load_events(asset, t_from_ms, t_to_ms):
@@ -66,6 +70,17 @@ class Sim:
         if p is None or self.inv * p >= INV_CAP_USD:
             return
         a = self.best_ask()
+        if POLICY == "DOG":
+            m = self.mid()
+            if m is None or m >= 0.45:
+                return                      # only the underdog token gets a bid
+            if a is not None and a - p >= 2 * self.tick - 1e-9:
+                p = round(p + self.tick, 4); q_ahead = 0.0
+            else:
+                q_ahead = self.bids.get(p, 0.0)
+            self.order = {"price": p, "shares": QUOTE_USD / p, "q_ahead": q_ahead, "placed_ms": ms}
+            self.joined += 1
+            return
         if POLICY == "IMPROVE":
             if a is None or a - p < 2 * self.tick - 1e-9:
                 return                      # spread too tight to improve; stay out

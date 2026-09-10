@@ -123,7 +123,7 @@ export interface CellStat {
 	games: number;
 }
 
-function stat(rows: Feat[]): CellStat {
+function stat(rows: Feat[], fade = false): CellStat {
 	const seen = new Set<string>();
 	const one: Feat[] = [];
 	for (const r of [...rows].sort((a, b) => a.created_at - b.created_at)) {
@@ -133,9 +133,12 @@ function stat(rows: Feat[]): CellStat {
 	}
 	const n = one.length;
 	if (n < 2) return { roiPct: null, z: null, clvPct: null, games: n };
-	const m = one.reduce((s, r) => s + r.roi, 0) / n;
-	const sd = Math.sqrt(one.reduce((s, r) => s + (r.roi - m) ** 2, 0) / (n - 1));
-	const c = one.filter((r) => r.clv != null).map((r) => r.clv as number);
+	const v = one.map((r) => (fade ? fadeRoi(r) : r.roi));
+	const m = v.reduce((s, x) => s + x, 0) / n;
+	const sd = Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / (n - 1));
+	const c = one
+		.filter((r) => r.clv != null)
+		.map((r) => (fade ? -(r.clv as number) : (r.clv as number)));
 	return {
 		roiPct: m * 100,
 		z: sd > 0 ? m / (sd / Math.sqrt(n)) : 0,
@@ -144,9 +147,16 @@ function stat(rows: Feat[]): CellStat {
 	};
 }
 
+/** ROI of FADING the signal: back the other side at (1 − price) + 0.5c; wins when the signal side loses. */
+function fadeRoi(r: Feat): number {
+	const fadePrice = 1 - r.price + 0.005;
+	return r.roi < 0 ? 1 / fadePrice - 1 : -1;
+}
+
 const CUTS: {
 	name: string;
 	fn: (r: Feat, ctx: { hiLine: number }) => boolean;
+	fade?: boolean;
 }[] = [
 	{ name: "ALL", fn: () => true },
 	{ name: "moneyline", fn: (r) => r.market_type === "moneyline" },
@@ -214,6 +224,17 @@ const CUTS: {
 	{ name: "price_edge >= .25", fn: (r) => (r.price_edge ?? 0) >= 0.25 },
 	{ name: "price >= .6 (big fav)", fn: (r) => r.price >= 0.6 },
 	{ name: "price <= .35 (big dog)", fn: (r) => r.price <= 0.35 },
+	// Registered fade cells (tennis, 2026-09-10): signal on a dog → back the favourite instead.
+	{
+		name: "FADE: signal on dog (< .5)",
+		fn: (r) => r.market_type === "moneyline" && r.price < 0.5,
+		fade: true,
+	},
+	{
+		name: "FADE: signal on big dog (<= .35)",
+		fn: (r) => r.market_type === "moneyline" && r.price <= 0.35,
+		fade: true,
+	},
 ];
 
 export async function handleSportEdgeRequest(
@@ -260,9 +281,15 @@ export async function handleSportEdgeRequest(
 		? lines[Math.floor(lines.length * (2 / 3))]
 		: Number.POSITIVE_INFINITY;
 	const games = new Set(feats.map((f) => f.game)).size;
-	const cells = CUTS.map(({ name, fn }) => {
-		const train = stat(feats.filter((f) => !f.test && fn(f, { hiLine })));
-		const test = stat(feats.filter((f) => f.test && fn(f, { hiLine })));
+	const cells = CUTS.map(({ name, fn, fade }) => {
+		const train = stat(
+			feats.filter((f) => !f.test && fn(f, { hiLine })),
+			fade === true,
+		);
+		const test = stat(
+			feats.filter((f) => f.test && fn(f, { hiLine })),
+			fade === true,
+		);
 		const holds =
 			train.games >= 40 &&
 			test.games >= 40 &&
