@@ -11,7 +11,7 @@ OUT=/root/polybook/data/reports/$(date -u +%F).txt
     QUOTE_USD=$Q INV_CAP_USD=$((Q*3)) /root/polyarb/.venv/bin/python /root/polybook/paper_mm.py /root/polybook/data/polybook.db $SINCE
   done
   echo; echo "### ESPORTS dog-bid paper quoter: bid only the underdog (mid < .45), improve when spread allows, BO1/qualifier/academy excluded, cancel T-15m"
-  SPORTS=cs2,lol,dota2,val POLICY=DOG QUOTE_USD=20 INV_CAP_USD=40 EXCLUDE_TITLE="\(BO1\)|qualif|academy|challengers|open qualifier" /root/polyarb/.venv/bin/python /root/polybook/paper_mm.py /root/polybook/data/polybook.db $SINCE | grep -vE "^\s+[a-z0-9]+\s+mkts=\s*0 "
+  SPORTS=cs2,lol,dota2,val POLICY=DOG QUOTE_USD=20 INV_CAP_USD=40 EXCLUDE_TITLE="\(BO1\)|qualif|academy|challengers|handicap|map [0-9]|game [0-9]|o/u|odd/even" /root/polyarb/.venv/bin/python /root/polybook/paper_mm.py /root/polybook/data/polybook.db $SINCE | grep -vE "^\s+[a-z0-9]+\s+mkts=\s*0 "
   echo; echo "### sharp-follow execution replay (last 24h): $10 bid at the sharp's price, 60s after their fill, cancel T-15m"
   /root/polyarb/.venv/bin/python /root/polybook/follow_sim.py /root/polybook/data/polybook.db $SINCE
   echo; echo "### recorder health (last 24h): rows/min avg, trades/min avg"
