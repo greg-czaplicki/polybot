@@ -55,19 +55,38 @@ function teams(title: string): string[] {
 		.map((x) => x.trim().toLowerCase());
 }
 
-function sidePos(title: string, label: string | null): Feat["pos"] {
+/** Soccer titles list the HOME side first (2026-08-05 deep dive); US sports list the away side first. */
+const HOME_FIRST = new Set([
+	"epl",
+	"laliga",
+	"seriea",
+	"bundesliga",
+	"ligue1",
+	"mls",
+	"ucl",
+	"championship",
+	"soccer",
+]);
+
+function sidePos(
+	title: string,
+	label: string | null,
+	homeFirst: boolean,
+): Feat["pos"] {
 	const lab = (label ?? "").toLowerCase();
 	if (lab === "over") return "over";
 	if (lab === "under") return "under";
 	const t = teams(title);
 	if (t.length === 2 && lab) {
-		if (lab.includes(t[0]) || t[0].includes(lab)) return "away";
-		if (lab.includes(t[1]) || t[1].includes(lab)) return "home";
+		const first = homeFirst ? "home" : "away";
+		const second = homeFirst ? "away" : "home";
+		if (lab.includes(t[0]) || t[0].includes(lab)) return first;
+		if (lab.includes(t[1]) || t[1].includes(lab)) return second;
 	}
 	return null;
 }
 
-function toFeat(r: Row, split: number): Feat {
+function toFeat(r: Row, split: number, homeFirst: boolean): Feat {
 	const t = teams(r.market_title);
 	const day = new Date(r.event_time * 1000).toISOString().slice(0, 10);
 	const line = r.market_title.match(/O\/U\s*([\d.]+)/);
@@ -83,7 +102,7 @@ function toFeat(r: Row, split: number): Feat {
 	}
 	return {
 		...r,
-		pos: sidePos(r.market_title, r.sharp_side_label),
+		pos: sidePos(r.market_title, r.sharp_side_label, homeFirst),
 		game:
 			t.length === 2
 				? `${day}:${[...t].sort().join("|")}`
@@ -231,7 +250,8 @@ export async function handleSportEdgeRequest(
 		sport,
 		sinceTs,
 	);
-	const feats = rows.map((r) => toFeat(r, split));
+	const homeFirst = HOME_FIRST.has(sport);
+	const feats = rows.map((r) => toFeat(r, split, homeFirst));
 	const lines = feats
 		.filter((f) => f.line != null)
 		.map((f) => f.line as number)
@@ -260,6 +280,7 @@ export async function handleSportEdgeRequest(
 		rows: feats.length,
 		games,
 		hiLine: Number.isFinite(hiLine) ? hiLine : null,
+		homeFirst,
 		rule: "HOLD = ROI > 0 and CLV > 0 in both halves with >= 40 games each; one row per game per cell; ~1 in 16 cuts holds by chance",
 		cells,
 	};
