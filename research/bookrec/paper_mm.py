@@ -26,7 +26,9 @@ SINCE = float(sys.argv[2]) if len(sys.argv) > 2 else 0  # only markets with game
 
 db = sqlite3.connect(DB)
 now = time.time()
+SPORTS = [s for s in os.environ.get("SPORTS", "").split(",") if s]   # optional filter, e.g. SPORTS=cs2,lol,dota2,val
 markets = db.execute("SELECT condition_id, question, token0, token1, tick, game_start, sport_hint FROM markets WHERE game_start <= ? AND game_start >= ?", (now, SINCE)).fetchall()
+if SPORTS: markets = [m for m in markets if m[6] in SPORTS]
 
 
 def load_events(asset, t_from_ms, t_to_ms):
