@@ -1,0 +1,128 @@
+cs2: 79118 small taker BUY fills, 887 markets (1s)
+time split at 2026-07-04
+
+== ALL   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ()                             ROI   -1.4%  z= -1.2  n= 1711   | older  +0.4% (n=822)  recent  -3.0% (n=889)
+
+== type   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('moneyline',)                 ROI   -1.7%  z= -1.4  n= 1460   | older  +0.2% (n=724)  recent  -3.5% (n=736)
+  ('prop',)                      ROI   -2.1%  z= -0.5  n=  115   | older  -4.2% (n=38)  recent  -1.1% (n=77)
+  ('spread',)                    ROI   -6.4%  z= -0.9  n=   56   | older  +0.0% (n=0)  recent  -6.4% (n=56)
+  ('total',)                     ROI   +8.1%  z= +1.7  n=   80   | older  +5.9% (n=60)  recent +14.7% (n=20)
+
+== price   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('20-40c',)                    ROI   +3.6%  z= +0.6  n=  559   | older  +8.8% (n=250)  recent  -0.6% (n=309)
+  ('40-50c',)                    ROI   +5.5%  z= +1.4  n=  562   | older  +6.8% (n=288)  recent  +4.1% (n=274)
+  ('50-60c',)                    ROI   -6.4%  z= -2.5  n=  590   | older  -7.9% (n=304)  recent  -4.8% (n=286)
+  ('60-80c',)                    ROI   -4.8%  z= -1.7  n=  620   | older  -5.1% (n=282)  recent  -4.5% (n=338)
+  ('80-95c',)                    ROI   -7.1%  z= -1.7  n=  136   | older -14.1% (n=47)  recent  -3.4% (n=89)
+
+== time   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('0-15m',)                     ROI   -2.1%  z= -1.4  n= 1387   | older  -1.8% (n=688)  recent  -2.5% (n=699)
+  ('15-60m',)                    ROI   -2.7%  z= -2.1  n= 1506   | older  -1.8% (n=748)  recent  -3.6% (n=758)
+  ('3-6h',)                      ROI   +0.5%  z= +0.4  n= 1409   | older  +1.9% (n=709)  recent  -0.8% (n=700)
+  ('60-180m',)                   ROI   -1.9%  z= -1.4  n= 1497   | older  -2.0% (n=754)  recent  -1.8% (n=743)
+
+== price×time   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('20-40c', '0-15m')            ROI   -2.3%  z= -0.3  n=  364   | older  -1.2% (n=174)  recent  -3.4% (n=190)
+  ('20-40c', '15-60m')           ROI   -3.6%  z= -0.5  n=  409   | older  +0.5% (n=197)  recent  -7.4% (n=212)
+  ('20-40c', '3-6h')             ROI   +4.6%  z= +0.6  n=  376   | older +10.2% (n=172)  recent  -0.1% (n=204)
+  ('20-40c', '60-180m')          ROI   +1.9%  z= +0.3  n=  392   | older  +3.3% (n=182)  recent  +0.7% (n=210)
+  ('40-50c', '0-15m')            ROI  +10.6%  z= +1.9  n=  353   | older  +6.5% (n=199)  recent +15.9% (n=154)
+  ('40-50c', '15-60m')           ROI   +5.6%  z= +1.0  n=  373   | older  +7.1% (n=194)  recent  +4.0% (n=179)
+  ('40-50c', '3-6h')             ROI  +11.2%  z= +1.9  n=  340   | older +10.9% (n=184)  recent +11.5% (n=156)
+  ('40-50c', '60-180m')          ROI   +5.5%  z= +0.9  n=  352   | older  +6.8% (n=194)  recent  +3.9% (n=158)
+  ('50-60c', '0-15m')            ROI   -8.5%  z= -2.3  n=  389   | older -12.0% (n=214)  recent  -4.1% (n=175)
+  ('50-60c', '15-60m')           ROI   -4.2%  z= -1.2  n=  413   | older  -8.0% (n=223)  recent  +0.4% (n=190)
+  ('50-60c', '3-6h')             ROI   -9.0%  z= -2.2  n=  360   | older  -8.7% (n=199)  recent  -9.4% (n=161)
+  ('50-60c', '60-180m')          ROI   -5.1%  z= -1.4  n=  402   | older  -6.2% (n=223)  recent  -3.7% (n=179)
+  ('60-80c', '0-15m')            ROI   -2.5%  z= -0.7  n=  454   | older  +2.8% (n=211)  recent  -7.0% (n=243)
+  ('60-80c', '15-60m')           ROI   -2.8%  z= -0.8  n=  464   | older  -0.3% (n=221)  recent  -5.1% (n=243)
+  ('60-80c', '3-6h')             ROI   -3.0%  z= -0.9  n=  435   | older  -6.0% (n=215)  recent  -0.1% (n=220)
+  ('60-80c', '60-180m')          ROI   -5.2%  z= -1.6  n=  472   | older  -5.8% (n=228)  recent  -4.7% (n=244)
+  ('80-95c', '0-15m')            ROI   -4.9%  z= -1.0  n=   88   | older -15.0% (n=32)  recent  +0.9% (n=56)
+  ('80-95c', '15-60m')           ROI   -6.7%  z= -1.4  n=  102   | older -15.5% (n=36)  recent  -1.9% (n=66)
+  ('80-95c', '3-6h')             ROI   -8.3%  z= -1.5  n=   83   | older -10.9% (n=25)  recent  -7.2% (n=58)
+  ('80-95c', '60-180m')          ROI   -9.0%  z= -1.8  n=  100   | older -13.4% (n=34)  recent  -6.7% (n=66)
+
+== type×time   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('moneyline', '0-15m')         ROI   -2.5%  z= -1.6  n= 1205   | older  -2.2% (n=608)  recent  -2.9% (n=597)
+  ('moneyline', '15-60m')        ROI   -2.1%  z= -1.5  n= 1304   | older  -1.0% (n=662)  recent  -3.3% (n=642)
+  ('moneyline', '3-6h')          ROI   +0.3%  z= +0.2  n= 1217   | older  +1.9% (n=629)  recent  -1.4% (n=588)
+  ('moneyline', '60-180m')       ROI   -2.4%  z= -1.7  n= 1292   | older  -2.3% (n=668)  recent  -2.4% (n=624)
+  ('prop', '0-15m')              ROI   -4.7%  z= -1.1  n=   89   | older  -6.5% (n=25)  recent  -4.0% (n=64)
+  ('prop', '15-60m')             ROI   -3.3%  z= -0.7  n=   97   | older -17.4% (n=32)  recent  +3.7% (n=65)
+  ('prop', '3-6h')               ROI   -1.3%  z= -0.2  n=   91   | older  -6.0% (n=34)  recent  +1.5% (n=57)
+  ('prop', '60-180m')            ROI   -1.9%  z= -0.3  n=   95   | older -12.0% (n=33)  recent  +3.4% (n=62)
+  ('spread', '15-60m')           ROI  -19.4%  z= -2.4  n=   40   | older  +0.0% (n=0)  recent -19.4% (n=40)
+  ('spread', '3-6h')             ROI   -5.6%  z= -0.7  n=   42   | older  +0.0% (n=0)  recent  -5.6% (n=42)
+  ('spread', '60-180m')          ROI   +2.1%  z= +0.2  n=   43   | older  +0.0% (n=0)  recent  +2.1% (n=43)
+  ('total', '0-15m')             ROI   +4.2%  z= +0.7  n=   68   | older  +4.6% (n=55)  recent  +2.6% (n=13)
+  ('total', '15-60m')            ROI   -3.3%  z= -0.7  n=   65   | older  -2.5% (n=54)  recent  -7.3% (n=11)
+  ('total', '3-6h')              ROI  +12.8%  z= +1.3  n=   59   | older  +8.0% (n=46)  recent +29.7% (n=13)
+  ('total', '60-180m')           ROI   +4.8%  z= +0.8  n=   67   | older  +8.8% (n=53)  recent -10.4% (n=14)
+
+== type×price   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('moneyline', '20-40c')        ROI   +3.4%  z= +0.5  n=  491   | older  +6.4% (n=234)  recent  +0.7% (n=257)
+  ('moneyline', '40-50c')        ROI   +6.4%  z= +1.4  n=  476   | older  +8.4% (n=250)  recent  +4.3% (n=226)
+  ('moneyline', '50-60c')        ROI   -7.0%  z= -2.4  n=  485   | older  -8.9% (n=251)  recent  -4.9% (n=234)
+  ('moneyline', '60-80c')        ROI   -5.5%  z= -1.8  n=  544   | older  -4.7% (n=262)  recent  -6.2% (n=282)
+  ('moneyline', '80-95c')        ROI   -9.0%  z= -2.0  n=  122   | older -14.9% (n=46)  recent  -5.5% (n=76)
+  ('prop', '20-40c')             ROI   +1.9%  z= +0.1  n=   38   | older  -8.4% (n=12)  recent  +6.7% (n=26)
+  ('prop', '40-50c')             ROI   +6.6%  z= +0.4  n=   37   | older -16.4% (n=8)  recent +12.9% (n=29)
+  ('prop', '50-60c')             ROI   -8.0%  z= -0.8  n=   42   | older  +1.4% (n=9)  recent -10.6% (n=33)
+  ('prop', '60-80c')             ROI   -3.2%  z= -0.3  n=   38   | older  -0.6% (n=13)  recent  -4.5% (n=25)
+  ('total', '40-50c')            ROI   +3.5%  z= +0.2  n=   39   | older  -0.4% (n=30)  recent +16.5% (n=9)
+  ('total', '50-60c')            ROI   -7.7%  z= -1.2  n=   52   | older  -4.2% (n=44)  recent -27.0% (n=8)
+
+== since-last-trade   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('1-5m',)                      ROI   -2.2%  z= -1.8  n= 1520   | older  -0.8% (n=751)  recent  -3.6% (n=769)
+  ('5-30m',)                     ROI   -1.2%  z= -1.0  n= 1546   | older  -0.3% (n=753)  recent  -2.1% (n=793)
+  ('<1m',)                       ROI   -0.7%  z= -0.6  n= 1531   | older  -0.1% (n=755)  recent  -1.4% (n=776)
+  ('>30m',)                      ROI   -2.6%  z= -1.1  n=  913   | older  -0.1% (n=373)  recent  -4.4% (n=540)
+
+== since×time   (one obs per market-side, mean small-taker fill ROI; z clustered by event)
+  ('1-5m', '0-15m')              ROI   -1.6%  z= -0.7  n=  907   | older  -2.3% (n=423)  recent  -1.0% (n=484)
+  ('1-5m', '15-60m')             ROI   -2.4%  z= -1.4  n= 1117   | older  -2.1% (n=584)  recent  -2.8% (n=533)
+  ('1-5m', '3-6h')               ROI   -2.7%  z= -1.3  n=  891   | older  -2.1% (n=522)  recent  -3.5% (n=369)
+  ('1-5m', '60-180m')            ROI   -2.3%  z= -1.2  n= 1046   | older  +1.3% (n=581)  recent  -6.7% (n=465)
+  ('5-30m', '0-15m')             ROI   -1.0%  z= -0.2  n=  444   | older  -1.3% (n=186)  recent  -0.8% (n=258)
+  ('5-30m', '15-60m')            ROI   -0.7%  z= -0.3  n=  963   | older  +1.1% (n=438)  recent  -2.3% (n=525)
+  ('5-30m', '3-6h')              ROI   +1.4%  z= +0.8  n= 1070   | older  -0.7% (n=573)  recent  +3.8% (n=497)
+  ('5-30m', '60-180m')           ROI   -1.8%  z= -1.1  n= 1216   | older  -2.5% (n=609)  recent  -1.0% (n=607)
+  ('<1m', '0-15m')               ROI   -1.0%  z= -0.5  n= 1028   | older  -0.2% (n=523)  recent  -1.8% (n=505)
+  ('<1m', '15-60m')              ROI   -1.0%  z= -0.5  n= 1040   | older  -0.8% (n=566)  recent  -1.3% (n=474)
+  ('<1m', '3-6h')                ROI   +3.0%  z= +1.4  n=  911   | older  +1.3% (n=508)  recent  +5.1% (n=403)
+  ('<1m', '60-180m')             ROI   -1.6%  z= -0.9  n= 1002   | older  -1.5% (n=552)  recent  -1.8% (n=450)
+  ('>30m', '0-15m')              ROI   -9.2%  z= -0.9  n=   69   | older -34.0% (n=25)  recent  +4.9% (n=44)
+  ('>30m', '15-60m')             ROI   -3.6%  z= -0.5  n=  209   | older  +3.8% (n=75)  recent  -7.8% (n=134)
+  ('>30m', '3-6h')               ROI   +0.9%  z= +0.2  n=  479   | older  +7.2% (n=209)  recent  -4.0% (n=270)
+  ('>30m', '60-180m')            ROI   -2.8%  z= -0.7  n=  543   | older  -1.2% (n=214)  recent  -3.8% (n=329)
+
+== spread / depth at the fill minute (polybook top-of-book, September coverage only)
+  fills with a book snapshot: 3913
+  ('depth@ask', '$10k+')               ROI   -4.5%  z= -0.6  n=   53
+  ('depth@ask', '$2k-10k')             ROI   -4.8%  z= -0.9  n=   88
+  ('depth@ask', '$500-2k')             ROI   +4.3%  z= +0.6  n=   87
+  ('depth@ask', '<$500')               ROI   +1.9%  z= +0.4  n=  166
+  ('spread', '1c')                     ROI   -4.0%  z= -1.0  n=  150
+  ('spread', '2c')                     ROI  -10.9%  z= -1.4  n=   74
+  ('spread', '3-4c')                   ROI   -7.9%  z= -0.8  n=   59
+  ('spread', '5c+')                    ROI   -2.0%  z= -0.3  n=   67
+  ('spread×time', '1c', '0-15m')       ROI   +9.9%  z= +1.5  n=   84
+  ('spread×time', '1c', '15-60m')      ROI  -12.3%  z= -2.5  n=  120
+  ('spread×time', '1c', '3-6h')        ROI   -6.5%  z= -1.1  n=   79
+  ('spread×time', '1c', '60-180m')     ROI   -2.9%  z= -0.6  n=  110
+  ('spread×time', '2c', '0-15m')       ROI  +11.0%  z= +0.8  n=   30
+  ('spread×time', '2c', '15-60m')      ROI  -25.8%  z= -2.0  n=   22
+  ('spread×time', '2c', '3-6h')        ROI  -19.9%  z= -1.5  n=   21
+  ('spread×time', '3-4c', '0-15m')     ROI   -6.8%  z= -0.5  n=   31
+  ('spread×time', '5c+', '0-15m')      ROI  -11.4%  z= -1.1  n=   40
+  ('spread×time', '5c+', '15-60m')     ROI   +0.2%  z= +0.0  n=   25
+
+== OUR PICKS vs the cell they sit in (entry = first small taker-BUY fill of the pick's token within 60 min after the pick)
+no picks file [Errno 2] No such file or directory: '/root/polysharp/data/cs2_picks.json'
+  side-mapping check: {'A=token0': 0, 'A=token1': 0}
+  picks matched to an executable fill: 0, unmatched/unknown market: 0
+
+done 2s
