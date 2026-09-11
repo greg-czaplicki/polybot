@@ -603,6 +603,11 @@ def report(db):
         for mt in ["moneyline", "spread", "total"]:
             rs3 = [r for r in rs if r["mtype"] == mt]
             if len(rs3) >= 20: line(f"  {rule[:1]} {mt}", rs3)
+    try:
+        import cell_lanes
+        lines += cell_lanes.report_lines(db, now)
+    except Exception as e:
+        lines.append(f"\nFORWARD CELL LANES: error {e!r}")
     lines.append(""); lines.append("LIVE ALERTS (upcoming markets, sharp fills seen):")
     for r in db.execute("SELECT datetime(ts,'unixepoch'), question, side, price, round(usd), round(wallet_roi_t,1), round(streak,2), round(sq_opp_usd), datetime(start,'unixepoch') FROM live_alerts WHERE start > ? ORDER BY ts DESC LIMIT 20", (now,)):
         lines.append(f"  {r}")
