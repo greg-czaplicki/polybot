@@ -87,3 +87,17 @@ exceeds 10 % of candidates).
 - Dog cells are tail-heavy: a handful of 4× wins carry the mean. That is why
   n ≥ 150 and a clustered z are required, and why no promotion happens from
   another cut of the historical tape.
+
+## Amendment v1.1 (2026-09-11, before any forward data exists)
+Replication lanes added for NFL, NCAAF and EPL, whose own tapes were too thin
+to read (137 / 106 / 219 markets; their cells flip sign between halves, and
+the NCAAF slice even points the other way). The bands are COPIED from the
+ATP/CS2 structure — moneyline dogs 0.20–0.40 expected positive, moneyline
+favourites 0.60–0.80 expected negative — not fitted to these sports. That
+makes them an out-of-sport replication, the strongest form of forward test
+this data allows. Same rule, grain, entry and pass criteria as `atp_dog_cell`
+(n ≥ 150, ROI > 0, clustered z ≥ 2); the favourite lanes are read as guards.
+EPL is a three-way market: a draw token whose price falls in the band is a
+row like any other. Label drift fixed the same day: polybook's slug-prefix
+hints are normalised in `polysharp.py` (`cfb→ncaaf`, `lal→laliga`,
+`bun→bundesliga`, `fl1→ligue1`, `elc→championship`) so each sport is one label.

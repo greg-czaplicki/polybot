@@ -15,6 +15,9 @@ from collections import defaultdict
 
 DB = os.environ.get("SHARP_DB", "/root/polysharp/data/sharp.db")
 BOOK_DB = os.environ.get("BOOK_DB", "/root/polybook/data/polybook.db")
+# polybook sport_hint is the market slug prefix; the seed used league names. Normalise so a sport is one label.
+LABEL_MAP = {"cfb": "ncaaf", "lal": "laliga", "bun": "bundesliga", "fl1": "ligue1", "elc": "championship"}
+def norm_sport(s): return LABEL_MAP.get(s, s) if s else s
 REPORT_DIR = os.environ.get("REPORT_DIR", "/root/polysharp/data/reports")
 UA = {"User-Agent": "polysharp/0.1"}
 MIN_N = 20; MIN_FILL_USD = 100.0; ENTRY_COST = 0.005; PRE_SEC = 900; SETTLE_LAG = 4 * 3600
@@ -149,7 +152,7 @@ def update_universe(db):
     n = 0
     for cid, sport, gs, q, t0, t1 in rows:
         r = db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, token1, status, source) VALUES (?,?,?,?,?,?,?,'pending','polybook')",
-                       (cid, sport, classify(q), gs, q, t0, t1))
+                       (cid, norm_sport(sport), classify(q), gs, q, t0, t1))
         n += r.rowcount
     # re-classify seed rows that only had moneyline/total from the old crawl
     db.execute("UPDATE markets SET market_type=NULL WHERE market_type IN ('moneyline','total') AND question IS NOT NULL AND source='seed' AND event_key IS NULL")
@@ -490,8 +493,8 @@ def live(db):
     # make sure these markets exist in our universe with event keys (carry polybook's sport so the report can group them)
     for cid, q, tok0, gs, l0, l1, sport in up_full:
         db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, status, source) VALUES (?,?,?,?,?,?,'pending','polybook')",
-                   (cid, sport, classify(q), gs, q, tok0))
-        db.execute("UPDATE markets SET sport=? WHERE condition_id=? AND sport IS NULL", (sport, cid))
+                   (cid, norm_sport(sport), classify(q), gs, q, tok0))
+        db.execute("UPDATE markets SET sport=? WHERE condition_id=? AND sport IS NULL", (norm_sport(sport), cid))
     assign_event_keys(db, now - 86400)
     ev_of = {r[0]: r[1] for r in db.execute("SELECT condition_id, event_key FROM markets WHERE start >= ?", (now - 86400,))}
     mtype = {r[0]: r[1] for r in db.execute("SELECT condition_id, market_type FROM markets WHERE start >= ?", (now - 86400,))}

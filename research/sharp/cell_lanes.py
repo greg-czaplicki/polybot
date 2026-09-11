@@ -27,6 +27,14 @@ LANES = {
     "guard_atp_fav_60_80":   ("atp",  "moneyline", 0.60, 0.80, "negative guard; <= -4% recent-half -> price-band gate"),
     "guard_cs2_fav_50_95":   ("cs2",  "moneyline", 0.50, 0.95, "negative guard; <= -4% recent-half -> price-band gate"),
     "guard_mlb_total_60_80": ("mlb",  "total",     0.60, 0.80, "negative guard; <= -4% recent-half -> price-band gate"),
+    # Replication lanes (charter v1.1, 2026-09-11): the ATP/CS2 structure applied to sports whose own tape was too
+    # thin to read (< 250 markets). Bands are copied, NOT fitted to these sports. Same pass rule as atp_dog_cell.
+    "repl_nfl_dog_cell":     ("nfl",   "moneyline", 0.20, 0.40, "replication of the dog cell; read at n>=150"),
+    "repl_nfl_fav_60_80":    ("nfl",   "moneyline", 0.60, 0.80, "replication of the favourite guard"),
+    "repl_ncaaf_dog_cell":   ("ncaaf", "moneyline", 0.20, 0.40, "replication of the dog cell; read at n>=150"),
+    "repl_ncaaf_fav_60_80":  ("ncaaf", "moneyline", 0.60, 0.80, "replication of the favourite guard"),
+    "repl_epl_dog_cell":     ("epl",   "moneyline", 0.20, 0.40, "replication of the dog cell (3-way market: draw side included); read at n>=150"),
+    "repl_epl_fav_60_80":    ("epl",   "moneyline", 0.60, 0.80, "replication of the favourite guard"),
 }
 
 
