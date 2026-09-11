@@ -485,12 +485,13 @@ def live(db):
     if not os.path.exists(BOOK_DB): print("no polybook db"); return
     bdb = sqlite3.connect(BOOK_DB)
     up = bdb.execute("SELECT condition_id, question, token0, game_start FROM markets WHERE game_start BETWEEN ? AND ?", (now + PRE_SEC, now + LIVE_HOURS * 3600)).fetchall()
-    up_full = bdb.execute("SELECT condition_id, question, token0, game_start, label0, label1 FROM markets WHERE game_start BETWEEN ? AND ?", (now + PRE_SEC, now + LIVE_HOURS * 3600)).fetchall()
+    up_full = bdb.execute("SELECT condition_id, question, token0, game_start, label0, label1, sport_hint FROM markets WHERE game_start BETWEEN ? AND ?", (now + PRE_SEC, now + LIVE_HOURS * 3600)).fetchall()
     labels = {r[0]: (r[4], r[5]) for r in up_full}
-    # make sure these markets exist in our universe with event keys
-    for cid, q, tok0, gs, l0, l1 in up_full:
+    # make sure these markets exist in our universe with event keys (carry polybook's sport so the report can group them)
+    for cid, q, tok0, gs, l0, l1, sport in up_full:
         db.execute("INSERT OR IGNORE INTO markets (condition_id, sport, market_type, start, question, token0, status, source) VALUES (?,?,?,?,?,?,'pending','polybook')",
-                   (cid, None, classify(q), gs, q, tok0))
+                   (cid, sport, classify(q), gs, q, tok0))
+        db.execute("UPDATE markets SET sport=? WHERE condition_id=? AND sport IS NULL", (sport, cid))
     assign_event_keys(db, now - 86400)
     ev_of = {r[0]: r[1] for r in db.execute("SELECT condition_id, event_key FROM markets WHERE start >= ?", (now - 86400,))}
     mtype = {r[0]: r[1] for r in db.execute("SELECT condition_id, market_type FROM markets WHERE start >= ?", (now - 86400,))}
@@ -571,6 +572,7 @@ def report(db):
              f"markets: {n_done} settled, {n_pend} pending; trades {n_tr}; snapshots {n_snap}; signals settled {len(rows)}",
              "", "ONE BET PER MARKET (first sharp fill >= $100, entry = fill + 0.5c, held to resolution)"]
     def line(name, rs):
+        name = name or "unlabelled"
         m, se, n = cl(rs, "roi"); c = cl(rs, "clv")
         wins = sum(r["win"] for r in rs)
         recent = [r for r in rs if r["start"] >= now - 14 * 86400]; older = [r for r in rs if r["start"] < now - 14 * 86400]
