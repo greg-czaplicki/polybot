@@ -154,7 +154,7 @@ function aliveItems(h: DashboardHealth): AliveItem[] {
 	];
 }
 
-function _Side({ pick }: { pick: DashboardPickRow }) {
+function Side({ pick }: { pick: DashboardPickRow }) {
 	const text = formatSideLabel(
 		pick.sharpSideLabel,
 		pick.sharpSide,
@@ -667,6 +667,62 @@ function TerminalPage() {
 							{isLoading && !data
 								? "Loading…"
 								: "No sharp fills on upcoming markets."}
+						</Empty>
+					)}
+				</Panel>
+
+				{/* POSITIONS — open, filled bets (the full operator view stays on /book) */}
+				<Panel
+					title={
+						<a href="/book" className="hover:text-ink-85">
+							Positions ↗
+						</a>
+					}
+					span={12}
+					meta={data ? `${data.activeBets.length} open` : undefined}
+				>
+					{data && data.activeBets.length > 0 ? (
+						<Tape
+							head={[
+								{ label: "Market" },
+								{ label: "Side" },
+								{ label: "Px", align: "right" },
+								{ label: "Grd", align: "right" },
+								{ label: "Mkt" },
+								{ label: "Fill" },
+								{ label: "Starts", align: "right" },
+							]}
+						>
+							{data.activeBets.map((p) => (
+								<Row key={p.id}>
+									<Cell className="max-w-[18rem]">
+										<a
+											href={`/sharp/market/${p.conditionId}`}
+											className="block truncate text-ink-95 hover:text-brand-blue"
+										>
+											{p.marketTitle}
+										</a>
+									</Cell>
+									<Cell>
+										<Side pick={p} />
+									</Cell>
+									<Cell right>
+										{p.price !== null ? p.price.toFixed(2) : "—"}
+									</Cell>
+									<Cell right>{p.grade ?? "—"}</Cell>
+									<Cell>
+										<Tag>{p.sportTag ?? "—"}</Tag>
+									</Cell>
+									<Cell className="text-ink-55">{p.fillStatus ?? "—"}</Cell>
+									<Cell right className="text-ink-55">
+										{clock(p.eventTime)}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>
+							{isLoading && !data ? "Loading…" : "Flat. No open positions."}
 						</Empty>
 					)}
 				</Panel>
