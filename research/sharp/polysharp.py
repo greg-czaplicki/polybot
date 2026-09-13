@@ -501,7 +501,7 @@ def live(db):
     new = 0
     agg = {}   # (cid, wallet, side) -> dict
     raw_fills = []   # (cid, wallet, is0, buy, usd) for every sharp-wallet trade, buys and sells
-    for cid, q, tok0, gs, l0, l1 in up_full:
+    for cid, q, tok0, gs, l0, l1, _sport in up_full:
         page = []
         for off in range(0, 5000, 1000):            # busy games (NFL ML ~1,100 pregame fills) need paging; most markets stop at one page
             chunk = get(f"https://data-api.polymarket.com/trades?market={cid}&limit=1000&offset={off}") or []; time.sleep(PAUSE)
