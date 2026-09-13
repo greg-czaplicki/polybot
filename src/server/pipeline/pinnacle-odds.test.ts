@@ -7,6 +7,7 @@ import {
 import {
 	extractPinnaclePrices,
 	type FetchCaps,
+	footballDayStartOf,
 	footballReserveBlocksFetch,
 	footballScheduledMayFetch,
 	matchOddsApiEvent,
@@ -21,6 +22,14 @@ import {
 const T0 = 1786400000; // arbitrary fixed event time (seconds)
 
 describe("football quote scheduling", () => {
+	it("budgets football slots per 06:00Z football day, not rolling 24h", () => {
+		// 2026-09-13 14:57Z (NFL Sunday) -> day starts 2026-09-13 06:00Z, so
+		// Saturday's 15:50Z and 23:52Z NCAAF requests are not counted.
+		expect(footballDayStartOf(1789311420)).toBe(1789279200);
+		// 2026-09-13 05:59Z still belongs to the Saturday football day.
+		expect(footballDayStartOf(1789279140)).toBe(1789192800);
+		expect(footballDayStartOf(1789279200)).toBe(1789279200);
+	});
 	it("reserves two unused slots on football days without raising the cap", () => {
 		expect(footballReserveBlocksFetch(true, 0, 6, 8)).toBe(true);
 		expect(footballReserveBlocksFetch(true, 0, 5, 8)).toBe(false);

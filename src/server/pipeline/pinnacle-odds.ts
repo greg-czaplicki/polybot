@@ -331,6 +331,17 @@ export function footballReserveBlocksFetch(
 	return reserve > 0 && fetches >= cap - reserve;
 }
 
+/** Football's two scheduled slots are budgeted per FOOTBALL DAY (06:00Z
+ * boundary) rather than per rolling 24h. With rolling accounting Saturday's
+ * two NCAAF requests sat inside Sunday's window, so the NFL early slate got a
+ * close but no pregame anchor and the late slate got nothing (first NFL
+ * Sunday, 2026-09-13). Total spend stays bounded by the rolling 24h caps. */
+export const FOOTBALL_DAY_BOUNDARY_HOUR_UTC = 6;
+export function footballDayStartOf(now: number): number {
+	const boundary = FOOTBALL_DAY_BOUNDARY_HOUR_UTC * 3600;
+	return Math.floor((now - boundary) / 86400) * 86400 + boundary;
+}
+
 export function footballScheduledMayFetch(
 	pregame: boolean,
 	closing: boolean,
@@ -1453,6 +1464,13 @@ export async function capturePinnacleOddsForPicks(
 		perSport.set(r.key, r.n);
 		fetchesInWindow += r.n;
 	}
+	const footballSpentRow = await first<{ n: number }>(
+		db,
+		`SELECT COUNT(*) AS n FROM pinnacle_fetch_log
+		 WHERE sport_key = 'oddspapi:football' AND fetched_at > ?`,
+		footballDayStartOf(now),
+	);
+	const footballSpentToday = footballSpentRow?.n ?? 0;
 	const providerFail = lastFail.get(provider);
 	let providerBackoff =
 		providerFail !== undefined &&
@@ -1510,7 +1528,7 @@ export async function capturePinnacleOddsForPicks(
 		if (providerBackoff) return false;
 		const spent = perSport.get(sportLogKey(tag)) ?? 0;
 		if (provider === "oddspapi") {
-			const footballSpent = perSport.get("oddspapi:football") ?? 0;
+			const footballSpent = footballSpentToday;
 			const football = sportLogKey(tag) === "oddspapi:football";
 			const liveClose = role === "live-close";
 			if (
