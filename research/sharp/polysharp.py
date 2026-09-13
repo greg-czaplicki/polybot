@@ -20,7 +20,11 @@ LABEL_MAP = {"cfb": "ncaaf", "lal": "laliga", "bun": "bundesliga", "fl1": "ligue
 def norm_sport(s): return LABEL_MAP.get(s, s) if s else s
 REPORT_DIR = os.environ.get("REPORT_DIR", "/root/polysharp/data/reports")
 UA = {"User-Agent": "polysharp/0.1"}
-MIN_N = 20; MIN_FILL_USD = 100.0; ENTRY_COST = 0.005; PRE_SEC = 900; SETTLE_LAG = 4 * 3600
+MIN_N = 20; MIN_FILL_USD = 100.0; ENTRY_COST = 0.005; PRE_SEC = 900; SETTLE_LAG = 6 * 3600
+# crawl sizing (2026-09-13): the old fixed 400/day cap fell ~700/day behind on football weekends,
+# starving the forward cell lanes. Now time-boxed; unresolved markets retry at most daily for 14 days.
+CRAWL_LIMIT = int(os.environ.get("CRAWL_LIMIT", "3000")); CRAWL_BUDGET_S = int(os.environ.get("CRAWL_BUDGET_S", str(50 * 60)))
+UNRESOLVED_RETRY_DAYS = 14; UNRESOLVED_RETRY_SEC = 20 * 3600
 LIVE_HOURS = 3; PAUSE = 0.12
 SPORTS = None  # None = all sports with a game start; esports are kept but reported separately
 
@@ -162,12 +166,17 @@ def update_universe(db):
     return n
 
 
-def crawl(db, limit=400):
-    now = int(time.time())
-    rows = db.execute("SELECT condition_id, start FROM markets WHERE status IN ('pending','unresolved') AND start + ? < ? ORDER BY start LIMIT ?",
-                      (SETTLE_LAG, now, limit)).fetchall()
+def crawl(db, limit=None, budget_s=None):
+    limit = limit or CRAWL_LIMIT; budget_s = budget_s or CRAWL_BUDGET_S
+    now = int(time.time()); t0 = time.time()
+    rows = db.execute("""SELECT condition_id, start FROM markets
+                         WHERE (status = 'pending' OR (status = 'unresolved' AND start > ? AND COALESCE(fetched_at, 0) < ?))
+                           AND start + ? < ? ORDER BY start LIMIT ?""",
+                      (now - UNRESOLVED_RETRY_DAYS * 86400, now - UNRESOLVED_RETRY_SEC, SETTLE_LAG, now, limit)).fetchall()
     done = 0
     for cid, st in rows:
+        if time.time() - t0 > budget_s:
+            print(f"crawl: budget {budget_s}s exhausted after {done}/{len(rows)} eligible markets"); break
         meta = get(f"https://clob.polymarket.com/markets/{cid}"); time.sleep(PAUSE)
         if not meta or not meta.get("tokens"):
             db.execute("UPDATE markets SET status='error', fetched_at=? WHERE condition_id=?", (now, cid)); continue
@@ -635,4 +644,4 @@ def daily(db):
 
 if __name__ == "__main__":
     db = sqlite3.connect(DB, timeout=60); db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000"); db.executescript(SCHEMA); ensure_columns(db)
-    {"daily": daily, "live": live, "report": report}[sys.argv[1]](db)
+    {"daily": daily, "live": live, "report": report, "crawl": lambda db: print(f"crawled {crawl(db)}")}[sys.argv[1]](db)
