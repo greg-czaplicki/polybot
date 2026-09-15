@@ -571,7 +571,7 @@ def fmt(m, se, n, scale=100, unit="%"):
     return f"{m*scale:+.1f}{unit} (z={m/se:+.1f}, n={n})" if n >= 2 and se > 0 else f"n={n}"
 
 
-def report(db):
+def report(db, fills=None):
     now = int(time.time())
     cols = ["cid", "sport", "mtype", "start", "side", "usd", "streak", "size_ratio", "sq_opp", "crowd", "mins", "win", "roi", "clv"]
     rows = [dict(zip(cols, r)) for r in db.execute("SELECT condition_id, sport, market_type, start, side, usd, streak, size_ratio, sq_opp_usd, crowd_same_usd, mins_to_start, win, roi_follow, clv FROM signals WHERE settled=1")]
@@ -620,6 +620,11 @@ def report(db):
         lines += cell_lanes.report_lines(db, now)
     except Exception as e:
         lines.append(f"\nFORWARD CELL LANES: error {e!r}")
+    try:
+        import hot_record
+        lines += hot_record.report_lines(db, now, fills=fills)
+    except Exception as e:
+        lines.append(f"\nHOT-RECORD LANE: error {e!r}")
     lines.append(""); lines.append("LIVE ALERTS (upcoming markets, sharp fills seen):")
     for r in db.execute("SELECT datetime(ts,'unixepoch'), question, side, price, round(usd), round(wallet_roi_t,1), round(streak,2), round(sq_opp_usd), datetime(start,'unixepoch') FROM live_alerts WHERE start > ? ORDER BY ts DESC LIMIT 20", (now,)):
         lines.append(f"  {r}")
@@ -638,7 +643,7 @@ def daily(db):
     snaps = ensure_snapshots(db, fills)
     n_sig = build_signals(db, fills)
     print(f"daily: +{n_new} universe, {n_crawled} crawled, {n_ev} event keys, {len(fills)} labelled fills, snapshots made {snaps}, +{n_sig} signals, {time.time()-t0:.0f}s")
-    report(db)
+    report(db, fills=fills)
     push({"summary": summary(db)})
 
 
