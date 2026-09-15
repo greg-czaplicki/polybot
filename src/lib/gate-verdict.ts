@@ -4,16 +4,24 @@
  * Pre-registered 2026-07-30 (see docs/STRATEGY.md, shadow-book audit): a
  * gate earns a promotion REVIEW only when its sole-blocker cohort (rejected
  * by this gate alone, every other vector gate passing) reaches
- *   n >= 50 settled  AND  z >= 2 on ROI  AND  CLV > 0.
- * CLV means Pinnacle close (pin_clv) once enough rows carry it; the
- * Polymarket self-close clv is the fallback while pin coverage is thin.
+ *   n >= 50 settled  AND  event-clustered z >= 2 on ROI.
  *
- * Anything short of that is HOLD. WATCH is informational only — CLV is
- * already positive and ROI is trending up, so only sample size/significance
- * is short; keep collecting — and never authorises action. A cohort the
- * sharp book prices as negative-CLV is HOLD no matter how hot its ROI.
- * Raw first-fired stats are deliberately NOT an input: they mix in rows
- * other gates would have rejected anyway (the twice-made mistake).
+ * Amendment 2026-09-15 (docs/audits/2026-09-15-promotion-rule-clv.md): the
+ * original third criterion, CLV > 0, is DROPPED from the verdict and kept
+ * as a displayed diagnostic. Polymarket's close sits within ~0.5pt of
+ * Pinnacle's (2026-09-11 close-calibration read) and pin_clv carries a
+ * structural ≈ −0.3%/side spread offset (2026-08-26 audit), so "beat the
+ * close" was a bar the live book itself fails while profitable (14d
+ * pin_clv −0.46%, +31% out-of-sample). Every verdict was HOLD on the z
+ * criterion alone when the amendment landed, so nothing changed
+ * retroactively. CLV means Pinnacle close (pin_clv) once enough rows carry
+ * it; the Polymarket self-close clv is the fallback while coverage is thin.
+ *
+ * Anything short of that is HOLD. WATCH is informational only — ROI is
+ * positive and trending up, so only sample size/significance is short;
+ * keep collecting — and never authorises action. Raw first-fired stats are
+ * deliberately NOT an input: they mix in rows other gates would have
+ * rejected anyway (the twice-made mistake).
  *
  * Amendment 2026-08-28 (external-review triage; every verdict was HOLD, so
  * nothing changes retroactively): the z criterion uses an EVENT-CLUSTERED
@@ -63,7 +71,7 @@ export interface GateVerdictResult {
 	z: number | null;
 	/** Per-row (naive) z, for display beside the clustered one. */
 	rowZ: number | null;
-	/** Which CLV benchmark the verdict used. */
+	/** Which CLV benchmark is shown beside the verdict (diagnostic only since 2026-09-15). */
 	clvSource: "pinnacle" | "polymarket" | "none";
 	clv: number | null;
 	/** Short human reason, e.g. "n=34/50". */
@@ -122,10 +130,6 @@ export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
 	if (z === null || z < PROMOTION_MIN_Z) {
 		missing.push(`z=${z === null ? "—" : z.toFixed(1)}/${PROMOTION_MIN_Z}`);
 	}
-	if (clv === null || clv <= 0) {
-		missing.push(clv === null ? "clv=—" : `clv=${(clv * 100).toFixed(1)}%≤0`);
-	}
-
 	if (missing.length === 0) {
 		return {
 			verdict: "ready",
@@ -145,9 +149,7 @@ export function gateVerdict(input: GateVerdictInput): GateVerdictResult {
 		z !== null &&
 		z >= WATCH_MIN_Z &&
 		roi !== null &&
-		roi > 0 &&
-		clv !== null &&
-		clv > 0;
+		roi > 0;
 	return {
 		verdict: watching ? "watch" : "hold",
 		z,

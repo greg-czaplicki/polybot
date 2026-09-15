@@ -42,6 +42,26 @@ Implemented in `src/lib/gate-verdict.ts` (`clusterRoiZ`) +
 rather than falling back to the per-row z. The per-row z stays visible as a
 diagnostic (`cleanRowZ`).
 
+**Promotion-rule amendment (2026-09-15, owner decision; every verdict was
+HOLD on the z criterion alone, so nothing changed retroactively — audit:
+[`audits/2026-09-15-promotion-rule-clv.md`](audits/2026-09-15-promotion-rule-clv.md)):**
+the checkpoint rule is now **n ≥ 50 sole-blocker settled AND event-clustered
+z ≥ 2**. The third criterion, **CLV > 0, is dropped as a criterion** and kept
+as a displayed diagnostic (`pin_clv`, `pin_move`, PM self-close `clv`).
+Rationale: Polymarket's close tracks Pinnacle's within ~0.5pt on MLB
+(2026-09-11 close-calibration read) and `pin_clv` carries a structural
+≈ −0.3%/side spread offset (2026-08-26 audit), so "beat the close" is a bar
+the live book itself fails while profitable (14d pin_clv −0.46%, +31%
+out-of-sample since 2026-07-20). Every charter that cites "the standard
+promotion rule" inherits this amendment; charters that state their own
+explicit CLV clause (fade-inversion, pin-edge-gate clause (b), tennis
+ground-up stage 2) keep it — those are separate hypotheses about
+Pinnacle-relative pricing, not gate promotions. WATCH is unchanged
+(n ≥ 25, z ≥ 1, ROI > 0) and still authorises nothing. The live-book stake
+ladder's `pin_move ≥ 0` clause is untouched (a different pre-registered
+rule about stake size, not promotion). The bar for lowering `z ≥ 2` itself
+is a written amendment BEFORE a cohort is read against it — never after.
+
 ## Pre-registered tests (open)
 
 Hypotheses written down BEFORE their data exists, so the read is mechanical

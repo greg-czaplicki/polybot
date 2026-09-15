@@ -19,7 +19,7 @@
  * rejects: reject_reason names the RULE that fired, sharp_side is the side
  * the rule bets, gates_json/top_holders_json are NULL. Every lane row is
  * its own clean cohort — the rule was the only decision — so the standard
- * promotion verdict (n>=50, clustered z>=2, pin_clv>0) applies to all of
+ * promotion verdict (n>=50, clustered z>=2; CLV diagnostic since 2026-09-15) applies to all of
  * them, per lane per sport. Keep them OUT of per-gate reads.
  */
 export const PAPER_LANE_REASONS = ["tennis_v2_paper", "pin_div_paper"] as const;

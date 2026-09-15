@@ -188,6 +188,20 @@ const ODDSPAPI_TENNIS_SPORT_ID = 12;
 const ODDSPAPI_TENNIS_INDEX_TAG = "oddspapi-tennis-index";
 /** pinnacle_feed_cache row holding the last OddsPapi error (path, status, body). */
 const ODDSPAPI_LAST_ERROR_TAG = "oddspapi-last-error";
+/**
+ * /odds-by-tournaments answers 404 FIXTURE_NOT_FOUND ("No fixtures found for
+ * the specified tournament IDs and bookmaker") when Pinnacle prices nothing
+ * in the group — and OddsPapi BILLS that answer like any other request.
+ * 2026-09-14: the tennis index held ghost tournaments (US Open, Eastbourne,
+ * Estoril, Mallorca — the /tournaments counts never reset), every sweep
+ * re-asked while an ATP/WTA row sat in its close window, and 29 credits went
+ * to 404s in one afternoon (118 → 81). A 404 is therefore treated as a
+ * billed "no listing": logged as group spend (caps apply), the group's tags
+ * get an empty feed (rows stamp), and the group is not asked again for this
+ * long. Marker row: `oddspapi-nofixtures:<group>`.
+ */
+const ODDSPAPI_NO_FIXTURES_BACKOFF_SECONDS = 6 * 3600;
+const ODDSPAPI_NO_FIXTURES_TAG_PREFIX = "oddspapi-nofixtures:";
 const ODDSPAPI_TENNIS_INDEX_MAX_AGE_SECONDS = 24 * 3600;
 const ODDSPAPI_TENNIS_PREFERRED = [
 	/us open/i,
@@ -686,11 +700,13 @@ export function selectOddspapiTennisTournaments(
 		if (!tag) continue;
 		if (!/singles$/i.test(t.tournamentName)) continue;
 		if (/doubles|mixed/i.test(t.tournamentName)) continue;
-		const n =
-			(t.futureFixtures ?? 0) +
-			(t.upcomingFixtures ?? 0) +
-			(t.liveFixtures ?? 0);
-		if (n <= 0) continue;
+		// Live-only rows are stuck ghosts, not tournaments in progress: on
+		// 2026-09-14 the index still showed Eastbourne (June), Estoril (April)
+		// and Mallorca (June) at liveFixtures=1, and a tournament with nothing
+		// pregame has nothing to anchor or close anyway.
+		const pregame = (t.futureFixtures ?? 0) + (t.upcomingFixtures ?? 0);
+		if (pregame <= 0) continue;
+		const n = pregame + (t.liveFixtures ?? 0);
 		const preferred = ODDSPAPI_TENNIS_PREFERRED.some((re) =>
 			re.test(t.tournamentName),
 		)
@@ -1569,6 +1585,20 @@ export async function capturePinnacleOddsForPicks(
 		return spent < caps.perSport;
 	};
 
+	// Last error body, durable: the sweep runs inside the sync DO where
+	// console output is not reliably observable from `wrangler tail`.
+	const writeLastOddspapiError = async (body: string): Promise<void> => {
+		await run(
+			db,
+			`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+			 VALUES (?, ?, ?, NULL)
+			 ON CONFLICT(sport_tag) DO UPDATE SET
+			   fetched_at = excluded.fetched_at, events_json = excluded.events_json`,
+			ODDSPAPI_LAST_ERROR_TAG,
+			now,
+			JSON.stringify(body.slice(0, 2000)),
+		);
+	};
 	// Failed pinnapi/oddspapi request: recorded for the backoff, not spend.
 	const logProviderFailure = async (
 		status: number,
@@ -1582,20 +1612,40 @@ export async function capturePinnacleOddsForPicks(
 			now,
 			`${provider === "oddspapi" ? ODDSPAPI_FAIL_KEY_PREFIX : PINNAPI_FAIL_KEY_PREFIX}${status}`,
 		);
-		// Last error body, durable: the sweep runs inside the sync DO where
-		// console output is not reliably observable from `wrangler tail`.
-		if (body) {
-			await run(
-				db,
-				`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
-				 VALUES (?, ?, ?, NULL)
-				 ON CONFLICT(sport_tag) DO UPDATE SET
-				   fetched_at = excluded.fetched_at, events_json = excluded.events_json`,
-				ODDSPAPI_LAST_ERROR_TAG,
-				now,
-				JSON.stringify(body.slice(0, 2000)),
-			);
-		}
+		if (body) await writeLastOddspapiError(body);
+	};
+	// OddsPapi 404 on a group = billed "nothing at Pinnacle for these ids"
+	// (see ODDSPAPI_NO_FIXTURES_BACKOFF_SECONDS). Not a provider failure: no
+	// 10-minute provider backoff (MLB/football closes must not be held up by
+	// a dead tennis index).
+	const oddspapiGroupNoFixtures = async (group: string): Promise<boolean> => {
+		const row = await first<{ fetched_at: number }>(
+			db,
+			`SELECT fetched_at FROM pinnacle_feed_cache WHERE sport_tag = ?`,
+			`${ODDSPAPI_NO_FIXTURES_TAG_PREFIX}${group}`,
+		);
+		return (
+			row !== null &&
+			row !== undefined &&
+			now - row.fetched_at < ODDSPAPI_NO_FIXTURES_BACKOFF_SECONDS
+		);
+	};
+	const markOddspapiGroupNoFixtures = async (
+		group: string,
+		body: string,
+	): Promise<void> => {
+		await run(
+			db,
+			`INSERT INTO pinnacle_feed_cache (sport_tag, fetched_at, events_json, credits_remaining)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(sport_tag) DO UPDATE SET
+			   fetched_at = excluded.fetched_at, events_json = excluded.events_json,
+			   credits_remaining = excluded.credits_remaining`,
+			`${ODDSPAPI_NO_FIXTURES_TAG_PREFIX}${group}`,
+			now,
+			JSON.stringify(body.slice(0, 500)),
+			credits.remaining,
+		);
 	};
 	// OddsPapi documents a 1 s per-endpoint cooldown; pace every call.
 	let lastOddspapiAt = 0;
@@ -1683,6 +1733,11 @@ export async function capturePinnacleOddsForPicks(
 					raw = null;
 				} else if (members.length === 0) {
 					raw = [];
+				} else if (await oddspapiGroupNoFixtures(group)) {
+					console.log(
+						`[pinnacle-odds] oddspapi ${group}: no-fixtures backoff active, not asking`,
+					);
+					raw = [];
 				} else {
 					await oddspapiPace();
 					const result = await fetchOddspapiTournaments(
@@ -1690,7 +1745,21 @@ export async function capturePinnacleOddsForPicks(
 						members.map((m) => m.id),
 						resolved.oddspapiTransport,
 					);
-					if ("failed" in result) {
+					if ("failed" in result && result.failed === 404) {
+						// Billed answer: nothing at Pinnacle for these ids.
+						await logFetch(`oddspapi:${group}`);
+						await writeLastOddspapiError(result.body);
+						await markOddspapiGroupNoFixtures(group, result.body);
+						if (group === "tennis") {
+							// The index that produced these ids is ghosts; blank
+							// it so no sweep re-asks until the daily re-resolve.
+							await writeTennisIndex(db, now, []);
+						}
+						console.warn(
+							`[pinnacle-odds] oddspapi ${group}: 404 no fixtures for ${members.map((m) => `${m.tag}:${m.id}`).join(",")} — backing the group off ${ODDSPAPI_NO_FIXTURES_BACKOFF_SECONDS / 3600}h`,
+						);
+						raw = [];
+					} else if ("failed" in result) {
 						await logProviderFailure(result.failed, result.body);
 						raw = null;
 					} else {

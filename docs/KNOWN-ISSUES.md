@@ -5,6 +5,17 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
+  OddsPapi's index recovers.** `/tournaments` reports fixture counts only for
+  ghost tournaments (stale live rows from April–June plus US Open leftovers)
+  while current ATP/WTA events show zero, so the `tennis` group returns
+  nothing and `/odds-by-tournaments` 404s. Tennis rows in this period have
+  `pin_*` NULL by circumstance, not by rule; the tennis-v2 / WTA paper lanes
+  report `stale_feed`. Each 404 BILLED a credit: 29 burned on 2026-09-14 —
+  fixed 2026-09-15 (group no-fixtures backoff, ghost-index blanking; see
+  `docs/audits/2026-09-15-promotion-rule-clv.md`). Check `pinnacle_fetch_log`
+  for `oddspapi-fail:%` rows and the `oddspapi-nofixtures:tennis` feed-cache
+  marker before reading tennis pin coverage or credit burn.
 - **Wallet-trade pilot is instrumentation, not a live strategy.** v1 starts
   2026-09-09; v2 adds future-only Gamma identity and native close measurements.
   Preserve collection versions, first-signal missingness and event grouping.

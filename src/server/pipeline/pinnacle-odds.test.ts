@@ -834,12 +834,13 @@ describe("selectOddspapiTennisTournaments", () => {
 			t(2559, "WTA", "Wimbledon Women Singles", 0, 0, 2),
 			t(8363, "WTA", "WTA Cincinnati, USA Women Singles", 0, 1),
 		]);
-		expect(chosen.map((c) => c.id)).toEqual([2591, 2595, 2559, 4329, 2715]);
+		// Wimbledon (live-only) is skipped since 2026-09-15: nothing pregame.
+		expect(chosen.map((c) => c.id)).toEqual([2591, 2595, 4329, 2715, 8363]);
 		expect(chosen.map((c) => c.tag)).toEqual([
 			"atp",
 			"wta",
-			"wta",
 			"atp",
+			"wta",
 			"wta",
 		]);
 	});
@@ -847,6 +848,20 @@ describe("selectOddspapiTennisTournaments", () => {
 		expect(
 			selectOddspapiTennisTournaments([t(2591, "ATP", "US Open Men Singles")]),
 		).toEqual([]);
+	});
+	it("skips live-only ghosts (the 2026-09-14 index that 404'd 29 times)", () => {
+		const chosen = selectOddspapiTennisTournaments([
+			t(2595, "WTA", "US Open Women Singles", 1, 2, 3),
+			t(2591, "ATP", "US Open Men Singles", 3),
+			t(2593, "ATP", "US Open Men Doubles", 1, 2),
+			t(2967, "ATP", "ATP Umag, Croatia Men Doubles", 0, 0, 1),
+			t(7631, "ATP", "ATP Eastbourne, Great Britain Men Singles", 0, 0, 1),
+			t(12549, "ATP", "ATP Estoril, Portugal Men Singles", 0, 0, 1),
+			t(31475, "ATP", "ATP Mallorca, Spain Men Singles", 0, 0, 1),
+		]);
+		// The US Open ghosts still pass (counts > 0 pregame); the 404 path in
+		// the sweep blanks the index for the day when they do.
+		expect(chosen.map((c) => c.id).sort()).toEqual([2591, 2595]);
 	});
 });
 

@@ -50,7 +50,7 @@ describe("gateVerdict", () => {
 		expect(v.verdict).toBe("watch");
 	});
 
-	it("holds, not watches, when Pinnacle CLV is negative however hot the ROI", () => {
+	it("2026-09-15 amendment: negative Pinnacle CLV no longer vetoes; z does", () => {
 		// 8/25 MLB below_policy_grade: 24-22 (+17%), z≈1, pin_clv −0.9% on 18 rows
 		const v = gateVerdict({
 			...cohort(24, 22, 1.2),
@@ -59,19 +59,33 @@ describe("gateVerdict", () => {
 			avgClv: -0.004,
 		});
 		expect(v.verdict).toBe("hold");
-		expect(v.clvSource).toBe("pinnacle");
+		expect(v.reason).not.toContain("clv");
+		expect(v.clvSource).toBe("pinnacle"); // still reported as a diagnostic
+		expect(v.clv).toBeCloseTo(-0.009);
+		// 9/15 MLB signal_score_saturation: 27-24 (+17%), clustered z 1.19,
+		// pin_clv −0.45% — WATCH (n≥25, z≥1, ROI>0), never READY: the only
+		// unmet criterion is z, and WATCH authorises nothing.
+		const ss = gateVerdict({
+			...cohort(27, 24, 1.2),
+			avgPinClv: -0.0045,
+			pinN: 23,
+			avgClv: 0.0008,
+			clusteredZ: 1.19,
+			clusterCount: 50,
+		});
+		expect(ss.verdict).toBe("watch");
+		expect(ss.reason).toBe("z=1.2/2");
 	});
 
-	it("is ready only with n>=50, z>=2 and positive CLV", () => {
+	it("is ready with n>=50 and z>=2 regardless of CLV sign", () => {
 		const base = { ...cohort(40, 20), avgClv: 0.002 };
 		expect(gateVerdict({ ...base, avgPinClv: 0.004, pinN: 30 }).verdict).toBe(
 			"ready",
 		);
-		// Pinnacle says no → not ready even though PM clv is positive.
-		expect(
-			gateVerdict({ ...base, avgPinClv: -0.003, pinN: 30 }).verdict,
-		).not.toBe("ready");
-		// Thin pin coverage falls back to PM clv.
+		const negClv = gateVerdict({ ...base, avgPinClv: -0.003, pinN: 30 });
+		expect(negClv.verdict).toBe("ready");
+		expect(negClv.clvSource).toBe("pinnacle");
+		// Thin pin coverage still falls back to PM clv for the diagnostic.
 		const thin = gateVerdict({ ...base, avgPinClv: -0.003, pinN: 3 });
 		expect(thin.clvSource).toBe("polymarket");
 		expect(thin.verdict).toBe("ready");

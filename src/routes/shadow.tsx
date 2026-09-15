@@ -99,8 +99,8 @@ function VerdictRow({
 	const n = r.cleanTotal;
 	const title =
 		r.verdict === "ready"
-			? `All criteria met (n≥${PROMOTION_MIN_N}, z≥${PROMOTION_MIN_Z}, ${r.verdictClvSource} CLV>0)`
-			: `Unmet: ${r.verdictReason} · CLV source ${r.verdictClvSource}`;
+			? `All criteria met (n≥${PROMOTION_MIN_N}, clustered z≥${PROMOTION_MIN_Z}); CLV (${r.verdictClvSource}) is diagnostic only since 2026-09-15`
+			: `Unmet: ${r.verdictReason} · CLV (${r.verdictClvSource}) diagnostic only since 2026-09-15`;
 	return (
 		<Row onClick={onClick} className={indent ? "bg-ink-05/60" : ""}>
 			<Cell
