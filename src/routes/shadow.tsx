@@ -481,6 +481,70 @@ function VerdictBoardPage() {
 					)}
 				</Panel>
 
+				{/* GRADE FLOOR B→C — pre-registered two-block test (charter mlb-grade-floor.md). */}
+				<Panel
+					title="MLB grade floor B→C"
+					span={7}
+					meta={
+						data
+							? `${data.gradeFloor.verdict.toUpperCase()} · ${data.gradeFloor.reason}`
+							: "pre-registered 2026-09-15"
+					}
+				>
+					{data ? (
+						<Tape
+							minWidth="min-w-[420px]"
+							head={[
+								{ label: "Block" },
+								{ label: "n", align: "right" },
+								{ label: "W-L", align: "right" },
+								{ label: "ROI", align: "right" },
+								{ label: "z (event)", align: "right" },
+								{ label: "Bar", align: "right" },
+							]}
+						>
+							{(
+								[
+									["in-sample (< 09-16)", data.gradeFloor.block1, "sign only"],
+									[
+										"forward (≥ 09-16)",
+										data.gradeFloor.block2,
+										"n≥30 · z≥1.5 · ROI>0",
+									],
+									["pooled", data.gradeFloor.pooled, "n≥80 · z≥2"],
+								] as const
+							).map(([label, b, bar]) => (
+								<Row key={label} title={`${b.clusters} game clusters`}>
+									<Cell className="text-ink-85">{label}</Cell>
+									<Cell right>{b.settled}</Cell>
+									<Cell right className="text-ink-70">
+										{b.wins}-{b.losses}
+									</Cell>
+									<Cell right>
+										<Num
+											value={b.roiPct}
+											text={pct(b.roiPct)}
+											dim={b.settled < MIN_N_FOR_COLOR}
+										/>
+									</Cell>
+									<Cell right>
+										<Num
+											value={b.z}
+											text={b.z === null ? "—" : b.z.toFixed(2)}
+											dim={b.settled < MIN_N_FOR_COLOR}
+										/>
+									</Cell>
+									<Cell right className="text-ink-55">
+										{bar}
+									</Cell>
+								</Row>
+							))}
+						</Tape>
+					) : (
+						<Empty>{isLoading ? "Loading…" : "No data."}</Empty>
+					)}
+				</Panel>
+
 				{/* TIMING PAIRS — collapsed; diagnostic only. */}
 				<Panel
 					title="Window drift"

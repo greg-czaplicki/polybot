@@ -9,6 +9,10 @@ import {
 	type GateVerdict,
 	gateVerdict,
 } from "../../lib/gate-verdict";
+import {
+	type GradeFloorRead,
+	gradeFloorRead,
+} from "../../lib/grade-floor-test";
 import { all } from "../db/client";
 import { getDb } from "../env";
 import {
@@ -464,6 +468,33 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
+		// Pre-registered two-block test (docs/charters/mlb-grade-floor.md):
+		// MLB below_policy_grade sole-blocker rows at grade C only.
+		const gradeFloorRows = await all<{
+			sport_series_id: number | null;
+			sport_tag: string | null;
+			market_title: string;
+			event_time: number | null;
+			roi: number;
+			status: string;
+			created_at: number;
+		}>(
+			db,
+			`SELECT sport_series_id, sport_tag, market_title, event_time, roi, status, created_at
+			 FROM shadow_candidates
+			 WHERE sport_tag = 'mlb' AND reject_reason = 'below_policy_grade' AND grade = 'C'
+			   AND status IN ('win','loss') AND roi IS NOT NULL
+			   AND ${SOLE_BLOCKER_SQL}`,
+		);
+		const gradeFloor: GradeFloorRead = gradeFloorRead(
+			gradeFloorRows.map((r) => ({
+				roi: r.roi,
+				win: r.status === "win",
+				clusterKey: eventClusterKey(r),
+				createdAt: r.created_at,
+			})),
+		);
+
 		const pairRows = await all<{
 			reject_reason: string;
 			shadow_label: string | null;
@@ -571,6 +602,7 @@ export const getShadowBookSummaryFn = createServerFn({ method: "GET" }).handler(
 			reasons,
 			bySport,
 			props,
+			gradeFloor,
 			timingPairs,
 			recent,
 		};
