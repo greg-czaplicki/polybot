@@ -13,6 +13,7 @@ import {
 	matchOddsApiEvent,
 	type OddsApiEvent,
 	parseTitleTeams,
+	oddspapiGroupPaused,
 	starvedGroupMayFetch,
 	TENNIS_BOOST_UNTIL_SECONDS,
 	teamNamesMatch,
@@ -914,5 +915,30 @@ describe("tennisBoostMayFetch", () => {
 		expect(tennisBoostMayFetch(TENNIS_BOOST_UNTIL_SECONDS, 1, 5, caps)).toBe(
 			false,
 		);
+	});
+});
+
+describe("oddspapiGroupPaused", () => {
+	const table = { "soccer-a": 1_000, tennis: 2_000 };
+	it("pauses a listed group before its date and releases it after", () => {
+		expect(oddspapiGroupPaused("soccer-a", 999, table)).toBe(true);
+		expect(oddspapiGroupPaused("soccer-a", 1_000, table)).toBe(false);
+		expect(oddspapiGroupPaused("tennis", 1_500, table)).toBe(true);
+	});
+	it("never pauses an unlisted or unknown group", () => {
+		expect(oddspapiGroupPaused("mlb", 0, table)).toBe(false);
+		expect(oddspapiGroupPaused("football", 0, table)).toBe(false);
+		expect(oddspapiGroupPaused(undefined, 0, table)).toBe(false);
+	});
+	it("default table pauses soccer + tennis only, until 2026-10-06Z", () => {
+		const sep20 = Date.UTC(2026, 8, 20) / 1000;
+		const oct7 = Date.UTC(2026, 9, 7) / 1000;
+		for (const g of ["soccer-a", "soccer-b", "tennis"]) {
+			expect(oddspapiGroupPaused(g, sep20)).toBe(true);
+			expect(oddspapiGroupPaused(g, oct7)).toBe(false);
+		}
+		for (const g of ["mlb", "football", "winter"]) {
+			expect(oddspapiGroupPaused(g, sep20)).toBe(false);
+		}
 	});
 });

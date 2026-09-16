@@ -13,6 +13,7 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	12185: "nfl", // nfl-2026
 	10345: "nba",
 	10210: "ncaaf",
+	12756: "ncaaf", // ncaaf-2026 (Gamma /series/12756; registry-only until 2026-09-16 -> NULL sport_tag on cold isolates)
 	10470: "ncaab",
 	3: "mlb",
 	10346: "nhl",

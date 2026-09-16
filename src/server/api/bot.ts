@@ -72,6 +72,9 @@ import {
 	type SharpGradePayload,
 } from "./sharp-money";
 
+/** /api/bot/sharp-alerts: rows accepted per push and statements per D1 batch. */
+const SHARP_ALERTS_MAX_ROWS = 5000;
+const SHARP_ALERTS_BATCH_SIZE = 100;
 const DEFAULT_CACHE_LIMIT = 200;
 const DEFAULT_CACHE_WINDOW_HOURS = 24;
 const DEFAULT_CANDIDATE_WINDOW_MINUTES = 60;
@@ -2959,7 +2962,26 @@ export async function handleBotRequest(
 		}
 		const now = nowUnixSeconds();
 		let inserted = 0;
-		for (const a of (payload.alerts ?? []).slice(0, 500)) {
+		// polysharp re-sends every alert from the last 6h on each 10-min run
+		// (300+ rows on an NFL Sunday). Row-by-row run() was one D1 round trip
+		// each (EU colo -> ENAM primary) and blew the client's 20s timeout on
+		// 56/144 runs 2026-09-13; the old .slice(0, 500) cap was a silent-drop
+		// risk on bigger slates. Batches go over in one round trip per chunk.
+		const stmt = env.POLYWHALER_DB.prepare(
+			`INSERT INTO sharp_alerts
+			 (id, condition_id, question, sport, side_label, start, ts, wallet, side, price, usd,
+			  wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd, received_at,
+			  event_key, market_type, fills, hedge)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, price = excluded.price, usd = excluded.usd,
+			   sq_opp_usd = excluded.sq_opp_usd, fills = excluded.fills, hedge = excluded.hedge,
+			   event_key = COALESCE(excluded.event_key, sharp_alerts.event_key),
+			   market_type = COALESCE(excluded.market_type, sharp_alerts.market_type),
+			   side_label = COALESCE(excluded.side_label, sharp_alerts.side_label),
+			   received_at = excluded.received_at`,
+		);
+		const bound: D1PreparedStatement[] = [];
+		for (const a of (payload.alerts ?? []).slice(0, SHARP_ALERTS_MAX_ROWS)) {
 			if (
 				typeof a?.condition_id !== "string" ||
 				typeof a.wallet !== "string" ||
@@ -2970,42 +2992,37 @@ export async function handleBotRequest(
 				continue;
 			// One row per (market, wallet, side); repeat fills update the aggregate.
 			const id = `${a.condition_id}:${a.wallet}:${a.side}`;
-			const r = await run(
-				env.POLYWHALER_DB,
-				`INSERT INTO sharp_alerts
-				 (id, condition_id, question, sport, side_label, start, ts, wallet, side, price, usd,
-				  wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd, received_at,
-				  event_key, market_type, fills, hedge)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, price = excluded.price, usd = excluded.usd,
-				   sq_opp_usd = excluded.sq_opp_usd, fills = excluded.fills, hedge = excluded.hedge,
-				   event_key = COALESCE(excluded.event_key, sharp_alerts.event_key),
-				   market_type = COALESCE(excluded.market_type, sharp_alerts.market_type),
-				   side_label = COALESCE(excluded.side_label, sharp_alerts.side_label),
-				   received_at = excluded.received_at`,
-				id,
-				a.condition_id,
-				typeof a.question === "string" ? a.question.slice(0, 200) : null,
-				typeof a.sport === "string" ? a.sport : null,
-				typeof a.side_label === "string" ? a.side_label.slice(0, 80) : null,
-				Math.floor(a.start),
-				Math.floor(a.ts),
-				a.wallet,
-				a.side,
-				typeof a.price === "number" ? a.price : null,
-				typeof a.usd === "number" ? a.usd : null,
-				typeof a.wallet_roi_t === "number" ? a.wallet_roi_t : null,
-				typeof a.wallet_markets === "number" ? a.wallet_markets : null,
-				typeof a.wallet_roi === "number" ? a.wallet_roi : null,
-				typeof a.streak === "number" ? a.streak : null,
-				typeof a.sq_opp_usd === "number" ? a.sq_opp_usd : null,
-				now,
-				typeof a.event_key === "string" ? a.event_key : null,
-				typeof a.market_type === "string" ? a.market_type : null,
-				typeof a.fills === "number" ? Math.floor(a.fills) : null,
-				a.hedge === 1 ? 1 : 0,
+			bound.push(
+				stmt.bind(
+					id,
+					a.condition_id,
+					typeof a.question === "string" ? a.question.slice(0, 200) : null,
+					typeof a.sport === "string" ? a.sport : null,
+					typeof a.side_label === "string" ? a.side_label.slice(0, 80) : null,
+					Math.floor(a.start),
+					Math.floor(a.ts),
+					a.wallet,
+					a.side,
+					typeof a.price === "number" ? a.price : null,
+					typeof a.usd === "number" ? a.usd : null,
+					typeof a.wallet_roi_t === "number" ? a.wallet_roi_t : null,
+					typeof a.wallet_markets === "number" ? a.wallet_markets : null,
+					typeof a.wallet_roi === "number" ? a.wallet_roi : null,
+					typeof a.streak === "number" ? a.streak : null,
+					typeof a.sq_opp_usd === "number" ? a.sq_opp_usd : null,
+					now,
+					typeof a.event_key === "string" ? a.event_key : null,
+					typeof a.market_type === "string" ? a.market_type : null,
+					typeof a.fills === "number" ? Math.floor(a.fills) : null,
+					a.hedge === 1 ? 1 : 0,
+				),
 			);
-			inserted += Number(r.meta?.changes ?? 0);
+		}
+		for (let i = 0; i < bound.length; i += SHARP_ALERTS_BATCH_SIZE) {
+			const results = await env.POLYWHALER_DB.batch(
+				bound.slice(i, i + SHARP_ALERTS_BATCH_SIZE),
+			);
+			for (const r of results) inserted += Number(r.meta?.changes ?? 0);
 		}
 		if (payload.summary && typeof payload.summary === "object") {
 			await run(

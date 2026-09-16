@@ -16,6 +16,17 @@ fixing commit.
   `docs/audits/2026-09-15-promotion-rule-clv.md`). Check `pinnacle_fetch_log`
   for `oddspapi-fail:%` rows and the `oddspapi-nofixtures:tennis` feed-cache
   marker before reading tennis pin coverage or credit burn.
+- **Soccer + tennis Pinnacle sweep PAUSED 2026-09-16 → 2026-10-06Z**
+  (`ODDSPAPI_GROUP_PAUSED_UNTIL` in `src/server/pipeline/pinnacle-odds.ts`).
+  74 free-plan credits had to last through the MLB postseason (from
+  2026-09-29) with no reset date in `/v4/account`, so the `soccer-a`,
+  `soccer-b` and `tennis` groups are untracked until the date passes. Shadow
+  rows for EPL/MLS/La Liga/Bundesliga/Serie A/Ligue 1/UCL/Championship and
+  ATP/WTA created in this window have `pin_*` NULL by circumstance, the
+  soccer `pin_div_paper` lane records nothing, and the tennis paper lanes keep
+  reporting `stale_feed`. Do not read soccer/tennis pin coverage, pin_clv or
+  the pin-divergence benchmark across this gap. Extend or lift by editing the
+  constant (no era bump: gates are unchanged).
 - **Wallet-trade pilot is instrumentation, not a live strategy.** v1 starts
   2026-09-09; v2 adds future-only Gamma identity and native close measurements.
   Preserve collection versions, first-signal missingness and event grouping.

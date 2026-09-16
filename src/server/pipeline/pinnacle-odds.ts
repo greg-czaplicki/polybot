@@ -177,6 +177,29 @@ const ODDSPAPI_GROUPS: Record<string, string[]> = {
 	winter: ["nba", "nhl", "ncaab"],
 	tennis: ["atp", "wta"],
 };
+/**
+ * Groups the sweep must not spend on until the given unix time. 2026-09-16:
+ * 74 credits left on the free plan (~7/day) with the MLB postseason starting
+ * 2026-09-29 and no reset date in /v4/account. Soccer and tennis are
+ * shadow-only benchmarks nowhere near a checkpoint (and the tennis index is
+ * empty until a live tournament is listed), so they yield to MLB + football
+ * until early October. Rows of a paused group are simply not tracked (no
+ * spend, no stamp); they resume when the date passes.
+ */
+export const ODDSPAPI_GROUP_PAUSED_UNTIL: Record<string, number> = {
+	"soccer-a": Date.UTC(2026, 9, 6) / 1000,
+	"soccer-b": Date.UTC(2026, 9, 6) / 1000,
+	tennis: Date.UTC(2026, 9, 6) / 1000,
+};
+export function oddspapiGroupPaused(
+	group: string | undefined,
+	now: number,
+	pausedUntil: Record<string, number> = ODDSPAPI_GROUP_PAUSED_UNTIL,
+): boolean {
+	if (!group) return false;
+	const until = pausedUntil[group];
+	return typeof until === "number" && now < until;
+}
 const ODDSPAPI_GROUP_OF: Record<string, string> = Object.fromEntries(
 	Object.entries(ODDSPAPI_GROUPS).flatMap(([group, tags]) =>
 		tags.map((tag) => [tag, group]),
@@ -1307,7 +1330,8 @@ export async function capturePinnacleOddsForPicks(
 	if (provider === null) return empty;
 	const tracked = (tag: string): boolean =>
 		provider === "oddspapi"
-			? ODDSPAPI_GROUP_OF[tag] !== undefined
+			? ODDSPAPI_GROUP_OF[tag] !== undefined &&
+				!oddspapiGroupPaused(ODDSPAPI_GROUP_OF[tag], nowUnixSeconds())
 			: provider === "pinnapi"
 				? PINNAPI_SPORT_IDS[tag] !== undefined
 				: !!(ODDS_API_SPORT_KEYS[tag] || TENNIS_TOUR_PREFIXES[tag]);
