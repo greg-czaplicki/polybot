@@ -61,6 +61,11 @@ class BotConfig:
 	trade_log_path: str
 	daily_notional_cap: float
 	kill_switch_path: str
+	# Era v14 second-family lanes: candidates carrying a `lane` are placed ONLY
+	# when the lane has a positive stake here (fail-closed). Per-lane rolling
+	# 24h notional caps sit under the global daily cap.
+	lane_stakes: Dict[str, float]
+	lane_daily_caps: Dict[str, float]
 
 
 def _prompt_missing(value: str, label: str, secret: bool = False) -> str:
@@ -89,6 +94,21 @@ def load_dotenv(path: str) -> None:
 					os.environ[key] = value
 	except FileNotFoundError:
 		return
+
+
+def parse_lane_map(raw: str) -> Dict[str, float]:
+	"""'cs2_pickem_dog=4,other=0' -> {'cs2_pickem_dog': 4.0, 'other': 0.0}."""
+	out: Dict[str, float] = {}
+	for part in (raw or "").split(","):
+		part = part.strip()
+		if not part or "=" not in part:
+			continue
+		key, value = part.split("=", 1)
+		try:
+			out[key.strip()] = float(value.strip())
+		except ValueError:
+			continue
+	return out
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -208,6 +228,10 @@ def load_config() -> BotConfig:
 		# Touch this file to halt live trading without stopping the process:
 		# candidates keep logging, orders stop. Remove it to resume.
 		kill_switch_path=os.getenv("BOT_KILL_SWITCH_PATH", "KILL"),
+		# e.g. BOT_LANE_STAKES="cs2_pickem_dog=4" BOT_LANE_DAILY_CAPS="cs2_pickem_dog=20".
+		# Unset → every lane candidate is skipped (logged as candidate_skip_lane_unconfigured).
+		lane_stakes=parse_lane_map(os.getenv("BOT_LANE_STAKES", "")),
+		lane_daily_caps=parse_lane_map(os.getenv("BOT_LANE_DAILY_CAPS", "")),
 	)
 
 
@@ -539,6 +563,7 @@ def candidate_context(
 	)
 	return {
 		"conditionId": entry.get("conditionId"),
+		"lane": candidate.get("lane"),
 		"marketGroupKey": get_market_group_key(entry),
 		"event": event_label,
 		"eventTime": entry.get("eventTime"),
@@ -1223,11 +1248,44 @@ def place_bet(
 			price,
 		)
 		return False
-	prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
-	kelly = kelly_fraction(prob, float(price))
-	stake = state.get("bankroll", config.paper_bankroll) * kelly * config.kelly_fraction
-	if config.fixed_stake > 0:
-		stake = config.fixed_stake
+	lane = candidate.get("lane")
+	if lane:
+		# Second-family lane (era v14): fixed lane stake, no Kelly, no grade
+		# sizing. run_loop already refused lanes without a positive stake.
+		stake = float(config.lane_stakes.get(str(lane), 0.0))
+		if stake <= 0:
+			print("[bot] skip lane without stake", lane, entry.get("marketTitle"))
+			return False
+		lane_cap = float(config.lane_daily_caps.get(str(lane), 0.0))
+		if lane_cap > 0:
+			now_ts = int(time.time())
+			lane_recent = [
+				t
+				for t in state.get("laneNotional", {}).get(str(lane), [])
+				if now_ts - int(t.get("ts", 0)) < 86400
+			]
+			state.setdefault("laneNotional", {})[str(lane)] = lane_recent
+			lane_spent = sum(float(t.get("stake") or 0) for t in lane_recent)
+			if lane_spent + stake > lane_cap:
+				print(
+					colorize("[bot]", COLOR_RED),
+					f"LANE CAP {lane}: {lane_spent:.2f} placed in 24h + {stake:.2f}",
+					f"> {lane_cap} — refusing",
+				)
+				log_event(
+					"lane_daily_cap_hit",
+					lane=lane,
+					spent24h=round(lane_spent, 2),
+					stake=round(stake, 2),
+					cap=lane_cap,
+				)
+				return False
+	else:
+		prob = GRADE_PROB_DEFAULTS.get(grade_label, 0.50)
+		kelly = kelly_fraction(prob, float(price))
+		stake = state.get("bankroll", config.paper_bankroll) * kelly * config.kelly_fraction
+		if config.fixed_stake > 0:
+			stake = config.fixed_stake
 	stake = min(stake, config.max_stake)
 	if stake < config.min_stake:
 		print("[bot] skip tiny stake", entry.get("marketTitle"), "stake", stake)
@@ -1283,6 +1341,7 @@ def place_bet(
 		"l2ImbalanceNearMid": entry.get("l2ImbalanceNearMid"),
 		"l2Disagreement": entry.get("l2Disagreement"),
 		"stake": round(stake, 2),
+		"lane": lane,
 		"mode": "paper" if config.dry_run else "live",
 	}
 	# Pick payload is built BEFORE submission so the durable submit intent can
@@ -1310,6 +1369,7 @@ def place_bet(
 	}
 	pick_payload = {
 		"clientPickId": client_pick_id,
+		"lane": lane,
 		"conditionId": entry.get("conditionId"),
 		"marketTitle": entry.get("marketTitle"),
 		"eventTime": entry.get("eventTime"),
@@ -1443,6 +1503,10 @@ def place_bet(
 		state.setdefault("liveNotional", []).append(
 			{"ts": int(time.time()), "stake": round(stake, 2)}
 		)
+		if lane:
+			state.setdefault("laneNotional", {}).setdefault(str(lane), []).append(
+				{"ts": int(time.time()), "stake": round(stake, 2)}
+			)
 	new_bankroll = round(state.get("bankroll", config.paper_bankroll) - stake, 2)
 	if new_bankroll <= 0:
 		# Wallet-sourced bankrolls re-sync from the live balance (settled
@@ -1715,6 +1779,16 @@ def run_loop() -> None:
 					skipped_missing_condition += 1
 					log_event(
 						"candidate_skip_missing_condition_id",
+						idx=idx,
+						**candidate_context(candidate),
+					)
+					continue
+				lane = candidate.get("lane")
+				if lane and config.lane_stakes.get(str(lane), 0.0) <= 0:
+					# Fail-closed: a lane the server emits but this bot has no
+					# stake for is never placed.
+					log_event(
+						"candidate_skip_lane_unconfigured",
 						idx=idx,
 						**candidate_context(candidate),
 					)
