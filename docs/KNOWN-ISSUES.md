@@ -5,6 +5,15 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Football Pinnacle data paused 2026-09-18 → 2026-11-02** (`football` group
+  in `ODDSPAPI_GROUP_PAUSED_UNTIL`): 69 credits with no reset were re-pointed
+  at the MLB postseason, and `BENCHMARK_MIN_CREDITS` rose 20 → 40 so the last
+  40 go to live MLB anchors/closes only (MLB shadow rows lose `pin_*` under
+  40). NFL/NCAAF rows in the gap have `pin_*` NULL by rule; the pin_edge
+  football arm and the pin_div_paper football lane are dark for it. Lift by
+  editing the constant (no era bump). Soccer/tennis pause (to 2026-10-06)
+  unchanged.
+
 - **From 2026-09-18 `manual_picks` holds TWO signal families.** Era v14 added
   the CS2 near-pickem dog lane: rows with `lane = 'cs2_pickem_dog'` are $4
   execution-pilot picks chosen by a price band, not by the holder signal.

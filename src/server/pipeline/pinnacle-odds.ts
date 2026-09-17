@@ -190,6 +190,11 @@ export const ODDSPAPI_GROUP_PAUSED_UNTIL: Record<string, number> = {
 	"soccer-a": Date.UTC(2026, 9, 6) / 1000,
 	"soccer-b": Date.UTC(2026, 9, 6) / 1000,
 	tennis: Date.UTC(2026, 9, 6) / 1000,
+	// 2026-09-17: 69 credits, no reset. Football (shadow-only; 1-2 requests a
+	// day across both leagues) yields to the MLB postseason (2026-09-29 →
+	// ~2026-11-01, the only live book). Football pin_* is NULL for this gap;
+	// the pin_edge football arm and the pin_div_paper football lane pause.
+	football: Date.UTC(2026, 10, 2) / 1000,
 };
 export function oddspapiGroupPaused(
 	group: string | undefined,
@@ -265,7 +270,9 @@ const LIVE_SPORT_TAGS = new Set([
 ]);
 /** Benchmark-only leagues don't fetch below this many remaining credits;
  * live sports keep fetching down to LIVE_MIN_CREDITS. */
-const BENCHMARK_MIN_CREDITS = 20;
+// 2026-09-17: raised 20 → 40 so the last 40 credits go to LIVE MLB anchors
+// and closes only (postseason); MLB shadow rows stop getting pin_* below 40.
+const BENCHMARK_MIN_CREDITS = 40;
 const LIVE_MIN_CREDITS = 2;
 /** Rolling-24h fetch caps per provider. `shadow` bounds benchmark-only
  * roles, `liveAnchor` live-pick anchors, `liveClose` live-pick closes (the
