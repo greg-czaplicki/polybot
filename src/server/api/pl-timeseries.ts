@@ -59,6 +59,7 @@ export const getPlTimeseriesFn = createServerFn({ method: "GET" }).handler(
 			   AND roi IS NOT NULL
 			   AND settled_at IS NOT NULL
 			   AND (fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed'))
+			   AND lane IS NULL
 			 ORDER BY settled_at ASC`,
 		);
 

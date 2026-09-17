@@ -101,3 +101,15 @@ EPL is a three-way market: a draw token whose price falls in the band is a
 row like any other. Label drift fixed the same day: polybook's slug-prefix
 hints are normalised in `polysharp.py` (`cfb→ncaaf`, `lal→laliga`,
 `bun→bundesliga`, `fl1→ligue1`, `elc→championship`) so each sport is one label.
+
+
+## v1.2 addendum (2026-09-17) — `cs2_pickem_dog_cell`
+Added after the 2026-09-17 esports read. CS2 moneyline sides priced
+0.40 ≤ p < 0.50 at T-60, same entry / grain / metric as every other lane.
+Origin: the 2026-09-11 cell audit (`cell_cs2.txt`) — 40–50c +5.5 % (z 1.4,
+n 562, positive in both halves), its mirror 50–60c −6.4 % (z −2.5). The
+lane's own start is **2026-09-18T00:00Z** (`LANE_STARTS` in
+`cell_lanes.py`); markets before that are its reference window. Expectation
+positive; pass = ROI > 0 and clustered z ≥ 2 at n ≥ 150, read per the v1
+rule. A capped $4 live execution pilot of the same rule runs in the app
+(`docs/charters/cs2-pickem-dog-pilot.md`); its picks are never evidence.

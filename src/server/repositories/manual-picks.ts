@@ -14,6 +14,8 @@ export type ManualPickStatus = "pending" | "win" | "loss" | "push";
 export interface ManualPickRow {
 	id: string;
 	client_pick_id?: string | null;
+	/** Era v14: pre-registered rule that produced the pick; NULL = holder-signal book. */
+	lane?: string | null;
 	condition_id: string;
 	market_title: string;
 	event_time?: string | null;
@@ -82,6 +84,7 @@ export interface ManualPickRow {
 export interface ManualPickEntry {
 	id: string;
 	clientPickId?: string;
+	lane?: string;
 	conditionId: string;
 	marketTitle: string;
 	eventTime?: string;
@@ -325,6 +328,8 @@ export interface ManualPickGradeRecalibrationSummary {
 
 export interface CreateManualPickInput {
 	clientPickId?: string;
+	/** Era v14: lane name for second-family picks (e.g. 'cs2_pickem_dog'). */
+	lane?: string;
 	conditionId: string;
 	marketTitle: string;
 	eventTime?: string;
@@ -494,6 +499,7 @@ function parsePickRow(row: ManualPickRow): ManualPickEntry {
 		warnings: parseStringArray(row.warnings_json),
 		decisionSnapshot: parseJsonValue(row.decision_snapshot_json),
 		candidateComputedAt: row.candidate_computed_at ?? undefined,
+		lane: row.lane ?? undefined,
 		executionSubmittedAt: row.execution_submitted_at ?? undefined,
 		executionFilledAt: row.execution_filled_at ?? undefined,
 		fillStatus: row.fill_status ?? undefined,
@@ -603,8 +609,9 @@ export async function createManualPick(
 	      warnings_json,
 	      decision_snapshot_json,
 	      candidate_computed_at,
-	      status
-	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	      status,
+	      lane
+	    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		input.clientPickId ?? null,
 		input.conditionId,
@@ -628,6 +635,7 @@ export async function createManualPick(
 		input.decisionSnapshot ? JSON.stringify(input.decisionSnapshot) : null,
 		input.candidateComputedAt ?? null,
 		"pending",
+		input.lane ?? null,
 	);
 	const row = await first<ManualPickRow>(
 		db,
@@ -2170,4 +2178,45 @@ export async function getManualPicksGradeRecalibrationSummary(
 		rows,
 		observations,
 	};
+}
+
+/**
+ * Every pick of one lane, shaped for `evaluateLaneState` (src/lib/cs2-pickem-lane.ts).
+ * Cluster key = matchup title (before ":") + event time: one match, one cluster.
+ */
+export async function listLanePickRows(
+	db: Db,
+	lane: string,
+): Promise<
+	Array<{
+		status: string;
+		roi: number | null;
+		fillNotional: number | null;
+		clusterKey: string;
+		pickedAt: number;
+		settledAt: number | null;
+	}>
+> {
+	const rows = await all<{
+		status: string;
+		roi: number | null;
+		fill_notional: number | null;
+		market_title: string;
+		event_time: string | null;
+		picked_at: number;
+		settled_at: number | null;
+	}>(
+		db,
+		`SELECT status, roi, fill_notional, market_title, event_time, picked_at, settled_at
+		 FROM manual_picks WHERE lane = ? ORDER BY picked_at ASC`,
+		lane,
+	);
+	return rows.map((r) => ({
+		status: r.status,
+		roi: r.roi,
+		fillNotional: r.fill_notional,
+		clusterKey: `${r.market_title.split(":")[0]?.trim().toLowerCase() ?? r.market_title}|${r.event_time ?? ""}`,
+		pickedAt: r.picked_at,
+		settledAt: r.settled_at,
+	}));
 }

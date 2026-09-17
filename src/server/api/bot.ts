@@ -1,4 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
+import {
+	CS2_PICKEM_DOG_LANE,
+	evaluateLaneState,
+	type LaneState,
+	pickemSide,
+} from "@/lib/cs2-pickem-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
@@ -55,6 +61,7 @@ import {
 import { listDailyStatsSnapshots } from "../repositories/daily-stats-snapshots";
 import {
 	createManualPick,
+	listLanePickRows,
 	type ManualPickStatus,
 	settleManualPick,
 	updateManualPickExecution,
@@ -141,6 +148,14 @@ type BotCandidatesDebug = {
 	inspect?: BotCandidateDebugInspect;
 	/** Pin-divergence paper lanes, this tick (see pipeline/tennis-v2.ts). */
 	paperLanes?: PaperLaneStats;
+	/** Era v14 CS2 pickem-dog lane, this tick (src/lib/cs2-pickem-lane.ts). */
+	lane?: {
+		name: string;
+		eligible: number;
+		emitted: number;
+		skipped: Record<string, number>;
+		state: LaneState | null;
+	};
 };
 
 type BotCandidatesOptions = {
@@ -184,6 +199,8 @@ type BotCandidatesResult = {
 			computedAt?: number;
 			historyUpdatedAt?: number;
 		};
+		/** Era v14: set on second-family candidates; bots without a configured lane stake must skip them. */
+		lane?: string;
 	}>;
 	requested: number;
 	returned: number;
@@ -2667,6 +2684,100 @@ async function listBotCandidates(
 		);
 	}
 	debug.returnedAfterDedup = dedupedCandidates.length;
+	// Era v14: CS2 near-pickem dog lane — a second signal family that never
+	// touches the holder pipeline above. It scans the same in-window entries
+	// (already filtered for already-picked / market-group / timing), takes the
+	// CS2 moneyline side priced in the band, and is capped and killed
+	// server-side from its own pick rows (src/lib/cs2-pickem-lane.ts). The bot
+	// skips lane candidates unless it has a stake configured for the lane, so
+	// the switch is fail-closed on both ends.
+	const laneCandidates: BotCandidate[] = [];
+	if (CS2_PICKEM_DOG_LANE.enabled && !inspectConditionId) {
+		const laneDebug: NonNullable<BotCandidatesDebug["lane"]> = {
+			name: CS2_PICKEM_DOG_LANE.name,
+			eligible: 0,
+			emitted: 0,
+			skipped: {},
+			state: null,
+		};
+		try {
+			const laneRows = await listLanePickRows(db, CS2_PICKEM_DOG_LANE.name);
+			const laneState = evaluateLaneState(laneRows, nowUnixSeconds());
+			laneDebug.state = laneState;
+			const takenGroupKeys = new Set(
+				dedupedCandidates.map((candidate) =>
+					getMarketGroupKey(candidate.entry),
+				),
+			);
+			const eligible = upcomingEntries
+				.filter(
+					(entry) =>
+						resolveSportTagFromSeriesId(entry.sportSeriesId) ===
+							CS2_PICKEM_DOG_LANE.sportTag &&
+						getMarketTypeLabel(entry.marketTitle) ===
+							CS2_PICKEM_DOG_LANE.marketType,
+				)
+				.map((entry) => {
+					const eventTime = parseEventTime(entry.eventTime);
+					return {
+						entry,
+						side: pickemSide(entry.sideA.price, entry.sideB.price),
+						minutesToStart:
+							eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null,
+					};
+				})
+				.filter((item) => item.side !== null && item.minutesToStart !== null)
+				// Closest to start first: the cell's best buckets were the late ones.
+				.sort((a, b) => (a.minutesToStart ?? 0) - (b.minutesToStart ?? 0));
+			laneDebug.eligible = eligible.length;
+			for (const { entry, side } of eligible) {
+				if (!laneState.active) {
+					incrementCounter(laneDebug.skipped, laneState.reason);
+					continue;
+				}
+				if (laneCandidates.length >= laneState.remainingToday) {
+					incrementCounter(laneDebug.skipped, "daily_cap_this_tick");
+					continue;
+				}
+				const groupKey = getMarketGroupKey(entry);
+				if (takenGroupKeys.has(groupKey)) {
+					incrementCounter(laneDebug.skipped, "market_group_taken");
+					continue;
+				}
+				takenGroupKeys.add(groupKey);
+				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
+				const laneSide = side as "A" | "B";
+				laneCandidates.push({
+					entry: toSlimCandidate({ ...entry, sharpSide: laneSide }),
+					grade: {
+						// Holder-signal fields are carried for the pick record only;
+						// the lane neither ranks nor sizes on them.
+						grade: grade?.grade ?? "D",
+						signalScore: grade?.signalScore,
+						edgeRating: grade?.edgeRating ?? entry.edgeRating,
+						scoreDifferential:
+							grade?.scoreDifferential ?? entry.scoreDifferential,
+						microstructureScore: grade?.microstructureScore,
+						segmentScore: 0,
+						segmentKey: CS2_PICKEM_DOG_LANE.name,
+						segmentLabel: "CS2 pickem dog lane (era v14 pilot)",
+						segmentNotes: [
+							`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
+						],
+						isReady: grade?.isReady,
+						warnings: grade?.warnings,
+						computedAt: grade?.computedAt,
+						historyUpdatedAt: grade?.historyUpdatedAt,
+					},
+					lane: CS2_PICKEM_DOG_LANE.name,
+				});
+				laneDebug.emitted += 1;
+			}
+		} catch (error) {
+			console.warn("[bot] cs2 pickem lane failed:", error);
+		}
+		debug.lane = laneDebug;
+	}
 	if (inspectConditionId && !debug.inspect) {
 		debug.inspect = {
 			conditionId: inspectConditionId,
@@ -2675,7 +2786,7 @@ async function listBotCandidates(
 		};
 	}
 	const result = {
-		candidates: dedupedCandidates,
+		candidates: [...dedupedCandidates, ...laneCandidates],
 		requested: gradesResult.requested,
 		returned: dedupedCandidates.length,
 		truncated: gradesResult.truncated,
@@ -3192,6 +3303,7 @@ export async function handleBotRequest(
 		}
 		const payload = await parseJson<{
 			clientPickId?: string;
+			lane?: string;
 			conditionId?: string;
 			marketTitle?: string;
 			eventTime?: string;
@@ -3424,6 +3536,10 @@ export async function handleBotRequest(
 		});
 		const createInput = {
 			clientPickId: payload.clientPickId,
+			lane:
+				typeof payload.lane === "string" && payload.lane.trim()
+					? payload.lane.trim()
+					: undefined,
 			conditionId: payload.conditionId,
 			marketTitle: payload.marketTitle ?? cacheEntry?.marketTitle ?? "",
 			eventTime: payload.eventTime ?? cacheEntry?.eventTime,

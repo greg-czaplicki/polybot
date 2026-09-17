@@ -5,6 +5,7 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
+import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
 import {
 	evaluateLiveLadder,
 	LIVE_OOS_SINCE,
@@ -14,6 +15,7 @@ import {
 import { STRATEGY_VERSION } from "../../lib/strategy-version";
 import { all, first } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
+import { listLanePickRows } from "../repositories/manual-picks";
 import { getSharpMoneyCacheStats } from "../repositories/sharp-money";
 
 export interface DashboardPickRow {
@@ -96,6 +98,16 @@ export interface DashboardHealth {
 	lanesEvaluated: number | null;
 	lanesFired: number | null;
 	lanesRecorded: number | null;
+	/** Era v14 CS2 pickem-dog pilot (src/lib/cs2-pickem-lane.ts), from its own pick rows. */
+	cs2Pilot: {
+		active: boolean;
+		reason: string;
+		todayPicks: number;
+		settled: number;
+		wins: number;
+		realizedPnl: number;
+		z: number | null;
+	} | null;
 }
 
 /** Live-book results over a trailing window (real fills only). */
@@ -251,7 +263,8 @@ function toEraSummary(label: string, r: EraAggRow): DashboardEraSummary {
  * fills awaiting reconciliation. NULL fill_status passes: every pick before
  * execution tracking (pre-2026-08-05) was a real bet.
  */
-const REAL_FILL_SQL = `(fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed'))`;
+// Era v14: the holder-signal book excludes second-family lane picks (lane IS NULL).
+const REAL_FILL_SQL = `(fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed')) AND lane IS NULL`;
 
 const ERA_AGG = `SELECT
 	SUM(status = 'win') AS wins,
@@ -614,6 +627,24 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				});
 		}
 
+		// Era v14: CS2 pickem-dog pilot state from its own lane rows (never the holder book).
+		let cs2Pilot: DashboardHealth["cs2Pilot"] = null;
+		try {
+			const laneRows = await listLanePickRows(db, CS2_PICKEM_DOG_LANE.name);
+			const laneState = evaluateLaneState(laneRows, now);
+			cs2Pilot = {
+				active: laneState.active,
+				reason: laneState.reason,
+				todayPicks: laneState.todayPicks,
+				settled: laneState.settled,
+				wins: laneState.wins,
+				realizedPnl: laneState.realizedPnl,
+				z: laneState.z,
+			};
+		} catch (error) {
+			console.warn("[dashboard] cs2 pilot state failed", error);
+		}
+
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
 			pipelineNewestAt: cacheStats.newestEntry ?? null,
@@ -636,6 +667,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			lanesEvaluated: lanes?.evaluated ?? null,
 			lanesFired: lanes?.fired ?? null,
 			lanesRecorded: lanes?.recorded ?? null,
+			cs2Pilot,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.

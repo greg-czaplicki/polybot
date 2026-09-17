@@ -18,6 +18,11 @@ import math, sqlite3, sys, time, os
 from collections import defaultdict
 
 LANE_START = 1789171200            # 2026-09-12 00:00:00Z — markets starting before this are reference only
+# Lanes added after the original freeze start later (charter version noted); the
+# reference window for such a lane ends at ITS start, not at LANE_START.
+LANE_STARTS = {
+    "cs2_pickem_dog_cell": 1789689600,   # 2026-09-18 00:00:00Z — charter v1.2 (2026-09-17)
+}
 DB = os.environ.get("SHARP_DB", "/root/polysharp/data/sharp.db")
 
 LANES = {
@@ -35,6 +40,11 @@ LANES = {
     "repl_ncaaf_fav_60_80":  ("ncaaf", "moneyline", 0.60, 0.80, "replication of the favourite guard"),
     "repl_epl_dog_cell":     ("epl",   "moneyline", 0.20, 0.40, "replication of the dog cell (3-way market: draw side included); read at n>=150"),
     "repl_epl_fav_60_80":    ("epl",   "moneyline", 0.60, 0.80, "replication of the favourite guard"),
+    # Charter v1.2 (2026-09-17): the CS2 near-pickem dog cell (40-50c moneyline, +5.5% z1.4 n=562 in-sample,
+    # positive in both halves; its mirror, 50-60c favourites, is -6.4% z-2.5). Read at n>=150 like atp_dog_cell.
+    # A capped live execution pilot (app lane `cs2_pickem_dog`, $4, era v14) runs the same rule inside the bot
+    # window; the EVIDENCE is this lane, never the pilot's picks.
+    "cs2_pickem_dog_cell":   ("cs2",   "moneyline", 0.40, 0.50, "positive; pass = ROI>0 & clustered z>=2 at n>=150 (v1.2, 2026-09-18 start)"),
 }
 
 
@@ -83,13 +93,14 @@ def report_lines(db, now=None):
     out = ["", f"FORWARD CELL LANES (pre-registered, markets starting >= {time.strftime('%Y-%m-%d', time.gmtime(LANE_START))}; "
                "entry = first small taker-BUY fill after T-60m; one row per market-side; z clustered by event)"]
     for name, (sport, mtype, lo, hi, expect) in LANES.items():
-        fwd = lane_rows(db, name, start_from=LANE_START)
+        start = LANE_STARTS.get(name, LANE_START)
+        fwd = lane_rows(db, name, start_from=start)
         m, z, n = clustered([(r[7], r[2]) for r in fwd])
         wins = sum(r[6] for r in fwd)
-        ref = lane_rows(db, name, start_to=LANE_START)
+        ref = lane_rows(db, name, start_to=start)
         rm, rz, rn = clustered([(r[7], r[2]) for r in ref])
         out.append(f"  {name:24s} {sport:4s} {mtype:9s} {lo:.2f}-{hi:.2f}  FORWARD ROI {m*100:+6.1f}% z={z:+4.1f} n={n:4d} wins {wins}/{n}"
-                   f"   | reference (in-sample, pre-{time.strftime('%Y-%m-%d', time.gmtime(LANE_START))}) {rm*100:+6.1f}% z={rz:+4.1f} n={rn}")
+                   f"   | reference (in-sample, pre-{time.strftime('%Y-%m-%d', time.gmtime(start))}) {rm*100:+6.1f}% z={rz:+4.1f} n={rn}")
         out.append(f"      expectation: {expect}")
     return out
 
