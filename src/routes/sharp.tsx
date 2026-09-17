@@ -665,7 +665,7 @@ function SharpMoneyPage() {
 						windowHours: UPCOMING_WINDOW_HOURS,
 					},
 				}),
-				getSharpMoneyCacheStatsFn({ data: {} }),
+				getSharpMoneyCacheStatsFn(),
 			]);
 
 			const nextEntries = cacheResult.entries ?? [];
@@ -690,7 +690,9 @@ function SharpMoneyPage() {
 			if (!response.ok) {
 				throw new Error("Failed to load pipeline status");
 			}
-			const status = await response.json();
+			const status = (await response.json()) as Parameters<
+				typeof setPipelineStatus
+			>[0];
 			setPipelineStatus(status);
 		} catch (error) {
 			console.error("Failed to load pipeline status:", error);
@@ -1081,12 +1083,12 @@ function SharpMoneyPage() {
 				},
 			});
 			if (cancelled) return;
-			if ("error" in result && result.error) {
+			if ("error" in result) {
 				setBotAlignedError(String(result.error));
 				setBotAlignedConditionOrder([]);
 				return;
 			}
-			const orderedIds = (result.candidates ?? []).map(
+			const orderedIds = result.candidates.map(
 				(candidate) => candidate.entry.conditionId,
 			);
 			setBotAlignedError(null);

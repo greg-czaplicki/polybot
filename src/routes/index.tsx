@@ -22,17 +22,12 @@ import {
 } from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
 import { roiZScore } from "@/lib/gate-verdict";
-import { reasonLabel } from "@/lib/shadow-labels";
 import { formatSideLabel } from "@/lib/side-label";
 import {
 	type DashboardHealth,
 	type DashboardPickRow,
 	getDashboardFn,
 } from "../server/api/dashboard";
-import type {
-	ShadowReasonSummary,
-	ShadowSportSummary,
-} from "../server/api/shadow-book-api";
 
 export const Route = createFileRoute("/")({
 	component: TerminalPage,
@@ -187,71 +182,6 @@ function Side({ pick }: { pick: DashboardPickRow }) {
 			) : null}
 		</span>
 	);
-}
-
-function _resultWord(status: string): string {
-	return status === "win" ? "W" : status === "loss" ? "L" : "P";
-}
-
-function _resultClass(status: string): string {
-	return status === "win"
-		? "text-signal-pos"
-		: status === "loss"
-			? "text-signal-bad"
-			: "text-ink-55";
-}
-
-interface VerdictRow {
-	key: string;
-	label: string;
-	scope: string;
-	verdict: "ready" | "watch" | "hold";
-	reason: string;
-	n: number;
-	wins: number;
-	losses: number;
-	roiPct: number | null;
-	z: number | null;
-	pinClvPct: number | null;
-	pinN: number;
-}
-
-function _verdictRows(
-	reasons: ShadowReasonSummary[],
-	bySport: ShadowSportSummary[],
-): VerdictRow[] {
-	const rank = { ready: 0, watch: 1, hold: 2 };
-	const rows: VerdictRow[] = [
-		...reasons.map((r) => ({
-			key: r.rejectReason,
-			label: reasonLabel(r.rejectReason),
-			scope: "all",
-			verdict: r.verdict,
-			reason: r.verdictReason,
-			n: r.cleanTotal,
-			wins: r.cleanWins,
-			losses: r.cleanLosses,
-			roiPct: r.cleanRoiPct,
-			z: r.cleanZ,
-			pinClvPct: r.cleanAvgPinClvPct,
-			pinN: r.cleanPinN,
-		})),
-		...bySport.map((r) => ({
-			key: `${r.rejectReason}:${r.sportTag}`,
-			label: reasonLabel(r.rejectReason),
-			scope: r.sportTag,
-			verdict: r.verdict,
-			reason: r.verdictReason,
-			n: r.cleanTotal,
-			wins: r.cleanWins,
-			losses: r.cleanLosses,
-			roiPct: r.cleanRoiPct,
-			z: r.cleanZ,
-			pinClvPct: r.cleanAvgPinClvPct,
-			pinN: r.cleanPinN,
-		})),
-	];
-	return rows.sort((a, b) => rank[a.verdict] - rank[b.verdict] || b.n - a.n);
 }
 
 /** Short label for a market inside its event: ML, Spread −4.5, O/U 44.5, TT O/U 17.5, 1H O/U 22.5. */

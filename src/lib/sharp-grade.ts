@@ -310,7 +310,7 @@ export function signalScoreToGradeLabel(
 	return "D";
 }
 
-export function gradeWeight(grade: GradeLabel): number {
+export function gradeWeight(grade: GradeLabel | string): number {
 	switch (grade) {
 		case "A+":
 			return 100;

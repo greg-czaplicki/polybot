@@ -1,5 +1,4 @@
 import { DurableObject } from 'cloudflare:workers'
-import type { DurableObjectState } from 'cloudflare:workers'
 import type { Env } from '../env'
 import { fetchTrendingSportsMarkets } from '../api/sharp-money'
 import { refreshMarketSharpness } from '../api/sharp-money'
@@ -41,14 +40,10 @@ const QUEUE_BATCH_SIZE = 100
 const CACHE_FUTURE_WINDOW_HOURS = 24
 const CACHE_PAST_GRACE_HOURS = 2
 
-export class SharpPipeline extends DurableObject {
-  private state: DurableObjectState
-  private env: Env
-
-  constructor(state: DurableObjectState, env: Env) {
-    super(state, env)
-    this.state = state
-    this.env = env
+export class SharpPipeline extends DurableObject<Env> {
+  /** Alias kept for the existing call sites; the base class owns `ctx` and `env`. */
+  private get state(): DurableObjectState {
+    return this.ctx
   }
 
   async fetch(request: Request) {

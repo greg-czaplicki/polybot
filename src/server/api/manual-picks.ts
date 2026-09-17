@@ -1,10 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import { detectBetType } from "@/lib/markets";
 import { detectSportTag, toCanonicalSportTag } from "@/lib/sports";
-import { resolveSportTagFromSeriesId } from "./series-registry";
 import type { Db } from "../db/client";
 import { run } from "../db/client";
 import { buildStrategyVersion, getDb, nowUnixSeconds } from "../env";
+import {
+	type BookAnchor,
+	captureBookAnchorForGame,
+	parseMarketTotalLine,
+} from "../pipeline/book-odds";
 import {
 	deriveFavDogRole,
 	extractSpreadPickedLabel,
@@ -15,11 +19,6 @@ import {
 	mapPickedTeamToSide,
 	resolvePickedSide,
 } from "../pipeline/pick-enrichment-helpers";
-import {
-	type BookAnchor,
-	captureBookAnchorForGame,
-	parseMarketTotalLine,
-} from "../pipeline/book-odds";
 import {
 	parseTeamsFromTitle,
 	resolveSingleTeam,
@@ -49,6 +48,7 @@ import {
 } from "../repositories/sharp-money";
 import { getTeamTrendSnapshotAsOf } from "../repositories/team-trend-snapshots";
 import type { FavDogRole, VenueRole } from "../types/canonical";
+import { resolveSportTagFromSeriesId } from "./series-registry";
 
 const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
 
@@ -538,8 +538,8 @@ export async function enrichPickInline(
 		const awayId =
 			teamId && opponentId ? (isHomeTeam ? opponentId : teamId) : awayTeamId;
 		gameId = await findGameForPick(db, {
-			homeTeamId: homeId,
-			awayTeamId: awayId,
+			homeTeamId: homeId ?? undefined,
+			awayTeamId: awayId ?? undefined,
 			eventTime: eventTimeUnix,
 			sportTag,
 		});
@@ -702,15 +702,17 @@ export async function enrichPickInline(
  * type so TanStack Start's return-type validation accepts it. The underlying
  * data is always JSON-parsed at the repository layer.
  */
+/** JSON-shaped value: what a server function may return (TanStack rejects `unknown`). */
+type JsonLike = string | number | boolean | null | object;
 type SerializablePickEntry = Omit<ManualPickEntry, "decisionSnapshot"> & {
-	decisionSnapshot?: Record<string, unknown>;
+	decisionSnapshot?: Record<string, JsonLike>;
 };
 
 function toSerializablePick(pick: ManualPickEntry): SerializablePickEntry {
 	return {
 		...pick,
 		decisionSnapshot: pick.decisionSnapshot as
-			| Record<string, unknown>
+			| Record<string, JsonLike>
 			| undefined,
 	};
 }
@@ -726,7 +728,8 @@ export const createManualPickFn = createServerFn({
 		const db = getDb(context);
 		const pick = await createManualPick(db, {
 			...data,
-			strategyVersion: data.strategyVersion ?? buildStrategyVersion() ?? undefined,
+			strategyVersion:
+				data.strategyVersion ?? buildStrategyVersion() ?? undefined,
 		});
 
 		// Attempt inline enrichment — best-effort, never blocks pick creation
@@ -773,140 +776,178 @@ export const getManualPicksSummaryFn = createServerFn({
 
 export const getManualPicksCalibrationFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	const calibration = await getManualPicksCalibrationSummary(db, {
-		limit: payload.limit,
-		sincePickedAt: payload.sincePickedAt,
+})
+	.inputValidator((d: { limit?: number; sincePickedAt?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		const calibration = await getManualPicksCalibrationSummary(db, {
+			limit: payload.limit,
+			sincePickedAt: payload.sincePickedAt,
+		});
+		return { calibration };
 	});
-	return { calibration };
-});
 
 export const getManualPicksBucketPerformanceFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	const performance = await getManualPicksBucketPerformanceSummary(db, {
-		limit: payload.limit,
-		sincePickedAt: payload.sincePickedAt,
+})
+	.inputValidator((d: { limit?: number; sincePickedAt?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		const performance = await getManualPicksBucketPerformanceSummary(db, {
+			limit: payload.limit,
+			sincePickedAt: payload.sincePickedAt,
+		});
+		return { performance };
 	});
-	return { performance };
-});
 
 export const getManualPicksClvTimingFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		qualityThreshold?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	const timing = await getManualPicksClvTimingSummary(db, {
-		limit: payload.limit,
-		qualityThreshold: payload.qualityThreshold,
-		sincePickedAt: payload.sincePickedAt,
+})
+	.inputValidator(
+		(d: {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		const timing = await getManualPicksClvTimingSummary(db, {
+			limit: payload.limit,
+			qualityThreshold: payload.qualityThreshold,
+			sincePickedAt: payload.sincePickedAt,
+		});
+		return { timing };
 	});
-	return { timing };
-});
 
 export const getManualPicksShadowWindowsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		qualityThreshold?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	try {
-		const shadow = await getManualPicksShadowWindowSummary(db, {
-			limit: payload.limit,
-			qualityThreshold: payload.qualityThreshold,
-			sincePickedAt: payload.sincePickedAt,
-		});
-		return { shadow };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`shadow_windows_failed: ${message}`);
-	}
-});
-
-export const getManualPicksSportPerformanceFn = createServerFn({
-	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		qualityThreshold?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	try {
-		const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
-			limit: payload.limit,
-			qualityThreshold: payload.qualityThreshold,
-			sincePickedAt: payload.sincePickedAt,
-		});
-		return { sportPerformance };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`sport_performance_failed: ${message}`);
-	}
-});
-
-export const getManualPicksMarketTypePerformanceFn = createServerFn({
-	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		qualityThreshold?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	try {
-		const marketTypePerformance =
-			await getManualPicksMarketTypePerformanceSummary(db, {
+})
+	.inputValidator(
+		(d: {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		try {
+			const shadow = await getManualPicksShadowWindowSummary(db, {
 				limit: payload.limit,
 				qualityThreshold: payload.qualityThreshold,
 				sincePickedAt: payload.sincePickedAt,
 			});
-		return { marketTypePerformance };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`market_type_performance_failed: ${message}`);
-	}
-});
+			return { shadow };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`shadow_windows_failed: ${message}`);
+		}
+	});
+
+export const getManualPicksSportPerformanceFn = createServerFn({
+	method: "POST",
+})
+	.inputValidator(
+		(d: {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		try {
+			const sportPerformance = await getManualPicksSportPerformanceSummary(db, {
+				limit: payload.limit,
+				qualityThreshold: payload.qualityThreshold,
+				sincePickedAt: payload.sincePickedAt,
+			});
+			return { sportPerformance };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`sport_performance_failed: ${message}`);
+		}
+	});
+
+export const getManualPicksMarketTypePerformanceFn = createServerFn({
+	method: "POST",
+})
+	.inputValidator(
+		(d: {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			qualityThreshold?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		try {
+			const marketTypePerformance =
+				await getManualPicksMarketTypePerformanceSummary(db, {
+					limit: payload.limit,
+					qualityThreshold: payload.qualityThreshold,
+					sincePickedAt: payload.sincePickedAt,
+				});
+			return { marketTypePerformance };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`market_type_performance_failed: ${message}`);
+		}
+	});
 
 export const getManualPicksGradeRecalibrationFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		limit?: number;
-		sincePickedAt?: number;
-	};
-	const db = getDb(context);
-	try {
-		const gradeRecalibration = await getManualPicksGradeRecalibrationSummary(
-			db,
-			{
-				limit: payload.limit,
-				sincePickedAt: payload.sincePickedAt,
-			},
-		);
-		return { gradeRecalibration };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`grade_recalibration_failed: ${message}`);
-	}
-});
+})
+	.inputValidator((d: { limit?: number; sincePickedAt?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			limit?: number;
+			sincePickedAt?: number;
+		};
+		const db = getDb(context);
+		try {
+			const gradeRecalibration = await getManualPicksGradeRecalibrationSummary(
+				db,
+				{
+					limit: payload.limit,
+					sincePickedAt: payload.sincePickedAt,
+				},
+			);
+			return { gradeRecalibration };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`grade_recalibration_failed: ${message}`);
+		}
+	});
 
 export const updateManualPickOutcomeFn = createServerFn({
 	method: "POST",

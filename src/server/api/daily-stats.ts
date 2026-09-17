@@ -8,16 +8,18 @@ import {
 
 export const getDailyStatsSnapshotsFn = createServerFn({
 	method: "GET",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number };
-	const limit =
-		typeof payload.limit === "number" && payload.limit > 0
-			? Math.min(payload.limit, 30)
-			: 14;
-	return {
-		snapshots: await listDailyStatsSnapshots(getDb(context), limit),
-	};
-});
+})
+	.inputValidator((d: { limit?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as { limit?: number };
+		const limit =
+			typeof payload.limit === "number" && payload.limit > 0
+				? Math.min(payload.limit, 30)
+				: 14;
+		return {
+			snapshots: await listDailyStatsSnapshots(getDb(context), limit),
+		};
+	});
 
 export const refreshDailyStatsSnapshotFn = createServerFn({
 	method: "POST",

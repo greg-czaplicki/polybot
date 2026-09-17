@@ -6,7 +6,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ago, clock, dollars, pct, units } from "@/components/terminal/format";
+import { ago, clock, pct, units } from "@/components/terminal/format";
 import {
 	Cell,
 	Dot,
@@ -16,18 +16,13 @@ import {
 	Row,
 	Tag,
 	Tape,
-	type Tone,
 	VerdictWord,
 	Workspace,
 } from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
 import { reasonLabel } from "@/lib/shadow-labels";
 import { formatSideLabel } from "@/lib/side-label";
-import {
-	type DashboardHealth,
-	type DashboardPickRow,
-	getDashboardFn,
-} from "../server/api/dashboard";
+import { type DashboardPickRow, getDashboardFn } from "../server/api/dashboard";
 import {
 	getShadowBookSummaryFn,
 	type ShadowReasonSummary,
@@ -40,120 +35,6 @@ export const Route = createFileRoute("/book")({
 
 type Dashboard = Awaited<ReturnType<typeof getDashboardFn>>;
 type ShadowSummary = Awaited<ReturnType<typeof getShadowBookSummaryFn>>;
-
-function ageTone(
-	seconds: number | null,
-	warnAfter: number,
-	badAfter: number,
-): Tone {
-	if (!seconds) return "off";
-	const age = Math.floor(Date.now() / 1000) - seconds;
-	if (age <= warnAfter) return "ok";
-	if (age <= badAfter) return "warn";
-	return "bad";
-}
-
-interface AliveItem {
-	key: string;
-	label: string;
-	tone: Tone;
-	value: string;
-	/** Shown only when the item is not ok — what to look at. */
-	alarm?: string;
-}
-
-/** The "is the machine alive" strip. Thresholds mirror each subsystem's cadence. */
-function _aliveItems(h: DashboardHealth): AliveItem[] {
-	const botTone = ageTone(h.botLastSeenAt, 15 * 60, 60 * 60);
-	const syncTone =
-		h.canonicalLastRunStatus === "failed"
-			? "bad"
-			: ageTone(h.canonicalLastRunAt, 15 * 60, 60 * 60);
-	const pipeTone = ageTone(h.pipelineNewestAt, 10 * 60, 30 * 60);
-	const pinTone =
-		h.pinCredits === null
-			? "off"
-			: h.pinCredits < 25
-				? "bad"
-				: h.pinCredits < 60
-					? "warn"
-					: ageTone(h.pinLastFetchAt, 36 * 3600, 72 * 3600);
-	const bankTone =
-		h.bankroll === null
-			? "off"
-			: ageTone(h.bankrollSyncedAt, 30 * 60, 2 * 3600);
-	return [
-		{
-			key: "bot",
-			label: "Bot",
-			tone: botTone,
-			value: `polled ${ago(h.botLastSeenAt)}`,
-			alarm: botTone === "bad" ? "bot silent — check VPS" : undefined,
-		},
-		{
-			key: "sync",
-			label: "Sync",
-			tone: syncTone,
-			value: `${h.canonicalLastRunStatus ?? "none"} ${ago(h.canonicalLastRunAt)}`,
-			alarm:
-				syncTone === "bad"
-					? h.canonicalLastRunStatus === "failed"
-						? "canonical sync failed"
-						: "canonical sync stale"
-					: undefined,
-		},
-		{
-			key: "pipe",
-			label: "Pipeline",
-			tone: pipeTone,
-			value: `data ${ago(h.pipelineNewestAt)}`,
-			alarm: pipeTone === "bad" ? "sharp-money cache stale" : undefined,
-		},
-		{
-			key: "pin",
-			label: "Pinnacle",
-			tone: pinTone,
-			value:
-				h.pinCredits === null
-					? "no fetches"
-					: `${h.pinCredits} cr · ${h.pinFetches24h}/24h · ${ago(h.pinLastFetchAt)}`,
-			alarm:
-				pinTone === "bad"
-					? h.pinCredits !== null && h.pinCredits < 25
-						? "OddsPapi credits nearly gone"
-						: "no Pinnacle fetch in 3 days"
-					: undefined,
-		},
-		{
-			key: "bank",
-			label: "Bankroll",
-			tone: bankTone,
-			value:
-				h.bankroll === null
-					? "no report"
-					: `${dollars(h.bankroll)} · ${
-							h.stakeMode === "fixed" && h.fixedStake
-								? `flat $${h.fixedStake}`
-								: (h.stakeMode ?? "—")
-						} · ${ago(h.bankrollSyncedAt)}`,
-			alarm: bankTone === "bad" ? "bankroll report stale" : undefined,
-		},
-		{
-			key: "lanes",
-			label: "Paper lanes",
-			tone: h.lanesEvaluatedAt ? "ok" : "off",
-			value: h.lanesEvaluatedAt
-				? `${h.lanesFired ?? 0} fired · ${ago(h.lanesEvaluatedAt)}`
-				: "no heartbeat",
-		},
-		{
-			key: "pick",
-			label: "Last pick",
-			tone: h.lastPickAt ? "ok" : "off",
-			value: ago(h.lastPickAt),
-		},
-	];
-}
 
 function Side({ pick }: { pick: DashboardPickRow }) {
 	const text = formatSideLabel(
@@ -276,7 +157,6 @@ function BookDetailPage() {
 		.slice(0, 9);
 
 	const live = data?.liveBook ?? null;
-	const _currentEra = data?.eras[0] ?? null;
 
 	return (
 		<Shell

@@ -344,8 +344,8 @@ export async function backfillManualPicks(
 						: awayTeamId;
 				gameId = await findGameForPick(db, {
 					eventSlug: snapshot?.eventSlug,
-					homeTeamId: homeId,
-					awayTeamId: awayId,
+					homeTeamId: homeId ?? undefined,
+					awayTeamId: awayId ?? undefined,
 					eventTime: eventTimeUnix,
 					sportTag,
 				});

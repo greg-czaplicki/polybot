@@ -220,6 +220,7 @@ type RuntimeMarketStats = {
 	}>;
 	filteredTagStats: Array<{
 		tag: string;
+		seriesId: number;
 		count: number;
 		markets: Array<{
 			title: string;
@@ -1253,6 +1254,7 @@ export async function fetchTrendingSportsMarkets(
 		lastRuntimeMarketStats.filteredTagStats = [...filteredTagMap.entries()].map(
 			([tag, markets]) => ({
 				tag,
+				seriesId: markets[0]?.seriesId ?? -1,
 				count: markets.length,
 				markets: markets.map((market) => ({
 					title: market.question ?? "",
@@ -1311,15 +1313,18 @@ export async function fetchTrendingSportsMarkets(
 
 export const fetchTrendingSportsMarketsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ data }) =>
-	fetchTrendingSportsMarkets((data ?? {}) as TrendingSportsPayload),
-);
+})
+	.inputValidator((d: TrendingSportsPayload) => d)
+	.handler(async ({ data }) =>
+		fetchTrendingSportsMarkets((data ?? {}) as TrendingSportsPayload),
+	);
 
 /**
  * Fetch PnL for a user across multiple time periods
  */
-export const fetchMultiPeriodPnlFn = createServerFn({ method: "POST" }).handler(
-	async ({ data }) => {
+export const fetchMultiPeriodPnlFn = createServerFn({ method: "POST" })
+	.inputValidator((d: { walletAddress: string }) => d)
+	.handler(async ({ data }) => {
 		const payload = data as { walletAddress: string };
 		const walletAddress = payload.walletAddress;
 
@@ -1395,8 +1400,7 @@ export const fetchMultiPeriodPnlFn = createServerFn({ method: "POST" }).handler(
 			console.warn("Error fetching multi-period PnL", walletAddress, error);
 			return { pnl: null };
 		}
-	},
-);
+	});
 
 /**
  * Batch fetch multi-period PnL for multiple users
@@ -1404,281 +1408,288 @@ export const fetchMultiPeriodPnlFn = createServerFn({ method: "POST" }).handler(
  */
 export const fetchBatchMultiPeriodPnlFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = data as { walletAddresses: string[] };
-	const walletAddresses = payload.walletAddresses;
+})
+	.inputValidator((d: { walletAddresses: string[] }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = data as { walletAddresses: string[] };
+		const walletAddresses = payload.walletAddresses;
 
-	if (!walletAddresses || walletAddresses.length === 0) {
-		return { results: {} as Record<string, MultiPeriodPnl> };
-	}
+		if (!walletAddresses || walletAddresses.length === 0) {
+			return { results: {} as Record<string, MultiPeriodPnl> };
+		}
 
-	const db = getDb(context);
-	const results: Record<string, MultiPeriodPnl> = {};
-	const uniqueWallets = [...new Set(walletAddresses)];
+		const db = getDb(context);
+		const results: Record<string, MultiPeriodPnl> = {};
+		const uniqueWallets = [...new Set(walletAddresses)];
 
-	// Check cache first (1 hour TTL)
-	const cacheExpiry = Math.floor(Date.now() / 1000) - 3600;
-	const cachedResults = await all<{
-		wallet_address: string;
-		pnl_day: number | null;
-		pnl_week: number | null;
-		pnl_month: number | null;
-		pnl_all: number | null;
-		volume: number | null;
-	}>(
-		db,
-		`SELECT * FROM wallet_pnl_cache WHERE wallet_address IN (${uniqueWallets.map(() => "?").join(",")}) AND fetched_at > ?`,
-		...uniqueWallets,
-		cacheExpiry,
-	);
-
-	// Populate results from cache
-	const cachedWallets = new Set<string>();
-	for (const row of cachedResults) {
-		cachedWallets.add(row.wallet_address);
-		results[row.wallet_address] = {
-			day: row.pnl_day,
-			week: row.pnl_week,
-			month: row.pnl_month,
-			all: row.pnl_all,
-			volume: row.volume ?? undefined,
-		};
-	}
-
-	// Only fetch wallets not in cache
-	const walletsToFetch = uniqueWallets.filter((w) => !cachedWallets.has(w));
-	console.log(
-		`[sharp-money] fetchBatchMultiPeriodPnlFn: ${cachedWallets.size} cached, ${walletsToFetch.length} to fetch`,
-	);
-
-	// Fetch uncached wallets (max 10 wallets = 40 subrequests, staying under 50 limit)
-	const maxToFetch = Math.min(walletsToFetch.length, 10);
-	const batchSize = 2; // Process 2 wallets at a time (8 subrequests per batch)
-
-	for (let i = 0; i < maxToFetch; i += batchSize) {
-		const batch = walletsToFetch.slice(i, i + batchSize);
-
-		await Promise.all(
-			batch.map(async (walletAddress) => {
-				const periods = ["DAY", "WEEK", "MONTH", "ALL"] as const;
-				const pnl: MultiPeriodPnl = {
-					day: null,
-					week: null,
-					month: null,
-					all: null,
-					volume: undefined,
-				};
-				let walletSuccess = false;
-
-				const periodResults = await Promise.all(
-					periods.map(async (period) => {
-						try {
-							const url = new URL("/v1/leaderboard", POLYMARKET_DATA_API);
-							url.searchParams.set("user", walletAddress);
-							url.searchParams.set("timePeriod", period);
-
-							const response = await fetch(url);
-
-							if (!response.ok) {
-								return { period, pnl: null, volume: undefined };
-							}
-
-							const data = (await response.json()) as Array<{
-								pnl?: number;
-								vol?: number;
-							}>;
-
-							if (!Array.isArray(data) || data.length === 0) {
-								return { period, pnl: null, volume: undefined };
-							}
-
-							walletSuccess = true;
-							return {
-								period,
-								pnl: data[0].pnl ?? null,
-								volume: data[0].vol,
-							};
-						} catch {
-							return { period, pnl: null, volume: undefined };
-						}
-					}),
-				);
-
-				for (const result of periodResults) {
-					switch (result.period) {
-						case "DAY":
-							pnl.day = result.pnl;
-							break;
-						case "WEEK":
-							pnl.week = result.pnl;
-							break;
-						case "MONTH":
-							pnl.month = result.pnl;
-							break;
-						case "ALL":
-							pnl.all = result.pnl;
-							pnl.volume = result.volume;
-							break;
-					}
-				}
-
-				if (walletSuccess) {
-					// Cache the result
-					await run(
-						db,
-						`INSERT OR REPLACE INTO wallet_pnl_cache (wallet_address, pnl_day, pnl_week, pnl_month, pnl_all, volume, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-						walletAddress,
-						pnl.day,
-						pnl.week,
-						pnl.month,
-						pnl.all,
-						pnl.volume ?? null,
-						Math.floor(Date.now() / 1000),
-					);
-				}
-
-				results[walletAddress] = pnl;
-			}),
+		// Check cache first (1 hour TTL)
+		const cacheExpiry = Math.floor(Date.now() / 1000) - 3600;
+		const cachedResults = await all<{
+			wallet_address: string;
+			pnl_day: number | null;
+			pnl_week: number | null;
+			pnl_month: number | null;
+			pnl_all: number | null;
+			volume: number | null;
+		}>(
+			db,
+			`SELECT * FROM wallet_pnl_cache WHERE wallet_address IN (${uniqueWallets.map(() => "?").join(",")}) AND fetched_at > ?`,
+			...uniqueWallets,
+			cacheExpiry,
 		);
 
-		// Delay between batches to avoid rate limits
-		if (i + batchSize < maxToFetch) {
-			await new Promise((resolve) => setTimeout(resolve, 200));
+		// Populate results from cache
+		const cachedWallets = new Set<string>();
+		for (const row of cachedResults) {
+			cachedWallets.add(row.wallet_address);
+			results[row.wallet_address] = {
+				day: row.pnl_day,
+				week: row.pnl_week,
+				month: row.pnl_month,
+				all: row.pnl_all,
+				volume: row.volume ?? undefined,
+			};
 		}
-	}
 
-	return { results };
-});
+		// Only fetch wallets not in cache
+		const walletsToFetch = uniqueWallets.filter((w) => !cachedWallets.has(w));
+		console.log(
+			`[sharp-money] fetchBatchMultiPeriodPnlFn: ${cachedWallets.size} cached, ${walletsToFetch.length} to fetch`,
+		);
+
+		// Fetch uncached wallets (max 10 wallets = 40 subrequests, staying under 50 limit)
+		const maxToFetch = Math.min(walletsToFetch.length, 10);
+		const batchSize = 2; // Process 2 wallets at a time (8 subrequests per batch)
+
+		for (let i = 0; i < maxToFetch; i += batchSize) {
+			const batch = walletsToFetch.slice(i, i + batchSize);
+
+			await Promise.all(
+				batch.map(async (walletAddress) => {
+					const periods = ["DAY", "WEEK", "MONTH", "ALL"] as const;
+					const pnl: MultiPeriodPnl = {
+						day: null,
+						week: null,
+						month: null,
+						all: null,
+						volume: undefined,
+					};
+					let walletSuccess = false;
+
+					const periodResults = await Promise.all(
+						periods.map(async (period) => {
+							try {
+								const url = new URL("/v1/leaderboard", POLYMARKET_DATA_API);
+								url.searchParams.set("user", walletAddress);
+								url.searchParams.set("timePeriod", period);
+
+								const response = await fetch(url);
+
+								if (!response.ok) {
+									return { period, pnl: null, volume: undefined };
+								}
+
+								const data = (await response.json()) as Array<{
+									pnl?: number;
+									vol?: number;
+								}>;
+
+								if (!Array.isArray(data) || data.length === 0) {
+									return { period, pnl: null, volume: undefined };
+								}
+
+								walletSuccess = true;
+								return {
+									period,
+									pnl: data[0].pnl ?? null,
+									volume: data[0].vol,
+								};
+							} catch {
+								return { period, pnl: null, volume: undefined };
+							}
+						}),
+					);
+
+					for (const result of periodResults) {
+						switch (result.period) {
+							case "DAY":
+								pnl.day = result.pnl;
+								break;
+							case "WEEK":
+								pnl.week = result.pnl;
+								break;
+							case "MONTH":
+								pnl.month = result.pnl;
+								break;
+							case "ALL":
+								pnl.all = result.pnl;
+								pnl.volume = result.volume;
+								break;
+						}
+					}
+
+					if (walletSuccess) {
+						// Cache the result
+						await run(
+							db,
+							`INSERT OR REPLACE INTO wallet_pnl_cache (wallet_address, pnl_day, pnl_week, pnl_month, pnl_all, volume, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+							walletAddress,
+							pnl.day,
+							pnl.week,
+							pnl.month,
+							pnl.all,
+							pnl.volume ?? null,
+							Math.floor(Date.now() / 1000),
+						);
+					}
+
+					results[walletAddress] = pnl;
+				}),
+			);
+
+			// Delay between batches to avoid rate limits
+			if (i + batchSize < maxToFetch) {
+				await new Promise((resolve) => setTimeout(resolve, 200));
+			}
+		}
+
+		return { results };
+	});
 
 export const fetchWalletClosedPositionsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ data }) => {
-	const payload = data as { walletAddress: string; limit?: number };
-	const walletAddress = payload.walletAddress;
+})
+	.inputValidator((d: { walletAddress: string; limit?: number }) => d)
+	.handler(async ({ data }) => {
+		const payload = data as { walletAddress: string; limit?: number };
+		const walletAddress = payload.walletAddress;
 
-	if (!walletAddress) {
-		return {
-			positions: [] as Array<ClosedPosition & { stake: number }>,
-			unitSize: null,
-		};
-	}
-
-	const limit = Math.min(
-		Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1),
-		50,
-	);
-
-	try {
-		const url = new URL("/closed-positions", POLYMARKET_DATA_API);
-		url.searchParams.set("user", walletAddress);
-		url.searchParams.set("limit", String(limit));
-		url.searchParams.set("sortBy", "TIMESTAMP");
-		url.searchParams.set("sortDirection", "DESC");
-
-		const response = await fetch(url);
-		if (!response.ok) {
+		if (!walletAddress) {
 			return {
 				positions: [] as Array<ClosedPosition & { stake: number }>,
 				unitSize: null,
 			};
 		}
 
-		const data = (await response.json()) as ClosedPosition[];
-		if (!Array.isArray(data) || data.length === 0) {
+		const limit = Math.min(
+			Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1),
+			50,
+		);
+
+		try {
+			const url = new URL("/closed-positions", POLYMARKET_DATA_API);
+			url.searchParams.set("user", walletAddress);
+			url.searchParams.set("limit", String(limit));
+			url.searchParams.set("sortBy", "TIMESTAMP");
+			url.searchParams.set("sortDirection", "DESC");
+
+			const response = await fetch(url);
+			if (!response.ok) {
+				return {
+					positions: [] as Array<ClosedPosition & { stake: number }>,
+					unitSize: null,
+				};
+			}
+
+			const data = (await response.json()) as ClosedPosition[];
+			if (!Array.isArray(data) || data.length === 0) {
+				return {
+					positions: [] as Array<ClosedPosition & { stake: number }>,
+					unitSize: null,
+				};
+			}
+
+			const positions = data.map((position) => ({
+				...position,
+				stake: (position.totalBought ?? 0) * (position.avgPrice ?? 0),
+			}));
+
+			const stakes = positions
+				.map((position) => position.stake)
+				.filter((value) => Number.isFinite(value) && value > 0);
+			const unitSize =
+				stakes.length >= MIN_UNIT_SIZE_SAMPLES
+					? calculateMedianTopHalf(stakes)
+					: null;
+
+			return { positions, unitSize };
+		} catch {
 			return {
 				positions: [] as Array<ClosedPosition & { stake: number }>,
 				unitSize: null,
 			};
 		}
-
-		const positions = data.map((position) => ({
-			...position,
-			stake: (position.totalBought ?? 0) * (position.avgPrice ?? 0),
-		}));
-
-		const stakes = positions
-			.map((position) => position.stake)
-			.filter((value) => Number.isFinite(value) && value > 0);
-		const unitSize =
-			stakes.length >= MIN_UNIT_SIZE_SAMPLES
-				? calculateMedianTopHalf(stakes)
-				: null;
-
-		return { positions, unitSize };
-	} catch {
-		return {
-			positions: [] as Array<ClosedPosition & { stake: number }>,
-			unitSize: null,
-		};
-	}
-});
+	});
 
 export const fetchWalletOpenPositionsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ data }) => {
-	const payload = data as { walletAddress: string; limit?: number };
-	const walletAddress = payload.walletAddress;
+})
+	.inputValidator((d: { walletAddress: string; limit?: number }) => d)
+	.handler(async ({ data }) => {
+		const payload = data as { walletAddress: string; limit?: number };
+		const walletAddress = payload.walletAddress;
 
-	if (!walletAddress) {
-		return {
-			positions: [] as Array<OpenPosition & { stake: number }>,
-			unitSize: null,
-		};
-	}
-
-	const limit = Math.min(
-		Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1),
-		100,
-	);
-
-	try {
-		const url = new URL("/positions", POLYMARKET_DATA_API);
-		url.searchParams.set("user", walletAddress);
-		url.searchParams.set("sizeThreshold", "1");
-		url.searchParams.set("limit", String(limit));
-		url.searchParams.set("sortBy", "INITIAL");
-		url.searchParams.set("sortDirection", "DESC");
-
-		const response = await fetch(url);
-		if (!response.ok) {
+		if (!walletAddress) {
 			return {
 				positions: [] as Array<OpenPosition & { stake: number }>,
 				unitSize: null,
 			};
 		}
 
-		const data = (await response.json()) as OpenPosition[];
-		if (!Array.isArray(data) || data.length === 0) {
+		const limit = Math.min(
+			Math.max(payload.limit ?? UNIT_SIZE_SAMPLE_LIMIT, 1),
+			100,
+		);
+
+		try {
+			const url = new URL("/positions", POLYMARKET_DATA_API);
+			url.searchParams.set("user", walletAddress);
+			url.searchParams.set("sizeThreshold", "1");
+			url.searchParams.set("limit", String(limit));
+			url.searchParams.set("sortBy", "INITIAL");
+			url.searchParams.set("sortDirection", "DESC");
+
+			const response = await fetch(url);
+			if (!response.ok) {
+				return {
+					positions: [] as Array<OpenPosition & { stake: number }>,
+					unitSize: null,
+				};
+			}
+
+			const data = (await response.json()) as OpenPosition[];
+			if (!Array.isArray(data) || data.length === 0) {
+				return {
+					positions: [] as Array<OpenPosition & { stake: number }>,
+					unitSize: null,
+				};
+			}
+
+			const positions = data.map((position) => ({
+				...position,
+				stake:
+					position.initialValue ??
+					(position.size ?? position.totalBought ?? 0) *
+						(position.avgPrice ?? 0),
+			}));
+
+			const stakes = positions
+				.map((position) => position.stake)
+				.filter((value) => Number.isFinite(value) && value > 0);
+			const unitSize =
+				stakes.length >= MIN_UNIT_SIZE_SAMPLES
+					? calculateMedianTopHalf(stakes)
+					: null;
+
+			return { positions, unitSize };
+		} catch {
 			return {
 				positions: [] as Array<OpenPosition & { stake: number }>,
 				unitSize: null,
 			};
 		}
-
-		const positions = data.map((position) => ({
-			...position,
-			stake:
-				position.initialValue ??
-				(position.size ?? position.totalBought ?? 0) * (position.avgPrice ?? 0),
-		}));
-
-		const stakes = positions
-			.map((position) => position.stake)
-			.filter((value) => Number.isFinite(value) && value > 0);
-		const unitSize =
-			stakes.length >= MIN_UNIT_SIZE_SAMPLES
-				? calculateMedianTopHalf(stakes)
-				: null;
-
-		return { positions, unitSize };
-	} catch {
-		return {
-			positions: [] as Array<OpenPosition & { stake: number }>,
-			unitSize: null,
-		};
-	}
-});
+	});
 
 async function fetchOpenPositionStakes(
 	walletAddress: string,
@@ -2321,7 +2332,7 @@ export async function analyzeMarketSharpness(
 			);
 
 			if (filteredResults.length > 0) {
-				holdersData = filteredResults;
+				holdersData = filteredResults as typeof holdersData;
 				tokenHoldersCounts = filteredResults.map((result) => ({
 					token: result.token,
 					count: result.holders.length,
@@ -3034,8 +3045,11 @@ export const analyzeMarketSharpnessFn = createServerFn({
 /**
  * Get cached sharp money data
  */
-export const getSharpMoneyCacheFn = createServerFn({ method: "POST" }).handler(
-	async ({ context, data }) => {
+export const getSharpMoneyCacheFn = createServerFn({ method: "POST" })
+	.inputValidator(
+		(d: { sportSeriesId?: number; limit?: number; windowHours?: number }) => d,
+	)
+	.handler(async ({ context, data }) => {
 		const payload = data as {
 			sportSeriesId?: number;
 			limit?: number;
@@ -3050,25 +3064,29 @@ export const getSharpMoneyCacheFn = createServerFn({ method: "POST" }).handler(
 		});
 
 		return { entries };
-	},
-);
+	});
 
 /**
  * Get a single cache entry for debug
  */
 export const getSharpMoneyCacheEntryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = data as { conditionId: string };
-	const db = getDb(context);
+})
+	.inputValidator((d: { conditionId: string }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = data as { conditionId: string };
+		const db = getDb(context);
 
-	if (!payload.conditionId) {
-		return { entry: null, error: "No condition ID provided" };
-	}
+		if (!payload.conditionId) {
+			return { entry: null, error: "No condition ID provided" };
+		}
 
-	const entry = await getSharpMoneyCacheByConditionId(db, payload.conditionId);
-	return { entry };
-});
+		const entry = await getSharpMoneyCacheByConditionId(
+			db,
+			payload.conditionId,
+		);
+		return { entry };
+	});
 
 /**
  * Get cache stats
@@ -3083,350 +3101,380 @@ export const getSharpMoneyCacheStatsFn = createServerFn({
 
 export const getSharpMoneyHistoryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = data as { conditionId: string; windowHours?: number };
-	const db = getDb(context);
-	if (!payload.conditionId) {
-		return {
-			history: [] as SharpMoneyHistoryEntry[],
-			error: "No condition ID provided",
-		};
-	}
-	const windowHours =
-		payload.windowHours && payload.windowHours > 0
-			? Math.min(payload.windowHours, 24 * 7)
-			: 24;
-	const cutoff = Math.floor(Date.now() / 1000) - windowHours * 60 * 60;
-	const history = await listSharpMoneyHistory(db, payload.conditionId, cutoff);
-	return { history };
-});
+})
+	.inputValidator((d: { conditionId: string; windowHours?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = data as { conditionId: string; windowHours?: number };
+		const db = getDb(context);
+		if (!payload.conditionId) {
+			return {
+				history: [] as SharpMoneyHistoryEntry[],
+				error: "No condition ID provided",
+			};
+		}
+		const windowHours =
+			payload.windowHours && payload.windowHours > 0
+				? Math.min(payload.windowHours, 24 * 7)
+				: 24;
+		const cutoff = Math.floor(Date.now() / 1000) - windowHours * 60 * 60;
+		const history = await listSharpMoneyHistory(
+			db,
+			payload.conditionId,
+			cutoff,
+		);
+		return { history };
+	});
 
 export const getSharpMoneyEdgeStatsHistoryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as {
-		windowHours?: number;
-		bucketHours?: number;
-	};
-	const now = Math.floor(Date.now() / 1000);
-	const windowHours =
-		payload.windowHours && payload.windowHours > 0
-			? Math.min(payload.windowHours, 24 * 30)
-			: 7 * 24;
-	const bucketHours =
-		payload.bucketHours && payload.bucketHours > 0
-			? Math.min(payload.bucketHours, 24)
-			: 1;
-	const since = now - windowHours * 60 * 60;
-	const rows = await listSharpMoneyHistoryWindow(db, since);
-	const buckets = new Map<number, number[]>();
+})
+	.inputValidator((d: { windowHours?: number; bucketHours?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const payload = (data ?? {}) as {
+			windowHours?: number;
+			bucketHours?: number;
+		};
+		const now = Math.floor(Date.now() / 1000);
+		const windowHours =
+			payload.windowHours && payload.windowHours > 0
+				? Math.min(payload.windowHours, 24 * 30)
+				: 7 * 24;
+		const bucketHours =
+			payload.bucketHours && payload.bucketHours > 0
+				? Math.min(payload.bucketHours, 24)
+				: 1;
+		const since = now - windowHours * 60 * 60;
+		const rows = await listSharpMoneyHistoryWindow(db, since);
+		const buckets = new Map<number, number[]>();
 
-	for (const row of rows) {
-		const bucketStart =
-			row.recordedAt - (row.recordedAt % (bucketHours * 3600));
-		if (!buckets.has(bucketStart)) {
-			buckets.set(bucketStart, []);
+		for (const row of rows) {
+			const bucketStart =
+				row.recordedAt - (row.recordedAt % (bucketHours * 3600));
+			if (!buckets.has(bucketStart)) {
+				buckets.set(bucketStart, []);
+			}
+			buckets.get(bucketStart)?.push(row.edgeRating);
 		}
-		buckets.get(bucketStart)?.push(row.edgeRating);
-	}
 
-	const percentile = (values: number[], percent: number) => {
-		if (values.length === 0) return 0;
-		const sorted = [...values].sort((a, b) => a - b);
-		const index = Math.round((percent / 100) * (sorted.length - 1));
-		return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
-	};
+		const percentile = (values: number[], percent: number) => {
+			if (values.length === 0) return 0;
+			const sorted = [...values].sort((a, b) => a - b);
+			const index = Math.round((percent / 100) * (sorted.length - 1));
+			return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+		};
 
-	const bucketList = [...buckets.entries()]
-		.sort((a, b) => a[0] - b[0])
-		.map(([bucketStart, values]) => {
-			const count = values.length;
-			const average =
-				count > 0
-					? Math.round(values.reduce((sum, value) => sum + value, 0) / count)
-					: 0;
-			return {
-				start: bucketStart,
-				count,
-				average,
-				p50: percentile(values, 50),
-				p75: percentile(values, 75),
-				p90: percentile(values, 90),
-				max: values.length > 0 ? Math.max(...values) : 0,
-			};
-		});
+		const bucketList = [...buckets.entries()]
+			.sort((a, b) => a[0] - b[0])
+			.map(([bucketStart, values]) => {
+				const count = values.length;
+				const average =
+					count > 0
+						? Math.round(values.reduce((sum, value) => sum + value, 0) / count)
+						: 0;
+				return {
+					start: bucketStart,
+					count,
+					average,
+					p50: percentile(values, 50),
+					p75: percentile(values, 75),
+					p90: percentile(values, 90),
+					max: values.length > 0 ? Math.max(...values) : 0,
+				};
+			});
 
-	return { buckets: bucketList };
-});
+		return { buckets: bucketList };
+	});
 
 export const getSharpMoneyGradeMixFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as {
-		windowHours?: number;
-		sportSeriesId?: number;
-		includeEven?: boolean;
-		gradeFiltered?: boolean;
-		aPlusOnly?: boolean;
-	};
-	const now = Math.floor(Date.now() / 1000);
-	const windowHours =
-		payload.windowHours && payload.windowHours > 0
-			? Math.min(payload.windowHours, 24 * 30)
-			: 7 * 24;
-	const since = now - windowHours * 60 * 60;
-	const rows = await listSharpMoneyHistoryLatest(
-		db,
-		since,
-		payload.sportSeriesId,
-	);
-
-	let total = 0;
-	let passing = 0;
-	let aPlusCount = 0;
-	let aPlusOrACount = 0;
-
-	for (const row of rows) {
-		const sharpSide = row.sharpSide ?? "EVEN";
-		if (!payload.includeEven && sharpSide === "EVEN") {
-			continue;
-		}
-		const edgeRating = row.edgeRating ?? 0;
-		const scoreDifferential = row.scoreDifferential ?? 0;
-		const signalScore = computeSignalScoreFromHistory(
-			{ edgeRating, scoreDifferential },
-			undefined,
-			MIN_EDGE_RATING,
+})
+	.inputValidator(
+		(d: {
+			windowHours?: number;
+			sportSeriesId?: number;
+			includeEven?: boolean;
+			gradeFiltered?: boolean;
+			aPlusOnly?: boolean;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const payload = (data ?? {}) as {
+			windowHours?: number;
+			sportSeriesId?: number;
+			includeEven?: boolean;
+			gradeFiltered?: boolean;
+			aPlusOnly?: boolean;
+		};
+		const now = Math.floor(Date.now() / 1000);
+		const windowHours =
+			payload.windowHours && payload.windowHours > 0
+				? Math.min(payload.windowHours, 24 * 30)
+				: 7 * 24;
+		const since = now - windowHours * 60 * 60;
+		const rows = await listSharpMoneyHistoryLatest(
+			db,
+			since,
+			payload.sportSeriesId,
 		);
-		const grade = signalScoreToGradeLabel(signalScore, {
-			edgeRating,
-			scoreDifferential,
-		}) as GradeLabel;
 
-		if (payload.gradeFiltered && (grade === "C" || grade === "D")) {
-			continue;
+		let total = 0;
+		let passing = 0;
+		let aPlusCount = 0;
+		let aPlusOrACount = 0;
+
+		for (const row of rows) {
+			const sharpSide = row.sharpSide ?? "EVEN";
+			if (!payload.includeEven && sharpSide === "EVEN") {
+				continue;
+			}
+			const edgeRating = row.edgeRating ?? 0;
+			const scoreDifferential = row.scoreDifferential ?? 0;
+			const signalScore = computeSignalScoreFromHistory(
+				{ edgeRating, scoreDifferential },
+				undefined,
+				MIN_EDGE_RATING,
+			);
+			const grade = signalScoreToGradeLabel(signalScore, {
+				edgeRating,
+				scoreDifferential,
+			}) as GradeLabel;
+
+			if (payload.gradeFiltered && (grade === "C" || grade === "D")) {
+				continue;
+			}
+			if (payload.aPlusOnly && grade !== "A+") {
+				continue;
+			}
+
+			total += 1;
+			if (edgeRating >= MIN_EDGE_RATING) passing += 1;
+			if (grade === "A+") {
+				aPlusCount += 1;
+				aPlusOrACount += 1;
+			} else if (grade === "A") {
+				aPlusOrACount += 1;
+			}
 		}
-		if (payload.aPlusOnly && grade !== "A+") {
-			continue;
-		}
 
-		total += 1;
-		if (edgeRating >= MIN_EDGE_RATING) passing += 1;
-		if (grade === "A+") {
-			aPlusCount += 1;
-			aPlusOrACount += 1;
-		} else if (grade === "A") {
-			aPlusOrACount += 1;
-		}
-	}
+		const mix: SharpMoneyGradeMix = {
+			total,
+			passing,
+			passingRate: total > 0 ? passing / total : 0,
+			aPlusCount,
+			aPlusRate: total > 0 ? aPlusCount / total : 0,
+			aPlusOrACount,
+			aPlusOrARate: total > 0 ? aPlusOrACount / total : 0,
+		};
 
-	const mix: SharpMoneyGradeMix = {
-		total,
-		passing,
-		passingRate: total > 0 ? passing / total : 0,
-		aPlusCount,
-		aPlusRate: total > 0 ? aPlusCount / total : 0,
-		aPlusOrACount,
-		aPlusOrARate: total > 0 ? aPlusOrACount / total : 0,
-	};
-
-	return { mix };
-});
+		return { mix };
+	});
 
 /**
  * Get runtime market fetch stats (for /runtime)
  */
 export const getRuntimeMarketStatsFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as {
-		minimal?: boolean;
-		freshnessWindowHours?: number;
-	};
-	const freshnessWindowHours =
-		payload.freshnessWindowHours && payload.freshnessWindowHours > 0
-			? Math.min(payload.freshnessWindowHours, 24 * 7)
-			: DEFAULT_FRESHNESS_WINDOW_HOURS;
-	const cacheFreshness = await getSharpMoneyCacheFreshnessStats(
-		db,
-		15 * 60,
-		freshnessWindowHours * 60 * 60,
-	);
+})
+	.inputValidator(
+		(d: { minimal?: boolean; freshnessWindowHours?: number }) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const payload = (data ?? {}) as {
+			minimal?: boolean;
+			freshnessWindowHours?: number;
+		};
+		const freshnessWindowHours =
+			payload.freshnessWindowHours && payload.freshnessWindowHours > 0
+				? Math.min(payload.freshnessWindowHours, 24 * 7)
+				: DEFAULT_FRESHNESS_WINDOW_HOURS;
+		const cacheFreshness = await getSharpMoneyCacheFreshnessStats(
+			db,
+			15 * 60,
+			freshnessWindowHours * 60 * 60,
+		);
 
-	if (!lastRuntimeMarketStats) {
-		return { stats: { cacheFreshness } };
-	}
+		if (!lastRuntimeMarketStats) {
+			return { stats: { cacheFreshness } };
+		}
 
-	return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
-});
+		return { stats: { ...lastRuntimeMarketStats, cacheFreshness } };
+	});
 
 export const getClobDepthSnapshotFn = createServerFn({
 	method: "POST",
-}).handler(async ({ data }) => {
-	const payload = (data ?? {}) as {
-		conditionId?: string;
-		levelLimit?: number;
-	};
-	const conditionId = payload.conditionId?.trim();
-	if (!conditionId) {
-		return { error: "conditionId_required", snapshot: null };
-	}
-
-	const levelLimit =
-		typeof payload.levelLimit === "number" && payload.levelLimit > 0
-			? Math.min(Math.floor(payload.levelLimit), 20)
-			: 10;
-	const clobMarketUrl = `https://clob.polymarket.com/markets/${conditionId}`;
-	const marketResponse = await fetch(clobMarketUrl);
-	if (!marketResponse.ok) {
-		return {
-			error: `clob_market_failed_${marketResponse.status}`,
-			snapshot: null,
+})
+	.inputValidator((d: { conditionId?: string; levelLimit?: number }) => d)
+	.handler(async ({ data }) => {
+		const payload = (data ?? {}) as {
+			conditionId?: string;
+			levelLimit?: number;
 		};
-	}
+		const conditionId = payload.conditionId?.trim();
+		if (!conditionId) {
+			return { error: "conditionId_required", snapshot: null };
+		}
 
-	const market = (await marketResponse.json()) as ClobMarketResponse;
-	const tokens = (market.tokens ?? [])
-		.map((token) => {
-			const tokenId =
-				token.token_id ?? token.tokenId ?? token.clobTokenId ?? token.id;
-			const outcome = token.outcome?.trim();
-			if (!tokenId || !outcome) return null;
-			return { tokenId: String(tokenId), outcome };
-		})
-		.filter((token): token is { tokenId: string; outcome: string } =>
-			Boolean(token),
+		const levelLimit =
+			typeof payload.levelLimit === "number" && payload.levelLimit > 0
+				? Math.min(Math.floor(payload.levelLimit), 20)
+				: 10;
+		const clobMarketUrl = `https://clob.polymarket.com/markets/${conditionId}`;
+		const marketResponse = await fetch(clobMarketUrl);
+		if (!marketResponse.ok) {
+			return {
+				error: `clob_market_failed_${marketResponse.status}`,
+				snapshot: null,
+			};
+		}
+
+		const market = (await marketResponse.json()) as ClobMarketResponse;
+		const tokens = (market.tokens ?? [])
+			.map((token) => {
+				const tokenId =
+					token.token_id ?? token.tokenId ?? token.clobTokenId ?? token.id;
+				const outcome = token.outcome?.trim();
+				if (!tokenId || !outcome) return null;
+				return { tokenId: String(tokenId), outcome };
+			})
+			.filter((token): token is { tokenId: string; outcome: string } =>
+				Boolean(token),
+			);
+
+		if (tokens.length === 0) {
+			return {
+				error: "clob_tokens_missing",
+				snapshot: null,
+			};
+		}
+
+		const books = await Promise.all(
+			tokens.map(async (token) => {
+				const bookUrl = new URL("https://clob.polymarket.com/book");
+				bookUrl.searchParams.set("token_id", token.tokenId);
+				const response = await fetch(bookUrl.toString());
+				if (!response.ok) return null;
+				const rawBook = (await response.json()) as ClobBookResponse;
+				const bids = (rawBook.bids ?? [])
+					.map((level) => {
+						const price = parseClobNumber(level.price);
+						const size = parseClobNumber(level.size);
+						if (
+							price === null ||
+							size === null ||
+							price <= 0 ||
+							price >= 1 ||
+							size <= 0
+						) {
+							return null;
+						}
+						return {
+							price,
+							size,
+							notional: price * size,
+						};
+					})
+					.filter((level): level is ClobBookLevel => Boolean(level))
+					.sort((a, b) => b.price - a.price)
+					.slice(0, levelLimit);
+				const asks = (rawBook.asks ?? [])
+					.map((level) => {
+						const price = parseClobNumber(level.price);
+						const size = parseClobNumber(level.size);
+						if (
+							price === null ||
+							size === null ||
+							price <= 0 ||
+							price >= 1 ||
+							size <= 0
+						) {
+							return null;
+						}
+						return {
+							price,
+							size,
+							notional: price * size,
+						};
+					})
+					.filter((level): level is ClobBookLevel => Boolean(level))
+					.sort((a, b) => a.price - b.price)
+					.slice(0, levelLimit);
+				const bestBid = bids[0]?.price ?? null;
+				const bestAsk = asks[0]?.price ?? null;
+				const mid =
+					bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
+				const spread =
+					bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
+				const bidNotional = bids.reduce(
+					(sum, level) => sum + level.notional,
+					0,
+				);
+				const askNotional = asks.reduce(
+					(sum, level) => sum + level.notional,
+					0,
+				);
+				const imbalance =
+					bidNotional + askNotional > 0
+						? (bidNotional - askNotional) / (bidNotional + askNotional)
+						: null;
+				const nearMidBand = 0.05;
+				const nearMidBidNotional =
+					mid === null
+						? 0
+						: bids
+								.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+								.reduce((sum, level) => sum + level.notional, 0);
+				const nearMidAskNotional =
+					mid === null
+						? 0
+						: asks
+								.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
+								.reduce((sum, level) => sum + level.notional, 0);
+				const imbalanceNearMid =
+					nearMidBidNotional + nearMidAskNotional > 0
+						? (nearMidBidNotional - nearMidAskNotional) /
+							(nearMidBidNotional + nearMidAskNotional)
+						: null;
+				return {
+					tokenId: token.tokenId,
+					outcome: token.outcome,
+					bids,
+					asks,
+					bestBid,
+					bestAsk,
+					mid,
+					spread,
+					imbalance,
+					imbalanceNearMid,
+				} satisfies ClobOutcomeBook;
+			}),
 		);
 
-	if (tokens.length === 0) {
-		return {
-			error: "clob_tokens_missing",
-			snapshot: null,
+		const outcomes: ClobOutcomeBook[] = books.filter((book) => book !== null);
+		const snapshot: ClobDepthSnapshot = {
+			conditionId,
+			marketQuestion: market.question,
+			marketSlug: market.slug,
+			fetchedAt: nowUnixSeconds(),
+			outcomes,
 		};
-	}
-
-	const books = await Promise.all(
-		tokens.map(async (token) => {
-			const bookUrl = new URL("https://clob.polymarket.com/book");
-			bookUrl.searchParams.set("token_id", token.tokenId);
-			const response = await fetch(bookUrl.toString());
-			if (!response.ok) return null;
-			const rawBook = (await response.json()) as ClobBookResponse;
-			const bids = (rawBook.bids ?? [])
-				.map((level) => {
-					const price = parseClobNumber(level.price);
-					const size = parseClobNumber(level.size);
-					if (
-						price === null ||
-						size === null ||
-						price <= 0 ||
-						price >= 1 ||
-						size <= 0
-					) {
-						return null;
-					}
-					return {
-						price,
-						size,
-						notional: price * size,
-					};
-				})
-				.filter((level): level is ClobBookLevel => Boolean(level))
-				.sort((a, b) => b.price - a.price)
-				.slice(0, levelLimit);
-			const asks = (rawBook.asks ?? [])
-				.map((level) => {
-					const price = parseClobNumber(level.price);
-					const size = parseClobNumber(level.size);
-					if (
-						price === null ||
-						size === null ||
-						price <= 0 ||
-						price >= 1 ||
-						size <= 0
-					) {
-						return null;
-					}
-					return {
-						price,
-						size,
-						notional: price * size,
-					};
-				})
-				.filter((level): level is ClobBookLevel => Boolean(level))
-				.sort((a, b) => a.price - b.price)
-				.slice(0, levelLimit);
-			const bestBid = bids[0]?.price ?? null;
-			const bestAsk = asks[0]?.price ?? null;
-			const mid =
-				bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
-			const spread =
-				bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
-			const bidNotional = bids.reduce((sum, level) => sum + level.notional, 0);
-			const askNotional = asks.reduce((sum, level) => sum + level.notional, 0);
-			const imbalance =
-				bidNotional + askNotional > 0
-					? (bidNotional - askNotional) / (bidNotional + askNotional)
-					: null;
-			const nearMidBand = 0.05;
-			const nearMidBidNotional =
-				mid === null
-					? 0
-					: bids
-							.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
-							.reduce((sum, level) => sum + level.notional, 0);
-			const nearMidAskNotional =
-				mid === null
-					? 0
-					: asks
-							.filter((level) => Math.abs(level.price - mid) <= nearMidBand)
-							.reduce((sum, level) => sum + level.notional, 0);
-			const imbalanceNearMid =
-				nearMidBidNotional + nearMidAskNotional > 0
-					? (nearMidBidNotional - nearMidAskNotional) /
-						(nearMidBidNotional + nearMidAskNotional)
-					: null;
-			return {
-				tokenId: token.tokenId,
-				outcome: token.outcome,
-				bids,
-				asks,
-				bestBid,
-				bestAsk,
-				mid,
-				spread,
-				imbalance,
-				imbalanceNearMid,
-			} satisfies ClobOutcomeBook;
-		}),
-	);
-
-	const outcomes = books.filter((book): book is ClobOutcomeBook =>
-		Boolean(book),
-	);
-	const snapshot: ClobDepthSnapshot = {
-		conditionId,
-		marketQuestion: market.question,
-		marketSlug: market.slug,
-		fetchedAt: nowUnixSeconds(),
-		outcomes,
-	};
-	return { snapshot };
-});
+		return { snapshot };
+	});
 
 export const backfillSharpMoneyHistoryFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const db = getDb(context);
-	const payload = (data ?? {}) as { limit?: number };
-	const limit =
-		payload.limit && payload.limit > 0 ? Math.min(payload.limit, 1000) : 100;
-	const updated = await backfillSharpMoneyHistory(db, limit);
-	return { updated };
-});
+})
+	.inputValidator((d: { limit?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const db = getDb(context);
+		const payload = (data ?? {}) as { limit?: number };
+		const limit =
+			payload.limit && payload.limit > 0 ? Math.min(payload.limit, 1000) : 100;
+		const updated = await backfillSharpMoneyHistory(db, limit);
+		return { updated };
+	});
 
 export async function computeSharpMoneyGrades(
 	db: Db,
@@ -3604,15 +3652,17 @@ export async function computeSharpMoneyGrades(
 
 export const getSharpMoneyGradesFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as SharpGradePayload;
-	const db = getDb(context);
-	const computed = await computeSharpMoneyGrades(db, payload);
-	if (computed.error) {
-		return { results: [], error: computed.error };
-	}
-	return { results: computed.results };
-});
+})
+	.inputValidator((d: SharpGradePayload) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as SharpGradePayload;
+		const db = getDb(context);
+		const computed = await computeSharpMoneyGrades(db, payload);
+		if (computed.error) {
+			return { results: [], error: computed.error };
+		}
+		return { results: computed.results };
+	});
 
 /**
  * Clear all cached sharp money data
@@ -3743,97 +3793,131 @@ export async function refreshMarketSharpness(
 
 export const refreshMarketSharpnessFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	console.log("[sharp-money] refreshMarketSharpnessFn called");
-	const payload = data as {
-		conditionId: string;
-		marketTitle: string;
-		marketSlug?: string;
-		eventSlug?: string;
-		sportSeriesId?: number;
-		outcomes?: string[];
-		bestBid?: number;
-		bestAsk?: number;
-		endDate?: string;
-		marketVolume?: number;
-		marketLiquidity?: number;
-	};
+})
+	.inputValidator(
+		(d: {
+			conditionId: string;
+			marketTitle: string;
+			marketSlug?: string;
+			eventSlug?: string;
+			sportSeriesId?: number;
+			outcomes?: string[];
+			bestBid?: number;
+			bestAsk?: number;
+			endDate?: string;
+			marketVolume?: number;
+			marketLiquidity?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		console.log("[sharp-money] refreshMarketSharpnessFn called");
+		const payload = data as {
+			conditionId: string;
+			marketTitle: string;
+			marketSlug?: string;
+			eventSlug?: string;
+			sportSeriesId?: number;
+			outcomes?: string[];
+			bestBid?: number;
+			bestAsk?: number;
+			endDate?: string;
+			marketVolume?: number;
+			marketLiquidity?: number;
+		};
 
-	// Validate this is actually a sports market before processing
-	const descriptor = {
-		title: payload.marketTitle,
-		slug: payload.marketSlug,
-		eventSlug: payload.eventSlug,
-	};
+		// Validate this is actually a sports market before processing
+		const descriptor = {
+			title: payload.marketTitle,
+			slug: payload.marketSlug,
+			eventSlug: payload.eventSlug,
+		};
 
-	console.log("[sharp-money] Checking descriptor:", JSON.stringify(descriptor));
+		console.log(
+			"[sharp-money] Checking descriptor:",
+			JSON.stringify(descriptor),
+		);
 
-	console.log(
-		"[sharp-money] ACCEPTED:",
-		payload.marketTitle,
-		"| series:",
-		payload.sportSeriesId ?? "unknown",
-	);
-	if (!context?.env) {
-		throw new Error("Environment not available");
-	}
-	return refreshMarketSharpness(context.env, payload);
-});
+		console.log(
+			"[sharp-money] ACCEPTED:",
+			payload.marketTitle,
+			"| series:",
+			payload.sportSeriesId ?? "unknown",
+		);
+		if (!context?.env) {
+			throw new Error("Environment not available");
+		}
+		return refreshMarketSharpness(context.env, payload);
+	});
 
 /**
  * Run sharp analysis with debug details (for /debug)
  */
 export const analyzeMarketSharpnessDebugFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = data as {
-		conditionId: string;
-		marketTitle?: string;
-		marketSlug?: string;
-		eventSlug?: string;
-		sportSeriesId?: number;
-		outcomes?: string[];
-		endDate?: string;
-		useCache?: boolean;
-		marketVolume?: number;
-		marketLiquidity?: number;
-	};
+})
+	.inputValidator(
+		(d: {
+			conditionId: string;
+			marketTitle?: string;
+			marketSlug?: string;
+			eventSlug?: string;
+			sportSeriesId?: number;
+			outcomes?: string[];
+			endDate?: string;
+			useCache?: boolean;
+			marketVolume?: number;
+			marketLiquidity?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = data as {
+			conditionId: string;
+			marketTitle?: string;
+			marketSlug?: string;
+			eventSlug?: string;
+			sportSeriesId?: number;
+			outcomes?: string[];
+			endDate?: string;
+			useCache?: boolean;
+			marketVolume?: number;
+			marketLiquidity?: number;
+		};
 
-	if (!payload.conditionId) {
-		return { analysis: null, debug: null, error: "No condition ID provided" };
-	}
+		if (!payload.conditionId) {
+			return { analysis: null, debug: null, error: "No condition ID provided" };
+		}
 
-	const db = getDb(context);
-	const cacheEntry = payload.useCache
-		? await getSharpMoneyCacheByConditionId(db, payload.conditionId)
-		: null;
+		const db = getDb(context);
+		const cacheEntry = payload.useCache
+			? await getSharpMoneyCacheByConditionId(db, payload.conditionId)
+			: null;
 
-	const marketTitle = payload.marketTitle ?? cacheEntry?.marketTitle;
-	if (!marketTitle) {
-		return { analysis: null, debug: null, error: "Missing market title" };
-	}
+		const marketTitle = payload.marketTitle ?? cacheEntry?.marketTitle;
+		if (!marketTitle) {
+			return { analysis: null, debug: null, error: "Missing market title" };
+		}
 
-	const analysisPayload = {
-		conditionId: payload.conditionId,
-		marketTitle,
-		marketSlug: payload.marketSlug ?? cacheEntry?.marketSlug,
-		eventSlug: payload.eventSlug ?? cacheEntry?.eventSlug,
-		sportSeriesId: payload.sportSeriesId ?? cacheEntry?.sportSeriesId,
-		outcomes: payload.outcomes,
-		endDate: payload.endDate ?? cacheEntry?.eventTime,
-		marketVolume: payload.marketVolume ?? cacheEntry?.marketVolume,
-		marketLiquidity: payload.marketLiquidity ?? cacheEntry?.marketLiquidity,
-		includeDebug: true,
-	};
+		const analysisPayload = {
+			conditionId: payload.conditionId,
+			marketTitle,
+			marketSlug: payload.marketSlug ?? cacheEntry?.marketSlug,
+			eventSlug: payload.eventSlug ?? cacheEntry?.eventSlug,
+			sportSeriesId: payload.sportSeriesId ?? cacheEntry?.sportSeriesId,
+			outcomes: payload.outcomes,
+			endDate: payload.endDate ?? cacheEntry?.eventTime,
+			marketVolume: payload.marketVolume ?? cacheEntry?.marketVolume,
+			marketLiquidity: payload.marketLiquidity ?? cacheEntry?.marketLiquidity,
+			includeDebug: true,
+		};
 
-	const { analysis, debug, error } = await analyzeMarketSharpness(
-		context.env,
-		analysisPayload,
-	);
+		const { analysis, debug, error } = await analyzeMarketSharpness(
+			context.env,
+			analysisPayload,
+		);
 
-	if (!analysis || !debug) {
-		return { analysis: null, debug: null, error: error ?? "Analysis failed" };
-	}
+		if (!analysis || !debug) {
+			return { analysis: null, debug: null, error: error ?? "Analysis failed" };
+		}
 
-	return { analysis, debug };
-});
+		return { analysis, debug };
+	});

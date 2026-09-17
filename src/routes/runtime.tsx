@@ -240,6 +240,7 @@ type RuntimeStats = {
 	}>;
 	filteredTagStats: Array<{
 		tag: string;
+		seriesId: number;
 		count: number;
 		markets: Array<{
 			title: string;
@@ -2461,7 +2462,7 @@ function RuntimePage() {
 																	{(candidate.grade.segmentNotes ?? []).length >
 																		0 && (
 																		<div className="mt-1 flex flex-wrap gap-1">
-																			{candidate.grade.segmentNotes
+																			{(candidate.grade.segmentNotes ?? [])
 																				.slice(0, 2)
 																				.map((note) => (
 																					<span
@@ -2476,7 +2477,7 @@ function RuntimePage() {
 																	{(candidate.grade.canonicalWarnings ?? [])
 																		.length > 0 && (
 																		<div className="mt-1 flex flex-wrap gap-1">
-																			{candidate.grade.canonicalWarnings
+																			{(candidate.grade.canonicalWarnings ?? [])
 																				.slice(0, 2)
 																				.map((warning) => (
 																					<span

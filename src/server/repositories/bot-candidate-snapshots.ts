@@ -82,7 +82,7 @@ function safeParseRecord(raw: string): Record<string, number> {
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
 		return Object.fromEntries(
 			Object.entries(parsed).filter(([, value]) => typeof value === "number"),
-		);
+		) as Record<string, number>;
 	} catch {
 		return {};
 	}

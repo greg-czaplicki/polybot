@@ -1,6 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	type ReactElement,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 
 import { Shell } from "@/components/terminal/shell";
 import {
@@ -94,7 +100,7 @@ function buildSparkPath(
 		.join(" ");
 }
 
-function renderTrendChart(points: BookTrendPoint[]): JSX.Element {
+function renderTrendChart(points: BookTrendPoint[]): ReactElement {
 	const spreadPoints = points
 		.map((point) => point.spread)
 		.filter(

@@ -72,6 +72,7 @@ import {
 	listSharpMoneyCache,
 } from "../repositories/sharp-money";
 import { getLatestTeamTrendSnapshot } from "../repositories/team-trend-snapshots";
+import type { TrendSnapshotType } from "../types/canonical";
 import {
 	computeHedgingMetrics,
 	computePriceEdgeFromEntry,
@@ -1252,7 +1253,10 @@ async function computeCanonicalBotCandidateScore(
 	]);
 	if (!homeTeam || !awayTeam) return null;
 
-	const getCachedSnapshot = (teamId: string, candidateSnapshotType: string) => {
+	const getCachedSnapshot = (
+		teamId: string,
+		candidateSnapshotType: TrendSnapshotType,
+	) => {
 		const cacheKey = `${teamId}:${candidateSnapshotType}`;
 		const existing = cache.snapshotByKey.get(cacheKey);
 		if (existing) return existing;
@@ -2820,8 +2824,9 @@ async function listBotCandidates(
 	return result;
 }
 
-export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
-	async ({ context, data }) => {
+export const getBotCandidatesFn = createServerFn({ method: "POST" })
+	.inputValidator((d: Partial<BotCandidatesOptions>) => d)
+	.handler(async ({ context, data }) => {
 		const payload = (data ?? {}) as Partial<BotCandidatesOptions>;
 		const minGrade = parseMinGrade(payload.minGrade ?? null);
 		if (!minGrade) {
@@ -2849,128 +2854,145 @@ export const getBotCandidatesFn = createServerFn({ method: "POST" }).handler(
 						: ("candidate_build_failed" as const),
 			};
 		}
-	},
-);
+	});
 
 export const getBotCandidateInspectFn = createServerFn({
 	method: "POST",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as {
-		conditionId?: string;
-		minGrade?: GradeLabel;
-		windowMinutes?: number;
-		minMinutesToStart?: number;
-		maxMinutesToStart?: number;
-		requireReady?: boolean;
-		includeStarted?: boolean;
-		requireMicrostructure?: boolean;
-		marketQualityThreshold?: number;
-		limit?: number;
-	};
-	const conditionId = payload.conditionId?.trim();
-	if (!conditionId) {
-		return { error: "conditionId_required" as const };
-	}
-	const minGrade = parseMinGrade(payload.minGrade ?? null);
-	if (!minGrade) {
-		return { error: "invalid_minGrade" as const };
-	}
-	try {
-		const windowMinutes =
-			typeof payload.windowMinutes === "number" && payload.windowMinutes > 0
-				? payload.windowMinutes
-				: DEFAULT_CANDIDATE_WINDOW_MINUTES;
-		const shouldRequireReady = payload.requireReady ?? true;
-		const allowStarted = payload.includeStarted ?? false;
-		const result = await listBotCandidates(getDb(context), {
-			minGrade,
-			windowMinutes,
-			minMinutesToStart: payload.minMinutesToStart,
-			maxMinutesToStart: payload.maxMinutesToStart,
-			limit: payload.limit,
-			requireReady: shouldRequireReady,
-			includeStarted: payload.includeStarted,
-			requireMicrostructure: payload.requireMicrostructure,
-			marketQualityThreshold: payload.marketQualityThreshold,
-			inspectConditionId: conditionId,
-		});
-		const inspect = result.debug.inspect ?? {
-			conditionId,
-			foundInEntries: false,
-			stage: "not_found_in_entries",
+})
+	.inputValidator(
+		(d: {
+			conditionId?: string;
+			minGrade?: GradeLabel;
+			windowMinutes?: number;
+			minMinutesToStart?: number;
+			maxMinutesToStart?: number;
+			requireReady?: boolean;
+			includeStarted?: boolean;
+			requireMicrostructure?: boolean;
+			marketQualityThreshold?: number;
+			limit?: number;
+		}) => d,
+	)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as {
+			conditionId?: string;
+			minGrade?: GradeLabel;
+			windowMinutes?: number;
+			minMinutesToStart?: number;
+			maxMinutesToStart?: number;
+			requireReady?: boolean;
+			includeStarted?: boolean;
+			requireMicrostructure?: boolean;
+			marketQualityThreshold?: number;
+			limit?: number;
 		};
-		if (inspect.stage === "not_found_in_entries") {
-			const db = getDb(context);
-			const cacheEntry = await getSharpMoneyCacheByConditionId(db, conditionId);
-			if (!cacheEntry) {
+		const conditionId = payload.conditionId?.trim();
+		if (!conditionId) {
+			return { error: "conditionId_required" as const };
+		}
+		const minGrade = parseMinGrade(payload.minGrade ?? null);
+		if (!minGrade) {
+			return { error: "invalid_minGrade" as const };
+		}
+		try {
+			const windowMinutes =
+				typeof payload.windowMinutes === "number" && payload.windowMinutes > 0
+					? payload.windowMinutes
+					: DEFAULT_CANDIDATE_WINDOW_MINUTES;
+			const shouldRequireReady = payload.requireReady ?? true;
+			const allowStarted = payload.includeStarted ?? false;
+			const result = await listBotCandidates(getDb(context), {
+				minGrade,
+				windowMinutes,
+				minMinutesToStart: payload.minMinutesToStart,
+				maxMinutesToStart: payload.maxMinutesToStart,
+				limit: payload.limit,
+				requireReady: shouldRequireReady,
+				includeStarted: payload.includeStarted,
+				requireMicrostructure: payload.requireMicrostructure,
+				marketQualityThreshold: payload.marketQualityThreshold,
+				inspectConditionId: conditionId,
+			});
+			const inspect = result.debug.inspect ?? {
+				conditionId,
+				foundInEntries: false,
+				stage: "not_found_in_entries",
+			};
+			if (inspect.stage === "not_found_in_entries") {
+				const db = getDb(context);
+				const cacheEntry = await getSharpMoneyCacheByConditionId(
+					db,
+					conditionId,
+				);
+				if (!cacheEntry) {
+					return {
+						inspect: {
+							...inspect,
+							diagnosticReason: "not_in_cache_table",
+						},
+					};
+				}
+				const eventTime = parseEventTime(cacheEntry.eventTime);
+				const now = Date.now();
+				const minutesToStart =
+					eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null;
+				const cutoffMinutes = windowMinutes;
+				const inEventWindow =
+					minutesToStart === null
+						? false
+						: minutesToStart >= 0 && minutesToStart <= cutoffMinutes;
+				const recentCacheCutoffSeconds =
+					nowUnixSeconds() - Math.max(1, Math.ceil(windowMinutes / 60)) * 3600;
+				const inRecentCacheWindow =
+					(cacheEntry.updatedAt ?? 0) >= recentCacheCutoffSeconds;
+				let diagnosticReason = "not_in_recent_cache_window";
+				const marketType = getMarketTypeLabel(cacheEntry.marketTitle);
+				if (marketType === "other") {
+					diagnosticReason = "market_type_other";
+				} else if (shouldRequireReady && !cacheEntry.isReady) {
+					diagnosticReason = "not_ready";
+				} else if (!eventTime) {
+					diagnosticReason = "missing_event_time";
+				} else if (
+					!allowStarted &&
+					minutesToStart !== null &&
+					minutesToStart < 0
+				) {
+					diagnosticReason = "started_excluded";
+				} else if (!inEventWindow) {
+					diagnosticReason = "outside_event_window";
+				} else if (inRecentCacheWindow) {
+					// The market exists in cache and passes the coarse window/readiness checks,
+					// but it was not part of the limited candidate scan returned by
+					// listSharpMoneyCache(...) for this inspect request.
+					diagnosticReason = "not_in_limited_candidate_scan";
+				}
 				return {
 					inspect: {
 						...inspect,
-						diagnosticReason: "not_in_cache_table",
+						diagnosticReason,
+						isReady: cacheEntry.isReady,
+						marketType,
+						minutesToStart,
+						candidateWindowMinutes: cutoffMinutes,
+						inEventWindow,
+						inRecentCacheWindow,
+						cacheUpdatedAt: cacheEntry.updatedAt,
 					},
 				};
 			}
-			const eventTime = parseEventTime(cacheEntry.eventTime);
-			const now = Date.now();
-			const minutesToStart =
-				eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null;
-			const cutoffMinutes = windowMinutes;
-			const inEventWindow =
-				minutesToStart === null
-					? false
-					: minutesToStart >= 0 && minutesToStart <= cutoffMinutes;
-			const recentCacheCutoffSeconds =
-				nowUnixSeconds() - Math.max(1, Math.ceil(windowMinutes / 60)) * 3600;
-			const inRecentCacheWindow =
-				(cacheEntry.updatedAt ?? 0) >= recentCacheCutoffSeconds;
-			let diagnosticReason = "not_in_recent_cache_window";
-			const marketType = getMarketTypeLabel(cacheEntry.marketTitle);
-			if (marketType === "other") {
-				diagnosticReason = "market_type_other";
-			} else if (shouldRequireReady && !cacheEntry.isReady) {
-				diagnosticReason = "not_ready";
-			} else if (!eventTime) {
-				diagnosticReason = "missing_event_time";
-			} else if (
-				!allowStarted &&
-				minutesToStart !== null &&
-				minutesToStart < 0
-			) {
-				diagnosticReason = "started_excluded";
-			} else if (!inEventWindow) {
-				diagnosticReason = "outside_event_window";
-			} else if (inRecentCacheWindow) {
-				// The market exists in cache and passes the coarse window/readiness checks,
-				// but it was not part of the limited candidate scan returned by
-				// listSharpMoneyCache(...) for this inspect request.
-				diagnosticReason = "not_in_limited_candidate_scan";
-			}
 			return {
-				inspect: {
-					...inspect,
-					diagnosticReason,
-					isReady: cacheEntry.isReady,
-					marketType,
-					minutesToStart,
-					candidateWindowMinutes: cutoffMinutes,
-					inEventWindow,
-					inRecentCacheWindow,
-					cacheUpdatedAt: cacheEntry.updatedAt,
-				},
+				inspect,
+			};
+		} catch (error) {
+			return {
+				error:
+					error instanceof Error
+						? error.message
+						: ("candidate_inspect_failed" as const),
 			};
 		}
-		return {
-			inspect,
-		};
-	} catch (error) {
-		return {
-			error:
-				error instanceof Error
-					? error.message
-					: ("candidate_inspect_failed" as const),
-		};
-	}
-});
+	});
 
 export const getBotInspectDefaultsFn = createServerFn({
 	method: "GET",
@@ -2982,16 +3004,18 @@ export const getBotInspectDefaultsFn = createServerFn({
 
 export const getBotCohortsFn = createServerFn({
 	method: "GET",
-}).handler(async ({ context, data }) => {
-	const payload = (data ?? {}) as { limit?: number };
-	const limit =
-		typeof payload.limit === "number" && payload.limit > 0
-			? Math.min(payload.limit, 100)
-			: 20;
-	return {
-		snapshots: await listBotCandidateSnapshots(getDb(context), limit),
-	};
-});
+})
+	.inputValidator((d: { limit?: number }) => d)
+	.handler(async ({ context, data }) => {
+		const payload = (data ?? {}) as { limit?: number };
+		const limit =
+			typeof payload.limit === "number" && payload.limit > 0
+				? Math.min(payload.limit, 100)
+				: 20;
+		return {
+			snapshots: await listBotCandidateSnapshots(getDb(context), limit),
+		};
+	});
 
 export async function handleBotRequest(
 	request: Request,
@@ -3427,10 +3451,14 @@ export async function handleBotRequest(
 		const finalL2Disagreement =
 			l2Disagreement ?? l2Fallback.l2Disagreement ?? undefined;
 		const confidence = cacheEntry?.confidence;
+		const priceEdgeSide =
+			sharpSide === "A" || sharpSide === "B" || sharpSide === "EVEN"
+				? sharpSide
+				: null;
 		const priceEdgeResult =
-			cacheEntry && sharpSide
+			cacheEntry && priceEdgeSide
 				? computePriceEdgeFromEntry({
-						sharpSide,
+						sharpSide: priceEdgeSide,
 						confidence: cacheEntry.confidence,
 						edgeRating: cacheEntry.edgeRating,
 						sideA: {
