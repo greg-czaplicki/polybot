@@ -930,15 +930,21 @@ describe("oddspapiGroupPaused", () => {
 		expect(oddspapiGroupPaused("football", 0, table)).toBe(false);
 		expect(oddspapiGroupPaused(undefined, 0, table)).toBe(false);
 	});
-	it("default table pauses soccer + tennis only, until 2026-10-06Z", () => {
+	it("default table pauses soccer + tennis until 2026-10-06Z and football until 2026-11-02Z", () => {
 		const sep20 = Date.UTC(2026, 8, 20) / 1000;
 		const oct7 = Date.UTC(2026, 9, 7) / 1000;
+		const nov3 = Date.UTC(2026, 10, 3) / 1000;
 		for (const g of ["soccer-a", "soccer-b", "tennis"]) {
 			expect(oddspapiGroupPaused(g, sep20)).toBe(true);
 			expect(oddspapiGroupPaused(g, oct7)).toBe(false);
 		}
-		for (const g of ["mlb", "football", "winter"]) {
+		// 2026-09-17: football yields to the MLB postseason (69 credits, no reset).
+		expect(oddspapiGroupPaused("football", sep20)).toBe(true);
+		expect(oddspapiGroupPaused("football", oct7)).toBe(true);
+		expect(oddspapiGroupPaused("football", nov3)).toBe(false);
+		for (const g of ["mlb", "winter"]) {
 			expect(oddspapiGroupPaused(g, sep20)).toBe(false);
+			expect(oddspapiGroupPaused(g, oct7)).toBe(false);
 		}
 	});
 });
