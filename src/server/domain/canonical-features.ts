@@ -51,6 +51,9 @@ export const FEATURE_SAFETY: Record<string, FeatureSafety> = {
 	teamAtsStreakType: "pre_pick",
 	teamAtsStreakLength: "pre_pick",
 	teamOuOverPct: "pre_pick",
+	teamOuSplitPct: "pre_pick",
+	teamOverallGames: "pre_pick",
+	teamSplitGames: "pre_pick",
 	teamOuStreakType: "pre_pick",
 	teamOuStreakLength: "pre_pick",
 	teamAvgCoverMargin: "pre_pick",
@@ -63,6 +66,9 @@ export const FEATURE_SAFETY: Record<string, FeatureSafety> = {
 	opponentAtsStreakType: "pre_pick",
 	opponentAtsStreakLength: "pre_pick",
 	opponentOuOverPct: "pre_pick",
+	opponentOuSplitPct: "pre_pick",
+	opponentOverallGames: "pre_pick",
+	opponentSplitGames: "pre_pick",
 	opponentOuStreakType: "pre_pick",
 	opponentOuStreakLength: "pre_pick",
 	opponentAvgCoverMargin: "pre_pick",
@@ -93,6 +99,17 @@ export interface SideFeatures {
 	atsStreakType: "W" | "L" | null;
 	atsStreakLength: number | null;
 	ouOverPct: number | null;
+	/**
+	 * OU over-rate on the contextual split snapshot (home / away / fav / dog
+	 * combos). Recorded 2026-09-17 for the football trend-split charter
+	 * (docs/charters/football-trend-splits.md); NOT consumed by the scorer —
+	 * every OU factor still reads the overall snapshot.
+	 */
+	ouSplitPct: number | null;
+	/** Games inside the overall snapshot's rolling window (1 at season open). */
+	overallGames: number | null;
+	/** Games inside the split snapshot's rolling window. */
+	splitGames: number | null;
 	ouStreakType: "W" | "L" | null;
 	ouStreakLength: number | null;
 	avgCoverMargin: number | null;
@@ -170,6 +187,12 @@ export interface PickForFeatures {
 // Feature extraction
 // ---------------------------------------------------------------------------
 
+/** Number of graded games inside a snapshot's rolling window. */
+function snapshotGames(snapshot: TeamTrendSnapshot | null): number | null {
+	if (!snapshot) return null;
+	return snapshot.suWins + snapshot.suLosses + snapshot.suPushes;
+}
+
 /** Extract SideFeatures from a trend snapshot, or nulls if not found. */
 export function extractSideFeatures(
 	overallSnapshot: TeamTrendSnapshot | null,
@@ -184,6 +207,9 @@ export function extractSideFeatures(
 				? overallSnapshot.atsStreakLength
 				: null,
 		ouOverPct: overallSnapshot?.ouOverPct ?? null,
+		ouSplitPct: splitSnapshot?.ouOverPct ?? null,
+		overallGames: snapshotGames(overallSnapshot),
+		splitGames: snapshotGames(splitSnapshot),
 		ouStreakType: overallSnapshot?.ouStreakType ?? null,
 		ouStreakLength:
 			overallSnapshot?.ouStreakType != null
