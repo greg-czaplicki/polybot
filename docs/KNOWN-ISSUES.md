@@ -5,6 +5,15 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **From 2026-09-18 `manual_picks` holds TWO signal families.** Era v14 added
+  the CS2 near-pickem dog lane: rows with `lane = 'cs2_pickem_dog'` are $4
+  execution-pilot picks chosen by a price band, not by the holder signal.
+  Every holder-book read (ROI, verdicts, stake ladder, digests, era
+  comparisons) must filter `lane IS NULL`; the dashboard and P&L series
+  already do, ad-hoc SQL and the weekly digest routine must add it. Lane
+  picks are never evidence for anything — the evidence read is the polysharp
+  forward lane `cs2_pickem_dog_cell` (charter `docs/charters/cs2-pickem-dog-pilot.md`).
+
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for
   ghost tournaments (stale live rows from April–June plus US Open leftovers)
