@@ -1,3 +1,4 @@
+import { matchTeamKeys } from "../../lib/cs2-pickem-lane";
 import { detectBetType } from "../../lib/markets";
 import { detectSportTag, getSportLabel } from "../../lib/sports";
 import { resolveSportTagFromSeriesId } from "../api/series-registry";
@@ -2183,6 +2184,7 @@ export async function getManualPicksGradeRecalibrationSummary(
 /**
  * Every pick of one lane, shaped for `evaluateLaneState` (src/lib/cs2-pickem-lane.ts).
  * Cluster key = matchup title (before ":") + event time: one match, one cluster.
+ * `teams` = both sides of the title (`matchTeamKeys`) for the one-team-per-day rule.
  */
 export async function listLanePickRows(
 	db: Db,
@@ -2193,6 +2195,7 @@ export async function listLanePickRows(
 		roi: number | null;
 		fillNotional: number | null;
 		clusterKey: string;
+		teams: string[];
 		pickedAt: number;
 		settledAt: number | null;
 	}>
@@ -2216,6 +2219,7 @@ export async function listLanePickRows(
 		roi: r.roi,
 		fillNotional: r.fill_notional,
 		clusterKey: `${r.market_title.split(":")[0]?.trim().toLowerCase() ?? r.market_title}|${r.event_time ?? ""}`,
+		teams: matchTeamKeys(r.market_title),
 		pickedAt: r.picked_at,
 		settledAt: r.settled_at,
 	}));

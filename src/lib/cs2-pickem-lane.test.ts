@@ -4,6 +4,7 @@ import {
 	clusteredZ,
 	evaluateLaneState,
 	type LanePickRow,
+	matchTeamKeys,
 	pickemSide,
 	utcDayStart,
 } from "./cs2-pickem-lane";
@@ -19,6 +20,7 @@ function row(
 		roi: null,
 		fillNotional: null,
 		clusterKey: `c${partial.pickedAt}`,
+		teams: [],
 		settledAt: null,
 		...partial,
 	};
@@ -43,7 +45,49 @@ describe("pickemSide", () => {
 	});
 });
 
+describe("matchTeamKeys", () => {
+	it("strips the game prefix, BO tag and event suffix", () => {
+		expect(
+			matchTeamKeys(
+				"Counter-Strike: MOUZ vs Natus Vincere (BO3) - StarLadder StarSeries Playoffs",
+			),
+		).toEqual(["mouz", "natus vincere"]);
+		expect(
+			matchTeamKeys(
+				"Counter-Strike: BBL vs 3DMAX (BO1) - Logitech G Play Connect Group B",
+			),
+		).toEqual(["bbl", "3dmax"]);
+	});
+	it("tolerates 'vs.' and missing tags", () => {
+		expect(matchTeamKeys("Counter-Strike: FaZe vs. Vitality")).toEqual([
+			"faze",
+			"vitality",
+		]);
+	});
+	it("returns nothing for titles without a matchup", () => {
+		expect(matchTeamKeys("Counter-Strike: Map 1 winner")).toEqual([]);
+		expect(matchTeamKeys("Counter-Strike: A vs B vs C")).toEqual([]);
+	});
+});
+
 describe("evaluateLaneState", () => {
+	it("lists the teams on either side of today's picks, not yesterday's", () => {
+		const state = evaluateLaneState(
+			[
+				row({ pickedAt: DAY - 3600, teams: ["old", "older"] }),
+				row({ pickedAt: DAY + 60, teams: ["3dmax", "inner circle esports"] }),
+				row({ pickedAt: DAY + 120, teams: ["eyeballers", "bbl"] }),
+			],
+			NOW,
+		);
+		expect(state.active).toBe(true);
+		expect(state.teamsToday).toEqual([
+			"3dmax",
+			"inner circle esports",
+			"eyeballers",
+			"bbl",
+		]);
+	});
 	it("is active with a fresh book", () => {
 		const s = evaluateLaneState([], NOW);
 		expect(s.active).toBe(true);

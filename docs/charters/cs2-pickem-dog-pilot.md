@@ -1,4 +1,4 @@
-# Charter — CS2 near-pickem dog lane, capped live execution pilot (era v14)
+# Charter — CS2 near-pickem dog lane, capped live execution pilot (era v14; v1.1 amendment era v15)
 
 Written 2026-09-17 under the `sports-modeling-doctrine` schema, before the
 first live row. Owner decision the same day: "Let's do both" — the
@@ -111,3 +111,31 @@ running for the forward lane.
   post-9/12 CS2 rows were examined before freezing the band.
 - Kill-rule inputs (realized PnL, trailing z) are computed from settled
   rows only; pending exposure does not feed them.
+
+## Amendment v1.1 (2026-09-18, era v15) — one pick per team per UTC day
+
+Decided on day 1 at ~11:30Z, before any lane pick had settled (the three
+2026-09-18 picks were pending). Day 1 emitted 3DMAX @ .46 vs Inner Circle,
+BBL @ .42 vs 3DMAX and BBL @ .48 vs EYEBALLERS — all Logitech G Play
+Connect Group B BO1s, two stakes on BBL and 3DMAX both for and against.
+Match outcomes are near-independent, but the shared factor is team-level
+mispricing: three stakes carried roughly one and a half stakes of
+independent risk while the kill z (cluster = match) counted three clusters.
+
+Rule added: a team that appears on **either** side of a market the lane
+already picked in the current UTC day is excluded for the rest of that day
+(`CS2_PICKEM_DOG_LANE.oneTeamPerDay`, team keys from `matchTeamKeys(title)`:
+game prefix, `(BOn)` tag and ` - <event>` suffix stripped, lower-cased).
+Applied to picks already placed today and to picks emitted earlier in the
+same tick; skip reason `team_taken_today`. Per-tournament dedupe was
+rejected: CS2 volume sits in one or two events per day and the cap would go
+unused, starving the fill/slippage measurement the pilot exists for.
+
+Everything else is unchanged: band, stake, caps, kill rule, forward start,
+metric, and the polysharp evidence lane `cs2_pickem_dog_cell` (which records
+every qualifying market-side and is not deduped — it is the read). This is a
+structural exposure rule, not a threshold moved after seeing results; the
+day-1 rows stay in the pilot cohort. Rows from 2026-09-18 onward carry
+`strategy_version` v15. Open follow-up (not adopted): the closest-to-start
+ordering spends the daily cap on the 08–13Z tier-3 slate; revisit a
+time-of-day spread only if first-week slippage is non-zero.

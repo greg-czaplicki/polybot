@@ -3,6 +3,7 @@ import {
 	CS2_PICKEM_DOG_LANE,
 	evaluateLaneState,
 	type LaneState,
+	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
@@ -2713,6 +2714,9 @@ async function listBotCandidates(
 					getMarketGroupKey(candidate.entry),
 				),
 			);
+			// v1.1 (era v15): one pick per team per UTC day — teams on either
+			// side of today's lane picks (placed or emitted this tick) are out.
+			const takenTeams = new Set(laneState.teamsToday);
 			const eligible = upcomingEntries
 				.filter(
 					(entry) =>
@@ -2748,7 +2752,16 @@ async function listBotCandidates(
 					incrementCounter(laneDebug.skipped, "market_group_taken");
 					continue;
 				}
+				const teams = matchTeamKeys(entry.marketTitle);
+				if (
+					CS2_PICKEM_DOG_LANE.oneTeamPerDay &&
+					teams.some((team) => takenTeams.has(team))
+				) {
+					incrementCounter(laneDebug.skipped, "team_taken_today");
+					continue;
+				}
 				takenGroupKeys.add(groupKey);
+				for (const team of teams) takenTeams.add(team);
 				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
 				const laneSide = side as "A" | "B";
 				laneCandidates.push({
@@ -2764,9 +2777,10 @@ async function listBotCandidates(
 						microstructureScore: grade?.microstructureScore,
 						segmentScore: 0,
 						segmentKey: CS2_PICKEM_DOG_LANE.name,
-						segmentLabel: "CS2 pickem dog lane (era v14 pilot)",
+						segmentLabel: "CS2 pickem dog lane (era v15 pilot, one team/day)",
 						segmentNotes: [
 							`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
+							`teams ${teams.join(" vs ") || "unparsed"}`,
 						],
 						isReady: grade?.isReady,
 						warnings: grade?.warnings,

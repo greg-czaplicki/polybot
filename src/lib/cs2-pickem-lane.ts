@@ -1,5 +1,6 @@
 /**
- * CS2 near-pickem dog lane — pre-registered live execution pilot (era v14).
+ * CS2 near-pickem dog lane — pre-registered live execution pilot (era v14,
+ * amended v1.1 / era v15 on 2026-09-18: one pick per team per UTC day).
  *
  * Charter: docs/charters/cs2-pickem-dog-pilot.md (2026-09-17). Every
  * threshold below is the contract; changing one after the forward start
@@ -29,6 +30,14 @@ export const CS2_PICKEM_DOG_LANE = {
 	/** Hard daily caps, UTC day. */
 	maxPicksPerDay: 3,
 	maxNotionalPerDay: 20,
+	/**
+	 * v1.1 (era v15): a team that appears on EITHER side of a market the
+	 * lane already picked today is excluded for the rest of the UTC day.
+	 * Day 1 (2026-09-18) took BBL twice and 3DMAX both for and against out
+	 * of one group stage: three stakes carrying about one and a half
+	 * stakes of independent risk while the kill z counted three clusters.
+	 */
+	oneTeamPerDay: true,
 	/** Kill: realized lane PnL at or below this (USD) stops emission. */
 	killDrawdownUsd: -40,
 	/** Kill: clustered z over the last `killTrailingN` settled picks below `killZ`, once `killMinSettled` have settled. */
@@ -62,6 +71,30 @@ export function pickemSide(
 	return null;
 }
 
+/**
+ * Team keys of an esports match-winner title, e.g.
+ * "Counter-Strike: MOUZ vs Natus Vincere (BO3) - StarLadder StarSeries Playoffs"
+ * → ["mouz", "natus vincere"]. The game prefix (up to the first ": "), the
+ * "(BOn)" format tag and the " - <event>" suffix are stripped; keys are
+ * lower-cased with collapsed whitespace. Empty when the title has no " vs ".
+ */
+export function matchTeamKeys(marketTitle: string): string[] {
+	let s = marketTitle;
+	const prefix = s.indexOf(": ");
+	if (prefix >= 0) s = s.slice(prefix + 2);
+	const parts = s.split(/\s+vs\.?\s+/i);
+	if (parts.length !== 2) return [];
+	const clean = (t: string): string =>
+		t
+			.replace(/\s*\(BO\d+\).*$/i, "")
+			.replace(/\s+-\s.*$/, "")
+			.replace(/\s+/g, " ")
+			.trim()
+			.toLowerCase();
+	const keys = parts.map(clean).filter((t) => t.length > 0);
+	return keys.length === 2 ? keys : [];
+}
+
 export interface LanePickRow {
 	status: string;
 	roi: number | null;
@@ -69,6 +102,8 @@ export interface LanePickRow {
 	fillNotional: number | null;
 	/** Cluster key: one match = one cluster. */
 	clusterKey: string;
+	/** Both teams of the picked market (`matchTeamKeys`), for the per-team day rule. */
+	teams: string[];
 	pickedAt: number;
 	settledAt: number | null;
 }
@@ -93,6 +128,8 @@ export interface LaneState {
 	roi: number | null;
 	/** Event-clustered z over the trailing `killTrailingN` settled picks (null until `killMinSettled`). */
 	z: number | null;
+	/** Teams on either side of today's lane picks; excluded for the rest of the UTC day (v1.1). */
+	teamsToday: string[];
 }
 
 /** Start of the UTC day containing `nowSeconds`. */
@@ -139,6 +176,9 @@ export function evaluateLaneState(
 		(s, r) => s + (r.fillNotional ?? lane.stakeUsd),
 		0,
 	);
+	const teamsToday = lane.oneTeamPerDay
+		? Array.from(new Set(today.flatMap((r) => r.teams)))
+		: [];
 	const settledRows = rows
 		.filter((r) => (r.status === "win" || r.status === "loss") && r.roi != null)
 		.sort((a, b) => (b.settledAt ?? 0) - (a.settledAt ?? 0));
@@ -178,6 +218,7 @@ export function evaluateLaneState(
 		realizedPnl,
 		roi,
 		z,
+		teamsToday,
 	};
 	const stopped = (reason: LaneState["reason"]): LaneState => ({
 		...base,
