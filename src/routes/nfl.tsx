@@ -183,7 +183,7 @@ function GutterStatus({ game }: { game: BoardGame }) {
 				picked
 			</span>
 		);
-	return <span className="font-mono text-xxs text-ink-25">—</span>;
+	return <span className="font-mono text-xxs text-ink-25">vs</span>;
 }
 
 function SplitRow({ label, s }: { label: string; s: BoardSplit }) {
@@ -335,14 +335,14 @@ function NflBoardPage() {
 						disabled={busy || (week ?? 1) <= 1}
 						title="Previous week"
 					>
-						‹ wk
+						‹
 					</ShellButton>
 					<ShellButton
 						onClick={() => void load((week ?? 1) + 1)}
 						disabled={busy || (week ?? 1) >= 22}
 						title="Next week"
 					>
-						wk ›
+						›
 					</ShellButton>
 					<ShellButton onClick={() => void load(week)} disabled={busy}>
 						{busy ? "…" : "Refresh"}
@@ -391,13 +391,16 @@ function NflBoardPage() {
 					span={8}
 					title={`Spread ladder · week ${data?.week ?? "…"}`}
 					meta={
-						<span>
-							tap a side to pick · tap again to clear · locks at kickoff ·{" "}
-							<span className="inline-block align-middle">
-								<Dot tone="warn" />
-							</span>{" "}
-							holder signal
-						</span>
+						<>
+							<span className="sm:hidden">tap a side · locks at kickoff</span>
+							<span className="hidden sm:inline">
+								tap a side to pick · tap again to clear · locks at kickoff ·{" "}
+								<span className="inline-block align-middle">
+									<Dot tone="warn" />
+								</span>{" "}
+								holder signal
+							</span>
+						</>
 					}
 					bodyClassName="p-0"
 				>
@@ -435,7 +438,7 @@ function NflBoardPage() {
 												onPick={onPick}
 												busy={busy}
 											/>
-											<div className="flex w-20 shrink-0 flex-col items-center justify-center border-x border-ink-10 bg-ink-05 px-1 text-center sm:w-24">
+											<div className="flex w-12 shrink-0 flex-col items-center justify-center border-x border-ink-10 bg-ink-05 px-1 text-center sm:w-20">
 												<GutterStatus game={g} />
 												{g.altLines > 0 && !g.locked ? (
 													<span className="mt-0.5 font-mono text-xxs text-ink-25">
