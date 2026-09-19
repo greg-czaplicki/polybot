@@ -28,7 +28,7 @@ describe("NCAAF_TOTALS_PILOT_LANE contract", () => {
 		expect(NCAAF_TOTALS_PILOT_LANE.maxPicksPerDay).toBe(5);
 		expect(NCAAF_TOTALS_PILOT_LANE.maxNotionalPerDay).toBe(20);
 		expect(NCAAF_TOTALS_PILOT_LANE.killDrawdownUsd).toBe(-40);
-		expect(NCAAF_TOTALS_PILOT_LANE.forwardStart).toBe(Date.UTC(2026, 8, 19, 22, 10) / 1000);
+		expect(NCAAF_TOTALS_PILOT_LANE.forwardStart).toBe(Date.UTC(2026, 8, 19, 21, 55) / 1000);
 		expect(NCAAF_TOTALS_PILOT_LANE.oneTeamPerDay).toBe(false);
 	});
 	it("runs the shared cap/kill machinery: 5 picks or $20 per UTC day, kill at -$40", () => {

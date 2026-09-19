@@ -71,7 +71,7 @@ price-drift guard vs the sighted price. Horizon = settlement.
 | price band | sighted price of the taken side in [0.25, 0.75) |
 | kill: drawdown | realized lane PnL ≤ −$40 → app stops emitting |
 | kill: z | ≥ 30 settled AND event-clustered z of the trailing 100 < −1 → stop |
-| forward start | 2026-09-19T22:10Z (registered as 2026-09-20T00:00Z; moved to deploy time within the hour at the owner's instruction — "there's games tonight" — before any row existed, so the 9/19 evening slate is in) |
+| forward start | 2026-09-19T21:55Z (registered as 2026-09-20T00:00Z; moved to deploy time within the hour at the owner's instruction — "there's games tonight" — before any row existed, so the 9/19 evening slate is in) |
 | manual off | `enabled=false` in the lane file (era bump) or `BOT_LANE_STAKES` entry unset / 0 (bot skips, logged) |
 
 Caps are enforced on both ends: the app will not emit past its caps, and a
@@ -117,5 +117,5 @@ Sharp-money cache covering NCAAF (FBS series), bot online on Saturdays
   seen at registration were NOT turned into filters.
 - Kill-rule inputs (realized PnL, trailing z) are computed from settled
   rows only; pending exposure does not feed them.
-- The forward start (2026-09-19T22:10Z) is after every row examined; the
+- The forward start (2026-09-19T21:55Z) is after every row examined; the
   9/19 evening games had no settled shadow rows at registration.
