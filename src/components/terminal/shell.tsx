@@ -1,5 +1,5 @@
 import { useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 
@@ -66,6 +66,26 @@ export function Shell({
 }) {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 	const inResearch = RESEARCH.some((r) => pathname.startsWith(r.href));
+	// The Research menu lives OUTSIDE the scrolling primary nav: that strip
+	// is overflow-x-auto, which also clips vertical overflow, so an
+	// absolutely positioned dropdown inside it was cut off (2026-09-19).
+	const [open, setOpen] = useState(false);
+	const menuRef = useRef<HTMLDetailsElement | null>(null);
+	useEffect(() => {
+		if (!open) return;
+		const onDown = (event: MouseEvent) => {
+			if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpen(false);
+		};
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey);
+		};
+	}, [open]);
 
 	return (
 		<AuthGate>
@@ -99,7 +119,8 @@ export function Shell({
 									</a>
 								);
 							})}
-							<details className="group relative shrink-0">
+						</nav>
+							<details className="group relative shrink-0" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)} open={open} ref={menuRef}>
 								<summary
 									className={`flex h-10 cursor-pointer list-none items-center gap-1 border-b-2 px-2.5 font-mono text-xxs font-semibold uppercase tracking-[0.18em] transition-colors ${
 										inResearch
@@ -128,7 +149,6 @@ export function Shell({
 									))}
 								</div>
 							</details>
-						</nav>
 						<div className="ml-2 flex shrink-0 items-center gap-3">
 							{actions}
 							<UtcClock />
