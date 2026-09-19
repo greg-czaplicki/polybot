@@ -50,8 +50,8 @@ export const NCAAF_TOTALS_PILOT_LANE: LaneConfig & {
 	killTrailingN: 100,
 	killMinSettled: 30,
 	killZ: -1,
-	/** 2026-09-20T00:00:00Z — first live pick may not precede this (registered 2026-09-19 ~22:00Z with that evening's slate already inside the window). */
-	forwardStart: 1789862400,
+	/** 2026-09-19T22:10:00Z — first live pick may not precede this. Registered at 00:00Z 9/20, moved to deploy time the same hour at the owner's instruction ("there's games tonight") before any row existed. */
+	forwardStart: 1789855800,
 	/** Master switch (era-gated; flipping it is an era bump). */
 	enabled: true,
 };
