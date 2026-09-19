@@ -265,6 +265,10 @@ function toEraSummary(label: string, r: EraAggRow): DashboardEraSummary {
  */
 // Era v14: the holder-signal book excludes second-family lane picks (lane IS NULL).
 const REAL_FILL_SQL = `(fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed')) AND lane IS NULL`;
+// Rows that are not a position on the exchange: paper-mode records and orders
+// the exchange rejected. 'unknown' rows STAY visible (their fill column says
+// so) — they exist to be reconciled by hand, hiding them would defeat that.
+const OPEN_POSITION_SQL = `(fill_status IS NULL OR fill_status NOT IN ('paper','failed'))`;
 
 const ERA_AGG = `SELECT
 	SUM(status = 'win') AS wins,
@@ -291,7 +295,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			await all<PickRowRaw>(
 				db,
 				`SELECT ${PICK_COLUMNS} FROM manual_picks
-				 WHERE status = 'pending'
+				 WHERE status = 'pending' AND ${OPEN_POSITION_SQL}
 				 ORDER BY event_time ASC`,
 			)
 		).map(toPickRow);
@@ -301,6 +305,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				db,
 				`SELECT ${PICK_COLUMNS} FROM manual_picks
 				 WHERE status IN ('win','loss','push') AND settled_at >= ?
+				   AND ${OPEN_POSITION_SQL}
 				 ORDER BY settled_at DESC
 				 LIMIT 25`,
 				twoDaysAgo,
@@ -333,7 +338,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		);
 		const placedRow = await first<{ n: number }>(
 			db,
-			`SELECT COUNT(*) AS n FROM manual_picks WHERE picked_at >= ?`,
+			`SELECT COUNT(*) AS n FROM manual_picks WHERE picked_at >= ? AND ${REAL_FILL_SQL}`,
 			dayAgo,
 		);
 		const recap: DashboardRecap = {
