@@ -653,3 +653,17 @@ Still open, in rough fix order:
   `[sharp-pipeline] STALE: ...` when the newest history row is >30 min old —
   expected overnight, actionable during game hours.
 - Always query remote D1 with `--remote`; the local miniflare DB is empty.
+
+## Paused OddsPapi groups were stamped as "captured" (2026-09-16 → 2026-09-19, FIXED)
+
+While a feed group was paused (soccer/tennis from 2026-09-16, football from
+2026-09-17) the shadow sweeps treated its rows like an untracked sport and
+stamped `pin_captured_at` / `pin_close_captured_at` with no feed and no
+fair prob. Fix: paused-group rows are now excluded from both shadow queries
+(`oddspapiPausedTags`); the 2026-09-19 cleanup reset the bogus stamps
+(rows with a stamp but `pin_feed_at IS NULL AND pin_fair_prob IS NULL`, or
+the close equivalents, for paused tags created after 2026-09-16). The
+dashboard tape "anchored" count now reads `pin_fair_prob IS NOT NULL`
+instead of the stamp, so esports rows (never anchored) no longer count.
+No pick, pin_clv or verdict data was affected: those read fair probs, not
+the stamp.

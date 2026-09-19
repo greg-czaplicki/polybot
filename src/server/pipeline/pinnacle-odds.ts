@@ -183,8 +183,9 @@ const ODDSPAPI_GROUPS: Record<string, string[]> = {
  * 2026-09-29 and no reset date in /v4/account. Soccer and tennis are
  * shadow-only benchmarks nowhere near a checkpoint (and the tennis index is
  * empty until a live tournament is listed), so they yield to MLB + football
- * until early October. Rows of a paused group are simply not tracked (no
- * spend, no stamp); they resume when the date passes.
+ * until early October. Rows of a paused group are excluded from the shadow
+ * sweeps entirely (no spend, no stamp — see oddspapiPausedTags); they resume
+ * when the date passes.
  */
 export const ODDSPAPI_GROUP_PAUSED_UNTIL: Record<string, number> = {
 	"soccer-a": Date.UTC(2026, 9, 6) / 1000,
@@ -210,6 +211,22 @@ const ODDSPAPI_GROUP_OF: Record<string, string> = Object.fromEntries(
 		tags.map((tag) => [tag, group]),
 	),
 );
+/**
+ * Tags whose OddsPapi group is paused at `now`. The shadow sweeps exclude
+ * them in SQL: a paused row must stay pin_captured_at / pin_close_captured_at
+ * NULL (it was never attempted — the `!tracked` stamp is for sports with no
+ * Pinnacle listing at all, e.g. esports), and it must not take a slot in the
+ * per-sport round-robin from the sports that can still be served.
+ */
+export function oddspapiPausedTags(
+	now: number,
+	pausedUntil: Record<string, number> = ODDSPAPI_GROUP_PAUSED_UNTIL,
+	groupOf: Record<string, string> = ODDSPAPI_GROUP_OF,
+): string[] {
+	return Object.entries(groupOf)
+		.filter(([, group]) => oddspapiGroupPaused(group, now, pausedUntil))
+		.map(([tag]) => tag);
+}
 const ODDSPAPI_MAX_TOURNAMENTS_PER_CALL = 5;
 const ODDSPAPI_TENNIS_SPORT_ID = 12;
 /** pinnacle_feed_cache row holding the resolved tennis tournament ids. */
@@ -1388,6 +1405,12 @@ export async function capturePinnacleOddsForPicks(
 		limit,
 	);
 
+	// Paused-group rows are left untouched (never stamped) and kept out of
+	// the per-sport round-robin. Only the OddsPapi provider has a pause table.
+	const pausedTags = provider === "oddspapi" ? oddspapiPausedTags(now) : [];
+	const pausedTagsSql = pausedTags.length
+		? `AND (sport_tag IS NULL OR sport_tag NOT IN (${pausedTags.map(() => "?").join(",")}))`
+		: "";
 	// shadow_candidates.event_time is INTEGER seconds, unlike manual_picks.
 	const shadowRows = await all<ShadowCloseRow>(
 		db,
@@ -1398,10 +1421,12 @@ export async function capturePinnacleOddsForPicks(
 		   AND market_type IN ('moneyline','total')
 		   AND pin_close_captured_at IS NULL
 		   AND event_time BETWEEN ? AND ?
+		   ${pausedTagsSql}
 		 ORDER BY ROW_NUMBER() OVER (PARTITION BY sport_tag ORDER BY event_time, id), event_time
 		 LIMIT 20`,
 		now - CLOSE_WINDOW_AFTER_SECONDS,
 		now + CLOSE_WINDOW_BEFORE_SECONDS,
+		...pausedTags,
 	);
 
 	const timingPlaceholders = TIMING_REJECT_REASONS.map(() => "?").join(",");
@@ -1416,11 +1441,13 @@ export async function capturePinnacleOddsForPicks(
 		   AND created_at > ?
 		   AND event_time > ?
 		   AND reject_reason NOT IN (${timingPlaceholders})
+		   ${pausedTagsSql}
 		 ORDER BY ROW_NUMBER() OVER (PARTITION BY sport_tag ORDER BY created_at, id), created_at
 		 LIMIT ?`,
 		now - ANCHOR_MAX_AGE_SECONDS,
 		now,
 		...TIMING_REJECT_REASONS,
+		...pausedTags,
 		SHADOW_ANCHOR_LIMIT,
 	);
 	// Schedule from observed markets, including outside-window shadows:

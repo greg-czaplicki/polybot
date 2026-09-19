@@ -14,6 +14,7 @@ import {
 	type OddsApiEvent,
 	parseTitleTeams,
 	oddspapiGroupPaused,
+	oddspapiPausedTags,
 	starvedGroupMayFetch,
 	TENNIS_BOOST_UNTIL_SECONDS,
 	teamNamesMatch,
@@ -915,6 +916,23 @@ describe("tennisBoostMayFetch", () => {
 		expect(tennisBoostMayFetch(TENNIS_BOOST_UNTIL_SECONDS, 1, 5, caps)).toBe(
 			false,
 		);
+	});
+});
+
+describe("oddspapiPausedTags", () => {
+	const groupOf = { mlb: "mlb", epl: "soccer-a", mls: "soccer-a", nfl: "football", ncaaf: "football", cs2: "esports" };
+	const table = { "soccer-a": 1_000, football: 2_000 };
+	it("lists every tag of a paused group and nothing else", () => {
+		expect(oddspapiPausedTags(500, table, groupOf).sort()).toEqual(["epl", "mls", "ncaaf", "nfl"]);
+		expect(oddspapiPausedTags(1_500, table, groupOf).sort()).toEqual(["ncaaf", "nfl"]);
+		expect(oddspapiPausedTags(2_000, table, groupOf)).toEqual([]);
+	});
+	it("default table: football + soccer + tennis tags are paused on 2026-09-20, none on 2026-11-03", () => {
+		const sep20 = Date.UTC(2026, 8, 20) / 1000;
+		const paused = oddspapiPausedTags(sep20);
+		for (const tag of ["ncaaf", "nfl", "epl", "atp", "wta", "ligue1"]) expect(paused).toContain(tag);
+		for (const tag of ["mlb", "nba", "nhl"]) expect(paused).not.toContain(tag);
+		expect(oddspapiPausedTags(Date.UTC(2026, 10, 3) / 1000)).toEqual([]);
 	});
 });
 

@@ -570,7 +570,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		}>(
 			db,
 			`SELECT sport_tag, COUNT(*) AS shadow_rows,
-			        SUM(pin_captured_at IS NOT NULL) AS anchored,
+			        SUM(pin_fair_prob IS NOT NULL) AS anchored,
 			        SUM(event_time > ?) AS upcoming
 			 FROM shadow_candidates
 			 WHERE created_at >= ? AND sport_tag IS NOT NULL
