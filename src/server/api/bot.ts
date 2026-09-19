@@ -2,10 +2,13 @@ import { createServerFn } from "@tanstack/react-start";
 import {
 	CS2_PICKEM_DOG_LANE,
 	evaluateLaneState,
+	type LaneConfig,
+	type LaneSide,
 	type LaneState,
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
+import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
@@ -158,6 +161,8 @@ type BotCandidatesDebug = {
 		skipped: Record<string, number>;
 		state: LaneState | null;
 	};
+	/** Era v16: every enabled second-family lane, this tick, keyed by lane name. */
+	lanes?: Record<string, NonNullable<BotCandidatesDebug["lane"]>>;
 };
 
 type BotCandidatesOptions = {
@@ -2697,104 +2702,139 @@ async function listBotCandidates(
 	// skips lane candidates unless it has a stake configured for the lane, so
 	// the switch is fail-closed on both ends.
 	const laneCandidates: BotCandidate[] = [];
-	if (CS2_PICKEM_DOG_LANE.enabled && !inspectConditionId) {
-		const laneDebug: NonNullable<BotCandidatesDebug["lane"]> = {
-			name: CS2_PICKEM_DOG_LANE.name,
-			eligible: 0,
-			emitted: 0,
-			skipped: {},
-			state: null,
-		};
-		try {
-			const laneRows = await listLanePickRows(db, CS2_PICKEM_DOG_LANE.name);
-			const laneState = evaluateLaneState(laneRows, nowUnixSeconds());
-			laneDebug.state = laneState;
-			const takenGroupKeys = new Set(
-				dedupedCandidates.map((candidate) =>
-					getMarketGroupKey(candidate.entry),
-				),
-			);
-			// v1.1 (era v15): one pick per team per UTC day — teams on either
-			// side of today's lane picks (placed or emitted this tick) are out.
-			const takenTeams = new Set(laneState.teamsToday);
-			const eligible = upcomingEntries
-				.filter(
-					(entry) =>
-						resolveSportTagFromSeriesId(entry.sportSeriesId) ===
-							CS2_PICKEM_DOG_LANE.sportTag &&
-						getMarketTypeLabel(entry.marketTitle) ===
-							CS2_PICKEM_DOG_LANE.marketType,
-				)
-				.map((entry) => {
-					const eventTime = parseEventTime(entry.eventTime);
-					return {
-						entry,
-						side: pickemSide(entry.sideA.price, entry.sideB.price),
-						minutesToStart:
-							eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null,
-					};
-				})
-				.filter((item) => item.side !== null && item.minutesToStart !== null)
-				// Closest to start first: the cell's best buckets were the late ones.
-				.sort((a, b) => (a.minutesToStart ?? 0) - (b.minutesToStart ?? 0));
-			laneDebug.eligible = eligible.length;
-			for (const { entry, side } of eligible) {
-				if (!laneState.active) {
-					incrementCounter(laneDebug.skipped, laneState.reason);
-					continue;
+	// Era v16: the same machinery runs the NCAAF totals pilot
+	// (src/lib/ncaaf-totals-lane.ts) — the holder pipeline's sighted side on
+	// an in-window NCAAF game total, no holder gate. Each lane evaluates its
+	// own pick rows for caps/kill; market groups taken by the holder book or
+	// an earlier lane this tick are skipped.
+	type LaneDebug = NonNullable<BotCandidatesDebug["lane"]>;
+	const lanes: Array<{
+		lane: LaneConfig;
+		segmentLabel: string;
+		side: (entry: (typeof upcomingEntries)[number]) => LaneSide | null;
+		notes: (entry: (typeof upcomingEntries)[number]) => string[];
+	}> = [
+		{
+			lane: CS2_PICKEM_DOG_LANE,
+			segmentLabel: "CS2 pickem dog lane (era v15 pilot, one team/day)",
+			side: (entry) => pickemSide(entry.sideA.price, entry.sideB.price),
+			notes: () => [
+				`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
+			],
+		},
+		{
+			lane: NCAAF_TOTALS_PILOT_LANE,
+			segmentLabel: "NCAAF totals lane (era v16 pilot, sighted side, no holder gate)",
+			side: (entry) =>
+				totalsSide(entry.sharpSide, entry.sideA.price, entry.sideB.price),
+			notes: (entry) => [
+				`sighted side ${entry.sharpSide ?? "none"}`,
+				`price band ${NCAAF_TOTALS_PILOT_LANE.priceLo}-${NCAAF_TOTALS_PILOT_LANE.priceHi}`,
+			],
+		},
+	];
+	if (!inspectConditionId) {
+		const takenGroupKeys = new Set(
+			dedupedCandidates.map((candidate) => getMarketGroupKey(candidate.entry)),
+		);
+		debug.lanes = {};
+		for (const { lane, segmentLabel, side: laneSideOf, notes } of lanes) {
+			if (!lane.enabled) continue;
+			const laneDebug: LaneDebug = {
+				name: lane.name,
+				eligible: 0,
+				emitted: 0,
+				skipped: {},
+				state: null,
+			};
+			try {
+				const laneRows = await listLanePickRows(db, lane.name);
+				const laneState = evaluateLaneState(laneRows, nowUnixSeconds(), lane);
+				laneDebug.state = laneState;
+				// v1.1 (era v15): one pick per team per UTC day — teams on either
+				// side of today's lane picks (placed or emitted this tick) are out.
+				const takenTeams = new Set(laneState.teamsToday);
+				let emittedThisLane = 0;
+				const eligible = upcomingEntries
+					.filter(
+						(entry) =>
+							resolveSportTagFromSeriesId(entry.sportSeriesId) === lane.sportTag &&
+							getMarketTypeLabel(entry.marketTitle) === lane.marketType,
+					)
+					.map((entry) => {
+						const eventTime = parseEventTime(entry.eventTime);
+						return {
+							entry,
+							side: laneSideOf(entry),
+							minutesToStart:
+								eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null,
+						};
+					})
+					.filter((item) => item.side !== null && item.minutesToStart !== null)
+					// Closest to start first.
+					.sort((a, b) => (a.minutesToStart ?? 0) - (b.minutesToStart ?? 0));
+				laneDebug.eligible = eligible.length;
+				for (const { entry, side } of eligible) {
+					if (!laneState.active) {
+						incrementCounter(laneDebug.skipped, laneState.reason);
+						continue;
+					}
+					if (emittedThisLane >= laneState.remainingToday) {
+						incrementCounter(laneDebug.skipped, "daily_cap_this_tick");
+						continue;
+					}
+					const groupKey = getMarketGroupKey(entry);
+					if (takenGroupKeys.has(groupKey)) {
+						incrementCounter(laneDebug.skipped, "market_group_taken");
+						continue;
+					}
+					const teams = matchTeamKeys(entry.marketTitle);
+					if (
+						lane.oneTeamPerDay &&
+						teams.some((team) => takenTeams.has(team))
+					) {
+						incrementCounter(laneDebug.skipped, "team_taken_today");
+						continue;
+					}
+					takenGroupKeys.add(groupKey);
+					for (const team of teams) takenTeams.add(team);
+					const grade = gradeByConditionId.get(entry.conditionId) ?? null;
+					const laneSide = side as LaneSide;
+					laneCandidates.push({
+						entry: toSlimCandidate({ ...entry, sharpSide: laneSide }),
+						grade: {
+							// Holder-signal fields are carried for the pick record only;
+							// the lane neither ranks nor sizes on them.
+							grade: grade?.grade ?? "D",
+							signalScore: grade?.signalScore,
+							edgeRating: grade?.edgeRating ?? entry.edgeRating,
+							scoreDifferential:
+								grade?.scoreDifferential ?? entry.scoreDifferential,
+							microstructureScore: grade?.microstructureScore,
+							segmentScore: 0,
+							segmentKey: lane.name,
+							segmentLabel,
+							segmentNotes: [
+								...notes(entry),
+								`teams ${teams.join(" vs ") || "unparsed"}`,
+							],
+							isReady: grade?.isReady,
+							warnings: grade?.warnings,
+							computedAt: grade?.computedAt,
+							historyUpdatedAt: grade?.historyUpdatedAt,
+						},
+						lane: lane.name,
+					});
+					laneDebug.emitted += 1;
+					emittedThisLane += 1;
 				}
-				if (laneCandidates.length >= laneState.remainingToday) {
-					incrementCounter(laneDebug.skipped, "daily_cap_this_tick");
-					continue;
-				}
-				const groupKey = getMarketGroupKey(entry);
-				if (takenGroupKeys.has(groupKey)) {
-					incrementCounter(laneDebug.skipped, "market_group_taken");
-					continue;
-				}
-				const teams = matchTeamKeys(entry.marketTitle);
-				if (
-					CS2_PICKEM_DOG_LANE.oneTeamPerDay &&
-					teams.some((team) => takenTeams.has(team))
-				) {
-					incrementCounter(laneDebug.skipped, "team_taken_today");
-					continue;
-				}
-				takenGroupKeys.add(groupKey);
-				for (const team of teams) takenTeams.add(team);
-				const grade = gradeByConditionId.get(entry.conditionId) ?? null;
-				const laneSide = side as "A" | "B";
-				laneCandidates.push({
-					entry: toSlimCandidate({ ...entry, sharpSide: laneSide }),
-					grade: {
-						// Holder-signal fields are carried for the pick record only;
-						// the lane neither ranks nor sizes on them.
-						grade: grade?.grade ?? "D",
-						signalScore: grade?.signalScore,
-						edgeRating: grade?.edgeRating ?? entry.edgeRating,
-						scoreDifferential:
-							grade?.scoreDifferential ?? entry.scoreDifferential,
-						microstructureScore: grade?.microstructureScore,
-						segmentScore: 0,
-						segmentKey: CS2_PICKEM_DOG_LANE.name,
-						segmentLabel: "CS2 pickem dog lane (era v15 pilot, one team/day)",
-						segmentNotes: [
-							`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
-							`teams ${teams.join(" vs ") || "unparsed"}`,
-						],
-						isReady: grade?.isReady,
-						warnings: grade?.warnings,
-						computedAt: grade?.computedAt,
-						historyUpdatedAt: grade?.historyUpdatedAt,
-					},
-					lane: CS2_PICKEM_DOG_LANE.name,
-				});
-				laneDebug.emitted += 1;
+			} catch (error) {
+				console.warn(`[bot] lane ${lane.name} failed:`, error);
 			}
-		} catch (error) {
-			console.warn("[bot] cs2 pickem lane failed:", error);
+			debug.lanes[lane.name] = laneDebug;
+			// Back-compat: debug.lane is the CS2 pilot (README, sweeps).
+			if (lane.name === CS2_PICKEM_DOG_LANE.name) debug.lane = laneDebug;
 		}
-		debug.lane = laneDebug;
 	}
 	if (inspectConditionId && !debug.inspect) {
 		debug.inspect = {

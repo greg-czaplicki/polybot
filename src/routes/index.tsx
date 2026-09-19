@@ -57,6 +57,30 @@ interface AliveItem {
 }
 
 /** The "is the machine alive" strip. Thresholds mirror each subsystem's cadence. */
+function pilotItem(
+	key: string,
+	label: string,
+	p: DashboardHealth["cs2Pilot"],
+): AliveItem {
+	return {
+		key,
+		label,
+		tone: !p
+			? "off"
+			: p.active
+				? "ok"
+				: p.reason.startsWith("kill")
+					? "bad"
+					: "warn",
+		value: !p
+			? "no state"
+			: `${p.active ? "live" : p.reason} · ${p.todayPicks}/${p.maxPicksPerDay} today · ${p.wins}-${p.settled - p.wins} ${p.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(p.realizedPnl).toFixed(0)}`,
+		alarm: p?.reason.startsWith("kill")
+			? `${label} killed: ${p.reason}`
+			: undefined,
+	};
+}
+
 function aliveItems(h: DashboardHealth): AliveItem[] {
 	const botTone = ageTone(h.botLastSeenAt, 15 * 60, 60 * 60);
 	const syncTone =
@@ -140,23 +164,8 @@ function aliveItems(h: DashboardHealth): AliveItem[] {
 				? `${h.lanesFired ?? 0} fired · ${ago(h.lanesEvaluatedAt)}`
 				: "no heartbeat",
 		},
-		{
-			key: "cs2",
-			label: "CS2 pilot",
-			tone: !h.cs2Pilot
-				? "off"
-				: h.cs2Pilot.active
-					? "ok"
-					: h.cs2Pilot.reason.startsWith("kill")
-						? "bad"
-						: "warn",
-			value: !h.cs2Pilot
-				? "no state"
-				: `${h.cs2Pilot.active ? "live" : h.cs2Pilot.reason} · ${h.cs2Pilot.todayPicks}/3 today · ${h.cs2Pilot.wins}-${h.cs2Pilot.settled - h.cs2Pilot.wins} ${h.cs2Pilot.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(h.cs2Pilot.realizedPnl).toFixed(0)}`,
-			alarm: h.cs2Pilot?.reason.startsWith("kill")
-				? `CS2 pilot killed: ${h.cs2Pilot.reason}`
-				: undefined,
-		},
+		pilotItem("cs2", "CS2 pilot", h.cs2Pilot),
+		pilotItem("ncaaf_totals", "CFB totals pilot", h.ncaafTotalsPilot),
 		{
 			key: "pick",
 			label: "Last pick",

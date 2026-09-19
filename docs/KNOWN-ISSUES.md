@@ -22,6 +22,9 @@ fixing commit.
   already do, ad-hoc SQL and the weekly digest routine must add it. Lane
   picks are never evidence for anything — the evidence read is the polysharp
   forward lane `cs2_pickem_dog_cell` (charter `docs/charters/cs2-pickem-dog-pilot.md`).
+  From 2026-09-20 era v16 adds a second lane, `lane = 'ncaaf_totals_pilot'`
+  ($4 NCAAF game totals on the holder-sighted side, no holder gate, charter
+  `docs/charters/ncaaf-totals-pilot.md`); the same `lane IS NULL` rule covers it.
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for

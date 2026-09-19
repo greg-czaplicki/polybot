@@ -20,8 +20,8 @@ Minimal polling bot that calls the app's bot API and places bets.
   - `BOT_MAX_STAKE` (default 50)
   - `BOT_MIN_STAKE` (default 1)
   - `BOT_FIXED_STAKE` (default 0, set to force a fixed stake per bet)
-  - `BOT_LANE_STAKES` (default empty) — era v14 second-family lanes, e.g. `cs2_pickem_dog=4`. A candidate carrying a `lane` is placed only when its lane has a positive stake here; unset = every lane candidate skipped (fail-closed).
-  - `BOT_LANE_DAILY_CAPS` (default empty) — per-lane rolling-24h live notional cap, e.g. `cs2_pickem_dog=20`; sits under `BOT_DAILY_NOTIONAL_CAP`.
+  - `BOT_LANE_STAKES` (default empty) — era v14 second-family lanes, e.g. `cs2_pickem_dog=4,ncaaf_totals_pilot=4`. A candidate carrying a `lane` is placed only when its lane has a positive stake here; unset = every lane candidate skipped (fail-closed).
+  - `BOT_LANE_DAILY_CAPS` (default empty) — per-lane rolling-24h live notional cap, e.g. `cs2_pickem_dog=20,ncaaf_totals_pilot=20`; sits under `BOT_DAILY_NOTIONAL_CAP`.
   - `BOT_LOW_ROI_THRESHOLD` (default 0.72, skip if price >= threshold)
   - `BOT_REQUIRE_L2_ALPHA` (default true, require L2 alpha signal when available)
   - `BOT_SKIP_IF_L2_MISSING` (default false, if true skip markets without L2 signals)

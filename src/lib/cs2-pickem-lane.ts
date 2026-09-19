@@ -53,6 +53,27 @@ export const CS2_PICKEM_DOG_LANE = {
 export type LaneSide = "A" | "B";
 
 /**
+ * The cap/kill contract every second-family lane shares (era v14 machinery).
+ * A lane file freezes one of these as a const; `evaluateLaneState` and the
+ * bot's lane loop read only these fields.
+ */
+export interface LaneConfig {
+	name: string;
+	sportTag: string;
+	marketType: string;
+	stakeUsd: number;
+	maxPicksPerDay: number;
+	maxNotionalPerDay: number;
+	oneTeamPerDay: boolean;
+	killDrawdownUsd: number;
+	killTrailingN: number;
+	killMinSettled: number;
+	killZ: number;
+	forwardStart: number;
+	enabled: boolean;
+}
+
+/**
  * Which side (if any) the lane takes. Exactly one side must sit in the
  * band; when both do (a wide spread on a true coin-flip) the market is
  * ambiguous and is skipped rather than guessed.
@@ -167,7 +188,7 @@ export function clusteredZ(
 export function evaluateLaneState(
 	rows: LanePickRow[],
 	nowSeconds: number,
-	lane = CS2_PICKEM_DOG_LANE,
+	lane: LaneConfig = CS2_PICKEM_DOG_LANE,
 ): LaneState {
 	const dayStart = utcDayStart(nowSeconds);
 	const today = rows.filter((r) => r.pickedAt >= dayStart);

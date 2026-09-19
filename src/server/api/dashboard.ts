@@ -6,6 +6,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
+import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
 import {
 	evaluateLiveLadder,
 	LIVE_OOS_SINCE,
@@ -99,15 +100,20 @@ export interface DashboardHealth {
 	lanesFired: number | null;
 	lanesRecorded: number | null;
 	/** Era v14 CS2 pickem-dog pilot (src/lib/cs2-pickem-lane.ts), from its own pick rows. */
-	cs2Pilot: {
-		active: boolean;
-		reason: string;
-		todayPicks: number;
-		settled: number;
-		wins: number;
-		realizedPnl: number;
-		z: number | null;
-	} | null;
+	cs2Pilot: LanePilotState | null;
+	/** Era v16 NCAAF totals pilot (src/lib/ncaaf-totals-lane.ts), from its own pick rows. */
+	ncaafTotalsPilot: LanePilotState | null;
+}
+
+export interface LanePilotState {
+	active: boolean;
+	reason: string;
+	todayPicks: number;
+	maxPicksPerDay: number;
+	settled: number;
+	wins: number;
+	realizedPnl: number;
+	z: number | null;
 }
 
 /** Live-book results over a trailing window (real fills only). */
@@ -632,23 +638,30 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				});
 		}
 
-		// Era v14: CS2 pickem-dog pilot state from its own lane rows (never the holder book).
-		let cs2Pilot: DashboardHealth["cs2Pilot"] = null;
-		try {
-			const laneRows = await listLanePickRows(db, CS2_PICKEM_DOG_LANE.name);
-			const laneState = evaluateLaneState(laneRows, now);
-			cs2Pilot = {
-				active: laneState.active,
-				reason: laneState.reason,
-				todayPicks: laneState.todayPicks,
-				settled: laneState.settled,
-				wins: laneState.wins,
-				realizedPnl: laneState.realizedPnl,
-				z: laneState.z,
-			};
-		} catch (error) {
-			console.warn("[dashboard] cs2 pilot state failed", error);
-		}
+		// Era v14/v16: lane pilot state from each lane's own rows (never the holder book).
+		const pilotState = async (
+			lane: typeof CS2_PICKEM_DOG_LANE | typeof NCAAF_TOTALS_PILOT_LANE,
+		): Promise<LanePilotState | null> => {
+			try {
+				const laneRows = await listLanePickRows(db, lane.name);
+				const laneState = evaluateLaneState(laneRows, now, lane);
+				return {
+					active: laneState.active,
+					reason: laneState.reason,
+					todayPicks: laneState.todayPicks,
+					maxPicksPerDay: lane.maxPicksPerDay,
+					settled: laneState.settled,
+					wins: laneState.wins,
+					realizedPnl: laneState.realizedPnl,
+					z: laneState.z,
+				};
+			} catch (error) {
+				console.warn(`[dashboard] ${lane.name} pilot state failed`, error);
+				return null;
+			}
+		};
+		const cs2Pilot = await pilotState(CS2_PICKEM_DOG_LANE);
+		const ncaafTotalsPilot = await pilotState(NCAAF_TOTALS_PILOT_LANE);
 
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
@@ -673,6 +686,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			lanesFired: lanes?.fired ?? null,
 			lanesRecorded: lanes?.recorded ?? null,
 			cs2Pilot,
+			ncaafTotalsPilot,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.
