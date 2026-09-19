@@ -30,6 +30,7 @@ const RESEARCH: { href: string; label: string }[] = [
 	{ href: "/strategy", label: "Strategy context" },
 	{ href: "/wallets", label: "Wallets" },
 	{ href: "/canonical", label: "Canonical games" },
+	{ href: "/nfl", label: "NFL board" },
 ];
 
 function UtcClock() {

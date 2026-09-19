@@ -20,6 +20,7 @@ import { getCanonicalFreshness } from "./server/pipeline/canonical-sync";
 import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
 import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
+import { settleNflBoardPicks } from "./server/api/nfl-board";
 import {
 	recordEarlyWindowShadows,
 	settleShadowCandidates,
@@ -460,6 +461,18 @@ const serverEntry = {
 					if (result.updated > 0) {
 						console.log(
 							`[shadow-book] Settled ${result.updated}/${result.checked} shadow candidates`,
+						);
+					}
+				})
+				.then(() =>
+					// NFL board: the operator's own ATS picks (never the bot's),
+					// same Gamma resolution path, a handful of rows a week.
+					settleNflBoardPicks(env.POLYWHALER_DB, { limit: 8 }),
+				)
+				.then((result) => {
+					if (result.updated > 0) {
+						console.log(
+							`[nfl-board] Settled ${result.updated}/${result.checked} board picks`,
 						);
 					}
 				})

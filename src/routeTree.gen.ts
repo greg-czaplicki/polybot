@@ -15,6 +15,7 @@ import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SharpRouteImport } from './routes/sharp'
 import { Route as ShadowRouteImport } from './routes/shadow'
 import { Route as RuntimeRouteImport } from './routes/runtime'
+import { Route as NflRouteImport } from './routes/nfl'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as CanonicalRouteImport } from './routes/canonical'
 import { Route as BotRouteImport } from './routes/bot'
@@ -50,6 +51,11 @@ const ShadowRoute = ShadowRouteImport.update({
 const RuntimeRoute = RuntimeRouteImport.update({
   id: '/runtime',
   path: '/runtime',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NflRoute = NflRouteImport.update({
+  id: '/nfl',
+  path: '/nfl',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -89,6 +95,7 @@ export interface FileRoutesByFullPath {
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
+  '/nfl': typeof NflRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
+  '/nfl': typeof NflRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/bot': typeof BotRoute
   '/canonical': typeof CanonicalRoute
   '/login': typeof LoginRoute
+  '/nfl': typeof NflRoute
   '/runtime': typeof RuntimeRoute
   '/shadow': typeof ShadowRoute
   '/sharp': typeof SharpRouteWithChildren
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/bot'
     | '/canonical'
     | '/login'
+    | '/nfl'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -148,6 +158,7 @@ export interface FileRouteTypes {
     | '/bot'
     | '/canonical'
     | '/login'
+    | '/nfl'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -162,6 +173,7 @@ export interface FileRouteTypes {
     | '/bot'
     | '/canonical'
     | '/login'
+    | '/nfl'
     | '/runtime'
     | '/shadow'
     | '/sharp'
@@ -177,6 +189,7 @@ export interface RootRouteChildren {
   BotRoute: typeof BotRoute
   CanonicalRoute: typeof CanonicalRoute
   LoginRoute: typeof LoginRoute
+  NflRoute: typeof NflRoute
   RuntimeRoute: typeof RuntimeRoute
   ShadowRoute: typeof ShadowRoute
   SharpRoute: typeof SharpRouteWithChildren
@@ -227,6 +240,13 @@ declare module '@tanstack/react-router' {
       path: '/runtime'
       fullPath: '/runtime'
       preLoaderRoute: typeof RuntimeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nfl': {
+      id: '/nfl'
+      path: '/nfl'
+      fullPath: '/nfl'
+      preLoaderRoute: typeof NflRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -290,6 +310,7 @@ const rootRouteChildren: RootRouteChildren = {
   BotRoute: BotRoute,
   CanonicalRoute: CanonicalRoute,
   LoginRoute: LoginRoute,
+  NflRoute: NflRoute,
   RuntimeRoute: RuntimeRoute,
   ShadowRoute: ShadowRoute,
   SharpRoute: SharpRouteWithChildren,
