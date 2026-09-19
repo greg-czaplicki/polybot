@@ -28,13 +28,17 @@ describe("NCAAF_TOTALS_PILOT_LANE contract", () => {
 		expect(NCAAF_TOTALS_PILOT_LANE.maxPicksPerDay).toBe(5);
 		expect(NCAAF_TOTALS_PILOT_LANE.maxNotionalPerDay).toBe(20);
 		expect(NCAAF_TOTALS_PILOT_LANE.killDrawdownUsd).toBe(-40);
-		expect(NCAAF_TOTALS_PILOT_LANE.forwardStart).toBe(Date.UTC(2026, 8, 19, 21, 55) / 1000);
+		expect(NCAAF_TOTALS_PILOT_LANE.forwardStart).toBe(
+			Date.UTC(2026, 8, 19, 21, 55) / 1000,
+		);
 		expect(NCAAF_TOTALS_PILOT_LANE.oneTeamPerDay).toBe(false);
 	});
 	it("runs the shared cap/kill machinery: 5 picks or $20 per UTC day, kill at -$40", () => {
 		const now = NCAAF_TOTALS_PILOT_LANE.forwardStart + 6 * 86400 + 3600;
 		const day = now - (now % 86400);
-		const row = (p: Partial<LanePickRow> & { pickedAt: number }): LanePickRow => ({
+		const row = (
+			p: Partial<LanePickRow> & { pickedAt: number },
+		): LanePickRow => ({
 			status: "pending",
 			roi: null,
 			fillNotional: null,
@@ -43,17 +47,31 @@ describe("NCAAF_TOTALS_PILOT_LANE contract", () => {
 			settledAt: null,
 			...p,
 		});
-		const before = evaluateLaneState([], NCAAF_TOTALS_PILOT_LANE.forwardStart - 1, NCAAF_TOTALS_PILOT_LANE);
+		const before = evaluateLaneState(
+			[],
+			NCAAF_TOTALS_PILOT_LANE.forwardStart - 1,
+			NCAAF_TOTALS_PILOT_LANE,
+		);
 		expect(before.active).toBe(false);
 		expect(before.reason).toBe("before_forward_start");
 		const fresh = evaluateLaneState([], now, NCAAF_TOTALS_PILOT_LANE);
 		expect(fresh.active).toBe(true);
 		expect(fresh.remainingToday).toBe(5);
 		const five = [1, 2, 3, 4, 5].map((i) => row({ pickedAt: day + i }));
-		expect(evaluateLaneState(five, now, NCAAF_TOTALS_PILOT_LANE).reason).toBe("daily_pick_cap");
-		const losses = Array.from({ length: 10 }, (_, i) =>
-			row({ pickedAt: day - 86400 * (i + 1), status: "loss", roi: -1, fillNotional: 4, settledAt: day - 3600 * (i + 1) }),
+		expect(evaluateLaneState(five, now, NCAAF_TOTALS_PILOT_LANE).reason).toBe(
+			"daily_pick_cap",
 		);
-		expect(evaluateLaneState(losses, now, NCAAF_TOTALS_PILOT_LANE).reason).toBe("kill_drawdown");
+		const losses = Array.from({ length: 10 }, (_, i) =>
+			row({
+				pickedAt: day - 86400 * (i + 1),
+				status: "loss",
+				roi: -1,
+				fillNotional: 4,
+				settledAt: day - 3600 * (i + 1),
+			}),
+		);
+		expect(evaluateLaneState(losses, now, NCAAF_TOTALS_PILOT_LANE).reason).toBe(
+			"kill_drawdown",
+		);
 	});
 });

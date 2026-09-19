@@ -74,7 +74,8 @@ export function Shell({
 	useEffect(() => {
 		if (!open) return;
 		const onDown = (event: MouseEvent) => {
-			if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpen(false);
+			if (menuRef.current && !menuRef.current.contains(event.target as Node))
+				setOpen(false);
 		};
 		const onKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape") setOpen(false);
@@ -120,35 +121,40 @@ export function Shell({
 								);
 							})}
 						</nav>
-							<details className="group relative shrink-0" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)} open={open} ref={menuRef}>
-								<summary
-									className={`flex h-10 cursor-pointer list-none items-center gap-1 border-b-2 px-2.5 font-mono text-xxs font-semibold uppercase tracking-[0.18em] transition-colors ${
-										inResearch
-											? "border-brand-blue text-ink-95"
-											: "border-transparent text-ink-55 hover:text-ink-85"
-									}`}
-								>
-									Research
-									<span aria-hidden className="text-ink-40">
-										▾
-									</span>
-								</summary>
-								<div className="absolute left-0 top-full z-40 mt-px min-w-44 border border-ink-15 bg-ink-05 py-1 shadow-[0_8px_24px_-12px_var(--ink-00)]">
-									{RESEARCH.map((r) => (
-										<a
-											key={r.href}
-											href={r.href}
-											className={`block px-3 py-1.5 text-sm hover:bg-ink-10 ${
-												pathname.startsWith(r.href)
-													? "text-ink-95"
-													: "text-ink-70"
-											}`}
-										>
-											{r.label}
-										</a>
-									))}
-								</div>
-							</details>
+						<details
+							className="group relative shrink-0"
+							onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+							open={open}
+							ref={menuRef}
+						>
+							<summary
+								className={`flex h-10 cursor-pointer list-none items-center gap-1 border-b-2 px-2.5 font-mono text-xxs font-semibold uppercase tracking-[0.18em] transition-colors ${
+									inResearch
+										? "border-brand-blue text-ink-95"
+										: "border-transparent text-ink-55 hover:text-ink-85"
+								}`}
+							>
+								Research
+								<span aria-hidden className="text-ink-40">
+									▾
+								</span>
+							</summary>
+							<div className="absolute left-0 top-full z-40 mt-px min-w-44 border border-ink-15 bg-ink-05 py-1 shadow-[0_8px_24px_-12px_var(--ink-00)]">
+								{RESEARCH.map((r) => (
+									<a
+										key={r.href}
+										href={r.href}
+										className={`block px-3 py-1.5 text-sm hover:bg-ink-10 ${
+											pathname.startsWith(r.href)
+												? "text-ink-95"
+												: "text-ink-70"
+										}`}
+									>
+										{r.label}
+									</a>
+								))}
+							</div>
+						</details>
 						<div className="ml-2 flex shrink-0 items-center gap-3">
 							{actions}
 							<UtcClock />

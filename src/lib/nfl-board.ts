@@ -12,7 +12,10 @@ export const NFL_WEEK1_START = Date.UTC(2026, 8, 9) / 1000;
 const WEEK_SECONDS = 7 * 86400;
 
 export function nflWeekOf(unixSeconds: number): number {
-	return Math.max(1, Math.floor((unixSeconds - NFL_WEEK1_START) / WEEK_SECONDS) + 1);
+	return Math.max(
+		1,
+		Math.floor((unixSeconds - NFL_WEEK1_START) / WEEK_SECONDS) + 1,
+	);
 }
 
 export function nflWeekBounds(week: number): { start: number; end: number } {
@@ -31,7 +34,9 @@ export interface SpreadTitle {
 
 /** "GB vs NYJ: Spread: Packers (-3.5)" → matchup, named team, line. */
 export function parseSpreadTitle(title: string): SpreadTitle | null {
-	const m = title.match(/^(.*?):\s*Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)\s*$/i);
+	const m = title.match(
+		/^(.*?):\s*Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)\s*$/i,
+	);
 	if (!m) return null;
 	const line = Number.parseFloat(m[3]);
 	if (!Number.isFinite(line)) return null;
@@ -67,9 +72,13 @@ export function pickMainLine(markets: SpreadMarket[]): SpreadMarket | null {
 	let best: SpreadMarket | null = null;
 	let bestGap = Number.POSITIVE_INFINITY;
 	for (const m of markets) {
-		if (typeof m.sideAPrice !== "number" || typeof m.sideBPrice !== "number") continue;
+		if (typeof m.sideAPrice !== "number" || typeof m.sideBPrice !== "number")
+			continue;
 		const gap = Math.abs(m.sideAPrice - m.sideBPrice);
-		if (gap < bestGap - 1e-9 || (Math.abs(gap - bestGap) <= 1e-9 && (m.volume ?? 0) > (best?.volume ?? 0))) {
+		if (
+			gap < bestGap - 1e-9 ||
+			(Math.abs(gap - bestGap) <= 1e-9 && (m.volume ?? 0) > (best?.volume ?? 0))
+		) {
 			best = m;
 			bestGap = gap;
 		}
@@ -138,7 +147,9 @@ export function boardStats(rows: BoardPickRow[]): BoardStats {
 	const weeks = new Map<number, BoardSplit>();
 	let pending = 0;
 	const settled = rows
-		.filter((r) => r.status === "win" || r.status === "loss" || r.status === "push")
+		.filter(
+			(r) => r.status === "win" || r.status === "loss" || r.status === "push",
+		)
 		.sort((a, b) => a.eventTime - b.eventTime);
 	for (const r of rows) if (r.status === "pending") pending += 1;
 	for (const r of settled) {
@@ -162,7 +173,11 @@ export function boardStats(rows: BoardPickRow[]): BoardStats {
 						: "push";
 			const signalPrice = agree ? r.price : 1 - r.price;
 			const signalRoi =
-				signalStatus === "win" && signalPrice > 0 ? 1 / signalPrice - 1 : signalStatus === "loss" ? -1 : 0;
+				signalStatus === "win" && signalPrice > 0
+					? 1 / signalPrice - 1
+					: signalStatus === "loss"
+						? -1
+						: 0;
 			add(signalItself, signalStatus, signalRoi);
 		}
 	}
@@ -177,7 +192,9 @@ export function boardStats(rows: BoardPickRow[]): BoardStats {
 	}
 	return {
 		season,
-		byWeek: [...weeks.entries()].sort((a, b) => a[0] - b[0]).map(([week, s]) => ({ week, ...s })),
+		byWeek: [...weeks.entries()]
+			.sort((a, b) => a[0] - b[0])
+			.map(([week, s]) => ({ week, ...s })),
 		favorites,
 		dogs,
 		withSignal,

@@ -50,8 +50,17 @@ describe("pickMainLine", () => {
 		volume,
 	});
 	it("takes the line priced closest to 50/50, volume breaks ties", () => {
-		expect(pickMainLine([mk("-9.5", 0.34, 0.67), mk("-4.5", 0.5, 0.51), mk("-5.5", 0.47, 0.54)])?.conditionId).toBe("-4.5");
-		expect(pickMainLine([mk("a", 0.5, 0.51, 10), mk("b", 0.5, 0.51, 90)])?.conditionId).toBe("b");
+		expect(
+			pickMainLine([
+				mk("-9.5", 0.34, 0.67),
+				mk("-4.5", 0.5, 0.51),
+				mk("-5.5", 0.47, 0.54),
+			])?.conditionId,
+		).toBe("-4.5");
+		expect(
+			pickMainLine([mk("a", 0.5, 0.51, 10), mk("b", 0.5, 0.51, 90)])
+				?.conditionId,
+		).toBe("b");
 		expect(pickMainLine([])).toBeNull();
 	});
 });
@@ -71,7 +80,13 @@ describe("boardStats", () => {
 	it("rolls up record, ROI, fav/dog, signal agreement and streak", () => {
 		const s = boardStats([
 			row({ status: "win", roi: 1, eventTime: 1, signalSide: "A" }),
-			row({ status: "loss", roi: -1, eventTime: 2, line: 3.5, signalSide: "B" }),
+			row({
+				status: "loss",
+				roi: -1,
+				eventTime: 2,
+				line: 3.5,
+				signalSide: "B",
+			}),
 			row({ status: "push", roi: 0, eventTime: 3 }),
 			row({ status: "win", roi: 1.2, eventTime: 4, week: 2 }),
 			row({ status: "win", roi: 0.8, eventTime: 5, week: 2 }),

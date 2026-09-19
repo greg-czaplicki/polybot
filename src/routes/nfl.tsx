@@ -15,7 +15,17 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ago, clock } from "@/components/terminal/format";
-import { Cell, Dot, Empty, Panel, Row, Tag, Tape, type Tone, Workspace } from "@/components/terminal/panel";
+import {
+	Cell,
+	Dot,
+	Empty,
+	Panel,
+	Row,
+	Tag,
+	Tape,
+	type Tone,
+	Workspace,
+} from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
 import type { BoardSplit } from "@/lib/nfl-board";
 import {
@@ -49,15 +59,23 @@ function cents(price: number | null): string {
 
 function record(s: BoardSplit): string {
 	if (s.n === 0) return "—";
-	return s.pushes > 0 ? `${s.wins}-${s.losses}-${s.pushes}` : `${s.wins}-${s.losses}`;
+	return s.pushes > 0
+		? `${s.wins}-${s.losses}-${s.pushes}`
+		: `${s.wins}-${s.losses}`;
 }
 
 function roiText(s: BoardSplit): string {
-	return s.roiPct === null ? "—" : `${s.roiPct >= 0 ? "+" : "−"}${Math.abs(s.roiPct).toFixed(1)}%`;
+	return s.roiPct === null
+		? "—"
+		: `${s.roiPct >= 0 ? "+" : "−"}${Math.abs(s.roiPct).toFixed(1)}%`;
 }
 
 function roiClass(s: BoardSplit): string {
-	return s.roiPct === null ? "text-ink-40" : s.roiPct >= 0 ? "text-signal-pos" : "text-signal-bad";
+	return s.roiPct === null
+		? "text-ink-40"
+		: s.roiPct >= 0
+			? "text-signal-pos"
+			: "text-signal-bad";
 }
 
 function units(roi: number | null): string {
@@ -66,7 +84,11 @@ function units(roi: number | null): string {
 }
 
 function statusClass(status: string | undefined): string {
-	return status === "win" ? "text-signal-pos" : status === "loss" ? "text-signal-bad" : "text-ink-85";
+	return status === "win"
+		? "text-signal-pos"
+		: status === "loss"
+			? "text-signal-bad"
+			: "text-ink-85";
 }
 
 /** One half of the ladder row. `mirror` puts the team name on the outside edge. */
@@ -105,7 +127,9 @@ function SideHalf({
 			? ""
 			: "hover:bg-ink-10";
 	const name = (
-		<span className={`truncate font-sans text-sm ${picked ? "font-semibold" : ""}`}>
+		<span
+			className={`truncate font-sans text-sm ${picked ? "font-semibold" : ""}`}
+		>
 			{signal ? (
 				<span className="mr-1.5 inline-block align-middle">
 					<Dot tone="warn" />
@@ -139,13 +163,26 @@ function GutterStatus({ game }: { game: BoardGame }) {
 	const p = game.pick;
 	if (p && p.status !== "pending") {
 		return (
-			<span className={`font-mono text-xs tabular-nums ${statusClass(p.status)}`}>
-				{p.status === "win" ? "W" : p.status === "loss" ? "L" : "P"} {units(p.roi)}
+			<span
+				className={`font-mono text-xs tabular-nums ${statusClass(p.status)}`}
+			>
+				{p.status === "win" ? "W" : p.status === "loss" ? "L" : "P"}{" "}
+				{units(p.roi)}
 			</span>
 		);
 	}
-	if (game.locked) return <span className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">live</span>;
-	if (p) return <span className="font-mono text-xxs uppercase tracking-[0.15em] text-brand-blue">picked</span>;
+	if (game.locked)
+		return (
+			<span className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+				live
+			</span>
+		);
+	if (p)
+		return (
+			<span className="font-mono text-xxs uppercase tracking-[0.15em] text-brand-blue">
+				picked
+			</span>
+		);
 	return <span className="font-mono text-xxs text-ink-25">—</span>;
 }
 
@@ -172,7 +209,9 @@ function NflBoardPage() {
 	const load = useCallback(async (w: number | null) => {
 		setBusy(true);
 		try {
-			const board = await getNflBoardFn({ data: w === null ? {} : { week: w } });
+			const board = await getNflBoardFn({
+				data: w === null ? {} : { week: w },
+			});
 			setData(board);
 			setWeek(board.week);
 			setError(null);
@@ -194,7 +233,9 @@ function NflBoardPage() {
 				const res =
 					game.pick?.side === side
 						? await clearNflBoardPickFn({ data: { eventSlug: game.eventSlug } })
-						: await setNflBoardPickFn({ data: { conditionId: game.conditionId, side } });
+						: await setNflBoardPickFn({
+								data: { conditionId: game.conditionId, side },
+							});
 				setError("error" in res ? (res.error ?? "error") : null);
 				await load(week);
 			} finally {
@@ -208,7 +249,8 @@ function NflBoardPage() {
 	const stats = data?.stats ?? null;
 	const slots = useMemo(() => {
 		const map = new Map<number, BoardGame[]>();
-		for (const g of games) map.set(g.eventTime, [...(map.get(g.eventTime) ?? []), g]);
+		for (const g of games)
+			map.set(g.eventTime, [...(map.get(g.eventTime) ?? []), g]);
 		return [...map.entries()].sort((a, b) => a[0] - b[0]);
 	}, [games]);
 	const open = games.filter((g) => !g.locked).length;
@@ -226,56 +268,80 @@ function NflBoardPage() {
 		return s;
 	}, [games]);
 
-	const strip: { key: string; label: string; value: string; tone: Tone }[] = stats
-		? [
-				{
-					key: "record",
-					label: "Season",
-					value: record(stats.season),
-					tone: stats.season.n === 0 ? "off" : stats.season.wins >= stats.season.losses ? "ok" : "bad",
-				},
-				{
-					key: "roi",
-					label: "ROI / $1",
-					value: roiText(stats.season),
-					tone: stats.season.roiPct === null ? "off" : stats.season.roiPct >= 0 ? "ok" : "bad",
-				},
-				{
-					key: "cover",
-					label: "Cover",
-					value:
-						stats.season.wins + stats.season.losses === 0
-							? "—"
-							: `${((stats.season.wins / (stats.season.wins + stats.season.losses)) * 100).toFixed(0)}%`,
-					tone: "off",
-				},
-				{
-					key: "streak",
-					label: "Streak",
-					value: stats.streak > 0 ? `W${stats.streak}` : stats.streak < 0 ? `L${-stats.streak}` : "—",
-					tone: stats.streak > 0 ? "ok" : stats.streak < 0 ? "bad" : "off",
-				},
-				{
-					key: "week",
-					label: `Week ${data?.week ?? ""}`,
-					value:
-						weekRecord.n > 0
-							? `${weekRecord.wins}-${weekRecord.losses}${weekRecord.pushes ? `-${weekRecord.pushes}` : ""} · ${picked}/${games.length} picked`
-							: `${picked}/${games.length} picked · ${open} open`,
-					tone: open > 0 && picked < games.length ? "warn" : "ok",
-				},
-			]
-		: [];
+	const strip: { key: string; label: string; value: string; tone: Tone }[] =
+		stats
+			? [
+					{
+						key: "record",
+						label: "Season",
+						value: record(stats.season),
+						tone:
+							stats.season.n === 0
+								? "off"
+								: stats.season.wins >= stats.season.losses
+									? "ok"
+									: "bad",
+					},
+					{
+						key: "roi",
+						label: "ROI / $1",
+						value: roiText(stats.season),
+						tone:
+							stats.season.roiPct === null
+								? "off"
+								: stats.season.roiPct >= 0
+									? "ok"
+									: "bad",
+					},
+					{
+						key: "cover",
+						label: "Cover",
+						value:
+							stats.season.wins + stats.season.losses === 0
+								? "—"
+								: `${((stats.season.wins / (stats.season.wins + stats.season.losses)) * 100).toFixed(0)}%`,
+						tone: "off",
+					},
+					{
+						key: "streak",
+						label: "Streak",
+						value:
+							stats.streak > 0
+								? `W${stats.streak}`
+								: stats.streak < 0
+									? `L${-stats.streak}`
+									: "—",
+						tone: stats.streak > 0 ? "ok" : stats.streak < 0 ? "bad" : "off",
+					},
+					{
+						key: "week",
+						label: `Week ${data?.week ?? ""}`,
+						value:
+							weekRecord.n > 0
+								? `${weekRecord.wins}-${weekRecord.losses}${weekRecord.pushes ? `-${weekRecord.pushes}` : ""} · ${picked}/${games.length} picked`
+								: `${picked}/${games.length} picked · ${open} open`,
+						tone: open > 0 && picked < games.length ? "warn" : "ok",
+					},
+				]
+			: [];
 
 	return (
 		<Shell
 			wide
 			actions={
 				<>
-					<ShellButton onClick={() => void load((week ?? 1) - 1)} disabled={busy || (week ?? 1) <= 1} title="Previous week">
+					<ShellButton
+						onClick={() => void load((week ?? 1) - 1)}
+						disabled={busy || (week ?? 1) <= 1}
+						title="Previous week"
+					>
 						‹ wk
 					</ShellButton>
-					<ShellButton onClick={() => void load((week ?? 1) + 1)} disabled={busy || (week ?? 1) >= 22} title="Next week">
+					<ShellButton
+						onClick={() => void load((week ?? 1) + 1)}
+						disabled={busy || (week ?? 1) >= 22}
+						title="Next week"
+					>
 						wk ›
 					</ShellButton>
 					<ShellButton onClick={() => void load(week)} disabled={busy}>
@@ -287,13 +353,22 @@ function NflBoardPage() {
 			{/* Season strip — the three-second read. */}
 			<div className="flex flex-wrap items-stretch divide-x divide-ink-15 bg-ink-05">
 				{strip.map((item) => (
-					<div key={item.key} className="flex min-w-0 flex-1 basis-[9.5rem] items-center gap-2 px-3 py-1.5">
+					<div
+						key={item.key}
+						className="flex min-w-0 flex-1 basis-[9.5rem] items-center gap-2 px-3 py-1.5"
+					>
 						<Dot tone={item.tone} />
 						<div className="min-w-0">
-							<p className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">{item.label}</p>
+							<p className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+								{item.label}
+							</p>
 							<p
 								className={`truncate font-mono text-xs tabular-nums ${
-									item.tone === "bad" ? "text-signal-bad" : item.tone === "warn" ? "text-signal-warn" : "text-ink-85"
+									item.tone === "bad"
+										? "text-signal-bad"
+										: item.tone === "warn"
+											? "text-signal-warn"
+											: "text-ink-85"
 								}`}
 							>
 								{item.value}
@@ -301,10 +376,14 @@ function NflBoardPage() {
 						</div>
 					</div>
 				))}
-				{!data ? <p className="px-3 py-2 text-sm text-ink-55">Loading…</p> : null}
+				{!data ? (
+					<p className="px-3 py-2 text-sm text-ink-55">Loading…</p>
+				) : null}
 			</div>
 			{error ? (
-				<p className="border-t border-ink-15 bg-signal-bad/10 px-3 py-1.5 font-mono text-xs text-signal-bad">{error}</p>
+				<p className="border-t border-ink-15 bg-signal-bad/10 px-3 py-1.5 font-mono text-xs text-signal-bad">
+					{error}
+				</p>
 			) : null}
 
 			<Workspace>
@@ -323,14 +402,20 @@ function NflBoardPage() {
 					bodyClassName="p-0"
 				>
 					{games.length === 0 ? (
-						<Empty>{data ? "No NFL spread markets in the cache for this week yet." : "Loading…"}</Empty>
+						<Empty>
+							{data
+								? "No NFL spread markets in the cache for this week yet."
+								: "Loading…"}
+						</Empty>
 					) : (
 						slots.map(([eventTime, list]) => (
 							<section key={eventTime}>
 								<header className="flex h-7 items-center justify-between border-b border-ink-10 bg-ink-05 px-3 font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
 									<span>
 										{slotLabel(eventTime)}
-										<span className="ml-2 normal-case tracking-normal text-ink-25">{clock(eventTime)} local</span>
+										<span className="ml-2 normal-case tracking-normal text-ink-25">
+											{clock(eventTime)} local
+										</span>
 									</span>
 									<span>
 										{list.length} {list.length === 1 ? "game" : "games"}
@@ -339,15 +424,32 @@ function NflBoardPage() {
 								</header>
 								<ul>
 									{list.map((g) => (
-										<li key={g.eventSlug} className="flex items-stretch border-b border-ink-10 last:border-b-0">
-											<SideHalf game={g} side="A" mirror={false} onPick={onPick} busy={busy} />
+										<li
+											key={g.eventSlug}
+											className="flex items-stretch border-b border-ink-10 last:border-b-0"
+										>
+											<SideHalf
+												game={g}
+												side="A"
+												mirror={false}
+												onPick={onPick}
+												busy={busy}
+											/>
 											<div className="flex w-20 shrink-0 flex-col items-center justify-center border-x border-ink-10 bg-ink-05 px-1 text-center sm:w-24">
 												<GutterStatus game={g} />
 												{g.altLines > 0 && !g.locked ? (
-													<span className="mt-0.5 font-mono text-xxs text-ink-25">+{g.altLines} alt</span>
+													<span className="mt-0.5 font-mono text-xxs text-ink-25">
+														+{g.altLines} alt
+													</span>
 												) : null}
 											</div>
-											<SideHalf game={g} side="B" mirror onPick={onPick} busy={busy} />
+											<SideHalf
+												game={g}
+												side="B"
+												mirror
+												onPick={onPick}
+												busy={busy}
+											/>
 										</li>
 									))}
 								</ul>
@@ -356,7 +458,12 @@ function NflBoardPage() {
 					)}
 				</Panel>
 
-				<Panel span={4} title="Season splits" meta={stats ? `${stats.pending} pending` : undefined} bodyClassName="p-0">
+				<Panel
+					span={4}
+					title="Season splits"
+					meta={stats ? `${stats.pending} pending` : undefined}
+					bodyClassName="p-0"
+				>
 					{stats ? (
 						<table className="w-full text-sm">
 							<thead>
@@ -371,7 +478,10 @@ function NflBoardPage() {
 								<SplitRow label="dogs" s={stats.dogs} />
 								<SplitRow label="with the signal" s={stats.withSignal} />
 								<SplitRow label="against the signal" s={stats.againstSignal} />
-								<SplitRow label="signal itself, same games" s={stats.signalItself} />
+								<SplitRow
+									label="signal itself, same games"
+									s={stats.signalItself}
+								/>
 								{stats.byWeek.length > 0 ? (
 									<tr className="h-6 border-y border-ink-10 bg-ink-05 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
 										<td className="px-3" colSpan={3}>
@@ -389,9 +499,17 @@ function NflBoardPage() {
 					)}
 				</Panel>
 
-				<Panel span={12} title="Settled picks" meta={data ? `as of ${ago(data.now)}` : undefined} bodyClassName="p-0">
+				<Panel
+					span={12}
+					title="Settled picks"
+					meta={data ? `as of ${ago(data.now)}` : undefined}
+					bodyClassName="p-0"
+				>
 					{!data || data.recent.length === 0 ? (
-						<Empty>Nothing settled yet. Picks grade about fifteen minutes after the final.</Empty>
+						<Empty>
+							Nothing settled yet. Picks grade about fifteen minutes after the
+							final.
+						</Empty>
 					) : (
 						<Tape
 							head={[
@@ -410,16 +528,24 @@ function NflBoardPage() {
 									</Cell>
 									<Cell className="text-ink-85">{p.matchup}</Cell>
 									<Cell className="text-ink-95">
-										{p.sideLabel} <span className="font-mono text-xs text-ink-55">{signedLine(p.line)}</span>
+										{p.sideLabel}{" "}
+										<span className="font-mono text-xs text-ink-55">
+											{signedLine(p.line)}
+										</span>
 									</Cell>
 									<Cell right className="text-ink-55">
 										{cents(p.price)}
 									</Cell>
 									<Cell>
-										{p.signalSide ? <Tag>{p.signalSide === p.side ? "with" : "against"}</Tag> : <span className="text-ink-25">—</span>}
+										{p.signalSide ? (
+											<Tag>{p.signalSide === p.side ? "with" : "against"}</Tag>
+										) : (
+											<span className="text-ink-25">—</span>
+										)}
 									</Cell>
 									<Cell right className={statusClass(p.status)}>
-										{p.status === "win" ? "W" : p.status === "loss" ? "L" : "P"} {units(p.roi)}
+										{p.status === "win" ? "W" : p.status === "loss" ? "L" : "P"}{" "}
+										{units(p.roi)}
 									</Cell>
 								</Row>
 							))}

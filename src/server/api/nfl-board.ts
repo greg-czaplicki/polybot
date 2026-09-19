@@ -99,7 +99,10 @@ function toPick(r: PickRow): BoardPick {
 const PICK_COLS = `id, week, event_slug, condition_id, matchup, side, side_label, line, price,
 	event_time, picked_at, signal_side, status, roi, settled_at`;
 
-async function listSlate(db: Db, week: number): Promise<Map<string, SpreadMarket[]>> {
+async function listSlate(
+	db: Db,
+	week: number,
+): Promise<Map<string, SpreadMarket[]>> {
 	const { start, end } = nflWeekBounds(week);
 	const rows = await all<{
 		condition_id: string;
@@ -127,7 +130,8 @@ async function listSlate(db: Db, week: number): Promise<Map<string, SpreadMarket
 	const byGame = new Map<string, SpreadMarket[]>();
 	for (const r of rows) {
 		const eventTime = Math.floor(Date.parse(r.event_time) / 1000);
-		if (!Number.isFinite(eventTime) || !r.side_a_label || !r.side_b_label) continue;
+		if (!Number.isFinite(eventTime) || !r.side_a_label || !r.side_b_label)
+			continue;
 		const list = byGame.get(r.event_slug) ?? [];
 		list.push({
 			conditionId: r.condition_id,
@@ -154,7 +158,9 @@ async function loadBoard(db: Db, week: number) {
 		`SELECT ${PICK_COLS} FROM nfl_board_picks WHERE season = ? ORDER BY event_time ASC`,
 		NFL_SEASON,
 	);
-	const pickBySlug = new Map(picks.filter((p) => p.week === week).map((p) => [p.event_slug, toPick(p)]));
+	const pickBySlug = new Map(
+		picks.filter((p) => p.week === week).map((p) => [p.event_slug, toPick(p)]),
+	);
 	const games: BoardGame[] = [];
 	for (const [eventSlug, markets] of slate) {
 		const main = pickMainLine(markets);
@@ -168,9 +174,20 @@ async function loadBoard(db: Db, week: number) {
 			locked: main.eventTime <= now,
 			conditionId: main.conditionId,
 			marketTitle: main.marketTitle,
-			sideA: { label: main.sideALabel, line: lineForSide(parsed, main.sideALabel), price: main.sideAPrice },
-			sideB: { label: main.sideBLabel, line: lineForSide(parsed, main.sideBLabel), price: main.sideBPrice },
-			signalSide: main.sharpSide === "A" || main.sharpSide === "B" ? main.sharpSide : null,
+			sideA: {
+				label: main.sideALabel,
+				line: lineForSide(parsed, main.sideALabel),
+				price: main.sideAPrice,
+			},
+			sideB: {
+				label: main.sideBLabel,
+				line: lineForSide(parsed, main.sideBLabel),
+				price: main.sideBPrice,
+			},
+			signalSide:
+				main.sharpSide === "A" || main.sharpSide === "B"
+					? main.sharpSide
+					: null,
 			altLines: markets.length - 1,
 			pick: pickBySlug.get(eventSlug) ?? null,
 		});
@@ -185,15 +202,25 @@ async function loadBoard(db: Db, week: number) {
 				locked: true,
 				conditionId: p.conditionId,
 				marketTitle: "",
-				sideA: { label: p.side === "A" ? p.sideLabel : "—", line: p.side === "A" ? p.line : -p.line, price: null },
-				sideB: { label: p.side === "B" ? p.sideLabel : "—", line: p.side === "B" ? p.line : -p.line, price: null },
+				sideA: {
+					label: p.side === "A" ? p.sideLabel : "—",
+					line: p.side === "A" ? p.line : -p.line,
+					price: null,
+				},
+				sideB: {
+					label: p.side === "B" ? p.sideLabel : "—",
+					line: p.side === "B" ? p.line : -p.line,
+					price: null,
+				},
 				signalSide: p.signalSide,
 				altLines: 0,
 				pick: p,
 			});
 		}
 	}
-	games.sort((a, b) => a.eventTime - b.eventTime || a.matchup.localeCompare(b.matchup));
+	games.sort(
+		(a, b) => a.eventTime - b.eventTime || a.matchup.localeCompare(b.matchup),
+	);
 	const statRows: BoardPickRow[] = picks.map((p) => ({
 		week: p.week,
 		side: p.side,
@@ -210,7 +237,15 @@ async function loadBoard(db: Db, week: number) {
 		.sort((a, b) => (b.settled_at ?? 0) - (a.settled_at ?? 0))
 		.slice(0, 40)
 		.map(toPick);
-	return { season: NFL_SEASON, week, currentWeek: nflWeekOf(now), now, games, stats, recent };
+	return {
+		season: NFL_SEASON,
+		week,
+		currentWeek: nflWeekOf(now),
+		now,
+		games,
+		stats,
+		recent,
+	};
 }
 
 export const getNflBoardFn = createServerFn({ method: "POST" })
@@ -218,7 +253,10 @@ export const getNflBoardFn = createServerFn({ method: "POST" })
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
 		const week =
-			typeof data?.week === "number" && Number.isInteger(data.week) && data.week >= 1 && data.week <= 22
+			typeof data?.week === "number" &&
+			Number.isInteger(data.week) &&
+			data.week >= 1 &&
+			data.week <= 22
 				? data.week
 				: nflWeekOf(nowUnixSeconds());
 		return loadBoard(db, week);
@@ -229,7 +267,10 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
 		const now = nowUnixSeconds();
-		if (typeof data?.conditionId !== "string" || (data.side !== "A" && data.side !== "B")) {
+		if (
+			typeof data?.conditionId !== "string" ||
+			(data.side !== "A" && data.side !== "B")
+		) {
 			return { error: "invalid_payload" as const };
 		}
 		const m = await first<{
@@ -251,7 +292,8 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 		);
 		if (!m || !m.event_time) return { error: "market_not_found" as const };
 		const eventTime = Math.floor(Date.parse(m.event_time) / 1000);
-		if (!Number.isFinite(eventTime)) return { error: "market_not_found" as const };
+		if (!Number.isFinite(eventTime))
+			return { error: "market_not_found" as const };
 		if (eventTime <= now) return { error: "locked" as const };
 		const parsed = parseSpreadTitle(m.market_title);
 		if (!parsed) return { error: "not_a_spread" as const };
@@ -289,7 +331,11 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 			eventTime,
 			now,
 			m.sharp_side === "A" || m.sharp_side === "B" ? m.sharp_side : null,
-			m.sharp_side === "A" ? m.side_a_price : m.sharp_side === "B" ? m.side_b_price : null,
+			m.sharp_side === "A"
+				? m.side_a_price
+				: m.sharp_side === "B"
+					? m.side_b_price
+					: null,
 		);
 		return { ok: true as const, week };
 	});
@@ -298,7 +344,8 @@ export const clearNflBoardPickFn = createServerFn({ method: "POST" })
 	.inputValidator((d: { eventSlug: string }) => d)
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
-		if (typeof data?.eventSlug !== "string") return { error: "invalid_payload" as const };
+		if (typeof data?.eventSlug !== "string")
+			return { error: "invalid_payload" as const };
 		await run(
 			db,
 			`DELETE FROM nfl_board_picks WHERE event_slug = ? AND status = 'pending' AND event_time > ?`,
@@ -318,7 +365,12 @@ export async function settleNflBoardPicks(
 ): Promise<{ checked: number; updated: number }> {
 	const limit = Math.min(Math.max(options?.limit ?? 8, 1), 25);
 	const now = nowUnixSeconds();
-	const rows = await all<{ id: string; condition_id: string; side: string; price: number }>(
+	const rows = await all<{
+		id: string;
+		condition_id: string;
+		side: string;
+		price: number;
+	}>(
 		db,
 		`SELECT id, condition_id, side, price FROM nfl_board_picks
 		 WHERE status = 'pending' AND event_time <= ?
@@ -331,7 +383,13 @@ export async function settleNflBoardPicks(
 	let updated = 0;
 	for (const row of rows) {
 		const market = await fetchGammaMarket(row.condition_id);
-		const resolution = market ? resolvePickResult({ sharpSide: row.side, entryPrice: row.price, market }) : null;
+		const resolution = market
+			? resolvePickResult({
+					sharpSide: row.side,
+					entryPrice: row.price,
+					market,
+				})
+			: null;
 		if (!resolution || resolution.status === "pending") {
 			await run(
 				db,
