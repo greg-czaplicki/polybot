@@ -268,7 +268,8 @@ async function loadTrends(
 		 JOIN teams ht ON ht.id = g.home_team_id
 		 JOIN teams at2 ON at2.id = g.away_team_id
 		 WHERE g.sport_tag = 'nfl' AND g.season = ? AND g.week = ?`,
-		NFL_SEASON,
+		// games.season / games.week are TEXT; D1 binds numbers as REAL ('2026.0' never matches).
+		String(NFL_SEASON),
 		String(week),
 	);
 	const out = new Map<
