@@ -13,10 +13,12 @@ import {
 	type BoardStats,
 	boardStats,
 	lineForSide,
+	type MarketKind,
 	NFL_SEASON,
 	nflWeekBounds,
 	nflWeekOf,
 	parseSpreadTitle,
+	parseTotalTitle,
 	pickMainLine,
 	type SpreadMarket,
 } from "../../lib/nfl-board";
@@ -25,11 +27,8 @@ import { all, first, run } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
 import { fetchGammaMarket, resolvePickResult } from "./manual-picks";
 
-export interface BoardGame {
-	eventSlug: string;
-	matchup: string;
-	eventTime: number;
-	locked: boolean;
+export interface BoardLine {
+	kind: MarketKind;
 	conditionId: string;
 	marketTitle: string;
 	sideA: { label: string; line: number; price: number | null };
@@ -40,9 +39,46 @@ export interface BoardGame {
 	pick: BoardPick | null;
 }
 
+export interface TrendLine {
+	games: number;
+	su: string;
+	ats: string;
+	ou: string;
+	atsStreak: string | null;
+	ouStreak: string | null;
+	/** Average margin vs the spread, points; positive = covering. */
+	coverMargin: number | null;
+	/** Average total vs the line, points; positive = going over. */
+	totalMargin: number | null;
+}
+
+export interface TeamTrend {
+	abbr: string;
+	name: string;
+	venue: "home" | "away";
+	overall: TrendLine | null;
+	/** Same team in this venue role (home or away) this season. */
+	atVenue: TrendLine | null;
+}
+
+export interface BoardGame {
+	eventSlug: string;
+	matchup: string;
+	eventTime: number;
+	locked: boolean;
+	spread: BoardLine | null;
+	total: BoardLine | null;
+	/** Canonical game match by slug (away-home); null when the games table has no row yet. */
+	away: TeamTrend | null;
+	home: TeamTrend | null;
+	/** Which spread side is the home team ("A" | "B"), when resolvable. */
+	homeSide: "A" | "B" | null;
+}
+
 export interface BoardPick {
 	id: string;
 	week: number;
+	kind: MarketKind;
 	eventSlug: string;
 	conditionId: string;
 	matchup: string;
@@ -61,6 +97,7 @@ export interface BoardPick {
 interface PickRow {
 	id: string;
 	week: number;
+	kind: string;
 	event_slug: string;
 	condition_id: string;
 	matchup: string;
@@ -80,6 +117,7 @@ function toPick(r: PickRow): BoardPick {
 	return {
 		id: r.id,
 		week: r.week,
+		kind: r.kind === "total" ? "total" : "spread",
 		eventSlug: r.event_slug,
 		conditionId: r.condition_id,
 		matchup: r.matchup,
@@ -96,7 +134,7 @@ function toPick(r: PickRow): BoardPick {
 	};
 }
 
-const PICK_COLS = `id, week, event_slug, condition_id, matchup, side, side_label, line, price,
+const PICK_COLS = `id, week, kind, event_slug, condition_id, matchup, side, side_label, line, price,
 	event_time, picked_at, signal_side, status, roi, settled_at`;
 
 async function listSlate(
@@ -121,7 +159,7 @@ async function listSlate(
 		        side_a_price, side_b_price, sharp_side, market_volume
 		 FROM sharp_money_cache
 		 WHERE event_slug LIKE 'nfl-%'
-		   AND market_title LIKE '%: Spread: %'
+		   AND (market_title LIKE '%: Spread: %' OR market_title LIKE '%: O/U %')
 		   AND event_time IS NOT NULL
 		   AND unixepoch(event_time) >= ? AND unixepoch(event_time) < ?`,
 		start,
@@ -150,80 +188,321 @@ async function listSlate(
 	return byGame;
 }
 
+interface SnapRow {
+	team_id: string;
+	snapshot_type: string;
+	as_of_time: number;
+	su_wins: number;
+	su_losses: number;
+	su_pushes: number;
+	ats_wins: number;
+	ats_losses: number;
+	ats_pushes: number;
+	ou_overs: number;
+	ou_unders: number;
+	ou_pushes: number;
+	ats_streak_type: string | null;
+	ats_streak_length: number | null;
+	ou_streak_type: string | null;
+	ou_streak_length: number | null;
+	avg_cover_margin: number | null;
+	avg_total_margin: number | null;
+}
+
+function toTrendLine(r: SnapRow | undefined): TrendLine | null {
+	if (!r) return null;
+	const games = r.su_wins + r.su_losses + r.su_pushes;
+	if (games === 0) return null;
+	const rec = (w: number, l: number, p: number) =>
+		p > 0 ? `${w}-${l}-${p}` : `${w}-${l}`;
+	const streak = (t: string | null, n: number | null) =>
+		t && n ? `${t}${n}` : null;
+	return {
+		games,
+		su: rec(r.su_wins, r.su_losses, r.su_pushes),
+		ats: rec(r.ats_wins, r.ats_losses, r.ats_pushes),
+		ou: rec(r.ou_overs, r.ou_unders, r.ou_pushes),
+		atsStreak: streak(r.ats_streak_type, r.ats_streak_length),
+		ouStreak: streak(r.ou_streak_type, r.ou_streak_length),
+		coverMargin: r.avg_cover_margin,
+		totalMargin: r.avg_total_margin,
+	};
+}
+
+/**
+ * Canonical games for the week (season/week from the ESPN-fed games table)
+ * keyed by "away-home" abbreviations, with the latest pre-kickoff trend
+ * snapshot per team for overall + venue role. One query each; the slate is
+ * at most ~16 games.
+ */
+async function loadTrends(
+	db: Db,
+	week: number,
+): Promise<
+	Map<
+		string,
+		{
+			away: TeamTrend;
+			home: TeamTrend;
+			teams: { away: TeamRow; home: TeamRow };
+		}
+	>
+> {
+	const games = await all<{
+		id: string;
+		game_time: number;
+		home_id: string;
+		home_name: string;
+		home_abbr: string;
+		home_short: string | null;
+		away_id: string;
+		away_name: string;
+		away_abbr: string;
+		away_short: string | null;
+	}>(
+		db,
+		`SELECT g.id, g.game_time,
+		        ht.id AS home_id, ht.name AS home_name, ht.abbreviation AS home_abbr, ht.short_name AS home_short,
+		        at2.id AS away_id, at2.name AS away_name, at2.abbreviation AS away_abbr, at2.short_name AS away_short
+		 FROM games g
+		 JOIN teams ht ON ht.id = g.home_team_id
+		 JOIN teams at2 ON at2.id = g.away_team_id
+		 WHERE g.sport_tag = 'nfl' AND g.season = ? AND g.week = ?`,
+		NFL_SEASON,
+		String(week),
+	);
+	const out = new Map<
+		string,
+		{
+			away: TeamTrend;
+			home: TeamTrend;
+			teams: { away: TeamRow; home: TeamRow };
+		}
+	>();
+	if (games.length === 0) return out;
+	const teamIds = [...new Set(games.flatMap((g) => [g.home_id, g.away_id]))];
+	const snaps = await all<SnapRow>(
+		db,
+		`SELECT team_id, snapshot_type, as_of_time, su_wins, su_losses, su_pushes, ats_wins, ats_losses, ats_pushes,
+		        ou_overs, ou_unders, ou_pushes, ats_streak_type, ats_streak_length, ou_streak_type, ou_streak_length,
+		        avg_cover_margin, avg_total_margin
+		 FROM team_trend_snapshots
+		 WHERE sport_tag = 'nfl' AND snapshot_type IN ('overall','home','away')
+		   AND team_id IN (${teamIds.map(() => "?").join(",")})
+		 ORDER BY as_of_time DESC`,
+		...teamIds,
+	);
+	const latest = new Map<string, SnapRow>();
+	for (const g of games) {
+		for (const r of snaps) {
+			if (r.as_of_time >= g.game_time) continue; // pre-kickoff only
+			const key = `${r.team_id}|${r.snapshot_type}|${g.id}`;
+			if (!latest.has(key)) latest.set(key, r);
+		}
+	}
+	for (const g of games) {
+		const trend = (
+			teamId: string,
+			venue: "home" | "away",
+			abbr: string,
+			name: string,
+		): TeamTrend => ({
+			abbr,
+			name,
+			venue,
+			overall: toTrendLine(latest.get(`${teamId}|overall|${g.id}`)),
+			atVenue: toTrendLine(latest.get(`${teamId}|${venue}|${g.id}`)),
+		});
+		out.set(`${g.away_abbr.toLowerCase()}-${g.home_abbr.toLowerCase()}`, {
+			away: trend(g.away_id, "away", g.away_abbr, g.away_name),
+			home: trend(g.home_id, "home", g.home_abbr, g.home_name),
+			teams: {
+				away: { abbr: g.away_abbr, name: g.away_name, short: g.away_short },
+				home: { abbr: g.home_abbr, name: g.home_name, short: g.home_short },
+			},
+		});
+	}
+	return out;
+}
+
+interface TeamRow {
+	abbr: string;
+	name: string;
+	short: string | null;
+}
+
+function labelMatchesTeam(label: string, t: TeamRow): boolean {
+	const l = label.trim().toLowerCase();
+	if (!l) return false;
+	return (
+		l === t.abbr.toLowerCase() ||
+		l === t.name.toLowerCase() ||
+		(t.short ?? "").toLowerCase() === l ||
+		t.name.toLowerCase().endsWith(` ${l}`) ||
+		t.name.toLowerCase().includes(l)
+	);
+}
+
+/** "nfl-gb-nyj-2026-09-20" → "gb-nyj" (Polymarket lists away first). */
+function slugKey(eventSlug: string): string | null {
+	const m = eventSlug.match(/^nfl-([a-z0-9]+)-([a-z0-9]+)-\d{4}-\d{2}-\d{2}$/i);
+	return m ? `${m[1].toLowerCase()}-${m[2].toLowerCase()}` : null;
+}
+
 async function loadBoard(db: Db, week: number) {
 	const now = nowUnixSeconds();
-	const slate = await listSlate(db, week);
+	const [slate, trends] = await Promise.all([
+		listSlate(db, week),
+		loadTrends(db, week),
+	]);
 	const picks = await all<PickRow>(
 		db,
 		`SELECT ${PICK_COLS} FROM nfl_board_picks WHERE season = ? ORDER BY event_time ASC`,
 		NFL_SEASON,
 	);
-	const pickBySlug = new Map(
-		picks.filter((p) => p.week === week).map((p) => [p.event_slug, toPick(p)]),
+	const pickByKey = new Map(
+		picks
+			.filter((p) => p.week === week)
+			.map((p) => [`${p.event_slug}|${p.kind}`, toPick(p)]),
 	);
-	const games: BoardGame[] = [];
-	for (const [eventSlug, markets] of slate) {
+	const kindOf = (title: string): MarketKind | null =>
+		parseSpreadTitle(title)
+			? "spread"
+			: parseTotalTitle(title)
+				? "total"
+				: null;
+	const buildLine = (
+		eventSlug: string,
+		kind: MarketKind,
+		markets: SpreadMarket[],
+	): BoardLine | null => {
 		const main = pickMainLine(markets);
-		if (!main) continue;
-		const parsed = parseSpreadTitle(main.marketTitle);
-		if (!parsed) continue;
-		games.push({
-			eventSlug,
-			matchup: parsed.matchup,
-			eventTime: main.eventTime,
-			locked: main.eventTime <= now,
-			conditionId: main.conditionId,
-			marketTitle: main.marketTitle,
-			sideA: {
+		if (!main) return null;
+		let sideA: BoardLine["sideA"];
+		let sideB: BoardLine["sideB"];
+		if (kind === "spread") {
+			const parsed = parseSpreadTitle(main.marketTitle);
+			if (!parsed) return null;
+			sideA = {
 				label: main.sideALabel,
 				line: lineForSide(parsed, main.sideALabel),
 				price: main.sideAPrice,
-			},
-			sideB: {
+			};
+			sideB = {
 				label: main.sideBLabel,
 				line: lineForSide(parsed, main.sideBLabel),
 				price: main.sideBPrice,
-			},
+			};
+		} else {
+			const parsed = parseTotalTitle(main.marketTitle);
+			if (!parsed) return null;
+			sideA = {
+				label: main.sideALabel,
+				line: parsed.line,
+				price: main.sideAPrice,
+			};
+			sideB = {
+				label: main.sideBLabel,
+				line: parsed.line,
+				price: main.sideBPrice,
+			};
+		}
+		return {
+			kind,
+			conditionId: main.conditionId,
+			marketTitle: main.marketTitle,
+			sideA,
+			sideB,
 			signalSide:
 				main.sharpSide === "A" || main.sharpSide === "B"
 					? main.sharpSide
 					: null,
 			altLines: markets.length - 1,
-			pick: pickBySlug.get(eventSlug) ?? null,
+			pick: pickByKey.get(`${eventSlug}|${kind}`) ?? null,
+		};
+	};
+	const games: BoardGame[] = [];
+	for (const [eventSlug, markets] of slate) {
+		const spreads = markets.filter((m) => kindOf(m.marketTitle) === "spread");
+		const totals = markets.filter((m) => kindOf(m.marketTitle) === "total");
+		const spread = buildLine(eventSlug, "spread", spreads);
+		const total = buildLine(eventSlug, "total", totals);
+		if (!spread && !total) continue;
+		const ref = spread ?? total;
+		const matchup =
+			parseSpreadTitle(spread?.marketTitle ?? "")?.matchup ??
+			parseTotalTitle(total?.marketTitle ?? "")?.matchup ??
+			eventSlug;
+		const eventTime = markets[0].eventTime;
+		const key = slugKey(eventSlug);
+		const t = key ? (trends.get(key) ?? null) : null;
+		let homeSide: "A" | "B" | null = null;
+		if (t && spread) {
+			if (labelMatchesTeam(spread.sideA.label, t.teams.home)) homeSide = "A";
+			else if (labelMatchesTeam(spread.sideB.label, t.teams.home))
+				homeSide = "B";
+			else if (labelMatchesTeam(spread.sideA.label, t.teams.away))
+				homeSide = "B";
+			else if (labelMatchesTeam(spread.sideB.label, t.teams.away))
+				homeSide = "A";
+		}
+		games.push({
+			eventSlug,
+			matchup,
+			eventTime,
+			locked: eventTime <= now,
+			spread,
+			total,
+			away: t?.away ?? null,
+			home: t?.home ?? null,
+			homeSide,
 		});
+		void ref;
 	}
 	// Picks whose market has left the cache (past games) still belong to the week's list.
-	for (const p of pickBySlug.values()) {
-		if (!games.some((g) => g.eventSlug === p.eventSlug)) {
-			games.push({
-				eventSlug: p.eventSlug,
-				matchup: p.matchup,
-				eventTime: p.eventTime,
-				locked: true,
-				conditionId: p.conditionId,
-				marketTitle: "",
-				sideA: {
-					label: p.side === "A" ? p.sideLabel : "—",
-					line: p.side === "A" ? p.line : -p.line,
-					price: null,
-				},
-				sideB: {
-					label: p.side === "B" ? p.sideLabel : "—",
-					line: p.side === "B" ? p.line : -p.line,
-					price: null,
-				},
-				signalSide: p.signalSide,
-				altLines: 0,
-				pick: p,
-			});
-		}
+	for (const p of pickByKey.values()) {
+		const found = games.find((g) => g.eventSlug === p.eventSlug);
+		const game: BoardGame = found ?? {
+			eventSlug: p.eventSlug,
+			matchup: p.matchup,
+			eventTime: p.eventTime,
+			locked: true,
+			spread: null,
+			total: null,
+			away: null,
+			home: null,
+			homeSide: null,
+		};
+		if (!found) games.push(game);
+		if (game[p.kind]) continue;
+		const isA = p.side === "A";
+		game[p.kind] = {
+			kind: p.kind,
+			conditionId: p.conditionId,
+			marketTitle: "",
+			sideA: {
+				label: isA ? p.sideLabel : "—",
+				line: p.kind === "total" ? p.line : isA ? p.line : -p.line,
+				price: null,
+			},
+			sideB: {
+				label: isA ? "—" : p.sideLabel,
+				line: p.kind === "total" ? p.line : isA ? -p.line : p.line,
+				price: null,
+			},
+			signalSide: p.signalSide,
+			altLines: 0,
+			pick: p,
+		};
 	}
 	games.sort(
 		(a, b) => a.eventTime - b.eventTime || a.matchup.localeCompare(b.matchup),
 	);
 	const statRows: BoardPickRow[] = picks.map((p) => ({
 		week: p.week,
+		kind: p.kind === "total" ? "total" : "spread",
 		side: p.side,
+		sideLabel: p.side_label,
 		line: p.line,
 		price: p.price,
 		status: p.status,
@@ -295,8 +574,10 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 		if (!Number.isFinite(eventTime))
 			return { error: "market_not_found" as const };
 		if (eventTime <= now) return { error: "locked" as const };
-		const parsed = parseSpreadTitle(m.market_title);
-		if (!parsed) return { error: "not_a_spread" as const };
+		const spreadTitle = parseSpreadTitle(m.market_title);
+		const totalTitle = spreadTitle ? null : parseTotalTitle(m.market_title);
+		if (!spreadTitle && !totalTitle) return { error: "not_a_spread" as const };
+		const kind: MarketKind = spreadTitle ? "spread" : "total";
 		const label = data.side === "A" ? m.side_a_label : m.side_b_label;
 		const price = data.side === "A" ? m.side_a_price : m.side_b_price;
 		if (!label || typeof price !== "number" || !(price > 0 && price < 1)) {
@@ -306,10 +587,10 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 		const id = `nflb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 		await run(
 			db,
-			`INSERT INTO nfl_board_picks (id, season, week, event_slug, condition_id, market_title, matchup,
+			`INSERT INTO nfl_board_picks (id, season, week, event_slug, kind, condition_id, market_title, matchup,
 			   side, side_label, line, price, event_time, picked_at, signal_side, signal_price, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-			 ON CONFLICT(event_slug) DO UPDATE SET
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+			 ON CONFLICT(event_slug, kind) DO UPDATE SET
 			   condition_id = excluded.condition_id, market_title = excluded.market_title,
 			   side = excluded.side, side_label = excluded.side_label, line = excluded.line,
 			   price = excluded.price, picked_at = excluded.picked_at,
@@ -321,12 +602,13 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 			NFL_SEASON,
 			week,
 			m.event_slug,
+			kind,
 			m.condition_id,
 			m.market_title,
-			parsed.matchup,
+			spreadTitle ? spreadTitle.matchup : (totalTitle?.matchup ?? m.event_slug),
 			data.side,
 			label,
-			lineForSide(parsed, label),
+			spreadTitle ? lineForSide(spreadTitle, label) : (totalTitle?.line ?? 0),
 			price,
 			eventTime,
 			now,
@@ -341,15 +623,17 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 	});
 
 export const clearNflBoardPickFn = createServerFn({ method: "POST" })
-	.inputValidator((d: { eventSlug: string }) => d)
+	.inputValidator((d: { eventSlug: string; kind: MarketKind }) => d)
 	.handler(async ({ context, data }) => {
 		const db = getDb(context);
 		if (typeof data?.eventSlug !== "string")
 			return { error: "invalid_payload" as const };
+		const kind: MarketKind = data.kind === "total" ? "total" : "spread";
 		await run(
 			db,
-			`DELETE FROM nfl_board_picks WHERE event_slug = ? AND status = 'pending' AND event_time > ?`,
+			`DELETE FROM nfl_board_picks WHERE event_slug = ? AND kind = ? AND status = 'pending' AND event_time > ?`,
 			data.eventSlug,
+			kind,
 			nowUnixSeconds(),
 		);
 		return { ok: true as const };

@@ -23,6 +23,27 @@ export function nflWeekBounds(week: number): { start: number; end: number } {
 	return { start, end: start + WEEK_SECONDS };
 }
 
+export type MarketKind = "spread" | "total";
+
+export interface TotalTitle {
+	/** "Panthers vs. Falcons" */
+	matchup: string;
+	line: number;
+}
+
+/** "Panthers vs. Falcons: O/U 43.5" → matchup + line. Team totals and period totals are not game totals and return null. */
+export function parseTotalTitle(title: string): TotalTitle | null {
+	const m = title.match(/^(.*?):\s*O\/U\s*(\d+(?:\.\d+)?)\s*$/i);
+	if (!m) return null;
+	const matchup = m[1].trim();
+	// "Seahawks Team Total: O/U 25.5" / "1H ..." are props, not the game total.
+	if (/team total|1h|2h|1st|2nd|3rd|4th|quarter|half/i.test(matchup))
+		return null;
+	const line = Number.parseFloat(m[2]);
+	if (!Number.isFinite(line)) return null;
+	return { matchup, line };
+}
+
 export interface SpreadTitle {
 	/** "GB vs NYJ" */
 	matchup: string;
@@ -88,7 +109,9 @@ export function pickMainLine(markets: SpreadMarket[]): SpreadMarket | null {
 
 export interface BoardPickRow {
 	week: number;
+	kind: MarketKind;
 	side: string;
+	sideLabel: string;
 	line: number;
 	price: number;
 	status: string;
@@ -110,8 +133,14 @@ export interface BoardSplit {
 export interface BoardStats {
 	season: BoardSplit;
 	byWeek: Array<{ week: number } & BoardSplit>;
+	spreads: BoardSplit;
+	totals: BoardSplit;
+	/** Spread picks only. */
 	favorites: BoardSplit;
 	dogs: BoardSplit;
+	/** Total picks only. */
+	overs: BoardSplit;
+	unders: BoardSplit;
 	/** Picks where the holder signal had sighted the same side / the other side. */
 	withSignal: BoardSplit;
 	againstSignal: BoardSplit;
@@ -139,8 +168,12 @@ function add(split: BoardSplit, status: string, roi: number | null): void {
 
 export function boardStats(rows: BoardPickRow[]): BoardStats {
 	const season = emptySplit();
+	const spreads = emptySplit();
+	const totals = emptySplit();
 	const favorites = emptySplit();
 	const dogs = emptySplit();
+	const overs = emptySplit();
+	const unders = emptySplit();
 	const withSignal = emptySplit();
 	const againstSignal = emptySplit();
 	const signalItself = emptySplit();
@@ -157,7 +190,13 @@ export function boardStats(rows: BoardPickRow[]): BoardStats {
 		const wk = weeks.get(r.week) ?? emptySplit();
 		add(wk, r.status, r.roi);
 		weeks.set(r.week, wk);
-		add(r.line < 0 ? favorites : dogs, r.status, r.roi);
+		if (r.kind === "total") {
+			add(totals, r.status, r.roi);
+			add(/^over/i.test(r.sideLabel) ? overs : unders, r.status, r.roi);
+		} else {
+			add(spreads, r.status, r.roi);
+			add(r.line < 0 ? favorites : dogs, r.status, r.roi);
+		}
 		if (r.signalSide === "A" || r.signalSide === "B") {
 			const agree = r.signalSide === r.side;
 			add(agree ? withSignal : againstSignal, r.status, r.roi);
@@ -195,8 +234,12 @@ export function boardStats(rows: BoardPickRow[]): BoardStats {
 		byWeek: [...weeks.entries()]
 			.sort((a, b) => a[0] - b[0])
 			.map(([week, s]) => ({ week, ...s })),
+		spreads,
+		totals,
 		favorites,
 		dogs,
+		overs,
+		unders,
 		withSignal,
 		againstSignal,
 		signalItself,

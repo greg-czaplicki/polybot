@@ -6,6 +6,7 @@ import {
 	nflWeekBounds,
 	nflWeekOf,
 	parseSpreadTitle,
+	parseTotalTitle,
 	pickMainLine,
 	type SpreadMarket,
 } from "./nfl-board";
@@ -28,6 +29,15 @@ describe("parseSpreadTitle / lineForSide", () => {
 			line: -3.5,
 		});
 		expect(parseSpreadTitle("GB vs NYJ: O/U 44.5")).toBeNull();
+	});
+	it("parses game totals and rejects team / period totals", () => {
+		expect(parseTotalTitle("Panthers vs. Falcons: O/U 43.5")).toEqual({
+			matchup: "Panthers vs. Falcons",
+			line: 43.5,
+		});
+		expect(parseTotalTitle("Seahawks Team Total: O/U 25.5")).toBeNull();
+		expect(parseTotalTitle("1H Packers vs. Jets: O/U 21.5")).toBeNull();
+		expect(parseTotalTitle("GB vs NYJ: Spread: Packers (-3.5)")).toBeNull();
 	});
 	it("gives the other team the opposite sign", () => {
 		const p = parseSpreadTitle("NO vs BAL: Spread: BAL (-8.5)")!;
@@ -68,7 +78,9 @@ describe("pickMainLine", () => {
 describe("boardStats", () => {
 	const row = (p: Partial<BoardPickRow>): BoardPickRow => ({
 		week: 1,
+		kind: "spread",
 		side: "A",
+		sideLabel: "Packers",
 		line: -3.5,
 		price: 0.5,
 		status: "pending",
@@ -91,20 +103,42 @@ describe("boardStats", () => {
 			row({ status: "win", roi: 1.2, eventTime: 4, week: 2 }),
 			row({ status: "win", roi: 0.8, eventTime: 5, week: 2 }),
 			row({ eventTime: 6, week: 2 }),
+			row({
+				status: "win",
+				roi: 1,
+				eventTime: 7,
+				week: 2,
+				kind: "total",
+				sideLabel: "Under",
+				line: 44.5,
+			}),
+			row({
+				status: "loss",
+				roi: -1,
+				eventTime: 8,
+				week: 2,
+				kind: "total",
+				sideLabel: "Over",
+				line: 44.5,
+			}),
 		]);
-		expect(s.season).toMatchObject({ n: 5, wins: 3, losses: 1, pushes: 1 });
-		expect(s.season.roiPct).toBeCloseTo(50, 5);
+		expect(s.season).toMatchObject({ n: 7, wins: 4, losses: 2, pushes: 1 });
+		expect(s.season.roiPct).toBeCloseTo(33.3333, 3);
 		expect(s.byWeek.map((w) => [w.week, w.wins, w.losses])).toEqual([
 			[1, 1, 1],
-			[2, 2, 0],
+			[2, 3, 1],
 		]);
+		expect(s.spreads.n).toBe(5);
+		expect(s.totals).toMatchObject({ n: 2, wins: 1, losses: 1 });
+		expect(s.unders).toMatchObject({ wins: 1, losses: 0 });
+		expect(s.overs).toMatchObject({ wins: 0, losses: 1 });
 		expect(s.favorites.n).toBe(4);
 		expect(s.dogs.n).toBe(1);
 		expect(s.withSignal).toMatchObject({ wins: 1, losses: 0 });
 		expect(s.againstSignal).toMatchObject({ wins: 0, losses: 1 });
 		// signal: agreed on the win (win), disagreed on our loss (its win)
 		expect(s.signalItself).toMatchObject({ wins: 2, losses: 0 });
-		expect(s.streak).toBe(2);
+		expect(s.streak).toBe(-1);
 		expect(s.pending).toBe(1);
 	});
 });

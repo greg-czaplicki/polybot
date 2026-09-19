@@ -27,10 +27,12 @@ import {
 	Workspace,
 } from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
-import type { BoardSplit } from "@/lib/nfl-board";
+import type { BoardSplit, MarketKind } from "@/lib/nfl-board";
 import {
 	type BoardGame,
+	type BoardLine,
 	type BoardPick,
+	type TeamTrend,
 	clearNflBoardPickFn,
 	getNflBoardFn,
 	setNflBoardPickFn,
@@ -91,32 +93,37 @@ function statusClass(status: string | undefined): string {
 			: "text-ink-85";
 }
 
-/** One half of the ladder row. `mirror` puts the team name on the outside edge. */
+/** One half of a ladder row. `mirror` puts the name on the outside edge. */
 function SideHalf({
-	game,
+	line,
+	locked,
 	side,
 	mirror,
 	onPick,
 	busy,
+	trend,
 }: {
-	game: BoardGame;
+	line: BoardLine;
+	locked: boolean;
 	side: "A" | "B";
 	mirror: boolean;
-	onPick: (game: BoardGame, side: "A" | "B") => void;
+	onPick: (line: BoardLine, side: "A" | "B") => void;
 	busy: boolean;
+	/** One-line team trend under the name (null = no snapshot yet; undefined = none for this row). */
+	trend?: string | null;
 }) {
-	const s = side === "A" ? game.sideA : game.sideB;
-	const pick = game.pick;
+	const s = side === "A" ? line.sideA : line.sideB;
+	const pick = line.pick;
 	const picked = pick?.side === side;
 	const other = !!pick && !picked;
-	const signal = game.signalSide === side;
-	const disabled = game.locked || busy || s.price === null;
+	const signal = line.signalSide === side;
+	const disabled = locked || busy || s.price === null;
 	const settled = pick && pick.status !== "pending";
 	const color = picked
 		? settled
 			? statusClass(pick?.status)
 			: "text-ink-95"
-		: other || game.locked
+		: other || locked
 			? "text-ink-40"
 			: "text-ink-70";
 	const surface = picked
@@ -126,21 +133,31 @@ function SideHalf({
 		: disabled
 			? ""
 			: "hover:bg-ink-10";
+	const isTotal = line.kind === "total";
 	const name = (
-		<span
-			className={`truncate font-sans text-sm ${picked ? "font-semibold" : ""}`}
-		>
-			{signal ? (
-				<span className="mr-1.5 inline-block align-middle">
-					<Dot tone="warn" />
+		<span className="flex min-w-0 flex-col">
+			<span
+				className={`truncate font-sans text-sm ${picked ? "font-semibold" : ""}`}
+			>
+				{signal ? (
+					<span className="mr-1.5 inline-block align-middle">
+						<Dot tone="warn" />
+					</span>
+				) : null}
+				{s.label}
+			</span>
+			{trend !== undefined ? (
+				<span className="truncate font-mono text-xxs tabular-nums text-ink-40">
+					{trend ?? "no trend yet"}
 				</span>
 			) : null}
-			{s.label}
 		</span>
 	);
 	const num = (
 		<span className="shrink-0 font-mono text-xs tabular-nums">
-			<span className={picked ? "" : "text-ink-55"}>{signedLine(s.line)}</span>
+			<span className={picked ? "" : "text-ink-55"}>
+				{isTotal ? s.line : signedLine(s.line)}
+			</span>
 			<span className="ml-2 text-ink-40">{cents(s.price)}</span>
 		</span>
 	);
@@ -148,9 +165,9 @@ function SideHalf({
 		<button
 			type="button"
 			disabled={disabled}
-			onClick={() => onPick(game, side)}
+			onClick={() => onPick(line, side)}
 			aria-pressed={picked}
-			className={`flex h-10 min-w-0 flex-1 items-center gap-3 px-3 text-left transition-colors disabled:cursor-default ${mirror ? "flex-row-reverse text-right" : ""} ${color} ${surface}`}
+			className={`flex min-w-0 flex-1 items-center gap-3 px-3 text-left transition-colors disabled:cursor-default ${isTotal ? "h-9" : "h-12"} ${mirror ? "flex-row-reverse text-right" : ""} ${color} ${surface}`}
 		>
 			{name}
 			<span className="flex-1" />
@@ -159,8 +176,14 @@ function SideHalf({
 	);
 }
 
-function GutterStatus({ game }: { game: BoardGame }) {
-	const p = game.pick;
+function GutterStatus({
+	line,
+	locked,
+}: {
+	line: BoardLine | null;
+	locked: boolean;
+}) {
+	const p = line?.pick ?? null;
 	if (p && p.status !== "pending") {
 		return (
 			<span
@@ -171,7 +194,7 @@ function GutterStatus({ game }: { game: BoardGame }) {
 			</span>
 		);
 	}
-	if (game.locked)
+	if (locked)
 		return (
 			<span className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
 				live
@@ -183,7 +206,109 @@ function GutterStatus({ game }: { game: BoardGame }) {
 				picked
 			</span>
 		);
-	return <span className="font-mono text-xxs text-ink-25">vs</span>;
+	return (
+		<span className="font-mono text-xxs text-ink-25">
+			{line?.kind === "total" ? "o/u" : "vs"}
+		</span>
+	);
+}
+
+/** One line of a game (spread or total): two halves around the gutter, or a dim placeholder when the cache has no line yet. */
+function LadderRow({
+	game,
+	line,
+	kind,
+	onPick,
+	busy,
+}: {
+	game: BoardGame;
+	line: BoardLine | null;
+	kind: MarketKind;
+	onPick: (line: BoardLine, side: "A" | "B") => void;
+	busy: boolean;
+}) {
+	const isTotal = kind === "total";
+	if (!line) {
+		return (
+			<div className={`flex items-center ${isTotal ? "h-9" : "h-12"}`}>
+				<span className="px-3 font-mono text-xxs text-ink-25">
+					{isTotal ? "no total cached yet" : "no spread cached yet"}
+				</span>
+			</div>
+		);
+	}
+	const fmt = (n: number | null, digits = 1) =>
+		n === null ? "" : `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(digits)}`;
+	const spreadTrend = (t: TeamTrend | null): string | null => {
+		if (!t) return null;
+		const o = t.overall;
+		if (!o) return `${t.venue} · no games yet`;
+		const v = t.atVenue;
+		return [
+			t.venue,
+			`SU ${o.su}`,
+			`ATS ${o.ats}${o.atsStreak ? ` ${o.atsStreak}` : ""}`,
+			o.coverMargin !== null ? `cov ${fmt(o.coverMargin)}` : null,
+			v && v.games > 0 && v.games !== o.games
+				? `${t.venue} ATS ${v.ats}`
+				: null,
+		]
+			.filter(Boolean)
+			.join(" · ");
+	};
+	const totalTrend = (t: TeamTrend | null): string | null => {
+		if (!t) return null;
+		const o = t.overall;
+		if (!o) return `${t.abbr} · no games yet`;
+		return [
+			`${t.abbr} O/U ${o.ou}${o.ouStreak ? ` ${o.ouStreak}` : ""}`,
+			o.totalMargin !== null ? `tot ${fmt(o.totalMargin)}` : null,
+		]
+			.filter(Boolean)
+			.join(" · ");
+	};
+	const teamForSide = (side: "A" | "B"): TeamTrend | null =>
+		game.homeSide === null
+			? null
+			: side === game.homeSide
+				? game.home
+				: game.away;
+	const trendA = isTotal
+		? totalTrend(game.away)
+		: spreadTrend(teamForSide("A"));
+	const trendB = isTotal
+		? totalTrend(game.home)
+		: spreadTrend(teamForSide("B"));
+	return (
+		<div className="flex items-stretch">
+			<SideHalf
+				line={line}
+				locked={game.locked}
+				side="A"
+				mirror={false}
+				onPick={onPick}
+				busy={busy}
+				trend={trendA}
+			/>
+			<div className="flex w-12 shrink-0 flex-col items-center justify-center border-x border-ink-10 bg-ink-05 px-1 text-center sm:w-20">
+				<GutterStatus line={line} locked={game.locked} />
+				{line.altLines > 0 && !game.locked ? (
+					<span className="mt-0.5 font-mono text-xxs text-ink-25">
+						+{line.altLines} alt
+					</span>
+				) : null}
+			</div>
+			<SideHalf
+				line={line}
+				locked={game.locked}
+				side="B"
+				mirror
+				onPick={onPick}
+				busy={busy}
+				trend={trendB}
+			/>
+		</div>
+	);
 }
 
 function SplitRow({ label, s }: { label: string; s: BoardSplit }) {
@@ -227,14 +352,16 @@ function NflBoardPage() {
 	}, [load]);
 
 	const onPick = useCallback(
-		async (game: BoardGame, side: "A" | "B") => {
+		async (line: BoardLine, side: "A" | "B") => {
 			setBusy(true);
 			try {
 				const res =
-					game.pick?.side === side
-						? await clearNflBoardPickFn({ data: { eventSlug: game.eventSlug } })
+					line.pick?.side === side
+						? await clearNflBoardPickFn({
+								data: { eventSlug: line.pick.eventSlug, kind: line.kind },
+							})
 						: await setNflBoardPickFn({
-								data: { conditionId: game.conditionId, side },
+								data: { conditionId: line.conditionId, side },
 							});
 				setError("error" in res ? (res.error ?? "error") : null);
 				await load(week);
@@ -254,11 +381,14 @@ function NflBoardPage() {
 		return [...map.entries()].sort((a, b) => a[0] - b[0]);
 	}, [games]);
 	const open = games.filter((g) => !g.locked).length;
-	const picked = games.filter((g) => g.pick).length;
+	const lines = games
+		.flatMap((g) => [g.spread, g.total])
+		.filter((l): l is BoardLine => l !== null);
+	const picked = lines.filter((l) => l.pick).length;
 	const weekRecord = useMemo(() => {
 		const s = { n: 0, wins: 0, losses: 0, pushes: 0 };
-		for (const g of games) {
-			const st = g.pick?.status;
+		for (const l of lines) {
+			const st = l.pick?.status;
 			if (st === "win") s.wins += 1;
 			else if (st === "loss") s.losses += 1;
 			else if (st === "push") s.pushes += 1;
@@ -266,7 +396,7 @@ function NflBoardPage() {
 			s.n += 1;
 		}
 		return s;
-	}, [games]);
+	}, [lines]);
 
 	const strip: { key: string; label: string; value: string; tone: Tone }[] =
 		stats
@@ -392,9 +522,12 @@ function NflBoardPage() {
 					title={`Spread ladder · week ${data?.week ?? "…"}`}
 					meta={
 						<>
-							<span className="sm:hidden">tap a side · locks at kickoff</span>
+							<span className="sm:hidden">
+								spread on top, total under · tap a side
+							</span>
 							<span className="hidden sm:inline">
-								tap a side to pick · tap again to clear · locks at kickoff ·{" "}
+								spread on top, game total under · tap a side to pick, again to
+								clear · locks at kickoff ·{" "}
 								<span className="inline-block align-middle">
 									<Dot tone="warn" />
 								</span>{" "}
@@ -429,30 +562,24 @@ function NflBoardPage() {
 									{list.map((g) => (
 										<li
 											key={g.eventSlug}
-											className="flex items-stretch border-b border-ink-10 last:border-b-0"
+											className="border-b border-ink-10 last:border-b-0"
 										>
-											<SideHalf
+											<LadderRow
 												game={g}
-												side="A"
-												mirror={false}
+												line={g.spread}
+												kind="spread"
 												onPick={onPick}
 												busy={busy}
 											/>
-											<div className="flex w-12 shrink-0 flex-col items-center justify-center border-x border-ink-10 bg-ink-05 px-1 text-center sm:w-20">
-												<GutterStatus game={g} />
-												{g.altLines > 0 && !g.locked ? (
-													<span className="mt-0.5 font-mono text-xxs text-ink-25">
-														+{g.altLines} alt
-													</span>
-												) : null}
+											<div className="border-t border-dashed border-ink-10">
+												<LadderRow
+													game={g}
+													line={g.total}
+													kind="total"
+													onPick={onPick}
+													busy={busy}
+												/>
 											</div>
-											<SideHalf
-												game={g}
-												side="B"
-												mirror
-												onPick={onPick}
-												busy={busy}
-											/>
 										</li>
 									))}
 								</ul>
@@ -477,8 +604,12 @@ function NflBoardPage() {
 								</tr>
 							</thead>
 							<tbody>
+								<SplitRow label="spreads" s={stats.spreads} />
+								<SplitRow label="totals" s={stats.totals} />
 								<SplitRow label="favorites" s={stats.favorites} />
 								<SplitRow label="dogs" s={stats.dogs} />
+								<SplitRow label="overs" s={stats.overs} />
+								<SplitRow label="unders" s={stats.unders} />
 								<SplitRow label="with the signal" s={stats.withSignal} />
 								<SplitRow label="against the signal" s={stats.againstSignal} />
 								<SplitRow
