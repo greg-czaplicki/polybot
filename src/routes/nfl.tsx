@@ -230,10 +230,8 @@ function LadderRow({
 	const isTotal = kind === "total";
 	if (!line) {
 		return (
-			<div className={`flex items-center ${isTotal ? "h-9" : "h-12"}`}>
-				<span className="px-3 font-mono text-xxs text-ink-25">
-					{isTotal ? "no total cached yet" : "no spread cached yet"}
-				</span>
+			<div className="flex h-6 items-center px-3 font-mono text-xxs text-ink-25">
+				{isTotal ? "no total cached yet" : "no spread cached yet"}
 			</div>
 		);
 	}
