@@ -153,12 +153,23 @@ function SideHalf({
 			) : null}
 		</span>
 	);
+	// The line is the number the operator is actually picking: big, bright,
+	// tabular. The price is context and stays small and muted.
+	const lineTone = picked
+		? settled
+			? statusClass(pick?.status)
+			: "text-ink-95"
+		: other || locked
+			? "text-ink-40"
+			: "text-ink-85";
 	const num = (
-		<span className="shrink-0 font-mono text-xs tabular-nums">
-			<span className={picked ? "" : "text-ink-55"}>
+		<span
+			className={`flex shrink-0 items-baseline gap-2 font-mono tabular-nums ${mirror ? "flex-row-reverse" : ""}`}
+		>
+			<span className={`text-lg font-semibold leading-none ${lineTone}`}>
 				{isTotal ? s.line : signedLine(s.line)}
 			</span>
-			<span className="ml-2 text-ink-40">{cents(s.price)}</span>
+			<span className="text-xxs text-ink-40">{cents(s.price)}</span>
 		</span>
 	);
 	return (
