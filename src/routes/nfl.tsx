@@ -240,10 +240,9 @@ function LadderRow({
 	const spreadTrend = (t: TeamTrend | null): string | null => {
 		if (!t) return null;
 		const o = t.overall;
-		if (!o) return `${t.venue} · no games yet`;
+		if (!o) return "no games yet";
 		const v = t.atVenue;
 		return [
-			t.venue,
 			`SU ${o.su}`,
 			`ATS ${o.ats}${o.atsStreak ? ` ${o.atsStreak}` : ""}`,
 			o.coverMargin !== null ? `cov ${fmt(o.coverMargin)}` : null,
@@ -556,12 +555,28 @@ function NflBoardPage() {
 										{list[0].locked ? " · started" : ""}
 									</span>
 								</header>
-								<ul>
+								<ul className="space-y-2 bg-ink-00 py-2">
 									{list.map((g) => (
 										<li
 											key={g.eventSlug}
-											className="border-b border-ink-10 last:border-b-0"
+											className="border-y border-ink-15 bg-ink-05/60"
 										>
+											<div className="flex h-6 items-center justify-between border-b border-ink-10 px-3">
+												<span className="font-sans text-xs text-ink-70">
+													{g.away && g.home ? (
+														<>
+															<span className="text-ink-85">{g.away.name}</span>
+															<span className="mx-1.5 text-ink-40">at</span>
+															<span className="text-ink-85">{g.home.name}</span>
+														</>
+													) : (
+														g.matchup
+													)}
+												</span>
+												<span className="font-mono text-xxs tabular-nums text-ink-40">
+													{g.locked ? "started" : clock(g.eventTime)}
+												</span>
+											</div>
 											<LadderRow
 												game={g}
 												line={g.spread}
