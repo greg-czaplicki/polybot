@@ -12,20 +12,21 @@ import {
 	type BoardPickRow,
 	type BoardStats,
 	boardStats,
-	lineForSide,
 	type MarketKind,
 	NFL_SEASON,
-	nflWeekBounds,
 	nflWeekOf,
-	parseSpreadTitle,
-	parseTotalTitle,
-	pickMainLine,
-	type SpreadMarket,
 } from "../../lib/nfl-board";
 import type { Db } from "../db/client";
 import { all, first, run } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
 import { fetchGammaMarket, resolvePickResult } from "./manual-picks";
+import {
+	getSlateRowByCondition,
+	listSlateRows,
+	refreshNflBoardSlate,
+	SLATE_MAX_AGE_SECONDS,
+	slateUpdatedAt,
+} from "./nfl-board-slate";
 
 export interface BoardLine {
 	kind: MarketKind;
@@ -136,57 +137,6 @@ function toPick(r: PickRow): BoardPick {
 
 const PICK_COLS = `id, week, kind, event_slug, condition_id, matchup, side, side_label, line, price,
 	event_time, picked_at, signal_side, status, roi, settled_at`;
-
-async function listSlate(
-	db: Db,
-	week: number,
-): Promise<Map<string, SpreadMarket[]>> {
-	const { start, end } = nflWeekBounds(week);
-	const rows = await all<{
-		condition_id: string;
-		event_slug: string;
-		market_title: string;
-		event_time: string;
-		side_a_label: string | null;
-		side_b_label: string | null;
-		side_a_price: number | null;
-		side_b_price: number | null;
-		sharp_side: string | null;
-		market_volume: number | null;
-	}>(
-		db,
-		`SELECT condition_id, event_slug, market_title, event_time, side_a_label, side_b_label,
-		        side_a_price, side_b_price, sharp_side, market_volume
-		 FROM sharp_money_cache
-		 WHERE event_slug LIKE 'nfl-%'
-		   AND (market_title LIKE '%: Spread: %' OR market_title LIKE '%: O/U %')
-		   AND event_time IS NOT NULL
-		   AND unixepoch(event_time) >= ? AND unixepoch(event_time) < ?`,
-		start,
-		end,
-	);
-	const byGame = new Map<string, SpreadMarket[]>();
-	for (const r of rows) {
-		const eventTime = Math.floor(Date.parse(r.event_time) / 1000);
-		if (!Number.isFinite(eventTime) || !r.side_a_label || !r.side_b_label)
-			continue;
-		const list = byGame.get(r.event_slug) ?? [];
-		list.push({
-			conditionId: r.condition_id,
-			eventSlug: r.event_slug,
-			marketTitle: r.market_title,
-			eventTime,
-			sideALabel: r.side_a_label,
-			sideBLabel: r.side_b_label,
-			sideAPrice: r.side_a_price,
-			sideBPrice: r.side_b_price,
-			sharpSide: r.sharp_side,
-			volume: r.market_volume,
-		});
-		byGame.set(r.event_slug, list);
-	}
-	return byGame;
-}
 
 interface SnapRow {
 	team_id: string;
@@ -352,115 +302,142 @@ function slugKey(eventSlug: string): string | null {
 
 async function loadBoard(db: Db, week: number) {
 	const now = nowUnixSeconds();
-	const [slate, trends] = await Promise.all([
-		listSlate(db, week),
+	// Refresh the Gamma slate when this week's rows are missing or stale.
+	const stamp = await slateUpdatedAt(db, week);
+	if (stamp === null || now - stamp > SLATE_MAX_AGE_SECONDS) {
+		try {
+			await refreshNflBoardSlate(db);
+		} catch (error) {
+			console.warn("[nfl-board] slate refresh failed", error);
+		}
+	}
+	const [slate, trends, picks] = await Promise.all([
+		listSlateRows(db, week),
 		loadTrends(db, week),
+		all<PickRow>(
+			db,
+			`SELECT ${PICK_COLS} FROM nfl_board_picks WHERE season = ? ORDER BY event_time ASC`,
+			NFL_SEASON,
+		),
 	]);
-	const picks = await all<PickRow>(
-		db,
-		`SELECT ${PICK_COLS} FROM nfl_board_picks WHERE season = ? ORDER BY event_time ASC`,
-		NFL_SEASON,
-	);
+	// Holder-signal sighted side per market (benchmark only), from the pipeline cache.
+	const conditionIds = slate
+		.flatMap((r) => [r.spread_condition_id, r.total_condition_id])
+		.filter((c): c is string => !!c);
+	const signalByCondition = new Map<string, string>();
+	if (conditionIds.length > 0) {
+		const rows = await all<{ condition_id: string; sharp_side: string | null }>(
+			db,
+			`SELECT condition_id, sharp_side FROM sharp_money_cache WHERE condition_id IN (${conditionIds.map(() => "?").join(",")})`,
+			...conditionIds,
+		);
+		for (const r of rows)
+			if (r.sharp_side === "A" || r.sharp_side === "B")
+				signalByCondition.set(r.condition_id, r.sharp_side);
+	}
 	const pickByKey = new Map(
 		picks
 			.filter((p) => p.week === week)
 			.map((p) => [`${p.event_slug}|${p.kind}`, toPick(p)]),
 	);
-	const kindOf = (title: string): MarketKind | null =>
-		parseSpreadTitle(title)
-			? "spread"
-			: parseTotalTitle(title)
-				? "total"
-				: null;
-	const buildLine = (
-		eventSlug: string,
-		kind: MarketKind,
-		markets: SpreadMarket[],
-	): BoardLine | null => {
-		const main = pickMainLine(markets);
-		if (!main) return null;
-		let sideA: BoardLine["sideA"];
-		let sideB: BoardLine["sideB"];
-		if (kind === "spread") {
-			const parsed = parseSpreadTitle(main.marketTitle);
-			if (!parsed) return null;
-			sideA = {
-				label: main.sideALabel,
-				line: lineForSide(parsed, main.sideALabel),
-				price: main.sideAPrice,
-			};
-			sideB = {
-				label: main.sideBLabel,
-				line: lineForSide(parsed, main.sideBLabel),
-				price: main.sideBPrice,
-			};
-		} else {
-			const parsed = parseTotalTitle(main.marketTitle);
-			if (!parsed) return null;
-			sideA = {
-				label: main.sideALabel,
-				line: parsed.line,
-				price: main.sideAPrice,
-			};
-			sideB = {
-				label: main.sideBLabel,
-				line: parsed.line,
-				price: main.sideBPrice,
-			};
-		}
-		return {
-			kind,
-			conditionId: main.conditionId,
-			marketTitle: main.marketTitle,
-			sideA,
-			sideB,
-			signalSide:
-				main.sharpSide === "A" || main.sharpSide === "B"
-					? main.sharpSide
-					: null,
-			altLines: markets.length - 1,
-			pick: pickByKey.get(`${eventSlug}|${kind}`) ?? null,
-		};
-	};
 	const games: BoardGame[] = [];
-	for (const [eventSlug, markets] of slate) {
-		const spreads = markets.filter((m) => kindOf(m.marketTitle) === "spread");
-		const totals = markets.filter((m) => kindOf(m.marketTitle) === "total");
-		const spread = buildLine(eventSlug, "spread", spreads);
-		const total = buildLine(eventSlug, "total", totals);
-		if (!spread && !total) continue;
-		const ref = spread ?? total;
-		const matchup =
-			parseSpreadTitle(spread?.marketTitle ?? "")?.matchup ??
-			parseTotalTitle(total?.marketTitle ?? "")?.matchup ??
-			eventSlug;
-		const eventTime = markets[0].eventTime;
-		const key = slugKey(eventSlug);
+	for (const r of slate) {
+		const spread: BoardLine | null =
+			r.spread_condition_id &&
+			r.spread_a_label &&
+			r.spread_b_label &&
+			r.spread_line !== null
+				? {
+						kind: "spread",
+						conditionId: r.spread_condition_id,
+						marketTitle: r.spread_question ?? "",
+						// Gamma's `line` is the named (first-outcome) team's line.
+						sideA: {
+							label: r.spread_a_label,
+							line: r.spread_line,
+							price: r.spread_a_price,
+						},
+						sideB: {
+							label: r.spread_b_label,
+							line: -r.spread_line,
+							price: r.spread_b_price,
+						},
+						signalSide: signalByCondition.get(r.spread_condition_id) ?? null,
+						altLines: r.spread_alts,
+						pick: pickByKey.get(`${r.event_slug}|spread`) ?? null,
+					}
+				: null;
+		const total: BoardLine | null =
+			r.total_condition_id && r.total_line !== null
+				? {
+						kind: "total",
+						conditionId: r.total_condition_id,
+						marketTitle: r.total_question ?? "",
+						sideA: {
+							label: "Over",
+							line: r.total_line,
+							price: r.total_a_price,
+						},
+						sideB: {
+							label: "Under",
+							line: r.total_line,
+							price: r.total_b_price,
+						},
+						signalSide: signalByCondition.get(r.total_condition_id) ?? null,
+						altLines: r.total_alts,
+						pick: pickByKey.get(`${r.event_slug}|total`) ?? null,
+					}
+				: null;
+		const key = slugKey(r.event_slug);
 		const t = key ? (trends.get(key) ?? null) : null;
+		const homeTeam: TeamRow | null =
+			r.home_name && r.home_abbr
+				? { abbr: r.home_abbr, name: r.home_name, short: null }
+				: (t?.teams.home ?? null);
+		const awayTeam: TeamRow | null =
+			r.away_name && r.away_abbr
+				? { abbr: r.away_abbr, name: r.away_name, short: null }
+				: (t?.teams.away ?? null);
 		let homeSide: "A" | "B" | null = null;
-		if (t && spread) {
-			if (labelMatchesTeam(spread.sideA.label, t.teams.home)) homeSide = "A";
-			else if (labelMatchesTeam(spread.sideB.label, t.teams.home))
-				homeSide = "B";
-			else if (labelMatchesTeam(spread.sideA.label, t.teams.away))
-				homeSide = "B";
-			else if (labelMatchesTeam(spread.sideB.label, t.teams.away))
-				homeSide = "A";
+		if (spread && homeTeam && awayTeam) {
+			if (labelMatchesTeam(spread.sideA.label, homeTeam)) homeSide = "A";
+			else if (labelMatchesTeam(spread.sideB.label, homeTeam)) homeSide = "B";
+			else if (labelMatchesTeam(spread.sideA.label, awayTeam)) homeSide = "B";
+			else if (labelMatchesTeam(spread.sideB.label, awayTeam)) homeSide = "A";
 		}
 		games.push({
-			eventSlug,
-			matchup,
-			eventTime,
-			locked: eventTime <= now,
+			eventSlug: r.event_slug,
+			matchup: r.title,
+			eventTime: r.kickoff,
+			locked: r.kickoff <= now,
 			spread,
 			total,
-			away: t?.away ?? null,
-			home: t?.home ?? null,
+			away:
+				t?.away ??
+				(awayTeam
+					? {
+							abbr: awayTeam.abbr,
+							name: awayTeam.name,
+							venue: "away",
+							overall: null,
+							atVenue: null,
+						}
+					: null),
+			home:
+				t?.home ??
+				(homeTeam
+					? {
+							abbr: homeTeam.abbr,
+							name: homeTeam.name,
+							venue: "home",
+							overall: null,
+							atVenue: null,
+						}
+					: null),
 			homeSide,
 		});
-		void ref;
 	}
-	// Picks whose market has left the cache (past games) still belong to the week's list.
+	// Picks whose game has left the slate (past weeks) still belong to the week's list.
 	for (const p of pickByKey.values()) {
 		const found = games.find((g) => g.eventSlug === p.eventSlug);
 		const game: BoardGame = found ?? {
@@ -522,6 +499,7 @@ async function loadBoard(db: Db, week: number) {
 		week,
 		currentWeek: nflWeekOf(now),
 		now,
+		slateUpdatedAt: await slateUpdatedAt(db, week),
 		games,
 		stats,
 		recent,
@@ -553,38 +531,47 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 		) {
 			return { error: "invalid_payload" as const };
 		}
-		const m = await first<{
-			condition_id: string;
-			event_slug: string;
-			market_title: string;
-			event_time: string | null;
-			side_a_label: string | null;
-			side_b_label: string | null;
-			side_a_price: number | null;
-			side_b_price: number | null;
-			sharp_side: string | null;
-		}>(
-			db,
-			`SELECT condition_id, event_slug, market_title, event_time, side_a_label, side_b_label,
-			        side_a_price, side_b_price, sharp_side
-			 FROM sharp_money_cache WHERE condition_id = ? AND event_slug LIKE 'nfl-%'`,
-			data.conditionId,
-		);
-		if (!m || !m.event_time) return { error: "market_not_found" as const };
-		const eventTime = Math.floor(Date.parse(m.event_time) / 1000);
-		if (!Number.isFinite(eventTime))
-			return { error: "market_not_found" as const };
-		if (eventTime <= now) return { error: "locked" as const };
-		const spreadTitle = parseSpreadTitle(m.market_title);
-		const totalTitle = spreadTitle ? null : parseTotalTitle(m.market_title);
-		if (!spreadTitle && !totalTitle) return { error: "not_a_spread" as const };
-		const kind: MarketKind = spreadTitle ? "spread" : "total";
-		const label = data.side === "A" ? m.side_a_label : m.side_b_label;
-		const price = data.side === "A" ? m.side_a_price : m.side_b_price;
-		if (!label || typeof price !== "number" || !(price > 0 && price < 1)) {
+		const r = await getSlateRowByCondition(db, data.conditionId);
+		if (!r) return { error: "market_not_found" as const };
+		if (r.kickoff <= now) return { error: "locked" as const };
+		const kind: MarketKind =
+			r.spread_condition_id === data.conditionId ? "spread" : "total";
+		const isA = data.side === "A";
+		let label: string | null;
+		let line: number | null;
+		let price: number | null;
+		if (kind === "spread") {
+			label = isA ? r.spread_a_label : r.spread_b_label;
+			line =
+				r.spread_line === null ? null : isA ? r.spread_line : -r.spread_line;
+			price = isA ? r.spread_a_price : r.spread_b_price;
+		} else {
+			label = isA ? "Over" : "Under";
+			line = r.total_line;
+			price = isA ? r.total_a_price : r.total_b_price;
+		}
+		if (
+			!label ||
+			line === null ||
+			typeof price !== "number" ||
+			!(price > 0 && price < 1)
+		) {
 			return { error: "no_price" as const };
 		}
-		const week = nflWeekOf(eventTime);
+		const signal = await first<{
+			sharp_side: string | null;
+			side_a_price: number | null;
+			side_b_price: number | null;
+		}>(
+			db,
+			`SELECT sharp_side, side_a_price, side_b_price FROM sharp_money_cache WHERE condition_id = ?`,
+			data.conditionId,
+		);
+		const signalSide =
+			signal?.sharp_side === "A" || signal?.sharp_side === "B"
+				? signal.sharp_side
+				: null;
+		const week = nflWeekOf(r.kickoff);
 		const id = `nflb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 		await run(
 			db,
@@ -602,22 +589,22 @@ export const setNflBoardPickFn = createServerFn({ method: "POST" })
 			id,
 			NFL_SEASON,
 			week,
-			m.event_slug,
+			r.event_slug,
 			kind,
-			m.condition_id,
-			m.market_title,
-			spreadTitle ? spreadTitle.matchup : (totalTitle?.matchup ?? m.event_slug),
+			data.conditionId,
+			(kind === "spread" ? r.spread_question : r.total_question) ?? r.title,
+			r.title,
 			data.side,
 			label,
-			spreadTitle ? lineForSide(spreadTitle, label) : (totalTitle?.line ?? 0),
+			line,
 			price,
-			eventTime,
+			r.kickoff,
 			now,
-			m.sharp_side === "A" || m.sharp_side === "B" ? m.sharp_side : null,
-			m.sharp_side === "A"
-				? m.side_a_price
-				: m.sharp_side === "B"
-					? m.side_b_price
+			signalSide,
+			signalSide === "A"
+				? (signal?.side_a_price ?? null)
+				: signalSide === "B"
+					? (signal?.side_b_price ?? null)
 					: null,
 		);
 		return { ok: true as const, week };
