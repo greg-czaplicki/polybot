@@ -61,7 +61,10 @@ def parse_start(raw):
 class Store:
     def __init__(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        self.db = sqlite3.connect(path)
+        # 60 s busy timeout: the daily report (polybook-report.timer, 11:30Z)
+        # takes the write lock for its prune; the default 5 s crashed the
+        # recorder 1-4x every morning from 2026-09-11 to 2026-09-22.
+        self.db = sqlite3.connect(path, timeout=60)
         self.db.executescript(SCHEMA)
         self.buf = []
         self.events_1m = 0

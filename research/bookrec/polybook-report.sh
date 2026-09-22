@@ -20,6 +20,5 @@ import sqlite3,time; db=sqlite3.connect('/root/polybook/data/polybook.db'); s=in
 print(db.execute('SELECT ROUND(AVG(events_1m)), ROUND(AVG(trades_1m)), MIN(conns), MAX(markets), ROUND(AVG(ws_rtt_ms),1) FROM health WHERE t>=?', (s,)).fetchone())
 print('db MB', round(db.execute('SELECT page_count*page_size/1e6 FROM pragma_page_count(), pragma_page_size()').fetchone()[0]))"
 } > "$OUT" 2>&1
-# prune raw events older than 14 days
-/root/polyarb/.venv/bin/python -c "
-import sqlite3,time; db=sqlite3.connect('/root/polybook/data/polybook.db'); db.execute('DELETE FROM events WHERE recv_ms < ?', ((int(time.time())-14*86400)*1000,)); db.commit()"
+# prune raw events older than 14 days (batched; see prune.py)
+/root/polyarb/.venv/bin/python /root/polybook/prune.py /root/polybook/data/polybook.db 14 >> "$OUT" 2>&1
