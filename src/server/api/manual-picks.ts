@@ -317,6 +317,23 @@ export function resolvePickResult(input: {
 		status = "push";
 	}
 
+	// Voided markets (cancelled/forfeited matches): Gamma carries no cancel
+	// string — `resolution` stays null and umaResolutionStatus is plain
+	// "resolved" — the only marker is a 50/50 payout in outcomePrices.
+	// Require "resolved" so a closed-but-unresolved market sitting near 0.5
+	// isn't voided early.
+	if (
+		status === "pending" &&
+		!resolvedSide &&
+		resolved &&
+		typeof umaResolutionStatus === "string" &&
+		normalizeOutcome(umaResolutionStatus) === "resolved" &&
+		outcomePrices.length >= 2 &&
+		outcomePrices.every((price) => Math.abs(price - 0.5) < 0.01)
+	) {
+		status = "push";
+	}
+
 	if (status === "push") {
 		return {
 			status,

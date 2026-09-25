@@ -670,3 +670,16 @@ dashboard tape "anchored" count now reads `pin_fair_prob IS NOT NULL`
 instead of the stamp, so esports rows (never anchored) no longer count.
 No pick, pin_clv or verdict data was affected: those read fair probs, not
 the stamp.
+
+## Voided (50/50) markets never settled (FIXED 2026-09-25)
+
+Gamma marks a voided match (cancelled/forfeited, common in small CS2
+tournaments) only by `outcomePrices ["0.5","0.5"]` with
+`umaResolutionStatus: "resolved"` and `resolution: null`; there's no
+"cancel"/"invalid" string. `resolvePickResult` didn't handle that shape, so
+those picks and shadow rows stayed `pending` and retried every hour. First
+seen on live CS2 lane picks 9/23 (paiN Academy/Semente do Mal) and 9/24
+(BASEMENT BOYS/Gothboiclique). Now settled as `push` with roi 0. The actual
+payout is 0.5 × shares (a few % above stake at entry prices around .42-.47),
+so a push slightly understates lane P&L; bankroll is wallet-synced and
+unaffected. This fixes manual picks, shadow_candidates and the NFL board.
