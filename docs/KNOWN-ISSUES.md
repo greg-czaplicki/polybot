@@ -683,3 +683,21 @@ seen on live CS2 lane picks 9/23 (paiN Academy/Semente do Mal) and 9/24
 payout is 0.5 × shares (a few % above stake at entry prices around .42-.47),
 so a push slightly understates lane P&L; bankroll is wallet-synced and
 unaffected. This fixes manual picks, shadow_candidates and the NFL board.
+
+## polybook tob_minute wrote frozen books for dropped markets (2026-09-09 → 2026-09-28, FIXED)
+
+The VPS order-book recorder (`/root/polybook/bookrec.py`, not in this repo)
+never removed a book from memory when discovery dropped its market, so every
+minute `tob_minute` got a frozen copy of every book it had ever seen. By
+9/28 it was writing ~7,300 rows/min against ~320 subscribed assets (12.4 GB,
+~2.6 GB/day), which was most of the VPS disk growth. Fix 2026-09-28:
+`set_tokens` drops books for unsubscribed assets (~330 rows/min after), and
+`prune.py` now also prunes `tob_minute` older than 30 days (events stay at
+14). A one-off cleanup deleted 40.4M rows stamped more than 30 min after
+their market's `game_start` (markets are dropped 10 min after start).
+**Remaining caveat:** markets that fell out of the top-300 by liquidity
+*before* their start still have frozen pre-start rows up to 9/28 15:09Z.
+Any `tob_minute` read over that window (`depth_read.py`,
+`polysharp/cell_read.py`, `esports_size.py`) should require `n_events > 0`
+somewhere near the lookup minute, or treat a long run of identical rows as
+stale.
