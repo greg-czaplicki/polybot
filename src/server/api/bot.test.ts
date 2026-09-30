@@ -100,6 +100,27 @@ describe("getBotCandidatePolicy", () => {
 		expect(mlbTotal.notes).toContain("mlb_total_preferred");
 	});
 
+	it("rejects NHL preseason games before league probation", () => {
+		const pre = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10346,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+			eventTimeMs: Date.UTC(2026, 8, 26, 23, 0),
+		});
+		expect(pre.rejectReason).toBe("nhl_preseason_excluded");
+		const reg = getBotCandidatePolicy({
+			marketType: "moneyline",
+			sportSeriesId: 10346,
+			minutesToStart: 120,
+			baseMinGrade: "A",
+			baseMarketQualityThreshold: 0.7,
+			eventTimeMs: Date.UTC(2026, 8, 29, 23, 0),
+		});
+		expect(reg.rejectReason).toBe("nhl_league_probation");
+	});
+
 	it("shadow-settles NHL behind league probation, after the market-type gates", () => {
 		// 10346 is the NHL fallback series ID (series-registry.ts).
 		const ml = getBotCandidatePolicy({

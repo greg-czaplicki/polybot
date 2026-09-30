@@ -701,3 +701,14 @@ Any `tob_minute` read over that window (`depth_read.py`,
 `polysharp/cell_read.py`, `esports_size.py`) should require `n_events > 0`
 somewhere near the lookup minute, or treat a long run of identical rows as
 stale.
+
+## NHL preseason rows landed in the probation cohort (2026-09-19 → 2026-09-26, FIXED 2026-09-30)
+
+NHL had no preseason gate, so exhibition games were shadow-settled as
+`nhl_league_probation` — the cohort the eventual NHL read is taken from. The
+2026-27 regular season opened Tue 2026-09-29. Added `nhl_preseason_excluded`
+(`isNhlPreseasonTime`, per-season opener table in `src/lib/sports.ts`; a
+season missing from the table fails open) and relabelled the 9 existing
+probation rows with `event_time < 2026-09-29 12:00Z` (2-7). No strategy era
+bump: NHL is never bet, so no pick changes; only the shadow label moves.
+**Add the 2027-28 opener to the table before next September.**

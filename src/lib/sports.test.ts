@@ -4,6 +4,7 @@ import {
 	detectSportTag,
 	detectSportTagFromSeriesId,
 	isNflPreseasonTime,
+	isNhlPreseasonTime,
 	isSportsMarket,
 } from "./sports";
 
@@ -84,5 +85,19 @@ describe("isNflPreseasonTime", () => {
 		// 2027: Labor Day Sep 6, kickoff Thursday Sep 9.
 		expect(isNflPreseasonTime(Date.UTC(2027, 8, 8, 23, 0))).toBe(true);
 		expect(isNflPreseasonTime(Date.UTC(2027, 8, 10, 0, 20))).toBe(false);
+	});
+});
+
+describe("isNhlPreseasonTime", () => {
+	it("flags games before the 2026-27 opener (Tue 2026-09-29)", () => {
+		expect(isNhlPreseasonTime(Date.UTC(2026, 8, 19, 23, 0))).toBe(true); // TOR-MTL exhibition
+		expect(isNhlPreseasonTime(Date.UTC(2026, 8, 26, 23, 0))).toBe(true);
+		expect(isNhlPreseasonTime(Date.UTC(2026, 8, 29, 21, 0))).toBe(false); // FLA @ CAR opener
+		expect(isNhlPreseasonTime(Date.UTC(2026, 8, 30, 2, 30))).toBe(false); // CHI @ VGK
+	});
+
+	it("fails open for seasons without a recorded opener", () => {
+		expect(isNhlPreseasonTime(Date.UTC(2027, 8, 25, 23, 0))).toBe(false);
+		expect(isNhlPreseasonTime(Date.UTC(2026, 11, 1, 0, 0))).toBe(false);
 	});
 });

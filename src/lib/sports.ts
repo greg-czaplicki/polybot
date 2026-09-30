@@ -644,6 +644,26 @@ export function isNflPreseasonTime(eventTimeMs: number): boolean {
 	return eventTimeMs < kickoffMs;
 }
 
+/**
+ * NHL regular-season opening nights (UTC noon on opening day). The NHL has no
+ * fixed opener rule, so each season's date is added by hand; a year missing
+ * from the table is never treated as preseason (fail open — the rows stay in
+ * the probation cohort and can be relabelled later).
+ */
+const NHL_REGULAR_SEASON_START_MS: Record<number, number> = {
+	2026: Date.UTC(2026, 8, 29, 12), // Tue 2026-09-29, FLA @ CAR
+};
+
+/** NHL preseason: any September/October game before that season's opener. */
+export function isNhlPreseasonTime(eventTimeMs: number): boolean {
+	if (!Number.isFinite(eventTimeMs)) return false;
+	const date = new Date(eventTimeMs);
+	const month = date.getUTCMonth();
+	if (month < 8 || month > 9) return false;
+	const startMs = NHL_REGULAR_SEASON_START_MS[date.getUTCFullYear()];
+	return startMs !== undefined && eventTimeMs < startMs;
+}
+
 const ESPORTS_KEYWORDS = [
 	"counter-strike",
 	"cs:go",

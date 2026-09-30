@@ -20,7 +20,11 @@ import {
 	isAcceptableSignalScore,
 	MIN_SCORE_DIFFERENTIAL,
 } from "@/lib/sharp-grade";
-import { isNflPreseasonTime, toCanonicalSportTag } from "@/lib/sports";
+import {
+	isNflPreseasonTime,
+	isNhlPreseasonTime,
+	toCanonicalSportTag,
+} from "@/lib/sports";
 import { deriveSnapshotType } from "../api/canonical-analytics";
 import { enrichPickInline } from "../api/manual-picks";
 import {
@@ -929,6 +933,31 @@ export function getBotCandidatePolicy(input: {
 				notes: ["preseason_excluded"],
 				reject: true,
 				rejectReason: "nfl_preseason_excluded",
+			},
+		);
+	}
+
+	// NHL preseason: same exhibition problem. NHL is shadow-only
+	// (nhl_league_probation) either way; this keeps preseason rows out of the
+	// probation cohort the eventual NHL read is taken from.
+	if (
+		sportKey === "nhl" &&
+		typeof input.eventTimeMs === "number" &&
+		isNhlPreseasonTime(input.eventTimeMs)
+	) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NHL preseason excluded",
+				rankingAdjustment: -100,
+				notes: ["preseason_excluded"],
+				reject: true,
+				rejectReason: "nhl_preseason_excluded",
 			},
 		);
 	}
