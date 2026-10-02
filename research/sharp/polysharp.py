@@ -10,7 +10,7 @@ from fills whose market started >= 4h before the snapshot; a fill is scored with
 its own timestamp — nothing looks ahead. Sharp = top decile of roi_t among wallets with >= MIN_N settled fills;
 square = bottom decile. Follow entry = fill price + ENTRY_COST (fee observed 0 on the wire).
 """
-import json, math, os, sqlite3, sys, time, urllib.request, urllib.error
+import json, math, os, re, sqlite3, sys, time, urllib.request, urllib.error
 from collections import defaultdict
 
 DB = os.environ.get("SHARP_DB", "/root/polysharp/data/sharp.db")
@@ -67,6 +67,10 @@ NON_TEAM = {"over", "under", "yes", "no"}
 
 def classify(question):
     q = question or ""
+    # esports: "A vs B - Map 1 Winner" / "Game 2 Winner" is a single map, not the match (was falling through to moneyline);
+    # "A vs B (BO3) - Event: Closed Qualifier" is the match even with a ':' in the event name (was falling through to prop)
+    if re.search(r" - (?:Map|Game) \d+ Winner$", q): return "prop"
+    if re.search(r"\(BO\d+\)", q) and " vs " in q: return "moneyline"
     if q.startswith("Spread:") or q.startswith("Set Handicap:") or "Handicap" in q: return "spread"
     if "Team Total" in q: return "team_total"
     if any(k in q for k in ("1H ", "1st Half", "1st Quarter", "1Q ", "First Half", "first inning", "1st Inning", "1st Set", "First Set", "2H ")): return "period"

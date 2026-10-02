@@ -702,6 +702,25 @@ Any `tob_minute` read over that window (`depth_read.py`,
 somewhere near the lookup minute, or treat a long run of identical rows as
 stale.
 
+## polysharp mislabelled esports market types (until 2026-10-02, FIXED)
+
+`research/sharp/polysharp.py` `classify()` labelled single-map / single-game
+winner markets ("CS2 A vs B - Map 1 Winner", "Dota 2 … - Game 3 Winner") as
+`moneyline`. It labelled match markets whose event name contains a colon
+("(BO3) - Stake Ranked Episode 5: Closed Qualifier"), and nearly all LoL
+match markets, as `prop`. Every polysharp read that cut esports by
+`market_type` before 2026-10-02 mixed the two:
+- the 2026-09-11 `cell_cs2.txt` moneyline cells (the CS2 lane's origin);
+- the forward lanes `cs2_pickem_dog_cell` / `guard_cs2_fav_50_95`. The
+  dog cell showed +20.5 % z 2.0 n 125; corrected, it is +4.5 % z 0.4 n 98
+  (`docs/audits/2026-10-02-cs2-pickem-pilot.md`);
+- the per-sport esports figures in the daily report's sharp-following table.
+Fixed in `classify()` (maps/games → `prop`, `(BOn)` matchups → `moneyline`)
+and 1,092 rows relabelled on the VPS (old values in
+`/root/polysharp/data/market_type_relabel_2026-10-02.json`). The app's own
+esports classification (era v13) was already correct, so live CS2 lane picks
+were always match markets.
+
 ## NHL preseason rows landed in the probation cohort (2026-09-19 → 2026-09-26, FIXED 2026-09-30)
 
 NHL had no preseason gate, so exhibition games were shadow-settled as

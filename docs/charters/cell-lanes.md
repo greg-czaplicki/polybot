@@ -113,3 +113,25 @@ lane's own start is **2026-09-18T00:00Z** (`LANE_STARTS` in
 positive; pass = ROI > 0 and clustered z ≥ 2 at n ≥ 150, read per the v1
 rule. A capped $4 live execution pilot of the same rule runs in the app
 (`docs/charters/cs2-pickem-dog-pilot.md`); its picks are never evidence.
+
+## v1.3 amendment (2026-10-02): esports `moneyline` means the match
+
+The lane is "the same rule" as the pilot, and the pilot charter limits the
+population to CS2 match-winner markets ("Map winners, map handicaps and
+totals … are outside the lane"). polysharp's `classify()` did not implement
+that. Single-map markets ("A vs B - Map 1 Winner", Dota "Game N Winner")
+fell through to `moneyline`, and match markets with a colon in the event
+name ("(BO3) - Stake Ranked Episode 5: Closed Qualifier") fell through to
+`prop`. Fixed 2026-10-02: `classify()` sends `- Map|Game N Winner` to
+`prop` and any `(BOn)` matchup to `moneyline`. 1,092 esports rows were
+relabelled; the old values are saved in
+`/root/polysharp/data/market_type_relabel_2026-10-02.json`. This affects
+`cs2_pickem_dog_cell` and `guard_cs2_fav_50_95`; no non-esports lane
+changed.
+
+Disclosure: the split was seen before the fix. As reported, the lane read
++20.5 % z 2.0 n 125. Its 35 map-winner rows read +56.9 %. The corrected
+lane reads +4.5 % z 0.4 n 98. The correction follows the pilot charter's
+written population, and it lowers the read. Band, entry, grain, start date
+and pass rule are unchanged. Readout:
+`docs/audits/2026-10-02-cs2-pickem-pilot.md`.
