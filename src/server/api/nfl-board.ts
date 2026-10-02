@@ -25,6 +25,7 @@ import {
 	listSlateRows,
 	refreshNflBoardSlate,
 	SLATE_MAX_AGE_SECONDS,
+	type SlateRow,
 	slateUpdatedAt,
 } from "./nfl-board-slate";
 
@@ -179,15 +180,19 @@ function toTrendLine(r: SnapRow | undefined): TrendLine | null {
 	};
 }
 
+/** Polymarket NFL slug abbreviations that differ from the ESPN-seeded teams table. */
+const POLYMARKET_NFL_ABBR: Record<string, string> = { la: "lar" };
+const espnAbbr = (a: string) => POLYMARKET_NFL_ABBR[a] ?? a;
+
 /**
- * Canonical games for the week (season/week from the ESPN-fed games table)
- * keyed by "away-home" abbreviations, with the latest pre-kickoff trend
- * snapshot per team for overall + venue role. One query each; the slate is
- * at most ~16 games.
+ * Latest pre-kickoff trend snapshot per team (overall + venue role) for every
+ * slate game, keyed by the slug's "away-home" abbreviations. Teams are resolved
+ * from the slug itself, not the ESPN-fed games table: ESPN schedule ingestion
+ * only looks one day ahead, so a Sunday game has no games row until Saturday.
  */
 async function loadTrends(
 	db: Db,
-	week: number,
+	slate: SlateRow[],
 ): Promise<
 	Map<
 		string,
@@ -198,30 +203,6 @@ async function loadTrends(
 		}
 	>
 > {
-	const games = await all<{
-		id: string;
-		game_time: number;
-		home_id: string;
-		home_name: string;
-		home_abbr: string;
-		home_short: string | null;
-		away_id: string;
-		away_name: string;
-		away_abbr: string;
-		away_short: string | null;
-	}>(
-		db,
-		`SELECT g.id, g.game_time,
-		        ht.id AS home_id, ht.name AS home_name, ht.abbreviation AS home_abbr, ht.short_name AS home_short,
-		        at2.id AS away_id, at2.name AS away_name, at2.abbreviation AS away_abbr, at2.short_name AS away_short
-		 FROM games g
-		 JOIN teams ht ON ht.id = g.home_team_id
-		 JOIN teams at2 ON at2.id = g.away_team_id
-		 WHERE g.sport_tag = 'nfl' AND g.season = ? AND g.week = ?`,
-		// games.season / games.week are TEXT; D1 binds numbers as REAL ('2026.0' never matches).
-		String(NFL_SEASON),
-		String(week),
-	);
 	const out = new Map<
 		string,
 		{
@@ -230,8 +211,29 @@ async function loadTrends(
 			teams: { away: TeamRow; home: TeamRow };
 		}
 	>();
+	const games = slate.flatMap((r) => {
+		const key = slugKey(r.event_slug);
+		if (!key) return [];
+		const [away, home] = key.split("-");
+		return [
+			{ key, kickoff: r.kickoff, away: espnAbbr(away), home: espnAbbr(home) },
+		];
+	});
 	if (games.length === 0) return out;
-	const teamIds = [...new Set(games.flatMap((g) => [g.home_id, g.away_id]))];
+	const abbrs = [...new Set(games.flatMap((g) => [g.away, g.home]))];
+	const teams = await all<{
+		id: string;
+		name: string;
+		abbreviation: string;
+		short_name: string | null;
+	}>(
+		db,
+		`SELECT id, name, abbreviation, short_name FROM teams
+		 WHERE sport_tag = 'nfl' AND lower(abbreviation) IN (${abbrs.map(() => "?").join(",")})`,
+		...abbrs,
+	);
+	if (teams.length === 0) return out;
+	const byAbbr = new Map(teams.map((t) => [t.abbreviation.toLowerCase(), t]));
 	const snaps = await all<SnapRow>(
 		db,
 		`SELECT team_id, snapshot_type, as_of_time, su_wins, su_losses, su_pushes, ats_wins, ats_losses, ats_pushes,
@@ -239,37 +241,46 @@ async function loadTrends(
 		        avg_cover_margin, avg_total_margin
 		 FROM team_trend_snapshots
 		 WHERE sport_tag = 'nfl' AND snapshot_type IN ('overall','home','away')
-		   AND team_id IN (${teamIds.map(() => "?").join(",")})
+		   AND team_id IN (${teams.map(() => "?").join(",")})
 		 ORDER BY as_of_time DESC`,
-		...teamIds,
+		...teams.map((t) => t.id),
 	);
 	const latest = new Map<string, SnapRow>();
 	for (const g of games) {
 		for (const r of snaps) {
-			if (r.as_of_time >= g.game_time) continue; // pre-kickoff only
-			const key = `${r.team_id}|${r.snapshot_type}|${g.id}`;
+			if (r.as_of_time >= g.kickoff) continue; // pre-kickoff only
+			const key = `${r.team_id}|${r.snapshot_type}|${g.key}`;
 			if (!latest.has(key)) latest.set(key, r);
 		}
 	}
 	for (const g of games) {
+		const away = byAbbr.get(g.away);
+		const home = byAbbr.get(g.home);
+		if (!away || !home) continue;
 		const trend = (
-			teamId: string,
+			team: { id: string; abbreviation: string; name: string },
 			venue: "home" | "away",
-			abbr: string,
-			name: string,
 		): TeamTrend => ({
-			abbr,
-			name,
+			abbr: team.abbreviation,
+			name: team.name,
 			venue,
-			overall: toTrendLine(latest.get(`${teamId}|overall|${g.id}`)),
-			atVenue: toTrendLine(latest.get(`${teamId}|${venue}|${g.id}`)),
+			overall: toTrendLine(latest.get(`${team.id}|overall|${g.key}`)),
+			atVenue: toTrendLine(latest.get(`${team.id}|${venue}|${g.key}`)),
 		});
-		out.set(`${g.away_abbr.toLowerCase()}-${g.home_abbr.toLowerCase()}`, {
-			away: trend(g.away_id, "away", g.away_abbr, g.away_name),
-			home: trend(g.home_id, "home", g.home_abbr, g.home_name),
+		out.set(g.key, {
+			away: trend(away, "away"),
+			home: trend(home, "home"),
 			teams: {
-				away: { abbr: g.away_abbr, name: g.away_name, short: g.away_short },
-				home: { abbr: g.home_abbr, name: g.home_name, short: g.home_short },
+				away: {
+					abbr: away.abbreviation,
+					name: away.name,
+					short: away.short_name,
+				},
+				home: {
+					abbr: home.abbreviation,
+					name: home.name,
+					short: home.short_name,
+				},
 			},
 		});
 	}
@@ -311,9 +322,9 @@ async function loadBoard(db: Db, week: number) {
 			console.warn("[nfl-board] slate refresh failed", error);
 		}
 	}
-	const [slate, trends, picks] = await Promise.all([
-		listSlateRows(db, week),
-		loadTrends(db, week),
+	const slate = await listSlateRows(db, week);
+	const [trends, picks] = await Promise.all([
+		loadTrends(db, slate),
 		all<PickRow>(
 			db,
 			`SELECT ${PICK_COLS} FROM nfl_board_picks WHERE season = ? ORDER BY event_time ASC`,
