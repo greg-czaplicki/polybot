@@ -9,6 +9,10 @@ import {
 	handleBotControlRequest,
 } from "./server/api/bot-control";
 import { settlePendingManualPicks } from "./server/api/manual-picks";
+import {
+	settleNflBoardPicks,
+	stampNflBoardSignals,
+} from "./server/api/nfl-board";
 import { warmSeriesRegistry } from "./server/api/series-registry";
 import { handleShadowDigestRequest } from "./server/api/shadow-digest";
 import { handleSportEdgeRequest } from "./server/api/sport-edge";
@@ -20,7 +24,6 @@ import { getCanonicalFreshness } from "./server/pipeline/canonical-sync";
 import { captureCloseSignalForPicks } from "./server/pipeline/close-signal";
 import { backfillManualPicks } from "./server/pipeline/pick-backfill";
 import { capturePinnacleOddsForPicks } from "./server/pipeline/pinnacle-odds";
-import { settleNflBoardPicks } from "./server/api/nfl-board";
 import {
 	recordEarlyWindowShadows,
 	settleShadowCandidates,
@@ -461,6 +464,18 @@ const serverEntry = {
 					if (result.updated > 0) {
 						console.log(
 							`[shadow-book] Settled ${result.updated}/${result.checked} shadow candidates`,
+						);
+					}
+				})
+				.then(() =>
+					// NFL board: picks made before the market reached the signal
+					// cache get its pre-kickoff holder side once it appears.
+					stampNflBoardSignals(env.POLYWHALER_DB),
+				)
+				.then((stamped) => {
+					if (stamped > 0) {
+						console.log(
+							`[nfl-board] Stamped holder signal on ${stamped} picks`,
 						);
 					}
 				})

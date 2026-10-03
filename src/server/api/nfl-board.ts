@@ -642,6 +642,27 @@ export const clearNflBoardPickFn = createServerFn({ method: "POST" })
  * Cron settlement: same eligibility and resolution path as shadow rows
  * (kickoff + 15 min, Gamma resolution, backoff on attempts).
  */
+/**
+ * Fill in the holder signal on pending picks made before their market reached
+ * sharp_money_cache (a pick made days ahead finds no signal yet). Fill-only:
+ * a side recorded at pick time is never overwritten, and nothing is stamped
+ * at or after kickoff, so every stamp is a pre-game signal.
+ */
+export async function stampNflBoardSignals(db: Db): Promise<number> {
+	const result = await run(
+		db,
+		`UPDATE nfl_board_picks SET
+		   signal_side = (SELECT c.sharp_side FROM sharp_money_cache c WHERE c.condition_id = nfl_board_picks.condition_id),
+		   signal_price = (SELECT CASE c.sharp_side WHEN 'A' THEN c.side_a_price ELSE c.side_b_price END
+		                   FROM sharp_money_cache c WHERE c.condition_id = nfl_board_picks.condition_id)
+		 WHERE status = 'pending' AND signal_side IS NULL AND event_time > ?
+		   AND EXISTS (SELECT 1 FROM sharp_money_cache c
+		               WHERE c.condition_id = nfl_board_picks.condition_id AND c.sharp_side IN ('A','B'))`,
+		nowUnixSeconds(),
+	);
+	return Number(result.meta?.changes ?? 0);
+}
+
 export async function settleNflBoardPicks(
 	db: Db,
 	options?: { limit?: number },
