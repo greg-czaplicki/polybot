@@ -32,10 +32,10 @@ import {
 	type BoardGame,
 	type BoardLine,
 	type BoardPick,
-	type TeamTrend,
 	clearNflBoardPickFn,
 	getNflBoardFn,
 	setNflBoardPickFn,
+	type TeamTrend,
 } from "../server/api/nfl-board";
 
 export const Route = createFileRoute("/nfl")({
@@ -224,6 +224,13 @@ function GutterStatus({
 	);
 }
 
+/** "W3" → { type: "W", n: 3 }. O/U streaks are stored W = over, L = under. */
+function parseStreak(s: string | null): { type: "W" | "L"; n: number } | null {
+	if (!s) return null;
+	const n = Number(s.slice(1));
+	return (s[0] === "W" || s[0] === "L") && n > 0 ? { type: s[0], n } : null;
+}
+
 /** One line of a game (spread or total): two halves around the gutter, or a dim placeholder when the cache has no line yet. */
 function LadderRow({
 	game,
@@ -246,20 +253,26 @@ function LadderRow({
 			</div>
 		);
 	}
-	const fmt = (n: number | null, digits = 1) =>
-		n === null ? "" : `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(digits)}`;
 	const spreadTrend = (t: TeamTrend | null): string | null => {
 		if (!t) return null;
 		const o = t.overall;
 		if (!o) return "no games yet";
 		const v = t.atVenue;
+		const streak = parseStreak(o.atsStreak);
+		// A streak as long as the season says nothing the record doesn't.
+		const streakText =
+			streak && streak.n < o.games
+				? `${streak.type === "W" ? "covered" : "missed"} last ${streak.n === 1 ? "game" : streak.n}`
+				: null;
+		const venueText =
+			v && v.games > 0 && v.games !== o.games ? ` (${t.venue} ${v.ats})` : "";
 		return [
-			`SU ${o.su}`,
-			`ATS ${o.ats}${o.atsStreak ? ` ${o.atsStreak}` : ""}`,
-			o.coverMargin !== null ? `cov ${fmt(o.coverMargin)}` : null,
-			v && v.games > 0 && v.games !== o.games
-				? `${t.venue} ATS ${v.ats}`
+			`vs spread ${o.ats}${venueText}`,
+			streakText,
+			o.coverMargin !== null
+				? `${o.coverMargin >= 0 ? "beats" : "misses"} spread by ${Math.abs(o.coverMargin).toFixed(1)} avg`
 				: null,
+			`W-L ${o.su}`,
 		]
 			.filter(Boolean)
 			.join(" · ");
@@ -268,9 +281,18 @@ function LadderRow({
 		if (!t) return null;
 		const o = t.overall;
 		if (!o) return `${t.abbr} · no games yet`;
+		const [overs, unders, pushes] = o.ou.split("-").map(Number);
+		const streak = parseStreak(o.ouStreak);
+		const streakText =
+			streak && streak.n < o.games
+				? `last ${streak.n === 1 ? "game" : streak.n} ${streak.type === "W" ? "over" : "under"}`
+				: null;
 		return [
-			`${t.abbr} O/U ${o.ou}${o.ouStreak ? ` ${o.ouStreak}` : ""}`,
-			o.totalMargin !== null ? `tot ${fmt(o.totalMargin)}` : null,
+			`${t.abbr} games ${overs} over, ${unders} under${pushes ? `, ${pushes} push` : ""}`,
+			streakText,
+			o.totalMargin !== null
+				? `${Math.abs(o.totalMargin).toFixed(1)} pts ${o.totalMargin >= 0 ? "over" : "under"} total avg`
+				: null,
 		]
 			.filter(Boolean)
 			.join(" · ");
@@ -545,6 +567,14 @@ function NflBoardPage() {
 					}
 					bodyClassName="p-0"
 				>
+					<p className="border-b border-ink-10 px-3 py-1.5 font-mono text-xxs leading-relaxed text-ink-40">
+						Team lines are season to date, before kickoff. Spread row: record
+						against the spread (home/away split in brackets), current streak,
+						how many points they beat or miss the spread by on average, and
+						straight-up W-L. Total row: how many of that team's games went over
+						or under the closing total, and how far above or below it they
+						finish on average.
+					</p>
 					{games.length === 0 ? (
 						<Empty>
 							{data
