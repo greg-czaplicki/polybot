@@ -25,10 +25,6 @@ const SPORT_SERIES_ID_TO_TAG: Record<number, string> = {
 	10203: "seriea", // serie-a-2025
 	10195: "ligue1", // ligue-1-2025
 	10204: "ucl", // ucl-2025
-	10209: "uel", // uel-2025
-	10437: "uecl", // europa-conference-league (evergreen)
-	11446: "unl", // soccer-unl (evergreen)
-	10238: "fif", // fifa-friendly (evergreen)
 	10365: "atp",
 	10366: "wta",
 	10310: "cs2", // counter-strike (evergreen)
@@ -252,10 +248,6 @@ const SPORT_TAG_DEFINITIONS: SportTagDefinition[] = [
 	{ tag: "seriea", label: "Serie A" },
 	{ tag: "ligue1", label: "Ligue 1" },
 	{ tag: "ucl", label: "Champions League" },
-	{ tag: "uel", label: "Europa League" },
-	{ tag: "uecl", label: "Conference League" },
-	{ tag: "unl", label: "Nations League" },
-	{ tag: "fif", label: "Intl Friendly" },
 	{
 		tag: "soccer",
 		label: "Soccer",
@@ -625,10 +617,6 @@ const SOCCER_LEAGUE_TAGS: ReadonlySet<string> = new Set([
 	"seriea",
 	"ligue1",
 	"ucl",
-	"uel",
-	"uecl",
-	"unl",
-	"fif",
 ]);
 
 export function toCanonicalSportTag(tag: string): string {

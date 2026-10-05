@@ -64,10 +64,6 @@ const HOME_FIRST = new Set([
 	"ligue1",
 	"mls",
 	"ucl",
-	"uel",
-	"uecl",
-	"unl",
-	"fif",
 	"championship",
 	"soccer",
 ]);

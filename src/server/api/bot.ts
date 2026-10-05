@@ -857,10 +857,6 @@ const LEAGUE_PROBATION_SPORT_KEYS: ReadonlySet<string> = new Set([
 	"seriea",
 	"ligue1",
 	"ucl",
-	"uel",
-	"uecl",
-	"unl",
-	"fif",
 	"soccer",
 	"atp",
 	"wta",
@@ -2785,8 +2781,7 @@ async function listBotCandidates(
 		},
 		{
 			lane: NCAAF_TOTALS_PILOT_LANE,
-			segmentLabel:
-				"NCAAF totals lane (era v16 pilot, sighted side, no holder gate)",
+			segmentLabel: "NCAAF totals lane (era v16 pilot, sighted side, no holder gate)",
 			side: (entry) =>
 				totalsSide(entry.sharpSide, entry.sideA.price, entry.sideB.price),
 			notes: (entry) => [
@@ -2798,8 +2793,7 @@ async function listBotCandidates(
 		// on regular-season NFL game totals.
 		{
 			lane: NFL_TOTALS_PILOT_LANE,
-			segmentLabel:
-				"NFL totals lane (era v18 pilot, sighted side, no holder gate)",
+			segmentLabel: "NFL totals lane (era v18 pilot, sighted side, no holder gate)",
 			side: (entry) =>
 				nflTotalsSide(
 					entry.sharpSide,
@@ -2838,8 +2832,7 @@ async function listBotCandidates(
 				const eligible = upcomingEntries
 					.filter(
 						(entry) =>
-							resolveSportTagFromSeriesId(entry.sportSeriesId) ===
-								lane.sportTag &&
+							resolveSportTagFromSeriesId(entry.sportSeriesId) === lane.sportTag &&
 							getMarketTypeLabel(entry.marketTitle) === lane.marketType,
 					)
 					.map((entry) => {
@@ -2848,9 +2841,7 @@ async function listBotCandidates(
 							entry,
 							side: laneSideOf(entry),
 							minutesToStart:
-								eventTime !== null
-									? (eventTime.getTime() - now) / 60_000
-									: null,
+								eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null,
 						};
 					})
 					.filter((item) => item.side !== null && item.minutesToStart !== null)
