@@ -45,7 +45,7 @@ describe("getBotCandidatePolicy", () => {
 			baseMarketQualityThreshold: 0.7,
 		});
 		const nba = getBotCandidatePolicy({
-			marketType: "moneyline",
+			marketType: "moneyline" as const,
 			sportSeriesId: 10345,
 			minutesToStart: 90,
 			baseMinGrade: "A",
@@ -119,6 +119,26 @@ describe("getBotCandidatePolicy", () => {
 			eventTimeMs: Date.UTC(2026, 8, 29, 23, 0),
 		});
 		expect(reg.rejectReason).toBe("nhl_league_probation");
+	});
+
+	it("rejects NBA preseason games before the NBA timing gate", () => {
+		const base = {
+			marketType: "moneyline" as const,
+			sportSeriesId: 10345,
+			minutesToStart: 60,
+			baseMinGrade: "A" as const,
+			baseMarketQualityThreshold: 0.7,
+		};
+		const pre = getBotCandidatePolicy({
+			...base,
+			eventTimeMs: Date.UTC(2026, 9, 3, 23, 0),
+		});
+		expect(pre.rejectReason).toBe("nba_preseason_excluded");
+		const reg = getBotCandidatePolicy({
+			...base,
+			eventTimeMs: Date.UTC(2026, 9, 21, 23, 30),
+		});
+		expect(reg.rejectReason).not.toBe("nba_preseason_excluded");
 	});
 
 	it("shadow-settles NHL behind league probation, after the market-type gates", () => {

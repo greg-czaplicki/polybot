@@ -21,6 +21,7 @@ import {
 	MIN_SCORE_DIFFERENTIAL,
 } from "@/lib/sharp-grade";
 import {
+	isNbaPreseasonTime,
 	isNflPreseasonTime,
 	isNhlPreseasonTime,
 	toCanonicalSportTag,
@@ -958,6 +959,32 @@ export function getBotCandidatePolicy(input: {
 				notes: ["preseason_excluded"],
 				reject: true,
 				rejectReason: "nhl_preseason_excluded",
+			},
+		);
+	}
+
+	// NBA preseason: same exhibition problem, and NBA is in the live book —
+	// 2026-10-03 the bot placed a real $8 ML on Heat @ Raptors (preseason)
+	// because no gate existed. Placed before the NBA timing gate so preseason
+	// rows never enter the nba_timing_excluded fade cohort.
+	if (
+		sportKey === "nba" &&
+		typeof input.eventTimeMs === "number" &&
+		isNbaPreseasonTime(input.eventTimeMs)
+	) {
+		return buildPolicy(
+			{
+				...input,
+				timingBucket,
+			},
+			{
+				minGrade: "A",
+				marketQualityThreshold: 1,
+				segmentLabel: "NBA preseason excluded",
+				rankingAdjustment: -100,
+				notes: ["preseason_excluded"],
+				reject: true,
+				rejectReason: "nba_preseason_excluded",
 			},
 		);
 	}

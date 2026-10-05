@@ -8,6 +8,7 @@ export const REASON_LABELS: Record<string, string> = {
 	nba_timing_excluded: "NBA >90m gate",
 	nfl_preseason_excluded: "NFL preseason gate",
 	nhl_preseason_excluded: "NHL preseason gate",
+	nba_preseason_excluded: "NBA preseason gate",
 	prop_market_excluded: "Prop market gate",
 	tennis_v2_paper: "Paper · tennis-v2 R1",
 	pin_div_paper: "Paper · pin-divergence",

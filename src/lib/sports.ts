@@ -664,6 +664,24 @@ export function isNhlPreseasonTime(eventTimeMs: number): boolean {
 	return startMs !== undefined && eventTimeMs < startMs;
 }
 
+/**
+ * NBA regular-season opening nights (UTC noon on opening day), same fail-open
+ * table pattern as the NHL. Preseason runs early October up to the opener.
+ */
+const NBA_REGULAR_SEASON_START_MS: Record<number, number> = {
+	2026: Date.UTC(2026, 9, 20, 12), // Tue 2026-10-20 (ESPN calendar: preseason ends 10/16)
+};
+
+/** NBA preseason: any September/October game before that season's opener. */
+export function isNbaPreseasonTime(eventTimeMs: number): boolean {
+	if (!Number.isFinite(eventTimeMs)) return false;
+	const date = new Date(eventTimeMs);
+	const month = date.getUTCMonth();
+	if (month < 8 || month > 9) return false;
+	const startMs = NBA_REGULAR_SEASON_START_MS[date.getUTCFullYear()];
+	return startMs !== undefined && eventTimeMs < startMs;
+}
+
 const ESPORTS_KEYWORDS = [
 	"counter-strike",
 	"cs:go",

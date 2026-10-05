@@ -731,3 +731,13 @@ season missing from the table fails open) and relabelled the 9 existing
 probation rows with `event_time < 2026-09-29 12:00Z` (2-7). No strategy era
 bump: NHL is never bet, so no pick changes; only the shadow label moves.
 **Add the 2027-28 opener to the table before next September.**
+
+## NBA preseason game bet live (2026-10-03, FIXED 2026-10-05, era v17)
+
+NBA is in the live book but had no preseason gate (NFL and NHL do). On
+2026-10-03 the bot placed a real $8 ML on Heat @ Raptors (`pick_1791064532956_rrm8qjj`,
+ESPN season type 1 = preseason); it won (+$10.18). It is the only NBA
+preseason pick. Exclude it from any NBA live-book read. Added
+`nba_preseason_excluded` (opener table in `src/lib/sports.ts`, 2026-27 opener
+Tue 2026-10-20). **Add the 2027-28 opener to the NBA and NHL tables before
+next September.**

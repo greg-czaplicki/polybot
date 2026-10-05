@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	detectSportTag,
 	detectSportTagFromSeriesId,
+	isNbaPreseasonTime,
 	isNflPreseasonTime,
 	isNhlPreseasonTime,
 	isSportsMarket,
@@ -99,5 +100,18 @@ describe("isNhlPreseasonTime", () => {
 	it("fails open for seasons without a recorded opener", () => {
 		expect(isNhlPreseasonTime(Date.UTC(2027, 8, 25, 23, 0))).toBe(false);
 		expect(isNhlPreseasonTime(Date.UTC(2026, 11, 1, 0, 0))).toBe(false);
+	});
+});
+
+describe("isNbaPreseasonTime", () => {
+	it("flags games before the 2026-27 opener (Tue 2026-10-20)", () => {
+		expect(isNbaPreseasonTime(Date.UTC(2026, 9, 3, 23, 0))).toBe(true); // MIA @ TOR exhibition
+		expect(isNbaPreseasonTime(Date.UTC(2026, 9, 16, 23, 30))).toBe(true);
+		expect(isNbaPreseasonTime(Date.UTC(2026, 9, 20, 23, 30))).toBe(false); // opening night
+		expect(isNbaPreseasonTime(Date.UTC(2026, 10, 1, 0, 0))).toBe(false);
+	});
+
+	it("fails open for seasons without a recorded opener", () => {
+		expect(isNbaPreseasonTime(Date.UTC(2027, 9, 5, 23, 0))).toBe(false);
 	});
 });
