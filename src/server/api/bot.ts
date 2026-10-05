@@ -9,6 +9,7 @@ import {
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
+import { NFL_TOTALS_PILOT_LANE, nflTotalsSide } from "@/lib/nfl-totals-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
@@ -2786,6 +2787,23 @@ async function listBotCandidates(
 			notes: (entry) => [
 				`sighted side ${entry.sharpSide ?? "none"}`,
 				`price band ${NCAAF_TOTALS_PILOT_LANE.priceLo}-${NCAAF_TOTALS_PILOT_LANE.priceHi}`,
+			],
+		},
+		// Era v18: NFL totals pilot (src/lib/nfl-totals-lane.ts) — same rule
+		// on regular-season NFL game totals.
+		{
+			lane: NFL_TOTALS_PILOT_LANE,
+			segmentLabel: "NFL totals lane (era v18 pilot, sighted side, no holder gate)",
+			side: (entry) =>
+				nflTotalsSide(
+					entry.sharpSide,
+					entry.sideA.price,
+					entry.sideB.price,
+					parseEventTime(entry.eventTime)?.getTime() ?? null,
+				),
+			notes: (entry) => [
+				`sighted side ${entry.sharpSide ?? "none"}`,
+				`price band ${NFL_TOTALS_PILOT_LANE.priceLo}-${NFL_TOTALS_PILOT_LANE.priceHi}`,
 			],
 		},
 	];

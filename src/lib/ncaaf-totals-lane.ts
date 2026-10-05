@@ -65,8 +65,9 @@ export function totalsSide(
 	sharpSide: string | null | undefined,
 	priceA: number | null | undefined,
 	priceB: number | null | undefined,
+	band: { priceLo: number; priceHi: number } = NCAAF_TOTALS_PILOT_LANE,
 ): LaneSide | null {
-	const { priceLo, priceHi } = NCAAF_TOTALS_PILOT_LANE;
+	const { priceLo, priceHi } = band;
 	const side: LaneSide | null =
 		sharpSide === "A" ? "A" : sharpSide === "B" ? "B" : null;
 	if (side === null) return null;

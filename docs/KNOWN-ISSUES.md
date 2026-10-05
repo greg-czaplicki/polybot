@@ -25,6 +25,8 @@ fixing commit.
   From 2026-09-20 era v16 adds a second lane, `lane = 'ncaaf_totals_pilot'`
   ($4 NCAAF game totals on the holder-sighted side, no holder gate, charter
   `docs/charters/ncaaf-totals-pilot.md`); the same `lane IS NULL` rule covers it.
+  From 2026-10-05 era v18 adds a third, `lane = 'nfl_totals_pilot'` (same rule
+  on regular-season NFL game totals, charter `docs/charters/nfl-totals-pilot.md`).
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for

@@ -166,6 +166,7 @@ function aliveItems(h: DashboardHealth): AliveItem[] {
 		},
 		pilotItem("cs2", "CS2 pilot", h.cs2Pilot),
 		pilotItem("ncaaf_totals", "CFB totals pilot", h.ncaafTotalsPilot),
+		pilotItem("nfl_totals", "NFL totals pilot", h.nflTotalsPilot),
 		{
 			key: "pick",
 			label: "Last pick",
