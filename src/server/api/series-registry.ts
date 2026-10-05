@@ -147,6 +147,21 @@ export const SPORT_SERIES_CONFIG: SeriesSportConfig[] = [
 		fallbackIds: [10204],
 		target: true,
 	},
+	// More soccer (2026-10-05): shadow-only via league probation, no ESPN
+	// linkage (settle via Gamma like UCL). Europa League is seasonal like UCL
+	// (uel-2025 carries 2026-27); Conference League, Nations League and
+	// international friendlies are evergreen series. Added during the
+	// Sept 21 - Oct 9 club break, when UNL was Polymarket's biggest soccer book.
+	{
+		tag: "uel",
+		kind: "seasonal",
+		slugBase: "uel",
+		fallbackIds: [10209],
+		target: true,
+	},
+	{ tag: "uecl", kind: "static", seriesId: 10437, target: true },
+	{ tag: "unl", kind: "static", seriesId: 11446, target: true },
+	{ tag: "fif", kind: "static", seriesId: 10238, target: true },
 	// Tennis: per-match markets live under the evergreen atp/wta series (no
 	// per-tournament series; US Open matches flow through these). Shadow-only
 	// via the same league-probation gate.

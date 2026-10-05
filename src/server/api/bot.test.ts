@@ -121,6 +121,24 @@ describe("getBotCandidatePolicy", () => {
 		expect(reg.rejectReason).toBe("nhl_league_probation");
 	});
 
+	it("shadow-settles the added soccer competitions behind league probation", () => {
+		for (const [seriesId, tag] of [
+			[10209, "uel"],
+			[10437, "uecl"],
+			[11446, "unl"],
+			[10238, "fif"],
+		] as const) {
+			const policy = getBotCandidatePolicy({
+				marketType: "moneyline",
+				sportSeriesId: seriesId,
+				minutesToStart: 120,
+				baseMinGrade: "A",
+				baseMarketQualityThreshold: 0.7,
+			});
+			expect(policy.rejectReason).toBe(`${tag}_league_probation`);
+		}
+	});
+
 	it("rejects NBA preseason games before the NBA timing gate", () => {
 		const base = {
 			marketType: "moneyline" as const,
