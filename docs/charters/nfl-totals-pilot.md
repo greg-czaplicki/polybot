@@ -20,7 +20,7 @@ applies verbatim with `ncaaf` → `nfl` and Saturday → Sunday/primetime.
 ## origin
 `nfl_league_probation` totals shadow, regular season only (event ≥
 2026-09-10), FIRST row per game (alt lines dedupe — the 9/28 overcount
-lesson), weeks 1-4: 56 games 37-19, +29.8 % at the sighted price, z 2.36.
+lesson), weeks 1-4: 56 games 37-19, +29.8 % at the sighted price, z 2.36 (CORRECTED 2026-10-05: 9 games had several alt lines first sighted at the same timestamp; 37-19 z 2.36 was the favourable tie-break. Averaging tied lines: ≈35-21, +25.2 %, z 2.02; worst/best tie-break +16.9 % z 1.28 / +31.4 % z 2.46.)
 Weekly 5-5 / 13-3 / 9-7 / 10-4; excluding week 2, 24-16 ≈ +18 %. Week 4
 (10-4) is the only block not seen at the 2026-09-28 read. Under 23-11,
 Over 14-8 — both positive; neither is a filter. All-gates-pass (the

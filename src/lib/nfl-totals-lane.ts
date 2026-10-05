@@ -10,7 +10,8 @@
  *
  * Evidence at registration: `nfl_league_probation` totals shadow, first row
  * per game, regular season (event ≥ 2026-09-10), weeks 1-4: 56 games 37-19,
- * +29.8 %, z 2.36 (weeks 5-5 / 13-3 / 9-7 / 10-4; ex-week-2 24-16 ≈ +18 %).
+ * +29.8 %, z 2.36 — CORRECTED same day: alt-line ties at the first sighting;
+ * tie-averaged ≈ 35-21 +25.2 % z 2.02, range z 1.28-2.46 — (weeks 5-5 / 13-3 / 9-7 / 10-4; ex-week-2 24-16 ≈ +18 %).
  * All-gates-pass cohort 4 rows 3-1, so the n ≥ 50 sole-blocker promotion
  * rule is NOT met: an execution pilot, not a promotion. Owner decision
  * 2026-10-05: "Yes, open nfl lanes".
