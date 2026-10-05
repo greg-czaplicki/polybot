@@ -743,3 +743,19 @@ preseason pick. Exclude it from any NBA live-book read. Added
 `nba_preseason_excluded` (opener table in `src/lib/sports.ts`, 2026-27 opener
 Tue 2026-10-20). **Add the 2027-28 opener to the NBA and NHL tables before
 next September.**
+
+## SharpPipeline /tick near the Durable Object memory limit (incident 2026-10-05 16:42–17:20Z)
+
+Registering four more soccer series (UEL 10209, UECL 10437, UNL 11446,
+friendlies 10238; commit 4f… reverted in 81a9212) made every `/tick` die
+with "Durable Object's isolate exceeded its memory limit", so
+`sharp_money_cache` froze for ~38 min (no new bot entries for any sport;
+no live pick windows were open). Cause: `fetchTrendingSportsMarkets`
+accumulates EVERY market of every in-window event (`allSportsMarkets.push(
+...tagMarkets)`, unfiltered) plus `tagStats`/`eventDetails` copies; UNL and
+friendly events carry ~110 markets each (exact scores, corners, halves).
+**Latent risk:** the margin was thin before the change — when NBA, NHL,
+NCAAB, NFL and soccer are all in season (November) the same crash can
+happen without any code change. Fix before adding sports: push only
+volume-floor + main-title markets, and drop per-market detail from the
+stats objects. Then re-add the four competitions.
