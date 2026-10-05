@@ -747,7 +747,7 @@ next September.**
 ## SharpPipeline /tick near the Durable Object memory limit (incident 2026-10-05 16:42–17:20Z)
 
 Registering four more soccer series (UEL 10209, UECL 10437, UNL 11446,
-friendlies 10238; commit 4f… reverted in 81a9212) made every `/tick` die
+friendlies 10238; reverted in the commit after it) made every `/tick` die
 with "Durable Object's isolate exceeded its memory limit", so
 `sharp_money_cache` froze for ~38 min (no new bot entries for any sport;
 no live pick windows were open). Cause: `fetchTrendingSportsMarkets`
