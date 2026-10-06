@@ -1003,6 +1003,15 @@ export async function fetchTrendingSportsMarkets(
 		const fetchSeries = async (seriesId: number) => {
 			const tag = seriesIdToTag.get(seriesId) ?? `series-${seriesId}`;
 			const tagMarkets: GammaMarket[] = [];
+			const propStat = {
+				tag,
+				seen: 0,
+				aboveFloor: 0,
+				totalVolume: 0,
+				maxVolume: 0,
+				maxTitle: "",
+				byType: {} as Record<string, number>,
+			};
 
 			if (!seriesId) {
 				console.warn(`[sharp-money] Missing series_id for ${tag}`);
@@ -1061,20 +1070,54 @@ export async function fetchTrendingSportsMarkets(
 							if (eventStart.getTime() > endWindowMs) continue;
 						}
 
-						const normalizedMarkets = rawMarkets.map((market) => ({
-							...market,
-							event_slug: event.slug ?? market.event_slug,
-							seriesId,
-							startTime: event.startTime ?? market.startTime,
-						}));
-						tagMarkets.push(...normalizedMarkets);
-						expandedCount += normalizedMarkets.length;
+						// Keep only markets that can survive the final filter, slimmed
+						// to the fields read downstream. Retaining every raw market of
+						// every in-window event (~6KB each, 3k+ on a busy slate) blew
+						// the SharpPipeline DO memory limit on 2026-10-05/06.
+						let keptCount = 0;
+						for (const market of rawMarkets) {
+							const title = market.question ?? "";
+							const marketVolume = market.volumeNum ?? market.volume ?? 0;
+							if (isPlayerPropTitle(title)) {
+								propStat.seen += 1;
+								if (marketVolume >= minVolumeUsd) propStat.aboveFloor += 1;
+								propStat.totalVolume += marketVolume;
+								if (marketVolume > propStat.maxVolume) {
+									propStat.maxVolume = marketVolume;
+									propStat.maxTitle = title;
+								}
+								const type = market.sportsMarketType ?? "unknown";
+								propStat.byType[type] = (propStat.byType[type] ?? 0) + 1;
+							}
+							if (!includeLowVolume && marketVolume < minVolumeUsd) continue;
+							if (!includeAllMarkets && !isMainMarketTitle(title)) continue;
+							tagMarkets.push({
+								id: market.id,
+								conditionId: market.conditionId,
+								question: market.question,
+								slug: market.slug,
+								event_slug: event.slug ?? market.event_slug,
+								eventSlug: market.eventSlug,
+								seriesId,
+								startTime: event.startTime ?? market.startTime,
+								endDate: market.endDate,
+								volumeNum: market.volumeNum,
+								volume: market.volume,
+								liquidityNum: market.liquidityNum,
+								liquidity: market.liquidity,
+								outcomes: market.outcomes,
+								bestBid: market.bestBid,
+								bestAsk: market.bestAsk,
+							} as GammaMarket);
+							keptCount += 1;
+						}
+						expandedCount += rawMarkets.length;
 						eventDetails.push({
 							tag,
 							seriesId,
 							eventSlug: event.slug ?? "unknown",
 							eventTitle: event.title ?? event.slug ?? "unknown",
-							marketCount: normalizedMarkets.length,
+							marketCount: keptCount,
 							rawMarketCount: rawMarkets.length,
 						});
 					}
@@ -1105,29 +1148,6 @@ export async function fetchTrendingSportsMarkets(
 					return isMainMarketTitle(market.question ?? "");
 				});
 
-				const propStat = {
-					tag,
-					seen: 0,
-					aboveFloor: 0,
-					totalVolume: 0,
-					maxVolume: 0,
-					maxTitle: "",
-					byType: {} as Record<string, number>,
-				};
-				for (const market of tagMarkets) {
-					const title = market.question ?? "";
-					if (!isPlayerPropTitle(title)) continue;
-					const marketVolume = market.volumeNum ?? market.volume ?? 0;
-					propStat.seen += 1;
-					if (marketVolume >= minVolumeUsd) propStat.aboveFloor += 1;
-					propStat.totalVolume += marketVolume;
-					if (marketVolume > propStat.maxVolume) {
-						propStat.maxVolume = marketVolume;
-						propStat.maxTitle = title;
-					}
-					const type = market.sportsMarketType ?? "unknown";
-					propStat.byType[type] = (propStat.byType[type] ?? 0) + 1;
-				}
 				if (propStat.seen > 0) playerPropStats.push(propStat);
 
 				tagStats.push({
