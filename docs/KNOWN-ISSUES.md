@@ -759,3 +759,12 @@ NCAAB, NFL and soccer are all in season (November) the same crash can
 happen without any code change. Fix before adding sports: push only
 volume-floor + main-title markets, and drop per-market detail from the
 stats objects. Then re-add the four competitions.
+
+**Recurred 2026-10-06 ~17:28–19:15Z with no code change** (organic slate:
+3,125 in-window markets across 22 series — NHL opener eve, MLB playoffs,
+tennis, esports); cache frozen ~1h45m, bot saw no new candidates. **FIXED
+18367ac:** markets are filtered (volume floor + main title) and slimmed to
+the downstream fields per event, prop stats computed inline; first ticks
+after deploy `ok`, cache fresh. `eventDetails.marketCount` now counts kept
+markets (`rawMarketCount` still the total). Re-adding the four soccer
+competitions is unblocked but untested — tail `/tick` after doing it.
