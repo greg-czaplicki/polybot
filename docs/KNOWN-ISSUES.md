@@ -27,6 +27,9 @@ fixing commit.
   `docs/charters/ncaaf-totals-pilot.md`); the same `lane IS NULL` rule covers it.
   From 2026-10-05 era v18 adds a third, `lane = 'nfl_totals_pilot'` (same rule
   on regular-season NFL game totals, charter `docs/charters/nfl-totals-pilot.md`).
+  From 2026-10-20 era v19 adds a fourth, `lane = 'nba_totals_fade'` (fade of
+  NBA-sharp wallet consensus on game totals, signals in `nba_fade_signals`
+  pushed from the VPS, charter `docs/charters/nba-totals-fade-pilot.md`).
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for

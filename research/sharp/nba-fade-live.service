@@ -1,0 +1,7 @@
+[Unit]
+Description=NBA totals fade: push sharp-consensus signals for upcoming NBA game totals (era v19)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/nba_fade_live.py
+TimeoutStartSec=540

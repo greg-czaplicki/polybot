@@ -9,6 +9,11 @@ import {
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
+import {
+	NBA_TOTALS_FADE_LANE,
+	type NbaFadeSignal,
+	nbaFadeSide,
+} from "@/lib/nba-totals-fade-lane";
 import { NFL_TOTALS_PILOT_LANE, nflTotalsSide } from "@/lib/nfl-totals-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
@@ -2765,6 +2770,33 @@ async function listBotCandidates(
 	// own pick rows for caps/kill; market groups taken by the holder book or
 	// an earlier lane this tick are skipped.
 	type LaneDebug = NonNullable<BotCandidatesDebug["lane"]>;
+	// Era v19: NBA totals fade signals pushed by polysharp (nba_fade_live.py).
+	const nbaFadeSignals = new Map<string, NbaFadeSignal>();
+	if (NBA_TOTALS_FADE_LANE.enabled) {
+		try {
+			const rows = await all<{
+				condition_id: string;
+				fade_label: string | null;
+				trigger_ts: number | null;
+				voided: number;
+			}>(
+				db,
+				`SELECT condition_id, fade_label, trigger_ts, voided FROM nba_fade_signals
+				 WHERE event_start > ?`,
+				Math.floor(now / 1000),
+			);
+			for (const row of rows) {
+				nbaFadeSignals.set(row.condition_id, {
+					conditionId: row.condition_id,
+					fadeLabel: row.fade_label,
+					triggerTs: row.trigger_ts,
+					voided: row.voided === 1,
+				});
+			}
+		} catch (error) {
+			console.warn("[bot] nba fade signals load failed:", error);
+		}
+	}
 	const lanes: Array<{
 		lane: LaneConfig;
 		segmentLabel: string;
@@ -2804,6 +2836,25 @@ async function listBotCandidates(
 			notes: (entry) => [
 				`sighted side ${entry.sharpSide ?? "none"}`,
 				`price band ${NFL_TOTALS_PILOT_LANE.priceLo}-${NFL_TOTALS_PILOT_LANE.priceHi}`,
+			],
+		},
+		// Era v19: NBA totals sharp-consensus FADE pilot
+		// (src/lib/nba-totals-fade-lane.ts) — bet the side opposite >= 2
+		// NBA-sharp wallets, from polysharp's pushed signals.
+		{
+			lane: NBA_TOTALS_FADE_LANE,
+			segmentLabel: "NBA totals fade lane (era v19 pilot, fade sharp consensus)",
+			side: (entry) =>
+				nbaFadeSide(
+					nbaFadeSignals.get(entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					parseEventTime(entry.eventTime)?.getTime() ?? null,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`fade ${nbaFadeSignals.get(entry.conditionId)?.fadeLabel ?? "none"} (consensus on the other side)`,
+				`price band ${NBA_TOTALS_FADE_LANE.priceLo}-${NBA_TOTALS_FADE_LANE.priceHi}`,
 			],
 		},
 	];
@@ -3210,6 +3261,80 @@ export async function handleBotRequest(
 			nowUnixSeconds(),
 		);
 		return jsonResponse({ ok: true });
+	}
+
+	if (url.pathname === "/api/bot/nba-fade-signals") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			signals?: Array<Record<string, unknown>>;
+			summary?: Record<string, unknown>;
+		}>(request);
+		if (!payload || !Array.isArray(payload.signals)) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const now = nowUnixSeconds();
+		// first_seen_at is kept from the first push: it is when the app could
+		// first have acted on the signal (audit of lane timing vs trigger_ts).
+		const stmt = env.POLYWHALER_DB.prepare(
+			`INSERT INTO nba_fade_signals
+			 (condition_id, question, event_start, consensus_label, fade_label, trigger_ts,
+			  wallets_json, voided, s1_over, s1_under, first_seen_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(condition_id) DO UPDATE SET
+			   consensus_label = excluded.consensus_label, fade_label = excluded.fade_label,
+			   trigger_ts = excluded.trigger_ts, wallets_json = excluded.wallets_json,
+			   voided = excluded.voided, s1_over = excluded.s1_over, s1_under = excluded.s1_under,
+			   updated_at = excluded.updated_at`,
+		);
+		const num = (v: unknown) =>
+			typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : null;
+		const str = (v: unknown, n: number) =>
+			typeof v === "string" ? v.slice(0, n) : null;
+		const bound: D1PreparedStatement[] = [];
+		for (const s of payload.signals.slice(0, 200)) {
+			const start = num(s.start);
+			if (typeof s.condition_id !== "string" || start === null) continue;
+			bound.push(
+				stmt.bind(
+					s.condition_id,
+					str(s.question, 200),
+					start,
+					str(s.consensus_label, 40),
+					str(s.fade_label, 40),
+					num(s.trigger_ts),
+					Array.isArray(s.wallets)
+						? JSON.stringify(s.wallets.slice(0, 20))
+						: null,
+					s.voided === 1 ? 1 : 0,
+					num(s.s1_over),
+					num(s.s1_under),
+					now,
+					now,
+				),
+			);
+		}
+		let upserted = 0;
+		for (let i = 0; i < bound.length; i += SHARP_ALERTS_BATCH_SIZE) {
+			const results = await env.POLYWHALER_DB.batch(
+				bound.slice(i, i + SHARP_ALERTS_BATCH_SIZE),
+			);
+			for (const r of results) upserted += Number(r.meta?.changes ?? 0);
+		}
+		if (payload.summary && typeof payload.summary === "object") {
+			await run(
+				env.POLYWHALER_DB,
+				`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+				 VALUES ('nba_fade', ?, ?)
+				 ON CONFLICT(key) DO UPDATE SET
+				   value_json = excluded.value_json,
+				   updated_at = excluded.updated_at`,
+				JSON.stringify(payload.summary).slice(0, 5000),
+				now,
+			);
+		}
+		return jsonResponse({ ok: true, upserted });
 	}
 
 	if (url.pathname === "/api/bot/sharp-alerts") {
