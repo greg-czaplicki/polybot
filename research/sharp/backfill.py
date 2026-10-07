@@ -7,6 +7,7 @@ sys.argv = [sys.argv[0], "report"] + sys.argv[1:]
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "polysharp.py")).read().split("if __name__")[0]
 exec(src)
 MIN_VOL = float(os.environ.get("MIN_VOL", 25000))
+SPORTS = {x for x in os.environ.get("SPORTS", "").split(",") if x}  # e.g. SPORTS=nba; empty = all
 start_day = date.fromisoformat(sys.argv[2]); end_day = date.fromisoformat(sys.argv[3])
 
 db = sqlite3.connect(DB, timeout=60); db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000"); db.executescript(SCHEMA); ensure_columns(db)
@@ -19,6 +20,7 @@ while d <= end_day:
         time.sleep(PAUSE)
         for m in page:
             if m.get("sportsMarketType") not in ("moneyline", "totals", "spreads") or m.get("negRisk"): continue
+            if SPORTS and (m.get("slug") or "").split("-")[0] not in SPORTS: continue
             gs = parse_start(m.get("gameStartTime")) if "parse_start" in globals() else None
             if gs is None:
                 try:
