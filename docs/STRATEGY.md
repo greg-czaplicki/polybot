@@ -68,6 +68,15 @@ ladder's `pin_move ≥ 0` clause is untouched (a different pre-registered
 rule about stake size, not promotion). The bar for lowering `z ≥ 2` itself
 is a written amendment BEFORE a cohort is read against it — never after.
 
+## Lane stake ladder (2026-10-08, no era bump — stake only)
+
+Every second-family lane: $4 → $6 at ≥ 100 settled forward bets, ROI > 0,
+clustered z ≥ 0.8 → $8 at ≥ 250, z ≥ 1.5; step down while the last 100 are
+net negative; above $8 (z ≥ 2) is the owner's call. Automatic (app
+`src/lib/lane-ladder.ts` → `laneStakeUsd`, bot `BOT_LANE_MAX_STAKE=8`).
+Counts lane bets picked from 2026-10-08T12:00Z. Charter
+`docs/charters/lane-stake-ladder.md`.
+
 ## Pre-registered tests (open)
 
 Hypotheses written down BEFORE their data exists, so the read is mechanical

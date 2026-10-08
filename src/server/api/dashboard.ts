@@ -7,6 +7,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
 import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
+import { evaluateLadder } from "@/lib/lane-ladder";
 import { NBA_TOTALS_FADE_LANE } from "@/lib/nba-totals-fade-lane";
 import { NFL_TOTALS_PILOT_LANE } from "@/lib/nfl-totals-lane";
 import {
@@ -119,6 +120,12 @@ export interface LanePilotState {
 	wins: number;
 	realizedPnl: number;
 	z: number | null;
+	/** Stake ladder (src/lib/lane-ladder.ts): current level, stake, and its evidence. */
+	ladderLevel: number;
+	ladderStake: number;
+	ladderSettled: number;
+	ladderZ: number | null;
+	ladderOwnerCall: boolean;
 }
 
 /** Live-book results over a trailing window (real fills only). */
@@ -649,8 +656,18 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		): Promise<LanePilotState | null> => {
 			try {
 				const laneRows = await listLanePickRows(db, lane.name);
-				const laneState = evaluateLaneState(laneRows, now, lane);
+				const ladder = evaluateLadder(laneRows);
+				const laneState = evaluateLaneState(laneRows, now, {
+					...lane,
+					stakeUsd: ladder.stakeUsd,
+					maxNotionalPerDay: ladder.stakeUsd * lane.maxPicksPerDay,
+				});
 				return {
+					ladderLevel: ladder.level,
+					ladderStake: ladder.stakeUsd,
+					ladderSettled: ladder.settled,
+					ladderZ: ladder.z,
+					ladderOwnerCall: ladder.ownerCall,
 					active: laneState.active,
 					reason: laneState.reason,
 					todayPicks: laneState.todayPicks,

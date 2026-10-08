@@ -8,6 +8,7 @@ import {
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
+import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import {
 	NBA_TOTALS_FADE_LANE,
@@ -171,6 +172,7 @@ type BotCandidatesDebug = {
 		emitted: number;
 		skipped: Record<string, number>;
 		state: LaneState | null;
+		ladder?: LadderState | null;
 	};
 	/** Era v16: every enabled second-family lane, this tick, keyed by lane name. */
 	lanes?: Record<string, NonNullable<BotCandidatesDebug["lane"]>>;
@@ -219,6 +221,8 @@ type BotCandidatesResult = {
 		};
 		/** Era v14: set on second-family candidates; bots without a configured lane stake must skip them. */
 		lane?: string;
+		/** 2026-10-08 lane stake ladder (src/lib/lane-ladder.ts): the stake for this lane right now. */
+		laneStakeUsd?: number;
 	}>;
 	requested: number;
 	returned: number;
@@ -2813,7 +2817,8 @@ async function listBotCandidates(
 		},
 		{
 			lane: NCAAF_TOTALS_PILOT_LANE,
-			segmentLabel: "NCAAF totals lane (era v16 pilot, sighted side, no holder gate)",
+			segmentLabel:
+				"NCAAF totals lane (era v16 pilot, sighted side, no holder gate)",
 			side: (entry) =>
 				totalsSide(entry.sharpSide, entry.sideA.price, entry.sideB.price),
 			notes: (entry) => [
@@ -2825,7 +2830,8 @@ async function listBotCandidates(
 		// on regular-season NFL game totals.
 		{
 			lane: NFL_TOTALS_PILOT_LANE,
-			segmentLabel: "NFL totals lane (era v18 pilot, sighted side, no holder gate)",
+			segmentLabel:
+				"NFL totals lane (era v18 pilot, sighted side, no holder gate)",
 			side: (entry) =>
 				nflTotalsSide(
 					entry.sharpSide,
@@ -2843,7 +2849,8 @@ async function listBotCandidates(
 		// NBA-sharp wallets, from polysharp's pushed signals.
 		{
 			lane: NBA_TOTALS_FADE_LANE,
-			segmentLabel: "NBA totals fade lane (era v19 pilot, fade sharp consensus)",
+			segmentLabel:
+				"NBA totals fade lane (era v19 pilot, fade sharp consensus)",
 			side: (entry) =>
 				nbaFadeSide(
 					nbaFadeSignals.get(entry.conditionId),
@@ -2874,7 +2881,20 @@ async function listBotCandidates(
 			};
 			try {
 				const laneRows = await listLanePickRows(db, lane.name);
-				const laneState = evaluateLaneState(laneRows, nowUnixSeconds(), lane);
+				// Stake ladder: the lane's stake and its daily notional cap scale
+				// together, so the per-day pick cap keeps its meaning.
+				const ladder = evaluateLadder(laneRows);
+				laneDebug.ladder = ladder;
+				const laneAtStake: LaneConfig = {
+					...lane,
+					stakeUsd: ladder.stakeUsd,
+					maxNotionalPerDay: ladder.stakeUsd * lane.maxPicksPerDay,
+				};
+				const laneState = evaluateLaneState(
+					laneRows,
+					nowUnixSeconds(),
+					laneAtStake,
+				);
 				laneDebug.state = laneState;
 				// v1.1 (era v15): one pick per team per UTC day — teams on either
 				// side of today's lane picks (placed or emitted this tick) are out.
@@ -2883,7 +2903,8 @@ async function listBotCandidates(
 				const eligible = upcomingEntries
 					.filter(
 						(entry) =>
-							resolveSportTagFromSeriesId(entry.sportSeriesId) === lane.sportTag &&
+							resolveSportTagFromSeriesId(entry.sportSeriesId) ===
+								lane.sportTag &&
 							getMarketTypeLabel(entry.marketTitle) === lane.marketType,
 					)
 					.map((entry) => {
@@ -2892,7 +2913,9 @@ async function listBotCandidates(
 							entry,
 							side: laneSideOf(entry),
 							minutesToStart:
-								eventTime !== null ? (eventTime.getTime() - now) / 60_000 : null,
+								eventTime !== null
+									? (eventTime.getTime() - now) / 60_000
+									: null,
 						};
 					})
 					.filter((item) => item.side !== null && item.minutesToStart !== null)
@@ -2949,6 +2972,7 @@ async function listBotCandidates(
 							historyUpdatedAt: grade?.historyUpdatedAt,
 						},
 						lane: lane.name,
+						laneStakeUsd: ladder.stakeUsd,
 					});
 					laneDebug.emitted += 1;
 					emittedThisLane += 1;

@@ -125,15 +125,21 @@ function LanesTable({ h }: { h: DashboardHealth }) {
 										<span className="block whitespace-nowrap text-ink-85">
 											{label}
 										</span>
-										{p?.active ? null : (
+										{p ? (
 											<span
 												className={`block whitespace-nowrap text-xs ${
-													item.tone === "bad" ? "text-signal-bad" : "text-ink-55"
+													item.tone === "bad"
+														? "text-signal-bad"
+														: "text-ink-55"
 												}`}
 											>
-												{laneStateText(p)}
+												${p.ladderStake} · level {p.ladderLevel}
+												{p.ladderOwnerCall
+													? " · z≥2, above $8 is your call"
+													: ""}
+												{p.active ? "" : ` · ${laneStateText(p)}`}
 											</span>
-										)}
+										) : null}
 									</span>
 								</span>
 							</td>
