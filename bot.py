@@ -66,6 +66,7 @@ class BotConfig:
 	# 24h notional caps sit under the global daily cap.
 	lane_stakes: Dict[str, float]
 	lane_daily_caps: Dict[str, float]
+	lane_max_stake: float
 
 
 def _prompt_missing(value: str, label: str, secret: bool = False) -> str:
@@ -232,6 +233,8 @@ def load_config() -> BotConfig:
 		# Unset → every lane candidate is skipped (logged as candidate_skip_lane_unconfigured).
 		lane_stakes=parse_lane_map(os.getenv("BOT_LANE_STAKES", "")),
 		lane_daily_caps=parse_lane_map(os.getenv("BOT_LANE_DAILY_CAPS", "")),
+		# 2026-10-08 stake ladder: the app sends laneStakeUsd; never above this.
+		lane_max_stake=float(os.getenv("BOT_LANE_MAX_STAKE", "8")),
 	)
 
 
@@ -1252,11 +1255,19 @@ def place_bet(
 	if lane:
 		# Second-family lane (era v14): fixed lane stake, no Kelly, no grade
 		# sizing. run_loop already refused lanes without a positive stake.
-		stake = float(config.lane_stakes.get(str(lane), 0.0))
-		if stake <= 0:
+		base_stake = float(config.lane_stakes.get(str(lane), 0.0))
+		if base_stake <= 0:
 			print("[bot] skip lane without stake", lane, entry.get("marketTitle"))
 			return False
-		lane_cap = float(config.lane_daily_caps.get(str(lane), 0.0))
+		# Stake ladder (app src/lib/lane-ladder.ts, 2026-10-08): the env stake
+		# is the on-switch and base; the app's laneStakeUsd is the current
+		# ladder stake, capped by BOT_LANE_MAX_STAKE. The lane's 24h cap scales
+		# with it so the per-day pick count keeps its meaning.
+		stake = base_stake
+		ladder_stake = candidate.get("laneStakeUsd")
+		if isinstance(ladder_stake, (int, float)) and ladder_stake > 0:
+			stake = min(float(ladder_stake), config.lane_max_stake)
+		lane_cap = float(config.lane_daily_caps.get(str(lane), 0.0)) * (stake / base_stake)
 		if lane_cap > 0:
 			now_ts = int(time.time())
 			lane_recent = [
