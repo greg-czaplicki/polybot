@@ -1020,16 +1020,18 @@ def parse_fill_from_response(
 
 def report_execution(
 	config: BotConfig, pick_id: str, payload: Dict[str, Any]
-) -> None:
-	"""Persist execution/fill details back onto the pick record."""
+) -> bool:
+	"""Persist execution/fill details back onto the pick record. False on failure."""
 	try:
 		post_json(
 			f"{config.base_url}/api/bot/picks/execution",
 			config.api_key,
 			{"id": pick_id, **payload},
 		)
+		return True
 	except Exception as exc:
 		print("[bot] failed to report execution:", exc)
+		return False
 
 def build_execution_payload(
 	trade: Dict[str, Any],
@@ -1515,10 +1517,13 @@ def place_bet(
 			f"{config.base_url}/api/bot/picks", config.api_key, pick_payload
 		)
 		pick_id = (created or {}).get("pick", {}).get("id")
-		if pick_id:
-			report_execution(config, pick_id, execution_payload)
-		else:
-			print("[bot] pick created but no id returned; execution not logged")
+		if not pick_id:
+			raise RuntimeError("pick created but no id returned")
+		if not report_execution(config, pick_id, execution_payload):
+			# 2026-10-08: a pick row without its fill (status, price, notional,
+			# order id) hides the position from exposure and slippage reads.
+			# Retry it through the outbox like a failed pick report.
+			raise RuntimeError("execution report failed")
 	except Exception as exc:
 		# A live fill with no D1 row would never be graded or settled. Queue
 		# the report for retry — clientPickId makes the replay idempotent.
@@ -1588,7 +1593,8 @@ def flush_pending_reports(config: BotConfig, state: Dict[str, Any]) -> None:
 			)
 			pick_id = (created or {}).get("pick", {}).get("id")
 			if pick_id and entry.get("executionPayload"):
-				report_execution(config, pick_id, entry["executionPayload"])
+				if not report_execution(config, pick_id, entry["executionPayload"]):
+					raise RuntimeError("execution report failed")
 			print(
 				"[bot] recovered pending pick report",
 				entry.get("clientPickId"),
