@@ -533,7 +533,11 @@ def fetch_candidates(config: BotConfig) -> Tuple[List[Dict[str, Any]], Dict[str,
 	)
 	url = f"{config.base_url}/api/bot/candidates?{query}"
 	data = request_json(url, config.api_key)
-	return data.get("candidates", []), data.get("debug", {})
+	debug = data.get("debug", {})
+	# 2026-10-08: open-exposure limit (app counts open bets from manual_picks).
+	if isinstance(debug, dict) and isinstance(data.get("exposure"), dict):
+		debug["exposure"] = data["exposure"]
+	return data.get("candidates", []), debug
 
 def normalize_outcome(value: str) -> str:
 	return " ".join(value.strip().lower().split())
@@ -1336,6 +1340,26 @@ def place_bet(
 					cap=config.daily_notional_cap,
 				)
 				return False
+		# Open-exposure limit (2026-10-08, owner: "x bets active at the same
+		# time"): money riding on unsettled bets, as counted by the app this
+		# poll, plus what this poll already placed, must stay under the cap.
+		# Settled bets free the room, so a winning day keeps firing.
+		exposure = state.get("exposure")
+		if isinstance(exposure, dict) and exposure.get("capUsd", 0) > 0:
+			open_usd = float(exposure.get("openUsd", 0)) + float(exposure.get("addedUsd", 0))
+			if open_usd + stake > float(exposure["capUsd"]):
+				print(
+					colorize("[bot]", COLOR_RED),
+					f"OPEN EXPOSURE CAP: {open_usd:.2f} open + {stake:.2f}",
+					f"> {exposure['capUsd']} — refusing live trade",
+				)
+				log_event(
+					"open_exposure_cap_hit",
+					openUsd=round(open_usd, 2),
+					stake=round(stake, 2),
+					cap=float(exposure["capUsd"]),
+				)
+				return False
 
 	# Generated BEFORE the order so the pick POST is idempotent: the server
 	# dedupes on client_pick_id, letting the outbox retry safely.
@@ -1514,6 +1538,8 @@ def place_bet(
 		state.setdefault("liveNotional", []).append(
 			{"ts": int(time.time()), "stake": round(stake, 2)}
 		)
+		if isinstance(state.get("exposure"), dict):
+			state["exposure"]["addedUsd"] = float(state["exposure"].get("addedUsd", 0)) + stake
 		if lane:
 			state.setdefault("laneNotional", {}).setdefault(str(lane), []).append(
 				{"ts": int(time.time()), "stake": round(stake, 2)}
@@ -1762,6 +1788,20 @@ def run_loop() -> None:
 			)
 			candidates, candidate_debug = fetch_candidates(config)
 			print("[bot] candidates", len(candidates))
+			exposure = (
+				candidate_debug.get("exposure")
+				if isinstance(candidate_debug, dict)
+				else None
+			)
+			state["exposure"] = (
+				{
+					"openUsd": float(exposure.get("openUsd") or 0),
+					"capUsd": float(exposure.get("capUsd") or 0),
+					"addedUsd": 0.0,
+				}
+				if isinstance(exposure, dict)
+				else None
+			)
 			if len(candidates) == 0 and isinstance(candidate_debug, dict):
 				excluded = candidate_debug.get("excluded") or {}
 				total_entries = candidate_debug.get("totalEntries")

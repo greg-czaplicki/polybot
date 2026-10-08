@@ -91,34 +91,32 @@ describe("evaluateLaneState", () => {
 	it("is active with a fresh book", () => {
 		const s = evaluateLaneState([], NOW);
 		expect(s.active).toBe(true);
-		expect(s.remainingToday).toBe(CS2_PICKEM_DOG_LANE.maxPicksPerDay);
+		expect(s.remainingOpen).toBe(CS2_PICKEM_DOG_LANE.maxOpenPicks);
 	});
 	it("refuses before the forward start", () => {
 		const s = evaluateLaneState([], CS2_PICKEM_DOG_LANE.forwardStart - 1);
 		expect(s.active).toBe(false);
 		expect(s.reason).toBe("before_forward_start");
 	});
-	it("caps at 3 picks per UTC day, ignoring yesterday", () => {
+	it("caps at 5 OPEN picks; settled and failed picks free their slot", () => {
 		const rows = [
-			row({ pickedAt: DAY - 100 }), // yesterday
+			row({ pickedAt: DAY - 100 }), // yesterday, still open
 			row({ pickedAt: DAY + 10 }),
 			row({ pickedAt: DAY + 20 }),
+			row({ pickedAt: DAY + 30 }),
 		];
-		expect(evaluateLaneState(rows, NOW).remainingToday).toBe(1);
-		rows.push(row({ pickedAt: DAY + 30 }));
+		expect(evaluateLaneState(rows, NOW).remainingOpen).toBe(1);
+		rows.push(row({ pickedAt: DAY + 40 }));
 		const s = evaluateLaneState(rows, NOW);
 		expect(s.active).toBe(false);
-		expect(s.reason).toBe("daily_pick_cap");
-	});
-	it("caps daily notional using executed fills", () => {
-		const rows = [
-			row({ pickedAt: DAY + 10, fillNotional: 9 }),
-			row({ pickedAt: DAY + 20, fillNotional: 9 }),
-		];
-		// 18 spent, 2 left < stake 4 → no more room even though only 2 picks
-		const s = evaluateLaneState(rows, NOW);
-		expect(s.active).toBe(false);
-		expect(s.reason).toBe("daily_notional_cap");
+		expect(s.reason).toBe("open_cap");
+		// one settles as a win, one order failed → two slots free again
+		rows[1] = row({ pickedAt: DAY + 10, status: "win", roi: 1.2, settledAt: DAY + 50 });
+		rows[2] = row({ pickedAt: DAY + 20, fillStatus: "failed" });
+		const after = evaluateLaneState(rows, NOW);
+		expect(after.active).toBe(true);
+		expect(after.remainingOpen).toBe(2);
+		expect(after.todayPicks).toBe(4);
 	});
 	it("kills on realized drawdown of $40 at the assumed stake", () => {
 		const rows = Array.from({ length: 10 }, (_, i) =>

@@ -33,9 +33,8 @@ export const NFL_TOTALS_PILOT_LANE: LaneConfig & {
 	priceHi: 0.75,
 	/** Fixed stake in USD. The bot's BOT_LANE_STAKES must match. */
 	stakeUsd: 4,
-	/** Hard daily caps, UTC day. Sunday slates are the volume; one pick per game via the market-group key. */
-	maxPicksPerDay: 5,
-	maxNotionalPerDay: 20,
+	/** Open-bet limit (2026-10-08, replaces 5/day + $20/day): unsettled lane bets at once. */
+	maxOpenPicks: 5,
 	oneTeamPerDay: false,
 	/** Kill: realized lane PnL at or below this (USD) stops emission. */
 	killDrawdownUsd: -40,

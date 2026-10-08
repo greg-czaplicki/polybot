@@ -23,8 +23,7 @@ describe("NFL_TOTALS_PILOT_LANE contract", () => {
 		expect(NFL_TOTALS_PILOT_LANE.sportTag).toBe("nfl");
 		expect(NFL_TOTALS_PILOT_LANE.marketType).toBe("total");
 		expect(NFL_TOTALS_PILOT_LANE.stakeUsd).toBe(4);
-		expect(NFL_TOTALS_PILOT_LANE.maxPicksPerDay).toBe(5);
-		expect(NFL_TOTALS_PILOT_LANE.maxNotionalPerDay).toBe(20);
+		expect(NFL_TOTALS_PILOT_LANE.maxOpenPicks).toBe(5);
 		expect(NFL_TOTALS_PILOT_LANE.killDrawdownUsd).toBe(-40);
 		expect(NFL_TOTALS_PILOT_LANE.forwardStart).toBe(
 			Date.UTC(2026, 9, 5, 17, 0) / 1000,

@@ -114,8 +114,8 @@ export interface DashboardHealth {
 export interface LanePilotState {
 	active: boolean;
 	reason: string;
-	todayPicks: number;
-	maxPicksPerDay: number;
+	openPicks: number;
+	maxOpenPicks: number;
 	settled: number;
 	wins: number;
 	realizedPnl: number;
@@ -660,7 +660,6 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				const laneState = evaluateLaneState(laneRows, now, {
 					...lane,
 					stakeUsd: ladder.stakeUsd,
-					maxNotionalPerDay: ladder.stakeUsd * lane.maxPicksPerDay,
 				});
 				return {
 					ladderLevel: ladder.level,
@@ -670,8 +669,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 					ladderOwnerCall: ladder.ownerCall,
 					active: laneState.active,
 					reason: laneState.reason,
-					todayPicks: laneState.todayPicks,
-					maxPicksPerDay: lane.maxPicksPerDay,
+					openPicks: laneState.openPicks,
+					maxOpenPicks: lane.maxOpenPicks,
 					settled: laneState.settled,
 					wins: laneState.wins,
 					realizedPnl: laneState.realizedPnl,

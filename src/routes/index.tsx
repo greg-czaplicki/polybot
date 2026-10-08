@@ -74,7 +74,7 @@ function pilotItem(
 					: "warn",
 		value: !p
 			? "no state"
-			: `${p.active ? "live" : p.reason} · ${p.todayPicks}/${p.maxPicksPerDay} today · ${p.wins}-${p.settled - p.wins} ${p.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(p.realizedPnl).toFixed(0)}`,
+			: `${p.active ? "live" : p.reason} · ${p.openPicks}/${p.maxOpenPicks} open · ${p.wins}-${p.settled - p.wins} ${p.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(p.realizedPnl).toFixed(0)}`,
 		alarm: p?.reason.startsWith("kill")
 			? `${label} killed: ${p.reason}`
 			: undefined,
@@ -105,7 +105,7 @@ function LanesTable({ h }: { h: DashboardHealth }) {
 			<thead>
 				<tr className="h-7 text-[0.6875rem] uppercase tracking-[0.12em] text-ink-55">
 					<th className="px-3 text-left font-medium">$4 lanes</th>
-					<th className="px-3 text-right font-medium">Today</th>
+					<th className="px-3 text-right font-medium">Open</th>
 					<th className="px-3 text-right font-medium">W-L</th>
 					<th className="px-3 text-right font-medium">P&amp;L</th>
 				</tr>
@@ -144,7 +144,7 @@ function LanesTable({ h }: { h: DashboardHealth }) {
 								</span>
 							</td>
 							<td className="whitespace-nowrap px-3 text-right text-ink-70">
-								{p ? `${p.todayPicks}/${p.maxPicksPerDay}` : "—"}
+								{p ? `${p.openPicks}/${p.maxOpenPicks}` : "—"}
 							</td>
 							<td className="whitespace-nowrap px-3 text-right text-ink-95">
 								{p && p.settled > 0 ? `${p.wins}-${p.settled - p.wins}` : "—"}

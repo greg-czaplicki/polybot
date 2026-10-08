@@ -39,9 +39,8 @@ export const NCAAF_TOTALS_PILOT_LANE: LaneConfig & {
 	priceHi: 0.75,
 	/** Fixed stake in USD. The bot's BOT_LANE_STAKES must match. */
 	stakeUsd: 4,
-	/** Hard daily caps, UTC day. Saturday slates are the volume; one pick per game via the market-group key. */
-	maxPicksPerDay: 5,
-	maxNotionalPerDay: 20,
+	/** Open-bet limit (2026-10-08, replaces 5/day + $20/day): unsettled lane bets at once. */
+	maxOpenPicks: 5,
 	/** Totals titles carry no team keys worth deduping ("A vs. B: O/U 53.5" → the market group already dedupes the game). */
 	oneTeamPerDay: false,
 	/** Kill: realized lane PnL at or below this (USD) stops emission. */

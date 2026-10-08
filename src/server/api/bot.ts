@@ -8,6 +8,7 @@ import {
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
+import { MAX_OPEN_NOTIONAL_USD } from "@/lib/exposure";
 import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import {
@@ -2881,15 +2882,10 @@ async function listBotCandidates(
 			};
 			try {
 				const laneRows = await listLanePickRows(db, lane.name);
-				// Stake ladder: the lane's stake and its daily notional cap scale
-				// together, so the per-day pick cap keeps its meaning.
+				// Stake ladder sets the stake; the open-bet limit is per lane.
 				const ladder = evaluateLadder(laneRows);
 				laneDebug.ladder = ladder;
-				const laneAtStake: LaneConfig = {
-					...lane,
-					stakeUsd: ladder.stakeUsd,
-					maxNotionalPerDay: ladder.stakeUsd * lane.maxPicksPerDay,
-				};
+				const laneAtStake: LaneConfig = { ...lane, stakeUsd: ladder.stakeUsd };
 				const laneState = evaluateLaneState(
 					laneRows,
 					nowUnixSeconds(),
@@ -2927,8 +2923,8 @@ async function listBotCandidates(
 						incrementCounter(laneDebug.skipped, laneState.reason);
 						continue;
 					}
-					if (emittedThisLane >= laneState.remainingToday) {
-						incrementCounter(laneDebug.skipped, "daily_cap_this_tick");
+					if (emittedThisLane >= laneState.remainingOpen) {
+						incrementCounter(laneDebug.skipped, "open_cap_this_tick");
 						continue;
 					}
 					const groupKey = getMarketGroupKey(entry);
@@ -3537,7 +3533,19 @@ export async function handleBotRequest(
 						: DEFAULT_MARKET_QUALITY_THRESHOLD,
 				inspectConditionId,
 			});
+			// Open exposure: money on unsettled bets (failed orders excluded,
+			// unknown fill state counted at the $8 max stake). The bot refuses a live order that
+			// would push it past capUsd.
+			const openRow = await all<{ open_usd: number | null }>(
+				env.POLYWHALER_DB,
+				`SELECT SUM(COALESCE(fill_notional, 8)) AS open_usd FROM manual_picks
+				 WHERE status = 'pending' AND COALESCE(fill_status, '') != 'failed'`,
+			);
 			return jsonResponse({
+				exposure: {
+					openUsd: Math.round((openRow[0]?.open_usd ?? 0) * 100) / 100,
+					capUsd: MAX_OPEN_NOTIONAL_USD,
+				},
 				candidates: result.candidates,
 				requested: result.requested,
 				returned: result.returned,

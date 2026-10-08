@@ -25,8 +25,7 @@ describe("NCAAF_TOTALS_PILOT_LANE contract", () => {
 	it("freezes the registered values", () => {
 		expect(NCAAF_TOTALS_PILOT_LANE.name).toBe("ncaaf_totals_pilot");
 		expect(NCAAF_TOTALS_PILOT_LANE.stakeUsd).toBe(4);
-		expect(NCAAF_TOTALS_PILOT_LANE.maxPicksPerDay).toBe(5);
-		expect(NCAAF_TOTALS_PILOT_LANE.maxNotionalPerDay).toBe(20);
+		expect(NCAAF_TOTALS_PILOT_LANE.maxOpenPicks).toBe(5);
 		expect(NCAAF_TOTALS_PILOT_LANE.killDrawdownUsd).toBe(-40);
 		expect(NCAAF_TOTALS_PILOT_LANE.forwardStart).toBe(
 			Date.UTC(2026, 8, 19, 21, 55) / 1000,
@@ -56,10 +55,10 @@ describe("NCAAF_TOTALS_PILOT_LANE contract", () => {
 		expect(before.reason).toBe("before_forward_start");
 		const fresh = evaluateLaneState([], now, NCAAF_TOTALS_PILOT_LANE);
 		expect(fresh.active).toBe(true);
-		expect(fresh.remainingToday).toBe(5);
+		expect(fresh.remainingOpen).toBe(5);
 		const five = [1, 2, 3, 4, 5].map((i) => row({ pickedAt: day + i }));
 		expect(evaluateLaneState(five, now, NCAAF_TOTALS_PILOT_LANE).reason).toBe(
-			"daily_pick_cap",
+			"open_cap",
 		);
 		const losses = Array.from({ length: 10 }, (_, i) =>
 			row({

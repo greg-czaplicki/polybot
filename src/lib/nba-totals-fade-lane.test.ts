@@ -31,8 +31,7 @@ describe("NBA_TOTALS_FADE_LANE contract", () => {
 		expect(NBA_TOTALS_FADE_LANE.sportTag).toBe("nba");
 		expect(NBA_TOTALS_FADE_LANE.marketType).toBe("total");
 		expect(NBA_TOTALS_FADE_LANE.stakeUsd).toBe(4);
-		expect(NBA_TOTALS_FADE_LANE.maxPicksPerDay).toBe(5);
-		expect(NBA_TOTALS_FADE_LANE.maxNotionalPerDay).toBe(20);
+		expect(NBA_TOTALS_FADE_LANE.maxOpenPicks).toBe(5);
 		expect(NBA_TOTALS_FADE_LANE.killDrawdownUsd).toBe(-40);
 		expect(NBA_TOTALS_FADE_LANE.forwardStart).toBe(Date.UTC(2026, 9, 20) / 1000);
 	});

@@ -27,9 +27,8 @@ export const CS2_PICKEM_DOG_LANE = {
 	priceHi: 0.5,
 	/** Fixed stake in USD. The bot's BOT_LANE_STAKES must match. */
 	stakeUsd: 4,
-	/** Hard daily caps, UTC day. */
-	maxPicksPerDay: 3,
-	maxNotionalPerDay: 20,
+	/** Open-bet limit (2026-10-08, replaces 3/day + $20/day): unsettled lane bets at once. */
+	maxOpenPicks: 5,
 	/**
 	 * v1.1 (era v15): a team that appears on EITHER side of a market the
 	 * lane already picked today is excluded for the rest of the UTC day.
@@ -62,8 +61,8 @@ export interface LaneConfig {
 	sportTag: string;
 	marketType: string;
 	stakeUsd: number;
-	maxPicksPerDay: number;
-	maxNotionalPerDay: number;
+	/** Max unsettled (open) lane bets at once; a settled bet frees its slot. */
+	maxOpenPicks: number;
 	oneTeamPerDay: boolean;
 	killDrawdownUsd: number;
 	killTrailingN: number;
@@ -121,6 +120,8 @@ export interface LanePickRow {
 	roi: number | null;
 	/** Executed notional; the assumed stake is used when null (paper / unreported). */
 	fillNotional: number | null;
+	/** manual_picks.fill_status; 'failed' rows never hold an open slot. */
+	fillStatus?: string | null;
 	/** Cluster key: one match = one cluster. */
 	clusterKey: string;
 	/** Both teams of the picked market (`matchTeamKeys`), for the per-team day rule. */
@@ -135,14 +136,14 @@ export interface LaneState {
 		| "ok"
 		| "disabled"
 		| "before_forward_start"
-		| "daily_pick_cap"
-		| "daily_notional_cap"
+		| "open_cap"
 		| "kill_drawdown"
 		| "kill_z";
 	todayPicks: number;
-	todayNotional: number;
-	/** How many more picks the lane may emit right now. */
-	remainingToday: number;
+	/** Unsettled lane bets right now. */
+	openPicks: number;
+	/** How many more picks the lane may emit right now (open slots left). */
+	remainingOpen: number;
 	settled: number;
 	wins: number;
 	realizedPnl: number;
@@ -193,10 +194,9 @@ export function evaluateLaneState(
 	const dayStart = utcDayStart(nowSeconds);
 	const today = rows.filter((r) => r.pickedAt >= dayStart);
 	const todayPicks = today.length;
-	const todayNotional = today.reduce(
-		(s, r) => s + (r.fillNotional ?? lane.stakeUsd),
-		0,
-	);
+	const openPicks = rows.filter(
+		(r) => r.status === "pending" && r.fillStatus !== "failed",
+	).length;
 	const teamsToday = lane.oneTeamPerDay
 		? Array.from(new Set(today.flatMap((r) => r.teams)))
 		: [];
@@ -223,17 +223,11 @@ export function evaluateLaneState(
 					})),
 				)
 			: null;
-	const remainingPicks = Math.max(0, lane.maxPicksPerDay - todayPicks);
-	const remainingNotional = lane.maxNotionalPerDay - todayNotional;
-	const remainingByNotional = Math.max(
-		0,
-		Math.floor(remainingNotional / lane.stakeUsd + 1e-9),
-	);
-	const remainingToday = Math.min(remainingPicks, remainingByNotional);
+	const remainingOpen = Math.max(0, lane.maxOpenPicks - openPicks);
 
 	const base = {
 		todayPicks,
-		todayNotional,
+		openPicks,
 		settled,
 		wins,
 		realizedPnl,
@@ -245,13 +239,12 @@ export function evaluateLaneState(
 		...base,
 		active: false,
 		reason,
-		remainingToday: 0,
+		remainingOpen: 0,
 	});
 	if (!lane.enabled) return stopped("disabled");
 	if (nowSeconds < lane.forwardStart) return stopped("before_forward_start");
 	if (realizedPnl <= lane.killDrawdownUsd) return stopped("kill_drawdown");
 	if (z !== null && z < lane.killZ) return stopped("kill_z");
-	if (remainingPicks === 0) return stopped("daily_pick_cap");
-	if (remainingByNotional === 0) return stopped("daily_notional_cap");
-	return { ...base, active: true, reason: "ok", remainingToday };
+	if (remainingOpen === 0) return stopped("open_cap");
+	return { ...base, active: true, reason: "ok", remainingOpen };
 }

@@ -39,3 +39,21 @@ at risk instead.
 - A lane with no edge reaches level 1 roughly 1 time in 5; the step-down
   rule and the −$40 kill bound the cost of that false promotion to tens of
   dollars. That trade is the point of the ladder.
+
+## Open-bet limits (2026-10-08, same day; era v20)
+Owner: "I don't think there should be a cap … we should be able to place x
+amount of bets that are active at the same time. If they settle as winners
+the bot should keep firing." Then: 5 open per lane; "We shouldn't really
+flirt with $100 dollars being open" → $50; 24h safety limit $100.
+
+- Per lane: at most **5 unsettled bets** at once (`maxOpenPicks`); a
+  settled or failed bet frees its slot. Replaces 3/day (CS2) and 5/day +
+  $20/day (NCAAF, NFL, NBA). CS2's one-team-per-UTC-day rule stays (it is a
+  correlation guard, not a volume cap).
+- All bets (lanes + holder book): at most **$50 riding on unsettled bets**
+  (`src/lib/exposure.ts`). The app sends `exposure {openUsd, capUsd}` with
+  the candidates; the bot refuses a live order that would cross it.
+  Unknown-fill rows count at $8.
+- Bot: per-lane 24h caps (`BOT_LANE_DAILY_CAPS`) removed. The global
+  rolling-24h placed limit stays as a malfunction backstop only:
+  `BOT_DAILY_NOTIONAL_CAP=100`.

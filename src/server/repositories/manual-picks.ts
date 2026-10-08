@@ -2204,13 +2204,14 @@ export async function listLanePickRows(
 		status: string;
 		roi: number | null;
 		fill_notional: number | null;
+		fill_status: string | null;
 		market_title: string;
 		event_time: string | null;
 		picked_at: number;
 		settled_at: number | null;
 	}>(
 		db,
-		`SELECT status, roi, fill_notional, market_title, event_time, picked_at, settled_at
+		`SELECT status, roi, fill_notional, fill_status, market_title, event_time, picked_at, settled_at
 		 FROM manual_picks WHERE lane = ? ORDER BY picked_at ASC`,
 		lane,
 	);
@@ -2218,6 +2219,7 @@ export async function listLanePickRows(
 		status: r.status,
 		roi: r.roi,
 		fillNotional: r.fill_notional,
+		fillStatus: r.fill_status,
 		clusterKey: `${r.market_title.split(":")[0]?.trim().toLowerCase() ?? r.market_title}|${r.event_time ?? ""}`,
 		teams: matchTeamKeys(r.market_title),
 		pickedAt: r.picked_at,
