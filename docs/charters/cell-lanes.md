@@ -135,3 +135,12 @@ lane reads +4.5 % z 0.4 n 98. The correction follows the pilot charter's
 written population, and it lowers the read. Band, entry, grain, start date
 and pass rule are unchanged. Readout:
 `docs/audits/2026-10-02-cs2-pickem-pilot.md`.
+
+## Read 2026-10-08 — `cs2_pickem_dog_cell`: FAIL
+Polysharp daily report 2026-10-08, first report past n ≥ 150: forward ROI
++3.8 %, clustered z 0.4, n 162 (76 wins); in-sample reference +4.7 % z 0.8
+n 355. Pass needed ROI > 0 and z ≥ 2 → FAIL. Per this charter: no re-cut of
+the same data. Consequence for the $4 execution pilot
+(`cs2-pickem-dog-pilot.md`): its scaling condition (lane PASS) can no longer
+be met under this version; the pilot keeps running at $4 under its own
+caps/kill until its 2026-11-01 readout.
