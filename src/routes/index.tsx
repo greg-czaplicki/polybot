@@ -118,28 +118,32 @@ function LanesTable({ h }: { h: DashboardHealth }) {
 							key={key}
 							className="h-9 border-t border-ink-10 text-sm sm:h-7 sm:text-xs"
 						>
-							<td className="px-3">
+							<td className="px-3 py-1">
 								<span className="flex items-center gap-2">
 									<Dot tone={item.tone} />
-									<span className="text-ink-85">{label}</span>
-									{p?.active ? null : (
-										<span
-											className={`text-xs ${
-												item.tone === "bad" ? "text-signal-bad" : "text-ink-55"
-											}`}
-										>
-											{laneStateText(p)}
+									<span className="min-w-0">
+										<span className="block whitespace-nowrap text-ink-85">
+											{label}
 										</span>
-									)}
+										{p?.active ? null : (
+											<span
+												className={`block whitespace-nowrap text-xs ${
+													item.tone === "bad" ? "text-signal-bad" : "text-ink-55"
+												}`}
+											>
+												{laneStateText(p)}
+											</span>
+										)}
+									</span>
 								</span>
 							</td>
-							<td className="px-3 text-right text-ink-70">
+							<td className="whitespace-nowrap px-3 text-right text-ink-70">
 								{p ? `${p.todayPicks}/${p.maxPicksPerDay}` : "—"}
 							</td>
-							<td className="px-3 text-right text-ink-95">
+							<td className="whitespace-nowrap px-3 text-right text-ink-95">
 								{p && p.settled > 0 ? `${p.wins}-${p.settled - p.wins}` : "—"}
 							</td>
-							<td className="px-3 text-right">
+							<td className="whitespace-nowrap px-3 text-right">
 								{p && p.settled > 0 ? (
 									<span className={toneClass(p.realizedPnl)}>
 										{p.realizedPnl >= 0 ? "+" : "−"}$
