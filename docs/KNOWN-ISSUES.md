@@ -5,6 +5,16 @@ fixing commit.
 
 ## Data-validity caveats (permanent)
 
+- **Lost execution report, 2026-10-08 12:00:17Z (FIXED, bot 313f1e6).** A live
+  CS2 lane fill (pick_1791460814307_fzoqajh, order 0x84eb…, $4 @ 0.50) got its
+  pick row but the `/api/bot/picks/execution` POST hit a worker 1101 (cause
+  unknown — no deploy at that minute; Workers logs are live-tail only), and
+  `report_execution` swallowed the error, leaving fill_status/price/notional/
+  order_id NULL. Replayed by hand from `bot/trades.jsonl` the same day; no other
+  NULL-fill rows since 2026-07-20. The bot now routes a failed execution report
+  into the pendingReports outbox. The open-exposure query counts any future
+  NULL-fill pending row at $8.
+
 - **Football Pinnacle data paused 2026-09-18 → 2026-11-02** (`football` group
   in `ODDSPAPI_GROUP_PAUSED_UNTIL`): 69 credits with no reset were re-pointed
   at the MLB postseason, and `BENCHMARK_MIN_CREDITS` rose 20 → 40 so the last
