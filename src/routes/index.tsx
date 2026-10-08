@@ -81,6 +81,82 @@ function pilotItem(
 	};
 }
 
+/** The $4 execution-pilot lanes, in the order they shipped. */
+function laneRows(h: DashboardHealth) {
+	return [
+		{ key: "cs2", label: "CS2 underdogs", state: h.cs2Pilot },
+		{ key: "ncaaf_totals", label: "NCAAF totals", state: h.ncaafTotalsPilot },
+		{ key: "nfl_totals", label: "NFL totals", state: h.nflTotalsPilot },
+		{ key: "nba_fade", label: "NBA totals fade", state: h.nbaTotalsFade },
+	];
+}
+
+function laneStateText(p: DashboardHealth["cs2Pilot"]): string {
+	if (!p) return "no state";
+	if (p.active) return "live";
+	if (p.reason === "before_forward_start") return "starts later";
+	return p.reason.replaceAll("_", " ");
+}
+
+/** Lane pilots: one row each, every number visible at phone width. */
+function LanesTable({ h }: { h: DashboardHealth }) {
+	return (
+		<table className="w-full border-t border-ink-15 bg-ink-05 font-mono tabular-nums">
+			<thead>
+				<tr className="h-7 text-[0.6875rem] uppercase tracking-[0.12em] text-ink-55">
+					<th className="px-3 text-left font-medium">$4 lanes</th>
+					<th className="px-3 text-right font-medium">Today</th>
+					<th className="px-3 text-right font-medium">W-L</th>
+					<th className="px-3 text-right font-medium">P&amp;L</th>
+				</tr>
+			</thead>
+			<tbody>
+				{laneRows(h).map(({ key, label, state: p }) => {
+					const item = pilotItem(key, label, p);
+					return (
+						<tr
+							key={key}
+							className="h-9 border-t border-ink-10 text-sm sm:h-7 sm:text-xs"
+						>
+							<td className="px-3">
+								<span className="flex items-center gap-2">
+									<Dot tone={item.tone} />
+									<span className="text-ink-85">{label}</span>
+									{p?.active ? null : (
+										<span
+											className={`text-xs ${
+												item.tone === "bad" ? "text-signal-bad" : "text-ink-55"
+											}`}
+										>
+											{laneStateText(p)}
+										</span>
+									)}
+								</span>
+							</td>
+							<td className="px-3 text-right text-ink-70">
+								{p ? `${p.todayPicks}/${p.maxPicksPerDay}` : "—"}
+							</td>
+							<td className="px-3 text-right text-ink-95">
+								{p && p.settled > 0 ? `${p.wins}-${p.settled - p.wins}` : "—"}
+							</td>
+							<td className="px-3 text-right">
+								{p && p.settled > 0 ? (
+									<span className={toneClass(p.realizedPnl)}>
+										{p.realizedPnl >= 0 ? "+" : "−"}$
+										{Math.abs(p.realizedPnl).toFixed(2)}
+									</span>
+								) : (
+									<span className="text-ink-40">—</span>
+								)}
+							</td>
+						</tr>
+					);
+				})}
+			</tbody>
+		</table>
+	);
+}
+
 function aliveItems(h: DashboardHealth): AliveItem[] {
 	const botTone = ageTone(h.botLastSeenAt, 15 * 60, 60 * 60);
 	const syncTone =
@@ -164,10 +240,9 @@ function aliveItems(h: DashboardHealth): AliveItem[] {
 				? `${h.lanesFired ?? 0} fired · ${ago(h.lanesEvaluatedAt)}`
 				: "no heartbeat",
 		},
-		pilotItem("cs2", "CS2 pilot", h.cs2Pilot),
-		pilotItem("ncaaf_totals", "CFB totals pilot", h.ncaafTotalsPilot),
-		pilotItem("nfl_totals", "NFL totals pilot", h.nflTotalsPilot),
-		pilotItem("nba_fade", "NBA totals fade", h.nbaTotalsFade),
+		...laneRows(h)
+			.map((l) => pilotItem(l.key, l.label, l.state))
+			.filter((item) => item.alarm),
 		{
 			key: "pick",
 			label: "Last pick",
@@ -209,6 +284,86 @@ function lineLabel(question: string | null, marketType: string | null): string {
 	if (marketType === "total") return `O/U ${num ?? ""}`.trim();
 	if (marketType === "moneyline") return "ML";
 	return q.split(":")[0].slice(0, 18);
+}
+
+/** Phone layout of the sharp tape: event line, then one two-line row per position. */
+function SharpTapeList({ events }: { events: SharpEvent[] }) {
+	return (
+		<ul className="divide-y divide-ink-15 sm:hidden">
+			{events.map((ev) => (
+				<li key={ev.key} className="px-3 py-2">
+					<p className="flex items-baseline justify-between gap-3">
+						<span className="min-w-0 text-sm font-semibold text-ink-95">
+							{ev.sport ? (
+								<span className="mr-1.5 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-ink-55">
+									{ev.sport}
+								</span>
+							) : null}
+							{ev.title}
+						</span>
+						<span className="shrink-0 font-mono text-xs tabular-nums text-ink-55">
+							{clock(ev.start)}
+						</span>
+					</p>
+					<ul className="mt-1 space-y-1.5">
+						{ev.rows.map((a) => {
+							const stats = [
+								a.walletRoiT != null
+									? `wallet t${a.walletRoiT.toFixed(1)}`
+									: null,
+								a.walletMarkets != null
+									? `${a.walletMarkets} mkts${
+											a.walletRoi != null
+												? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
+												: ""
+										}`
+									: null,
+								a.streak != null
+									? `form ${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
+									: null,
+								a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
+									? `square opp ${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
+									: null,
+								`seen ${ago(a.ts)}`,
+							].filter(Boolean);
+							return (
+								<li
+									key={`${a.conditionId}:${a.side}:${a.ts}`}
+									className={a.hedge ? "opacity-60" : ""}
+								>
+									<p className="flex items-baseline justify-between gap-3 text-sm">
+										<span className="min-w-0 text-ink-85">
+											<span className="mr-1.5 font-mono text-xs text-ink-55">
+												{lineLabel(a.question, a.marketType)}
+											</span>
+											{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
+											{a.hedge ? (
+												<span className="ml-1.5 font-mono text-xs uppercase text-signal-warn">
+													hedge
+												</span>
+											) : null}
+										</span>
+										<span className="shrink-0 font-mono tabular-nums text-ink-95">
+											{a.price != null ? `${Math.round(a.price * 100)}¢` : "—"}
+											<span className="ml-2 text-ink-70">
+												{a.usd != null
+													? `$${Math.round(a.usd).toLocaleString()}`
+													: "—"}
+												{a.fills != null && a.fills > 1 ? ` ×${a.fills}` : ""}
+											</span>
+										</span>
+									</p>
+									<p className="font-mono text-xs text-ink-55">
+										{stats.join(" · ")}
+									</p>
+								</li>
+							);
+						})}
+					</ul>
+				</li>
+			))}
+		</ul>
+	);
 }
 
 interface SharpEvent {
@@ -301,11 +456,11 @@ function TerminalPage() {
 					>
 						<Dot tone={item.tone} />
 						<div className="min-w-0">
-							<p className="font-mono text-xxs uppercase tracking-[0.15em] text-ink-40">
+							<p className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-ink-55 sm:text-xxs sm:tracking-[0.15em] sm:text-ink-40">
 								{item.label}
 							</p>
 							<p
-								className={`truncate font-mono text-xs tabular-nums ${
+								className={`font-mono text-sm tabular-nums sm:truncate sm:text-xs ${
 									item.tone === "bad"
 										? "text-signal-bad"
 										: item.tone === "warn"
@@ -324,6 +479,7 @@ function TerminalPage() {
 					</p>
 				) : null}
 			</div>
+			{data ? <LanesTable h={data.health} /> : null}
 			{alarms.length > 0 ? (
 				<p className="border-t border-ink-15 bg-signal-bad/10 px-3 py-1.5 font-mono text-xs text-signal-bad">
 					<span className="font-semibold uppercase tracking-[0.15em]">
@@ -354,7 +510,9 @@ function TerminalPage() {
 										<th className="px-3 text-right font-medium">W-L</th>
 										<th className="px-3 text-right font-medium">Units</th>
 										<th className="px-3 text-right font-medium">ROI</th>
-										<th className="px-3 text-right font-medium">Pin CLV</th>
+										<th className="hidden px-3 text-right font-medium sm:table-cell">
+											Pin CLV
+										</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -365,7 +523,7 @@ function TerminalPage() {
 												<Cell mono className="text-ink-70">
 													{w.label}
 													{w.placed > 0 ? (
-														<span className="ml-1.5 text-ink-40">
+														<span className="ml-1.5 text-ink-55">
 															{w.placed} placed
 														</span>
 													) : null}
@@ -381,10 +539,7 @@ function TerminalPage() {
 												<Cell right>
 													<Num value={w.roiPct} text={pct(w.roiPct)} />
 												</Cell>
-												<Cell
-													right
-													title={`${w.pinClvN}/${settled} settled carry Pinnacle CLV`}
-												>
+												<Cell right className="hidden sm:table-cell">
 													<Num
 														value={w.avgPinClvPct}
 														text={w.pinClvN > 0 ? pct(w.avgPinClvPct, 2) : "—"}
@@ -441,7 +596,7 @@ function TerminalPage() {
 								</div>
 							) : null}
 							{currentEra ? (
-								<div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 border-t border-ink-15 px-3 py-2 font-mono text-xs">
+								<div className="hidden grid-cols-[1fr_auto_auto] items-baseline gap-x-4 border-t border-ink-15 px-3 py-2 font-mono text-xs sm:grid">
 									<span className="text-xxs uppercase tracking-[0.15em] text-ink-40">
 										CLV vs · current era
 									</span>
@@ -487,139 +642,153 @@ function TerminalPage() {
 					title="Sharp tape · upcoming"
 					span={7}
 					meta={
-						data?.sharp.all
-							? `${data.sharp.sharpWallets ?? "—"} sharp wallets · ${data.sharp.all.n} signals · ROI ${pct(
+						data?.sharp.all ? (
+							<>
+								<span className="sm:hidden">
+									{data.sharp.all.n} signals · ROI{" "}
+									{pct((data.sharp.all.roi ?? 0) * 100)}
+								</span>
+								<span className="hidden sm:inline">{`${data.sharp.sharpWallets ?? "—"} sharp wallets · ${data.sharp.all.n} signals · ROI ${pct(
 									(data.sharp.all.roi ?? 0) * 100,
 								)} · CLV ${
 									data.sharp.all.clv != null
 										? `${(data.sharp.all.clv * 100).toFixed(2)}c`
 										: "—"
-								}`
-							: "no polysharp report yet"
+								}`}</span>
+							</>
+						) : (
+							"no polysharp report yet"
+						)
 					}
 				>
 					{data && data.sharpAlerts.length > 0 ? (
-						<Tape
-							minWidth="min-w-[560px]"
-							head={[
-								{ label: "Seen" },
-								{ label: "Line" },
-								{ label: "Side" },
-								{ label: "Px", align: "right" },
-								{ label: "$", align: "right" },
-								{ label: "Wallet", align: "right" },
-								{ label: "Form", align: "right" },
-								{ label: "Sq opp", align: "right" },
-								{ label: "Type" },
-							]}
-						>
-							{groupSharpEvents(data.sharpAlerts).map((ev) => (
-								<Fragment key={ev.key}>
-									<Row>
-										<Cell className="whitespace-nowrap text-xs text-ink-40">
-											{clock(ev.start)}
-										</Cell>
-										<Cell className="text-xs font-semibold text-ink-85">
-											{ev.sport ? (
-												<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
-													{ev.sport}
-												</span>
-											) : null}
-											{ev.title}
-										</Cell>
-										<Cell className="text-xxs text-ink-40" colSpan={7}>
-											{ev.rows.length} position{ev.rows.length === 1 ? "" : "s"}{" "}
-											· {new Set(ev.rows.map((r) => r.conditionId)).size} market
-											{new Set(ev.rows.map((r) => r.conditionId)).size === 1
-												? ""
-												: "s"}
-											{ev.rows.some((r) => r.hedge) ? " · hedge present" : ""}
-										</Cell>
-									</Row>
-									{ev.rows.map((a) => (
-										<Row
-											key={`${a.conditionId}:${a.side}:${a.ts}`}
-											className={a.hedge ? "opacity-60" : ""}
-										>
-											<Cell className="whitespace-nowrap text-xs text-ink-55">
-												{ago(a.ts)}
+						<SharpTapeList events={groupSharpEvents(data.sharpAlerts)} />
+					) : null}
+					{data && data.sharpAlerts.length > 0 ? (
+						<div className="hidden sm:block">
+							<Tape
+								minWidth="min-w-[560px]"
+								head={[
+									{ label: "Seen" },
+									{ label: "Line" },
+									{ label: "Side" },
+									{ label: "Px", align: "right" },
+									{ label: "$", align: "right" },
+									{ label: "Wallet", align: "right" },
+									{ label: "Form", align: "right" },
+									{ label: "Sq opp", align: "right" },
+									{ label: "Type" },
+								]}
+							>
+								{groupSharpEvents(data.sharpAlerts).map((ev) => (
+									<Fragment key={ev.key}>
+										<Row>
+											<Cell className="whitespace-nowrap text-xs text-ink-40">
+												{clock(ev.start)}
 											</Cell>
-											<Cell
-												className="pl-4 font-mono text-xs text-ink-70"
-												title={a.question ?? ""}
-											>
-												{lineLabel(a.question, a.marketType)}
-											</Cell>
-											<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
-												{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
-												{a.hedge ? (
-													<span className="ml-1 font-mono text-xxs uppercase text-signal-warn">
-														hedge
+											<Cell className="text-xs font-semibold text-ink-85">
+												{ev.sport ? (
+													<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
+														{ev.sport}
 													</span>
 												) : null}
+												{ev.title}
 											</Cell>
-											<Cell right className="font-mono text-xs">
-												{a.price != null
-													? `${Math.round(a.price * 100)}¢`
-													: "—"}
-											</Cell>
-											<Cell right className="font-mono text-xs">
-												{a.usd != null
-													? `$${Math.round(a.usd).toLocaleString()}`
-													: "—"}
-												{a.fills != null && a.fills > 1 ? (
-													<span className="ml-1 text-ink-40">×{a.fills}</span>
-												) : null}
-											</Cell>
-											<Cell
-												right
-												className="font-mono text-xs"
-												title="wallet ROI t-stat · settled markets · ROI"
-											>
-												{a.walletRoiT != null
-													? `t${a.walletRoiT.toFixed(1)}`
-													: "—"}
-												{a.walletMarkets != null ? (
-													<span className="ml-1 text-ink-40">
-														{a.walletMarkets}m
-														{a.walletRoi != null
-															? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
-															: ""}
-													</span>
-												) : null}
-											</Cell>
-											<Cell
-												right
-												className={`font-mono text-xs ${
-													a.streak != null && a.streak > 0.1
-														? "text-ink-95"
-														: a.streak != null && a.streak < -0.1
-															? "text-ink-40"
-															: ""
-												}`}
-												title="trailing-20 settled ROI"
-											>
-												{a.streak != null
-													? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
-													: "—"}
-											</Cell>
-											<Cell
-												right
-												className="font-mono text-xs"
-												title="square $ already on the opposite side"
-											>
-												{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
-													? `${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
-													: "—"}
-											</Cell>
-											<Cell className="text-xs text-ink-40">
-												{a.marketType ?? ""}
+											<Cell className="text-xxs text-ink-40" colSpan={7}>
+												{ev.rows.length} position
+												{ev.rows.length === 1 ? "" : "s"} ·{" "}
+												{new Set(ev.rows.map((r) => r.conditionId)).size} market
+												{new Set(ev.rows.map((r) => r.conditionId)).size === 1
+													? ""
+													: "s"}
+												{ev.rows.some((r) => r.hedge) ? " · hedge present" : ""}
 											</Cell>
 										</Row>
-									))}
-								</Fragment>
-							))}
-						</Tape>
+										{ev.rows.map((a) => (
+											<Row
+												key={`${a.conditionId}:${a.side}:${a.ts}`}
+												className={a.hedge ? "opacity-60" : ""}
+											>
+												<Cell className="whitespace-nowrap text-xs text-ink-55">
+													{ago(a.ts)}
+												</Cell>
+												<Cell
+													className="pl-4 font-mono text-xs text-ink-70"
+													title={a.question ?? ""}
+												>
+													{lineLabel(a.question, a.marketType)}
+												</Cell>
+												<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
+													{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
+													{a.hedge ? (
+														<span className="ml-1 font-mono text-xxs uppercase text-signal-warn">
+															hedge
+														</span>
+													) : null}
+												</Cell>
+												<Cell right className="font-mono text-xs">
+													{a.price != null
+														? `${Math.round(a.price * 100)}¢`
+														: "—"}
+												</Cell>
+												<Cell right className="font-mono text-xs">
+													{a.usd != null
+														? `$${Math.round(a.usd).toLocaleString()}`
+														: "—"}
+													{a.fills != null && a.fills > 1 ? (
+														<span className="ml-1 text-ink-40">×{a.fills}</span>
+													) : null}
+												</Cell>
+												<Cell
+													right
+													className="font-mono text-xs"
+													title="wallet ROI t-stat · settled markets · ROI"
+												>
+													{a.walletRoiT != null
+														? `t${a.walletRoiT.toFixed(1)}`
+														: "—"}
+													{a.walletMarkets != null ? (
+														<span className="ml-1 text-ink-40">
+															{a.walletMarkets}m
+															{a.walletRoi != null
+																? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
+																: ""}
+														</span>
+													) : null}
+												</Cell>
+												<Cell
+													right
+													className={`font-mono text-xs ${
+														a.streak != null && a.streak > 0.1
+															? "text-ink-95"
+															: a.streak != null && a.streak < -0.1
+																? "text-ink-40"
+																: ""
+													}`}
+													title="trailing-20 settled ROI"
+												>
+													{a.streak != null
+														? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
+														: "—"}
+												</Cell>
+												<Cell
+													right
+													className="font-mono text-xs"
+													title="square $ already on the opposite side"
+												>
+													{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
+														? `${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
+														: "—"}
+												</Cell>
+												<Cell className="text-xs text-ink-40">
+													{a.marketType ?? ""}
+												</Cell>
+											</Row>
+										))}
+									</Fragment>
+								))}
+							</Tape>
+						</div>
 					) : (
 						<Empty>
 							{isLoading && !data
@@ -640,44 +809,67 @@ function TerminalPage() {
 					meta={data ? `${data.activeBets.length} open` : undefined}
 				>
 					{data && data.activeBets.length > 0 ? (
-						<Tape
-							head={[
-								{ label: "Market" },
-								{ label: "Side" },
-								{ label: "Px", align: "right" },
-								{ label: "Grd", align: "right" },
-								{ label: "Mkt" },
-								{ label: "Fill" },
-								{ label: "Starts", align: "right" },
-							]}
-						>
+						<ul className="divide-y divide-ink-10 sm:hidden">
 							{data.activeBets.map((p) => (
-								<Row key={p.id}>
-									<Cell className="max-w-[18rem]">
-										<a
-											href={`/sharp/market/${p.conditionId}`}
-											className="block truncate text-ink-95 hover:text-brand-blue"
-										>
-											{p.marketTitle}
-										</a>
-									</Cell>
-									<Cell>
+								<li key={p.id} className="px-3 py-2">
+									<a
+										href={`/sharp/market/${p.conditionId}`}
+										className="block text-sm text-ink-95"
+									>
+										{p.marketTitle}
+									</a>
+									<p className="mt-0.5 flex items-baseline justify-between gap-3 text-sm">
 										<Side pick={p} />
-									</Cell>
-									<Cell right>
-										{p.price !== null ? p.price.toFixed(2) : "—"}
-									</Cell>
-									<Cell right>{p.grade ?? "—"}</Cell>
-									<Cell>
-										<Tag>{p.sportTag ?? "—"}</Tag>
-									</Cell>
-									<Cell className="text-ink-55">{p.fillStatus ?? "—"}</Cell>
-									<Cell right className="text-ink-55">
-										{clock(p.eventTime)}
-									</Cell>
-								</Row>
+										<span className="shrink-0 font-mono text-xs tabular-nums text-ink-70">
+											{p.price !== null ? p.price.toFixed(2) : "—"} ·{" "}
+											{clock(p.eventTime)}
+										</span>
+									</p>
+								</li>
 							))}
-						</Tape>
+						</ul>
+					) : null}
+					{data && data.activeBets.length > 0 ? (
+						<div className="hidden sm:block">
+							<Tape
+								head={[
+									{ label: "Market" },
+									{ label: "Side" },
+									{ label: "Px", align: "right" },
+									{ label: "Grd", align: "right" },
+									{ label: "Mkt" },
+									{ label: "Fill" },
+									{ label: "Starts", align: "right" },
+								]}
+							>
+								{data.activeBets.map((p) => (
+									<Row key={p.id}>
+										<Cell className="max-w-[18rem]">
+											<a
+												href={`/sharp/market/${p.conditionId}`}
+												className="block truncate text-ink-95 hover:text-brand-blue"
+											>
+												{p.marketTitle}
+											</a>
+										</Cell>
+										<Cell>
+											<Side pick={p} />
+										</Cell>
+										<Cell right>
+											{p.price !== null ? p.price.toFixed(2) : "—"}
+										</Cell>
+										<Cell right>{p.grade ?? "—"}</Cell>
+										<Cell>
+											<Tag>{p.sportTag ?? "—"}</Tag>
+										</Cell>
+										<Cell className="text-ink-55">{p.fillStatus ?? "—"}</Cell>
+										<Cell right className="text-ink-55">
+											{clock(p.eventTime)}
+										</Cell>
+									</Row>
+								))}
+							</Tape>
+						</div>
 					) : (
 						<Empty>
 							{isLoading && !data ? "Loading…" : "Flat. No open positions."}
