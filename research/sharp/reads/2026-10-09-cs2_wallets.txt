@@ -1,0 +1,38 @@
+7239 markets, 6412 match winners, fills_all rows 2411285  [0s]
+265888 wallet-market positions  [4s]
+records: 24670 wallets  [6s]
+  0/6412 markets  [6s]
+  500/6412 markets  [6s]
+  1000/6412 markets  [6s]
+  1500/6412 markets  [6s]
+  2000/6412 markets  [7s]
+  2500/6412 markets  [7s]
+  3000/6412 markets  [7s]
+  3500/6412 markets  [7s]
+  4000/6412 markets  [7s]
+  4500/6412 markets  [8s]
+  5000/6412 markets  [8s]
+  5500/6412 markets  [8s]
+  6000/6412 markets  [8s]
+
+cell                   discovery (<6/1)                     | holdout (>=6/1)                      | all
+A L0_lane               +10.4% z +2.7 n  878 g 878 |   +1.1% z +0.3 n  961 g 961 |   +5.5% z +2.1 n 1839  (disc only, holdout fails)
+A S1_on_dog             +11.8% z +1.0 n   90 g  90 |   -9.6% z -0.9 n  110 g 110 |   +0.0% z +0.0 n  200
+A S1_on_fav             +28.5% z +2.6 n  105 g 105 |   -1.1% z -0.1 n  132 g 132 |  +12.0% z +1.6 n  237  (disc only, holdout fails)
+A S2_on_dog             +17.1% z +1.5 n   94 g  94 |   +4.1% z +0.4 n  115 g 115 |  +10.0% z +1.3 n  209
+A S2_on_fav             +20.2% z +2.0 n  135 g 135 |   +1.2% z +0.2 n  198 g 198 |   +8.9% z +1.4 n  333  (disc only, holdout fails)
+A S3_on_dog             +18.1% z +1.2 n   55 g  55 |   +9.9% z +1.1 n  151 g 151 |  +12.1% z +1.5 n  206
+A S3_on_fav              +8.8% z +0.5 n   50 g  50 |  -18.2% z -1.9 n  128 g 128 |  -10.6% z -1.3 n  178
+A S5_on_dog             +22.4% z +1.1 n   29 g  29 |  -25.6% z -1.7 n   48 g  48 |   -7.5% z -0.6 n   77
+A S5_on_fav             +66.9% z +3.5 n   29 g  29 |  -14.4% z -0.9 n   42 g  42 |  +18.8% z +1.4 n   71
+A L_skip_S1_fav          +5.0% z +1.0 n  519 g 519 |   -0.6% z -0.1 n  469 g 469 |   +2.4% z +0.7 n  988
+B S0_follow              +3.8% z +1.0 n  225 g 225 |   +3.0% z +0.8 n  214 g 214 |   +3.4% z +1.3 n  439
+B S1_follow              +3.7% z +0.8 n  716 g 716 |   +0.5% z +0.1 n  718 g 718 |   +2.1% z +0.7 n 1434
+B S2_follow              +1.7% z +0.6 n  878 g 878 |   +4.7% z +1.8 n  988 g 988 |   +3.3% z +1.7 n 1866
+B S3_follow              +2.5% z +0.4 n  361 g 361 |   +2.2% z +0.5 n  704 g 704 |   +2.3% z +0.7 n 1065
+B S5_follow              +3.8% z +0.7 n  518 g 518 |   -3.0% z -0.8 n  718 g 718 |   -0.1% z -0.0 n 1236
+
+cells tested: 15; expected chance discovery hits at |z|>=2 ~0.7
+CANDIDATES: 0
+done  [9s]
+CHAIN DONE
