@@ -44,6 +44,8 @@ while d <= end_day:
     print(f"{d}: +{day_n} markets (total {found})", flush=True)
     d += timedelta(days=1)
 print("discovery done; crawling pending…", flush=True)
+if os.environ.get("DISCOVER_ONLY"):  # wallet backtests fetch tapes with fast_tape.py instead of crawl()
+    print("BACKFILL DONE (discovery only)", flush=True); sys.exit(0)
 while True:
     n = crawl(db, limit=200)
     left = db.execute("SELECT COUNT(*) FROM markets WHERE status='pending' AND start + ? < ?", (SETTLE_LAG, int(time.time()))).fetchone()[0]
