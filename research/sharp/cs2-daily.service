@@ -1,0 +1,7 @@
+[Unit]
+Description=CS2 daily: backfill settled CS2 markets + full tapes, then the team-specialist forward read
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+ExecStart=/root/polysharp/cs2-daily.sh
+TimeoutStartSec=7200

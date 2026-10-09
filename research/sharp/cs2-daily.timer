@@ -1,0 +1,7 @@
+[Unit]
+Description=CS2 daily forward read at 13:30 UTC
+[Timer]
+OnCalendar=*-*-* 13:30:00
+Persistent=true
+[Install]
+WantedBy=timers.target
