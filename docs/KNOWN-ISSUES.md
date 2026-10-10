@@ -40,6 +40,12 @@ fixing commit.
   From 2026-10-20 era v19 adds a fourth, `lane = 'nba_totals_fade'` (fade of
   NBA-sharp wallet consensus on game totals, signals in `nba_fade_signals`
   pushed from the VPS, charter `docs/charters/nba-totals-fade-pilot.md`).
+  From 2026-10-10 era v21 adds a fifth, `lane = 'cfb_hot_follow'` (follow
+  hot / team-specialist CFB wallets on game totals, signals in `lane_signals`,
+  charter `docs/charters/cfb-hot-follow-pilot.md`). It runs before the NCAAF
+  totals pilot, so from v21 `ncaaf_totals_pilot` rows exclude games that had
+  a hot/team signal — compare the pilot's record before/after 2026-10-10 with
+  that in mind.
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for

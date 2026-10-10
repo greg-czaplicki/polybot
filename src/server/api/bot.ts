@@ -8,6 +8,11 @@ import {
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
+import {
+	CFB_HOT_FOLLOW_LANE,
+	type LaneSignal,
+	laneSignalSide,
+} from "@/lib/cfb-hot-follow-lane";
 import { MAX_OPEN_NOTIONAL_USD } from "@/lib/exposure";
 import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
@@ -2802,6 +2807,35 @@ async function listBotCandidates(
 			console.warn("[bot] nba fade signals load failed:", error);
 		}
 	}
+	// Era v21: generic pushed wallet signals (lane_signals), first user the
+	// CFB hot/team-specialist follow lane (cfb_hot_live.py on the VPS).
+	const cfbHotSignals = new Map<string, LaneSignal>();
+	if (CFB_HOT_FOLLOW_LANE.enabled) {
+		try {
+			const rows = await all<{
+				condition_id: string;
+				bet_label: string | null;
+				trigger_ts: number | null;
+				voided: number;
+			}>(
+				db,
+				`SELECT condition_id, bet_label, trigger_ts, voided FROM lane_signals
+				 WHERE lane = ? AND event_start > ?`,
+				CFB_HOT_FOLLOW_LANE.name,
+				Math.floor(now / 1000),
+			);
+			for (const row of rows) {
+				cfbHotSignals.set(row.condition_id, {
+					conditionId: row.condition_id,
+					betLabel: row.bet_label,
+					triggerTs: row.trigger_ts,
+					voided: row.voided === 1,
+				});
+			}
+		} catch (error) {
+			console.warn("[bot] cfb hot signals load failed:", error);
+		}
+	}
 	const lanes: Array<{
 		lane: LaneConfig;
 		segmentLabel: string;
@@ -2814,6 +2848,25 @@ async function listBotCandidates(
 			side: (entry) => pickemSide(entry.sideA.price, entry.sideB.price),
 			notes: () => [
 				`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
+			],
+		},
+		// Era v21: CFB totals hot/team-specialist FOLLOW pilot
+		// (src/lib/cfb-hot-follow-lane.ts). Before the NCAAF totals pilot so
+		// a game with a wallet signal is bet by this lane.
+		{
+			lane: CFB_HOT_FOLLOW_LANE,
+			segmentLabel:
+				"CFB totals hot/specialist follow lane (era v21 pilot, follow wallets)",
+			side: (entry) =>
+				laneSignalSide(
+					cfbHotSignals.get(entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`follow ${cfbHotSignals.get(entry.conditionId)?.betLabel ?? "none"} (hot/team-specialist wallets)`,
+				`price band ${CFB_HOT_FOLLOW_LANE.priceLo}-${CFB_HOT_FOLLOW_LANE.priceHi}`,
 			],
 		},
 		{
@@ -3281,6 +3334,97 @@ export async function handleBotRequest(
 			nowUnixSeconds(),
 		);
 		return jsonResponse({ ok: true });
+	}
+
+	// Era v21: generic wallet-signal push for second-family lanes. The body
+	// is the lane's CURRENT state for upcoming events: rows upserted here,
+	// rows of the same lane for upcoming events not in this push cleared.
+	if (url.pathname === "/api/bot/lane-signals") {
+		if (request.method !== "POST") {
+			return jsonResponse({ error: "method_not_allowed" }, { status: 405 });
+		}
+		const payload = await parseJson<{
+			lane?: unknown;
+			signals?: Array<Record<string, unknown>>;
+			summary?: Record<string, unknown>;
+		}>(request);
+		const laneName =
+			typeof payload?.lane === "string" ? payload.lane.slice(0, 64) : "";
+		if (!payload || !laneName || !Array.isArray(payload.signals)) {
+			return jsonResponse({ error: "invalid_payload" }, { status: 400 });
+		}
+		const now = nowUnixSeconds();
+		// trigger_ts is kept while the bet label is unchanged, so it records
+		// when the current signal first fired; first_seen_at never moves.
+		const stmt = env.POLYWHALER_DB.prepare(
+			`INSERT INTO lane_signals
+			 (lane, condition_id, question, event_start, bet_label, trigger_ts,
+			  voided, detail_json, first_seen_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(lane, condition_id) DO UPDATE SET
+			   trigger_ts = CASE WHEN lane_signals.bet_label IS excluded.bet_label
+			     THEN lane_signals.trigger_ts ELSE excluded.trigger_ts END,
+			   bet_label = excluded.bet_label, voided = excluded.voided,
+			   detail_json = excluded.detail_json, question = excluded.question,
+			   event_start = excluded.event_start, updated_at = excluded.updated_at`,
+		);
+		const num = (v: unknown) =>
+			typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : null;
+		const str = (v: unknown, n: number) =>
+			typeof v === "string" ? v.slice(0, n) : null;
+		const bound: D1PreparedStatement[] = [];
+		for (const s of payload.signals.slice(0, 500)) {
+			const start = num(s.start);
+			if (typeof s.condition_id !== "string" || start === null) continue;
+			bound.push(
+				stmt.bind(
+					laneName,
+					s.condition_id,
+					str(s.question, 200),
+					start,
+					str(s.bet_label, 40),
+					num(s.trigger_ts),
+					s.voided === 1 ? 1 : 0,
+					s.detail && typeof s.detail === "object"
+						? JSON.stringify(s.detail).slice(0, 4000)
+						: null,
+					now,
+					now,
+				),
+			);
+		}
+		let upserted = 0;
+		for (let i = 0; i < bound.length; i += SHARP_ALERTS_BATCH_SIZE) {
+			const results = await env.POLYWHALER_DB.batch(
+				bound.slice(i, i + SHARP_ALERTS_BATCH_SIZE),
+			);
+			for (const r of results) upserted += Number(r.meta?.changes ?? 0);
+		}
+		const cleared = await env.POLYWHALER_DB.prepare(
+			`UPDATE lane_signals SET bet_label = NULL, voided = 0, updated_at = ?
+			 WHERE lane = ? AND event_start > ? AND updated_at < ?
+			   AND (bet_label IS NOT NULL OR voided = 1)`,
+		)
+			.bind(now, laneName, now, now)
+			.run();
+		if (payload.summary && typeof payload.summary === "object") {
+			await run(
+				env.POLYWHALER_DB,
+				`INSERT INTO bot_runtime_status (key, value_json, updated_at)
+				 VALUES (?, ?, ?)
+				 ON CONFLICT(key) DO UPDATE SET
+				   value_json = excluded.value_json,
+				   updated_at = excluded.updated_at`,
+				`lane_signals:${laneName}`,
+				JSON.stringify(payload.summary).slice(0, 5000),
+				now,
+			);
+		}
+		return jsonResponse({
+			ok: true,
+			upserted,
+			cleared: Number(cleared.meta?.changes ?? 0),
+		});
 	}
 
 	if (url.pathname === "/api/bot/nba-fade-signals") {

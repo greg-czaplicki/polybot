@@ -1,0 +1,7 @@
+[Unit]
+Description=CFB totals hot/team-specialist follow: push wallet signals for upcoming CFB game totals (era v21)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/cfb_hot_live.py
+TimeoutStartSec=540

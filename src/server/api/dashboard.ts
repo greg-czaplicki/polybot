@@ -6,6 +6,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
+import { CFB_HOT_FOLLOW_LANE } from "@/lib/cfb-hot-follow-lane";
 import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
 import { evaluateLadder } from "@/lib/lane-ladder";
 import { NBA_TOTALS_FADE_LANE } from "@/lib/nba-totals-fade-lane";
@@ -109,6 +110,8 @@ export interface DashboardHealth {
 	/** Era v18 NFL totals pilot (src/lib/nfl-totals-lane.ts), from its own pick rows. */
 	nflTotalsPilot: LanePilotState | null;
 	nbaTotalsFade: LanePilotState | null;
+	/** Era v21 CFB totals hot/team-specialist follow pilot (src/lib/cfb-hot-follow-lane.ts). */
+	cfbHotFollow: LanePilotState | null;
 }
 
 export interface LanePilotState {
@@ -685,6 +688,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const ncaafTotalsPilot = await pilotState(NCAAF_TOTALS_PILOT_LANE);
 		const nflTotalsPilot = await pilotState(NFL_TOTALS_PILOT_LANE);
 		const nbaTotalsFade = await pilotState(NBA_TOTALS_FADE_LANE);
+		const cfbHotFollow = await pilotState(CFB_HOT_FOLLOW_LANE);
 
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
@@ -712,6 +716,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			ncaafTotalsPilot,
 			nflTotalsPilot,
 			nbaTotalsFade,
+			cfbHotFollow,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.
