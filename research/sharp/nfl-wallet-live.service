@@ -1,0 +1,8 @@
+[Unit]
+Description=NFL totals wallet follow (team specialists + fade squares): push signals for upcoming NFL game totals (era v22)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+Environment=LANE=nfl_wallet_follow SERIES_ID=12185 RULE=S3SQ RECORDS=/root/polysharp/data/nfl/nfl_records.pkl LOOKAHEAD_H=24
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/wallet_lane_live.py
+TimeoutStartSec=540

@@ -47,7 +47,9 @@ Backfills, tape DBs and recurring data jobs run on the DESKTOP, data in
 with systemd --user timers (`research/sharp/desktop-units/`; installed
 copies in `~/.config/systemd/user/`). Daily jobs ship only small records
 pickles to the VPS: `cfb-daily.sh` → `/root/polysharp/data/cfb/cfb_records.pkl`,
-`nba-daily.sh` → `/root/polysharp/data/nba/records.pkl`; `cs2-daily.sh`
+`nba-daily.sh` → `/root/polysharp/data/nba/records.pkl`,
+`nfl-daily.sh` → `/root/polysharp/data/nfl/nfl_records.pkl` (generic
+`wallet_records.py` + VPS `wallet_lane_live.py`, env-configured per lane); `cs2-daily.sh`
 writes its forward read to `polywhaler-data/reports/`. Fetch full tapes with
 `research/sharp/fast_tape.py` (parallel; ~4 min per sport-season).
 

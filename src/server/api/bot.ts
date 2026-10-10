@@ -1,5 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
+	CFB_HOT_FOLLOW_LANE,
+	type LaneSignal,
+	laneSignalSide,
+} from "@/lib/cfb-hot-follow-lane";
+import {
 	CS2_PICKEM_DOG_LANE,
 	evaluateLaneState,
 	type LaneConfig,
@@ -8,20 +13,19 @@ import {
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
-import {
-	CFB_HOT_FOLLOW_LANE,
-	type LaneSignal,
-	laneSignalSide,
-} from "@/lib/cfb-hot-follow-lane";
 import { MAX_OPEN_NOTIONAL_USD } from "@/lib/exposure";
 import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
-import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import {
 	NBA_TOTALS_FADE_LANE,
 	type NbaFadeSignal,
 	nbaFadeSide,
 } from "@/lib/nba-totals-fade-lane";
+import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import { NFL_TOTALS_PILOT_LANE, nflTotalsSide } from "@/lib/nfl-totals-lane";
+import {
+	NFL_WALLET_FOLLOW_LANE,
+	nflWalletSide,
+} from "@/lib/nfl-wallet-follow-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
@@ -2807,25 +2811,31 @@ async function listBotCandidates(
 			console.warn("[bot] nba fade signals load failed:", error);
 		}
 	}
-	// Era v21: generic pushed wallet signals (lane_signals), first user the
-	// CFB hot/team-specialist follow lane (cfb_hot_live.py on the VPS).
-	const cfbHotSignals = new Map<string, LaneSignal>();
-	if (CFB_HOT_FOLLOW_LANE.enabled) {
+	// Era v21+: generic pushed wallet signals (lane_signals) for the wallet
+	// lanes (wallet_lane_live.py / cfb_hot_live.py on the VPS), per lane.
+	const walletLanes = [CFB_HOT_FOLLOW_LANE, NFL_WALLET_FOLLOW_LANE].filter(
+		(lane) => lane.enabled,
+	);
+	const laneSignals = new Map<string, Map<string, LaneSignal>>(
+		walletLanes.map((lane) => [lane.name, new Map()]),
+	);
+	if (walletLanes.length > 0) {
 		try {
 			const rows = await all<{
+				lane: string;
 				condition_id: string;
 				bet_label: string | null;
 				trigger_ts: number | null;
 				voided: number;
 			}>(
 				db,
-				`SELECT condition_id, bet_label, trigger_ts, voided FROM lane_signals
-				 WHERE lane = ? AND event_start > ?`,
-				CFB_HOT_FOLLOW_LANE.name,
+				`SELECT lane, condition_id, bet_label, trigger_ts, voided FROM lane_signals
+				 WHERE lane IN (${walletLanes.map(() => "?").join(", ")}) AND event_start > ?`,
+				...walletLanes.map((lane) => lane.name),
 				Math.floor(now / 1000),
 			);
 			for (const row of rows) {
-				cfbHotSignals.set(row.condition_id, {
+				laneSignals.get(row.lane)?.set(row.condition_id, {
 					conditionId: row.condition_id,
 					betLabel: row.bet_label,
 					triggerTs: row.trigger_ts,
@@ -2833,9 +2843,11 @@ async function listBotCandidates(
 				});
 			}
 		} catch (error) {
-			console.warn("[bot] cfb hot signals load failed:", error);
+			console.warn("[bot] lane signals load failed:", error);
 		}
 	}
+	const signalOf = (lane: LaneConfig, conditionId: string) =>
+		laneSignals.get(lane.name)?.get(conditionId);
 	const lanes: Array<{
 		lane: LaneConfig;
 		segmentLabel: string;
@@ -2859,13 +2871,13 @@ async function listBotCandidates(
 				"CFB totals hot/specialist follow lane (era v21 pilot, follow wallets)",
 			side: (entry) =>
 				laneSignalSide(
-					cfbHotSignals.get(entry.conditionId),
+					signalOf(CFB_HOT_FOLLOW_LANE, entry.conditionId),
 					entry.sideA,
 					entry.sideB,
 					Math.floor(now / 1000),
 				),
 			notes: (entry) => [
-				`follow ${cfbHotSignals.get(entry.conditionId)?.betLabel ?? "none"} (hot/team-specialist wallets)`,
+				`follow ${signalOf(CFB_HOT_FOLLOW_LANE, entry.conditionId)?.betLabel ?? "none"} (hot/team-specialist wallets)`,
 				`price band ${CFB_HOT_FOLLOW_LANE.priceLo}-${CFB_HOT_FOLLOW_LANE.priceHi}`,
 			],
 		},
@@ -2878,6 +2890,26 @@ async function listBotCandidates(
 			notes: (entry) => [
 				`sighted side ${entry.sharpSide ?? "none"}`,
 				`price band ${NCAAF_TOTALS_PILOT_LANE.priceLo}-${NCAAF_TOTALS_PILOT_LANE.priceHi}`,
+			],
+		},
+		// Era v22: NFL totals wallet FOLLOW pilot (src/lib/nfl-wallet-follow-lane.ts)
+		// — team specialists on a side / square wallets on the other. Before
+		// the NFL totals pilot so a game with a wallet signal is bet here.
+		{
+			lane: NFL_WALLET_FOLLOW_LANE,
+			segmentLabel:
+				"NFL totals wallet lane (era v22 pilot, team specialists + fade squares)",
+			side: (entry) =>
+				nflWalletSide(
+					signalOf(NFL_WALLET_FOLLOW_LANE, entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					parseEventTime(entry.eventTime)?.getTime() ?? null,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`follow ${signalOf(NFL_WALLET_FOLLOW_LANE, entry.conditionId)?.betLabel ?? "none"} (team specialists / against squares)`,
+				`price band ${NFL_WALLET_FOLLOW_LANE.priceLo}-${NFL_WALLET_FOLLOW_LANE.priceHi}`,
 			],
 		},
 		// Era v18: NFL totals pilot (src/lib/nfl-totals-lane.ts) — same rule

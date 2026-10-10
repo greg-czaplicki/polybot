@@ -5,18 +5,19 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
-import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
 import { CFB_HOT_FOLLOW_LANE } from "@/lib/cfb-hot-follow-lane";
-import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
+import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
 import { evaluateLadder } from "@/lib/lane-ladder";
-import { NBA_TOTALS_FADE_LANE } from "@/lib/nba-totals-fade-lane";
-import { NFL_TOTALS_PILOT_LANE } from "@/lib/nfl-totals-lane";
 import {
 	evaluateLiveLadder,
 	LIVE_OOS_SINCE,
 	type LiveCohortInput,
 	type LiveTrigger,
 } from "@/lib/live-verdict";
+import { NBA_TOTALS_FADE_LANE } from "@/lib/nba-totals-fade-lane";
+import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
+import { NFL_TOTALS_PILOT_LANE } from "@/lib/nfl-totals-lane";
+import { NFL_WALLET_FOLLOW_LANE } from "@/lib/nfl-wallet-follow-lane";
 import { STRATEGY_VERSION } from "../../lib/strategy-version";
 import { all, first } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
@@ -112,6 +113,8 @@ export interface DashboardHealth {
 	nbaTotalsFade: LanePilotState | null;
 	/** Era v21 CFB totals hot/team-specialist follow pilot (src/lib/cfb-hot-follow-lane.ts). */
 	cfbHotFollow: LanePilotState | null;
+	/** Era v22 NFL totals wallet follow pilot (src/lib/nfl-wallet-follow-lane.ts). */
+	nflWalletFollow: LanePilotState | null;
 }
 
 export interface LanePilotState {
@@ -689,6 +692,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const nflTotalsPilot = await pilotState(NFL_TOTALS_PILOT_LANE);
 		const nbaTotalsFade = await pilotState(NBA_TOTALS_FADE_LANE);
 		const cfbHotFollow = await pilotState(CFB_HOT_FOLLOW_LANE);
+		const nflWalletFollow = await pilotState(NFL_WALLET_FOLLOW_LANE);
 
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
@@ -717,6 +721,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			nflTotalsPilot,
 			nbaTotalsFade,
 			cfbHotFollow,
+			nflWalletFollow,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.

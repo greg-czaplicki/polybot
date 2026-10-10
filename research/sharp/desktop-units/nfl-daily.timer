@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily nfl-daily (catches up after sleep)
+[Timer]
+OnCalendar=*-*-* 11:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

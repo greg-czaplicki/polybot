@@ -46,6 +46,10 @@ fixing commit.
   totals pilot, so from v21 `ncaaf_totals_pilot` rows exclude games that had
   a hot/team signal — compare the pilot's record before/after 2026-10-10 with
   that in mind.
+  From 2026-10-11 era v22 adds a sixth, `lane = 'nfl_wallet_follow'` (team
+  specialists + fade squares on NFL totals, `lane_signals`, charter
+  `docs/charters/nfl-wallet-follow-pilot.md`); it runs before the NFL totals
+  pilot, which from then excludes games with a wallet signal.
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for

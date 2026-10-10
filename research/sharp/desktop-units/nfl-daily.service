@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler NFL wallet records refresh (desktop) -> VPS, era v22 nfl_wallet_follow
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/nfl-daily.sh
+TimeoutStartSec=3600

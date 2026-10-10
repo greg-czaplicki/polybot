@@ -16,7 +16,8 @@ from collections import defaultdict
 DB = sys.argv[1]
 SPORT = os.environ.get("SPORT", "cfb")
 SHADOW = sys.argv[2] if len(sys.argv) > 2 else None
-SPLIT, SETTLE_LAG = 1782864000, 4 * 3600          # 2026-07-01T00:00Z
+SPLIT = int(os.environ.get("SPLIT", 1782864000))    # default 2026-07-01T00:00Z (season boundary); NBA uses 2026-02-01
+SETTLE_LAG = 4 * 3600
 TRIG_USD, ON_USD, MIN_STAKE, LAT = 100, 100, 50, 60
 LINE_LO, LINE_HI, WIN_OPEN, WIN_CLOSE = 0.35, 0.65, 180 * 60, 60 * 60
 db = sqlite3.connect(DB, timeout=120)

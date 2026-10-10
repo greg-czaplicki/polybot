@@ -1,0 +1,7 @@
+[Unit]
+Description=NFL wallet follow signal poll every 10 minutes
+[Timer]
+OnCalendar=*:7/10
+Persistent=false
+[Install]
+WantedBy=timers.target
