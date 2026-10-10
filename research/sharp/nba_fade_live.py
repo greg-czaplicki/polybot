@@ -9,13 +9,12 @@ Same rule as the 2025-26 backtest cell S5_consensus/total (research/sharp/nba_wa
   consensus on both sides -> voided (no bet).
 Pushes every signal for upcoming NBA game totals to the app (/api/bot/nba-fade-signals); the app's lane bets the
 OTHER side in the bot's window. Runs every 10 min (nba-fade-live.timer).
-usage: python3 nba_fade_live.py [--dry]
+usage: python3 nba_fade_live.py [--dry]   |   desktop: python3 nba_fade_live.py --build-records <db> <out.pkl>
 """
 import os, sys, time, json, pickle, sqlite3, urllib.request
 from collections import defaultdict
 import bisect
 
-DB = os.environ.get("NBA_DB", "/root/polysharp/data/nba/nba_2025.db")
 BOOK_DB = os.environ.get("BOOK_DB", "/root/polybook/data/polybook.db")
 CACHE = os.environ.get("NBA_REC_CACHE", "/root/polysharp/data/nba/records.pkl")
 SETTLE_LAG, MIN_STAKE, TRIG_USD, MIN_CASH = 4 * 3600, 50, 100, 50
@@ -35,15 +34,17 @@ def get(url, retries=4):
     return None
 
 def records():
-    """wallet -> (settle_ts list, cum pnl, cum stake); cached until the settled-market count changes."""
-    db = sqlite3.connect(DB, timeout=60)
+    """wallet -> (settle_ts list, cum pnl, cum stake). Since 2026-10-09 the NBA DB lives on the owner's desktop:
+    the VPS only loads the records pickle that the desktop builds (`--build-records <db> <out>`, nba-daily.sh) and ships."""
+    with open(CACHE, "rb") as f:
+        c = pickle.load(f)
+    if "built_at" in c: log(f"records built {(time.time() - c['built_at']) / 3600:.1f}h ago")
+    return c["rec"]
+
+def build_records(db_path, out):
+    """Desktop: compute the records from the backfill DB and write the pickle the VPS job loads."""
+    db = sqlite3.connect(db_path, timeout=60)
     key = db.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), 0) FROM fills_done").fetchone()
-    try:
-        with open(CACHE, "rb") as f:
-            c = pickle.load(f)
-        if c["key"] == key: return c["rec"]
-    except Exception:
-        pass
     mk = {cid: (st, w0) for cid, st, w0 in db.execute(
         "SELECT condition_id, start, winner0 FROM markets WHERE status='done' AND winner0 IN (0,1)")}
     pos = defaultdict(lambda: [0.0, 0.0])
@@ -63,8 +64,9 @@ def records():
         lst.sort(); ts, cp, cs = [], [0.0], [0.0]
         for s, p, st in lst: ts.append(s); cp.append(cp[-1] + p); cs.append(cs[-1] + st)
         rec[w] = (ts, cp, cs)
-    with open(CACHE + ".tmp", "wb") as f: pickle.dump({"key": key, "rec": rec}, f)
-    os.replace(CACHE + ".tmp", CACHE)
+    with open(out + ".tmp", "wb") as f: pickle.dump({"key": key, "built_at": int(time.time()), "rec": rec}, f)
+    os.replace(out + ".tmp", out)
+    print(f"records: {len(rec)} wallets with >= {S1_N} positions -> {out}")
     return rec
 
 def is_sharp(rec, w, t):
@@ -148,4 +150,7 @@ def main():
     if not DRY: push({"signals": signals, "summary": summary})
 
 if __name__ == "__main__":
-    main()
+    if "--build-records" in sys.argv:            # desktop: nba_fade_live.py --build-records <db> <out.pkl>
+        i = sys.argv.index("--build-records"); build_records(sys.argv[i + 1], sys.argv[i + 2])
+    else:
+        main()

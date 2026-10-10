@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler NBA wallet records refresh (desktop) -> VPS, nba_totals_fade lane
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/nba-daily.sh
+TimeoutStartSec=7200

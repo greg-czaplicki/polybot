@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler CFB wallet records refresh (desktop) -> VPS, era v21 cfb_hot_follow
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/cfb-daily.sh
+TimeoutStartSec=3600

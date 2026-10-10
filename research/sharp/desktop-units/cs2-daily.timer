@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily cs2-daily (catches up after sleep)
+[Timer]
+OnCalendar=*-*-* 13:30:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -5,6 +5,11 @@ starts 2026-10-10T00:00Z). Rule is code: `research/sharp/cs2_forward.py`
 (lane rows + wallet records copied verbatim from `cs2_wallets.py`), run daily
 by `cs2-daily.timer` on the VPS after `cs2-daily.sh` refreshes
 `/root/polysharp/data/cs2/cs2_2025.db` (settled CS2 markets + full tapes).
+Moved 2026-10-09 (before the first forward row, rule unchanged): the job runs
+on the owner's DESKTOP (`cs2-daily.timer`, systemd --user, 13:30 UTC) against
+`~/Documents/Projects/polywhaler-data/cs2/cs2_2025.db` (byte-identical copy,
+sha256 verified), tapes via `fast_tape.py` (same full-tape query); reports in
+`~/Documents/Projects/polywhaler-data/reports/cs2_forward_<date>.txt`.
 
 ## origin (exploratory — why this is a hypothesis)
 The pre-registered wallet backtest (`cs2-wallet-backtest.md`, audit

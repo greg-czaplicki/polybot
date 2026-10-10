@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler CS2 team-specialist forward read (desktop)
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/cs2-daily.sh
+TimeoutStartSec=7200

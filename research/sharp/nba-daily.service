@@ -1,7 +1,0 @@
-[Unit]
-Description=NBA daily: backfill settled NBA markets + full tapes (wallet records for the fade lane)
-[Service]
-Type=oneshot
-WorkingDirectory=/root/polysharp
-ExecStart=/root/polysharp/nba-daily.sh
-TimeoutStartSec=7200

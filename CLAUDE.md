@@ -39,6 +39,18 @@ Bot config is env-driven (`BOT_POLL_SECONDS`, `BOT_MAX_CALLS_PER_HOUR`, etc.)
 via the systemd unit. Remember to `git push main master:master` — the app
 branch only exists on GitHub because of that push (first pushed 2026-07-21).
 
+## Research Data Lives on the Desktop (owner rule, 2026-10-09)
+
+The VPS stays "squeaky clean": live services + small input files only.
+Backfills, tape DBs and recurring data jobs run on the DESKTOP, data in
+`~/Documents/Projects/polywhaler-data/<sport>/` (outside the repo), scheduled
+with systemd --user timers (`research/sharp/desktop-units/`; installed
+copies in `~/.config/systemd/user/`). Daily jobs ship only small records
+pickles to the VPS: `cfb-daily.sh` → `/root/polysharp/data/cfb/cfb_records.pkl`,
+`nba-daily.sh` → `/root/polysharp/data/nba/records.pkl`; `cs2-daily.sh`
+writes its forward read to `polywhaler-data/reports/`. Fetch full tapes with
+`research/sharp/fast_tape.py` (parallel; ~4 min per sport-season).
+
 ## Operational Gotchas
 
 - Always query D1 with `--remote`; the local miniflare DB is empty.

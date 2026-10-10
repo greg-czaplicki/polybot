@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily CFB wallet records refresh (catches up after sleep)
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
