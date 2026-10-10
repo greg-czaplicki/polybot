@@ -657,7 +657,7 @@ function TerminalPage() {
 
 				{/* Sharp tape: ranked-wallet fills on upcoming markets (VPS polysharp → D1) */}
 				<Panel
-					title="Sharp tape · upcoming"
+					title="Sharp tape · our games"
 					span={7}
 					meta={
 						data?.sharp.all ? (
@@ -811,7 +811,7 @@ function TerminalPage() {
 						<Empty>
 							{isLoading && !data
 								? "Loading…"
-								: "No sharp fills on upcoming markets."}
+								: "No sharp fills on games we have a bet on."}
 						</Empty>
 					)}
 				</Panel>

@@ -735,6 +735,9 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.
+		// Only games we have an open bet on (owner 2026-10-10: hide the rest) —
+		// matched by market, by event, or by game title + start for a bet on
+		// another line of the same game.
 		// Table from migration 0041; degrade to an empty tape if it is missing.
 		let sharpAlerts: DashboardSharpAlert[] = [];
 		try {
@@ -762,29 +765,56 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 				`SELECT condition_id, question, sport, side_label, side, start, ts, price, usd,
 				        wallet_roi_t, wallet_markets, wallet_roi, streak, sq_opp_usd,
 				        event_key, market_type, fills, hedge
-				 FROM sharp_alerts WHERE start >= ? ORDER BY start, event_key, wallet, ts DESC LIMIT 60`,
+				 FROM sharp_alerts WHERE start >= ? ORDER BY start, event_key, wallet, ts DESC LIMIT 2000`,
 				now - 900,
 			);
-			sharpAlerts = rows.map((r) => ({
-				conditionId: r.condition_id,
-				question: r.question,
-				sport: r.sport,
-				sideLabel: r.side_label,
-				side: r.side,
-				start: r.start,
-				ts: r.ts,
-				price: r.price,
-				usd: r.usd,
-				walletRoiT: r.wallet_roi_t,
-				walletMarkets: r.wallet_markets,
-				walletRoi: r.wallet_roi,
-				streak: r.streak,
-				sqOppUsd: r.sq_opp_usd,
-				eventKey: r.event_key,
-				marketType: r.market_type,
-				fills: r.fills,
-				hedge: r.hedge === 1,
-			}));
+			const gameKey = (title: string | null, start: number | null) =>
+				`${(title ?? "").split(":")[0].trim().toLowerCase()}|${start ?? ""}`;
+			const betCids = new Set(activeBets.map((b) => b.conditionId));
+			const betGames = new Set(
+				activeBets.map((b) =>
+					gameKey(
+						b.marketTitle,
+						b.eventTime ? Math.floor(Date.parse(b.eventTime) / 1000) : null,
+					),
+				),
+			);
+			const betEvents = new Set(
+				rows
+					.filter(
+						(r) =>
+							betCids.has(r.condition_id) ||
+							betGames.has(gameKey(r.question, r.start)),
+					)
+					.map((r) => r.event_key),
+			);
+			sharpAlerts = rows
+				.filter(
+					(r) =>
+						betCids.has(r.condition_id) ||
+						(r.event_key != null && betEvents.has(r.event_key)),
+				)
+				.slice(0, 60)
+				.map((r) => ({
+					conditionId: r.condition_id,
+					question: r.question,
+					sport: r.sport,
+					sideLabel: r.side_label,
+					side: r.side,
+					start: r.start,
+					ts: r.ts,
+					price: r.price,
+					usd: r.usd,
+					walletRoiT: r.wallet_roi_t,
+					walletMarkets: r.wallet_markets,
+					walletRoi: r.wallet_roi,
+					streak: r.streak,
+					sqOppUsd: r.sq_opp_usd,
+					eventKey: r.event_key,
+					marketType: r.market_type,
+					fills: r.fills,
+					hedge: r.hedge === 1,
+				}));
 		} catch {
 			sharpAlerts = [];
 		}
