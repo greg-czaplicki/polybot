@@ -1,5 +1,14 @@
 # Wallet signals: entry timing + NBA combination pass — 2026-10-09 (exploratory)
 
+> **RETRACTED the same evening — lookahead.** The "conflict-free side of ALL pregame triggers"
+> signal below drops games where the wallet type later bought the other side — information
+> not available at entry. Point-in-time version (`research/sharp/first_trigger_read.py`: follow
+> the FIRST trigger of the type, entry ≥ 60 s / 600 s later, one bet per game):
+> NBA square-follow +1.5–3.0 % (z ≤ 0.9, n ≈ 860), CFB +8.3 % (z 1.2; 2025 +3.5 %, 2026 +11.4 %),
+> NFL −2.5 %; team-specialist first trigger NBA +2.7 %, CFB +12 % (n 52), NFL ≈ 0.
+> **No early-entry lane.** The live CFB/NFL lanes use A-cells (state from fills strictly before
+> T) and are not affected.
+
 Script: research/sharp/trigger_entry_read.py (records/qualifiers from totals_wallets.py).
 One bet per game. Signal = the conflict-free side of all pregame wallet triggers (first BUY
 ≥ $100 per wallet/side, 0–24 h out) of the given type. "trigger" entry = first fill on that side
