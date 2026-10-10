@@ -57,3 +57,11 @@ flirt with $100 dollars being open" → $50; 24h safety limit $100.
 - Bot: per-lane 24h caps (`BOT_LANE_DAILY_CAPS`) removed. The global
   rolling-24h placed limit stays as a malfunction backstop only:
   `BOT_DAILY_NOTIONAL_CAP=100`.
+
+### Raised 2026-10-10 (era v24)
+Eight lanes at $4 now share the cap (CFB/NHL/soccer/NFL wallet lanes, NBA
+fade, NCAAF + NFL totals pilots, CS2), so $50 (~12 open bets) would skip
+signals on a full Saturday. Owner, after the proposal to go to $100 on a
+~$208 bankroll: "Raise it". Open cap **$100**; bot 24h backstop
+`BOT_DAILY_NOTIONAL_CAP=150` so it never binds before the open cap. Per-lane
+5-open and −$40 kill unchanged.
