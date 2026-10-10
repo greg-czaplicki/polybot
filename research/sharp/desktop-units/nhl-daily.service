@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler nhl wallet records refresh (desktop) -> VPS, era v23 nhl_hot_fade
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/wallet-daily.sh nhl
+TimeoutStartSec=3600

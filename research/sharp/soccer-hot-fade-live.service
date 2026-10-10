@@ -1,0 +1,8 @@
+[Unit]
+Description=soccer hot/team-specialist FADE: push wallet signals for upcoming game totals (era v23)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+Environment=LANE=soccer_hot_fade SERIES_ID=10188,10189,10355,10193,10194,10203,10195,10204 RULE=HTFADE RECORDS=/root/polysharp/data/soccer/soccer_records.pkl LOOKAHEAD_H=24
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/wallet_lane_live.py
+TimeoutStartSec=540

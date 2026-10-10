@@ -20,7 +20,7 @@ Minimal polling bot that calls the app's bot API and places bets.
   - `BOT_MAX_STAKE` (default 50)
   - `BOT_MIN_STAKE` (default 1)
   - `BOT_FIXED_STAKE` (default 0, set to force a fixed stake per bet)
-  - `BOT_LANE_STAKES` (default empty) — era v14 second-family lanes, e.g. `cs2_pickem_dog=4,ncaaf_totals_pilot=4,nfl_totals_pilot=4,nba_totals_fade=4,cfb_hot_follow=4,nfl_wallet_follow=4`. A candidate carrying a `lane` is placed only when its lane has a positive stake here; unset = every lane candidate skipped (fail-closed).
+  - `BOT_LANE_STAKES` (default empty) — era v14 second-family lanes, e.g. `cs2_pickem_dog=4,ncaaf_totals_pilot=4,nfl_totals_pilot=4,nba_totals_fade=4,cfb_hot_follow=4,nfl_wallet_follow=4,nhl_hot_fade=4,soccer_hot_fade=4`. A candidate carrying a `lane` is placed only when its lane has a positive stake here; unset = every lane candidate skipped (fail-closed).
   - `BOT_LANE_DAILY_CAPS` (default empty; UNSET since 2026-10-08 — lanes are limited by open bets in the app) — per-lane rolling-24h live notional cap, e.g. `cs2_pickem_dog=20,ncaaf_totals_pilot=20,nfl_totals_pilot=20,nba_totals_fade=20`; sits under `BOT_DAILY_NOTIONAL_CAP`.
   - `BOT_LANE_MAX_STAKE` (default 8) — ceiling on the app's stake-ladder `laneStakeUsd` (2026-10-08). The bot also refuses any live order that would push money on unsettled bets past the app's `exposure.capUsd` ($50), and `BOT_DAILY_NOTIONAL_CAP` (set to 100) is only a malfunction backstop. The env lane stake stays the on-switch/base; the lane's 24h cap scales by ladder stake ÷ base stake.
   - `BOT_LOW_ROI_THRESHOLD` (default 0.72, skip if price >= threshold)

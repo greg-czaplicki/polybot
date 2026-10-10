@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler soccer wallet records refresh (desktop) -> VPS, era v23 soccer_hot_fade
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/wallet-daily.sh soccer
+TimeoutStartSec=3600

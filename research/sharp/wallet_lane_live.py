@@ -1,8 +1,10 @@
 """Wallet-signal lane — live signal job for game totals, any sport (generalised from cfb_hot_live.py, 2026-10-09).
-Lanes: nfl_wallet_follow (era v22, RULE=S3SQ, charter docs/charters/nfl-wallet-follow-pilot.md).
+Lanes (SERIES_ID may list several series, e.g. soccer leagues): nfl_wallet_follow (era v22, RULE=S3SQ, charter docs/charters/nfl-wallet-follow-pilot.md);
+       nhl_hot_fade + soccer_hot_fade (era v23, RULE=HTFADE, charters nhl-/soccer-hot-fade-pilot.md).
 Env: LANE, SERIES_ID (Gamma series), RECORDS (pickle from wallet_records.py), RULE:
   HT    = follow HOT or TEAM wallets (the CFB rule);
-  S3SQ  = follow TEAM wallets, and bet AGAINST SQUARE wallets (>= 30 settled, ROI <= -15%).
+  S3SQ  = follow TEAM wallets, and bet AGAINST SQUARE wallets (>= 30 settled, ROI <= -15%);
+  HTFADE = bet AGAINST HOT or TEAM wallets.
 A side's support = follow-type wallets ON it + square wallets on the OTHER side; support on both sides -> voided.
 --- original header (cfb_hot_live.py) ---
 
@@ -22,10 +24,12 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 LANE = os.environ["LANE"]
-SERIES = os.environ["SERIES_ID"]                       # Gamma series id (per season)
+SERIES = [x for x in os.environ["SERIES_ID"].split(",") if x]   # Gamma series id(s), comma list (per season)
 RECORDS = os.environ["RECORDS"]
 RULE = os.environ.get("RULE", "HT")
-FOLLOW_KINDS, FADE_KINDS = {"HT": ({"hot", "team"}, set()), "S3SQ": ({"team"}, {"square"})}[RULE]
+FOLLOW_KINDS, FADE_KINDS = {"HT": ({"hot", "team"}, set()), "S3SQ": ({"team"}, {"square"}),
+                             "HTFADE": (set(), {"hot", "team"})}[RULE]
+KINDS = FOLLOW_KINDS | FADE_KINDS
 ON_USD, MIN_CASH = 100, 50
 LOOKAHEAD_H = int(os.environ.get("LOOKAHEAD_H", 24))
 PUSH_LO, PUSH_HI = 0.30, 0.70                          # lines worth pushing (lane band is narrower, app-side)
@@ -50,9 +54,21 @@ def parse_ts(s):
     except ValueError: return None
 
 def upcoming_games(now):
+    merged = {}
+    for sid in SERIES:
+        for g in series_games(sid, now):           # one game can span several events (main + "More Markets")
+            k = (g["title"], g["st"])
+            if k in merged:
+                seen = {l["cid"] for l in merged[k]["lines"]}
+                merged[k]["lines"] += [l for l in g["lines"] if l["cid"] not in seen]
+            else:
+                merged[k] = g
+    return list(merged.values())
+
+def series_games(sid, now):
     games, off = [], 0
     while off < 2000:
-        page = get(f"https://gamma-api.polymarket.com/events?series_id={SERIES}&closed=false&limit=100&offset={off}")
+        page = get(f"https://gamma-api.polymarket.com/events?series_id={sid}&closed=false&limit=100&offset={off}")
         if not isinstance(page, list): break
         for e in page:
             lines = []
@@ -69,8 +85,9 @@ def upcoming_games(now):
                 lines.append(dict(cid=m["conditionId"], over=toks[0], st=st, q=m.get("question"), line=m.get("line"),
                                   p_over=px[0] if px else None))
             if lines:
-                tm = re.match(r"^(.+?) vs\.? (.+?)$", (e.get("title") or "").strip())
-                games.append(dict(title=e.get("title"), teams=(tm.group(1).strip(), tm.group(2).strip()) if tm else (),
+                title = re.sub(r"\s+-\s+More Markets$", "", (e.get("title") or "").strip())   # soccer totals live in "… - More Markets"
+                tm = re.match(r"^(.+?) vs\.? (.+?)$", title)
+                games.append(dict(title=title, teams=(tm.group(1).strip(), tm.group(2).strip()) if tm else (),
                                   st=min(l["st"] for l in lines), lines=lines))
         if len(page) < 100: break
         off += 100
@@ -128,16 +145,16 @@ def main():
         for w, b in buys.items():
             for s in (0, 1):
                 if b[s] >= ON_USD and b[s] > b[1 - s]:
-                    kinds = {k for k, ok in (("hot", "hot" in FOLLOW_KINDS and is_hot(w)),
-                                             ("team", "team" in FOLLOW_KINDS and is_team(w, g["teams"])),
-                                             ("square", "square" in FADE_KINDS and is_square(w))) if ok}
+                    kinds = {k for k, ok in (("hot", "hot" in KINDS and is_hot(w)),
+                                             ("team", "team" in KINDS and is_team(w, g["teams"])),
+                                             ("square", "square" in KINDS and is_square(w))) if ok}
                     if kinds & FOLLOW_KINDS: on[s].append(dict(wallet=w, kinds=sorted(kinds & FOLLOW_KINDS), usd=round(b[s])))
-                    if kinds & FADE_KINDS: on[1 - s].append(dict(wallet=w, kinds=["fade_square"], usd=round(b[s])))
+                    if kinds & FADE_KINDS: on[1 - s].append(dict(wallet=w, kinds=["fade_" + k for k in sorted(kinds & FADE_KINDS)], usd=round(b[s])))
         if not on[0] and not on[1]: continue
         voided = bool(on[0] and on[1])
         label = None if voided else ("Over" if on[1] else "Under")
         stats["voided" if voided else "signals"] += 1
-        print(f"   {g['title']}: {'VOIDED' if voided else 'follow ' + label}  over={len(on[1])} under={len(on[0])}", flush=True)
+        print(f"   {g['title']}: {'VOIDED' if voided else 'bet ' + label}  over={len(on[1])} under={len(on[0])}", flush=True)
         for l in g["lines"]:
             if l["p_over"] is None or not (PUSH_LO <= l["p_over"] <= PUSH_HI): continue
             signals.append(dict(condition_id=l["cid"], question=f"{g['title']}: O/U {l['line']}", start=l["st"],

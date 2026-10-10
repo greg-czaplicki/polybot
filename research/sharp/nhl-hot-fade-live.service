@@ -1,0 +1,8 @@
+[Unit]
+Description=nhl hot/team-specialist FADE: push wallet signals for upcoming game totals (era v23)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+Environment=LANE=nhl_hot_fade SERIES_ID=10346 RULE=HTFADE RECORDS=/root/polysharp/data/nhl/nhl_records.pkl LOOKAHEAD_H=24
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/wallet_lane_live.py
+TimeoutStartSec=540

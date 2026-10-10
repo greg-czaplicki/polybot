@@ -1,0 +1,7 @@
+[Unit]
+Description=soccer hot-fade signal poll every 10 minutes
+[Timer]
+OnCalendar=*:9/10
+Persistent=false
+[Install]
+WantedBy=timers.target

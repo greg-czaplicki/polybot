@@ -59,6 +59,8 @@ export type LaneSide = "A" | "B";
 export interface LaneConfig {
 	name: string;
 	sportTag: string;
+	/** Several sport tags (e.g. soccer leagues); when set it replaces sportTag for eligibility. */
+	sportTags?: string[];
 	marketType: string;
 	stakeUsd: number;
 	/** Max unsettled (open) lane bets at once; a settled bet frees its slot. */

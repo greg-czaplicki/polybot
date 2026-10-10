@@ -38,7 +38,7 @@ def teams_of(q, mt):
 mk, games = {}, defaultdict(list)
 for cid, mt, q, st, w0, tok0 in db.execute(
         "SELECT condition_id, market_type, question, start, winner0, token0 FROM markets "
-        "WHERE status='done' AND winner0 IN (0,1) AND sport=? AND condition_id IN (SELECT condition_id FROM fills_done)", (SPORT,)):
+        "WHERE status='done' AND winner0 IN (0,1) AND sport IN (" + ",".join("?" * len(SPORT.split(","))) + ") AND condition_id IN (SELECT condition_id FROM fills_done)", tuple(SPORT.split(","))):
     teams = teams_of(q, mt)
     gk = (tuple(sorted(teams)), (st - 6 * 3600) // 86400) if len(teams) == 2 else None
     mk[cid] = dict(mt=mt, st=st, w0=w0, tok0=tok0, teams=teams, hold=st >= SPLIT, g=gk or cid)

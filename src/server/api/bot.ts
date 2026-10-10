@@ -26,6 +26,7 @@ import {
 	NFL_WALLET_FOLLOW_LANE,
 	nflWalletSide,
 } from "@/lib/nfl-wallet-follow-lane";
+import { NHL_HOT_FADE_LANE, nhlHotFadeSide } from "@/lib/nhl-hot-fade-lane";
 import type { GradeLabel, SignalScoreBreakdown } from "@/lib/sharp-grade";
 import {
 	EDGE_RATING_DEAD_ZONE_MAX,
@@ -37,6 +38,10 @@ import {
 	isAcceptableSignalScore,
 	MIN_SCORE_DIFFERENTIAL,
 } from "@/lib/sharp-grade";
+import {
+	SOCCER_HOT_FADE_LANE,
+	soccerHotFadeSide,
+} from "@/lib/soccer-hot-fade-lane";
 import {
 	isNbaPreseasonTime,
 	isNflPreseasonTime,
@@ -2813,9 +2818,12 @@ async function listBotCandidates(
 	}
 	// Era v21+: generic pushed wallet signals (lane_signals) for the wallet
 	// lanes (wallet_lane_live.py / cfb_hot_live.py on the VPS), per lane.
-	const walletLanes = [CFB_HOT_FOLLOW_LANE, NFL_WALLET_FOLLOW_LANE].filter(
-		(lane) => lane.enabled,
-	);
+	const walletLanes = [
+		CFB_HOT_FOLLOW_LANE,
+		NFL_WALLET_FOLLOW_LANE,
+		NHL_HOT_FADE_LANE,
+		SOCCER_HOT_FADE_LANE,
+	].filter((lane) => lane.enabled);
 	const laneSignals = new Map<string, Map<string, LaneSignal>>(
 		walletLanes.map((lane) => [lane.name, new Map()]),
 	);
@@ -2950,6 +2958,44 @@ async function listBotCandidates(
 				`price band ${NBA_TOTALS_FADE_LANE.priceLo}-${NBA_TOTALS_FADE_LANE.priceHi}`,
 			],
 		},
+		// Era v23: NHL totals hot/team-specialist FADE pilot
+		// (src/lib/nhl-hot-fade-lane.ts) — bet against hot / team-specialist
+		// NHL wallets (pre-registered backtest cell A HT, negative).
+		{
+			lane: NHL_HOT_FADE_LANE,
+			segmentLabel:
+				"NHL totals hot-wallet fade lane (era v23 pilot, fade hot/specialists)",
+			side: (entry) =>
+				nhlHotFadeSide(
+					signalOf(NHL_HOT_FADE_LANE, entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					parseEventTime(entry.eventTime)?.getTime() ?? null,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`bet ${signalOf(NHL_HOT_FADE_LANE, entry.conditionId)?.betLabel ?? "none"} (against hot/team-specialist wallets)`,
+				`price band ${NHL_HOT_FADE_LANE.priceLo}-${NHL_HOT_FADE_LANE.priceHi}`,
+			],
+		},
+		// Era v23: soccer totals hot/team-specialist FADE pilot
+		// (src/lib/soccer-hot-fade-lane.ts) — the NHL fade rule, 8 leagues.
+		{
+			lane: SOCCER_HOT_FADE_LANE,
+			segmentLabel:
+				"Soccer totals hot-wallet fade lane (era v23 pilot, fade hot/specialists)",
+			side: (entry) =>
+				soccerHotFadeSide(
+					signalOf(SOCCER_HOT_FADE_LANE, entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`bet ${signalOf(SOCCER_HOT_FADE_LANE, entry.conditionId)?.betLabel ?? "none"} (against hot/team-specialist wallets)`,
+				`price band ${SOCCER_HOT_FADE_LANE.priceLo}-${SOCCER_HOT_FADE_LANE.priceHi}`,
+			],
+		},
 	];
 	if (!inspectConditionId) {
 		const takenGroupKeys = new Set(
@@ -2984,9 +3030,9 @@ async function listBotCandidates(
 				const eligible = upcomingEntries
 					.filter(
 						(entry) =>
-							resolveSportTagFromSeriesId(entry.sportSeriesId) ===
-								lane.sportTag &&
-							getMarketTypeLabel(entry.marketTitle) === lane.marketType,
+							(lane.sportTags ?? [lane.sportTag]).includes(
+								resolveSportTagFromSeriesId(entry.sportSeriesId) ?? "",
+							) && getMarketTypeLabel(entry.marketTitle) === lane.marketType,
 					)
 					.map((entry) => {
 						const eventTime = parseEventTime(entry.eventTime);

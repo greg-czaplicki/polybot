@@ -18,6 +18,8 @@ import { NBA_TOTALS_FADE_LANE } from "@/lib/nba-totals-fade-lane";
 import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
 import { NFL_TOTALS_PILOT_LANE } from "@/lib/nfl-totals-lane";
 import { NFL_WALLET_FOLLOW_LANE } from "@/lib/nfl-wallet-follow-lane";
+import { NHL_HOT_FADE_LANE } from "@/lib/nhl-hot-fade-lane";
+import { SOCCER_HOT_FADE_LANE } from "@/lib/soccer-hot-fade-lane";
 import { STRATEGY_VERSION } from "../../lib/strategy-version";
 import { all, first } from "../db/client";
 import { getDb, nowUnixSeconds } from "../env";
@@ -115,6 +117,10 @@ export interface DashboardHealth {
 	cfbHotFollow: LanePilotState | null;
 	/** Era v22 NFL totals wallet follow pilot (src/lib/nfl-wallet-follow-lane.ts). */
 	nflWalletFollow: LanePilotState | null;
+	/** Era v23 NHL totals hot/team-specialist fade pilot (src/lib/nhl-hot-fade-lane.ts). */
+	nhlHotFade: LanePilotState | null;
+	/** Era v23 soccer totals hot/team-specialist fade pilot (src/lib/soccer-hot-fade-lane.ts). */
+	soccerHotFade: LanePilotState | null;
 }
 
 export interface LanePilotState {
@@ -693,6 +699,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const nbaTotalsFade = await pilotState(NBA_TOTALS_FADE_LANE);
 		const cfbHotFollow = await pilotState(CFB_HOT_FOLLOW_LANE);
 		const nflWalletFollow = await pilotState(NFL_WALLET_FOLLOW_LANE);
+		const nhlHotFade = await pilotState(NHL_HOT_FADE_LANE);
+		const soccerHotFade = await pilotState(SOCCER_HOT_FADE_LANE);
 
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
@@ -722,6 +730,8 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			nbaTotalsFade,
 			cfbHotFollow,
 			nflWalletFollow,
+			nhlHotFade,
+			soccerHotFade,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.

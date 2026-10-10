@@ -50,6 +50,9 @@ fixing commit.
   specialists + fade squares on NFL totals, `lane_signals`, charter
   `docs/charters/nfl-wallet-follow-pilot.md`); it runs before the NFL totals
   pilot, which from then excludes games with a wallet signal.
+  From 2026-10-10 era v23 adds `nhl_hot_fade` and `soccer_hot_fade` (fade hot /
+  team-specialist wallets on NHL / soccer totals; charters `nhl-hot-fade-pilot.md`,
+  `soccer-hot-fade-pilot.md`).
 
 - **Tennis Pinnacle coverage is dead from 2026-09-07 (US Open end) until
   OddsPapi's index recovers.** `/tournaments` reports fixture counts only for
