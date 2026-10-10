@@ -31,7 +31,7 @@ Over 36-21 +29 %, Under 36-29 +11 %; one HT wallet 51-33 +23 %, 2+ 21-17.
 - Signal = HOT-or-TEAM wallets on exactly one side → bet that side. On both
   sides → no bet.
 - Execution: in-window NCAAF game-total entry (bot window), that side's price
-  in [0.35, 0.65), $4, one bet per game, ≤ 5 open, kill at −$40 realized or
+  in [0.35, 0.65), $4, one bet per game, ≤ 5 open (≤ 10 from 2026-10-10, era v25), kill at −$40 realized or
   trailing-100 game-clustered z < −1 after 30 settled (shared lane
   machinery), stake ladder per `lane-stake-ladder.md`.
 - Lane order: before `ncaaf_totals_pilot` — a game with a signal goes to this

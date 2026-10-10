@@ -51,7 +51,7 @@ describe("CFB_HOT_FOLLOW_LANE contract", () => {
 		expect(CFB_HOT_FOLLOW_LANE.sportTag).toBe("ncaaf");
 		expect(CFB_HOT_FOLLOW_LANE.marketType).toBe("total");
 		expect(CFB_HOT_FOLLOW_LANE.stakeUsd).toBe(4);
-		expect(CFB_HOT_FOLLOW_LANE.maxOpenPicks).toBe(5);
+		expect(CFB_HOT_FOLLOW_LANE.maxOpenPicks).toBe(10);
 		expect(CFB_HOT_FOLLOW_LANE.killDrawdownUsd).toBe(-40);
 		expect(CFB_HOT_FOLLOW_LANE.forwardStart).toBe(
 			Date.UTC(2026, 9, 10, 12) / 1000,

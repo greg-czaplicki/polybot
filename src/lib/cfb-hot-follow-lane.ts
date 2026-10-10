@@ -39,8 +39,9 @@ export const CFB_HOT_FOLLOW_LANE: LaneConfig & {
 	priceHi: 0.65,
 	/** Fixed stake in USD. The bot's BOT_LANE_STAKES must match. */
 	stakeUsd: 4,
-	/** Unsettled lane bets at once. */
-	maxOpenPicks: 5,
+	/** Unsettled lane bets at once (5 → 10, era v25, owner 2026-10-10:
+	 * the lane hit 5 open early on its first Saturday and skipped the rest). */
+	maxOpenPicks: 10,
 	oneTeamPerDay: false,
 	/** Kill: realized lane PnL at or below this (USD) stops emission. */
 	killDrawdownUsd: -40,

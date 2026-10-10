@@ -7,4 +7,4 @@
  * On bump: add a row to docs/STRATEGY.md and tag the commit
  * (`git tag strategy-vN`).
  */
-export const STRATEGY_VERSION = "v24-open-cap-100";
+export const STRATEGY_VERSION = "v25-cfb-hot-open-10";
