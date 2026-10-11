@@ -33,7 +33,10 @@ export interface PlShadowPoint {
 }
 
 export interface PlTimeseriesResult {
+	/** Holder book only (lane IS NULL) — the strategy series. */
 	picks: PlPickPoint[];
+	/** Execution-lane bets ($4 pilots), same fields; home-page money curve. */
+	lanePicks: PlPickPoint[];
 	shadows: PlShadowPoint[];
 }
 
@@ -50,16 +53,16 @@ export const getPlTimeseriesFn = createServerFn({ method: "GET" }).handler(
 			fill_status: string | null;
 			fill_notional: number | null;
 			fill_price: number | null;
+			lane: string | null;
 		}>(
 			db,
 			`SELECT settled_at, status, roi, clv, strategy_version, fill_status,
-			        fill_notional, fill_price
+			        fill_notional, fill_price, lane
 			 FROM manual_picks
 			 WHERE status IN ('win','loss','push')
 			   AND roi IS NOT NULL
 			   AND settled_at IS NOT NULL
 			   AND (fill_status IS NULL OR fill_status NOT IN ('paper','unknown','failed'))
-			   AND lane IS NULL
 			 ORDER BY settled_at ASC`,
 		);
 
@@ -76,35 +79,38 @@ export const getPlTimeseriesFn = createServerFn({ method: "GET" }).handler(
 			 ORDER BY settled_at ASC`,
 		);
 
+		const toPoint = (row: (typeof pickRows)[number]): PlPickPoint => {
+			const matched =
+				row.fill_status === "matched" &&
+				typeof row.fill_notional === "number" &&
+				row.fill_notional > 0;
+			const realizedRoi =
+				matched &&
+				typeof row.fill_price === "number" &&
+				row.fill_price > 0 &&
+				row.fill_price < 1
+					? row.status === "win"
+						? (1 - row.fill_price) / row.fill_price
+						: row.status === "loss"
+							? -1
+							: 0
+					: null;
+			return {
+				settledAt: row.settled_at,
+				roi: row.roi,
+				clv: row.clv,
+				strategyVersion: row.strategy_version,
+				realizedRoi,
+				dollars: matched
+					? (row.fill_notional as number) * (realizedRoi ?? row.roi)
+					: null,
+				stake: matched ? row.fill_notional : null,
+			};
+		};
+
 		return {
-			picks: pickRows.map((row) => {
-				const matched =
-					row.fill_status === "matched" &&
-					typeof row.fill_notional === "number" &&
-					row.fill_notional > 0;
-				const realizedRoi =
-					matched &&
-					typeof row.fill_price === "number" &&
-					row.fill_price > 0 &&
-					row.fill_price < 1
-						? row.status === "win"
-							? (1 - row.fill_price) / row.fill_price
-							: row.status === "loss"
-								? -1
-								: 0
-						: null;
-				return {
-					settledAt: row.settled_at,
-					roi: row.roi,
-					clv: row.clv,
-					strategyVersion: row.strategy_version,
-					realizedRoi,
-					dollars: matched
-						? (row.fill_notional as number) * (realizedRoi ?? row.roi)
-						: null,
-					stake: matched ? row.fill_notional : null,
-				};
-			}),
+			picks: pickRows.filter((row) => row.lane === null).map(toPoint),
+			lanePicks: pickRows.filter((row) => row.lane !== null).map(toPoint),
 			shadows: shadowRows.map((row) => ({
 				settledAt: row.settled_at,
 				roi: row.roi,

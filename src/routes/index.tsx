@@ -99,6 +99,23 @@ function laneRows(h: DashboardHealth) {
 	];
 }
 
+/** Short lane names for position rows (lane column of manual_picks). */
+const LANE_LABELS: Record<string, string> = {
+	cs2_pickem_dog: "CS2 dogs",
+	ncaaf_totals_pilot: "NCAAF totals",
+	nfl_totals_pilot: "NFL totals",
+	nba_totals_fade: "NBA fade",
+	cfb_hot_follow: "CFB hot",
+	nfl_wallet_follow: "NFL wallets",
+	nhl_hot_fade: "NHL fade",
+	soccer_hot_fade: "Soccer fade",
+};
+
+function laneLabel(lane: string | null): string {
+	if (lane === null) return "Book";
+	return LANE_LABELS[lane] ?? lane.replaceAll("_", " ");
+}
+
 function laneStateText(p: DashboardHealth["cs2Pilot"]): string {
 	if (!p) return "no state";
 	if (p.active) return "live";
@@ -109,7 +126,7 @@ function laneStateText(p: DashboardHealth["cs2Pilot"]): string {
 /** Lane pilots: one row each, every number visible at phone width. */
 function LanesTable({ h }: { h: DashboardHealth }) {
 	return (
-		<table className="w-full border-t border-ink-15 bg-ink-05 font-mono tabular-nums">
+		<table className="w-full border-t border-ink-15 bg-ink-05 font-mono tabular-nums lg:hidden">
 			<thead>
 				<tr className="h-7 text-[0.6875rem] uppercase tracking-[0.12em] text-ink-55">
 					<th className="px-3 text-left font-medium">$4 lanes</th>
@@ -172,6 +189,65 @@ function LanesTable({ h }: { h: DashboardHealth }) {
 				})}
 			</tbody>
 		</table>
+	);
+}
+
+/** Desktop: the same lanes as a 4-across grid, so the numbers sit next to
+ * their names instead of 1,000px to the right of them. */
+function LanesGrid({ h }: { h: DashboardHealth }) {
+	return (
+		<div className="hidden gap-px border-t border-ink-15 bg-ink-15 font-mono tabular-nums lg:grid lg:grid-cols-4">
+			{laneRows(h).map(({ key, label, state: p }) => {
+				const item = pilotItem(key, label, p);
+				const openShare =
+					p && p.maxOpenPicks > 0 ? p.openPicks / p.maxOpenPicks : 0;
+				return (
+					<div key={key} className="bg-ink-05 px-3 py-2">
+						<div className="flex items-baseline justify-between gap-3">
+							<span className="flex min-w-0 items-center gap-2">
+								<Dot tone={item.tone} />
+								<span className="truncate text-xs text-ink-95">{label}</span>
+							</span>
+							{p && p.settled > 0 ? (
+								<span className={`text-sm ${toneClass(p.realizedPnl)}`}>
+									{p.realizedPnl >= 0 ? "+" : "−"}$
+									{Math.abs(p.realizedPnl).toFixed(2)}
+								</span>
+							) : (
+								<span className="text-sm text-ink-40">—</span>
+							)}
+						</div>
+						<div className="mt-0.5 flex items-baseline justify-between gap-3 text-xxs">
+							<span
+								className={`truncate ${item.tone === "bad" ? "text-signal-bad" : "text-ink-55"}`}
+							>
+								{p
+									? `$${p.ladderStake} · level ${p.ladderLevel}${p.active ? "" : ` · ${laneStateText(p)}`}`
+									: "no state"}
+							</span>
+							<span className="shrink-0 text-ink-70">
+								{p && p.settled > 0
+									? `${p.wins}-${p.settled - p.wins}`
+									: "no bets"}
+							</span>
+						</div>
+						{p ? (
+							<div className="mt-1.5 flex items-center gap-2 text-xxs text-ink-55">
+								<span className="h-1 flex-1 overflow-hidden rounded-full bg-ink-15">
+									<span
+										className={`block h-full rounded-full ${openShare >= 1 ? "bg-signal-warn" : "bg-brand-blue"}`}
+										style={{ width: `${Math.min(100, openShare * 100)}%` }}
+									/>
+								</span>
+								<span className="shrink-0">
+									{p.openPicks}/{p.maxOpenPicks} open
+								</span>
+							</div>
+						) : null}
+					</div>
+				);
+			})}
+		</div>
 	);
 }
 
@@ -441,7 +517,6 @@ function TerminalPage() {
 	const alarms = alive.filter((a) => a.alarm);
 
 	const live = data?.liveBook ?? null;
-	const currentEra = data?.eras[0] ?? null;
 
 	return (
 		<Shell
@@ -498,6 +573,7 @@ function TerminalPage() {
 				) : null}
 			</div>
 			{data ? <LanesTable h={data.health} /> : null}
+			{data ? <LanesGrid h={data.health} /> : null}
 			{alarms.length > 0 ? (
 				<p className="border-t border-ink-15 bg-signal-bad/10 px-3 py-1.5 font-mono text-xs text-signal-bad">
 					<span className="font-semibold uppercase tracking-[0.15em]">
@@ -613,206 +689,9 @@ function TerminalPage() {
 									</div>
 								</div>
 							) : null}
-							{currentEra ? (
-								<div className="hidden grid-cols-[1fr_auto_auto] items-baseline gap-x-4 border-t border-ink-15 px-3 py-2 font-mono text-xs sm:grid">
-									<span className="text-xxs uppercase tracking-[0.15em] text-ink-40">
-										CLV vs · current era
-									</span>
-									<span className="text-right text-xxs uppercase tracking-[0.15em] text-ink-40">
-										avg
-									</span>
-									<span className="text-right text-xxs uppercase tracking-[0.15em] text-ink-40">
-										n
-									</span>
-									{(
-										[
-											["Polymarket", currentEra.avgClvPct, currentEra.clvN],
-											[
-												"DraftKings",
-												currentEra.avgBookClvPct,
-												currentEra.bookClvN,
-											],
-											["Pinnacle", currentEra.avgPinClvPct, currentEra.pinClvN],
-										] as const
-									).map(([name, v, n]) => (
-										<Fragment key={name}>
-											<span className="text-ink-70">{name}</span>
-											<Num
-												value={v}
-												text={n > 0 ? pct(v, 2) : "—"}
-												dim={n < 10}
-											/>
-											<span className="text-right tabular-nums text-ink-40">
-												{n}/{currentEra.wins + currentEra.losses}
-											</span>
-										</Fragment>
-									))}
-								</div>
-							) : null}
 						</>
 					) : (
 						<Empty>{isLoading ? "Loading…" : "No data."}</Empty>
-					)}
-				</Panel>
-
-				{/* Sharp tape: ranked-wallet fills on upcoming markets (VPS polysharp → D1) */}
-				<Panel
-					title="Sharp tape · our games"
-					span={7}
-					meta={
-						data?.sharp.all ? (
-							<>
-								<span className="sm:hidden">
-									{data.sharp.all.n} signals · ROI{" "}
-									{pct((data.sharp.all.roi ?? 0) * 100)}
-								</span>
-								<span className="hidden sm:inline">{`${data.sharp.sharpWallets ?? "—"} sharp wallets · ${data.sharp.all.n} signals · ROI ${pct(
-									(data.sharp.all.roi ?? 0) * 100,
-								)} · CLV ${
-									data.sharp.all.clv != null
-										? `${(data.sharp.all.clv * 100).toFixed(2)}c`
-										: "—"
-								}`}</span>
-							</>
-						) : (
-							"no polysharp report yet"
-						)
-					}
-				>
-					{data && data.sharpAlerts.length > 0 ? (
-						<SharpTapeList events={groupSharpEvents(data.sharpAlerts)} />
-					) : null}
-					{data && data.sharpAlerts.length > 0 ? (
-						<div className="hidden sm:block">
-							<Tape
-								minWidth="min-w-[560px]"
-								head={[
-									{ label: "Seen" },
-									{ label: "Line" },
-									{ label: "Side" },
-									{ label: "Px", align: "right" },
-									{ label: "$", align: "right" },
-									{ label: "Wallet", align: "right" },
-									{ label: "Form", align: "right" },
-									{ label: "Sq opp", align: "right" },
-									{ label: "Type" },
-								]}
-							>
-								{groupSharpEvents(data.sharpAlerts).map((ev) => (
-									<Fragment key={ev.key}>
-										<Row>
-											<Cell className="whitespace-nowrap text-xs text-ink-40">
-												{clock(ev.start)}
-											</Cell>
-											<Cell className="text-xs font-semibold text-ink-85">
-												{ev.sport ? (
-													<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
-														{ev.sport}
-													</span>
-												) : null}
-												{ev.title}
-											</Cell>
-											<Cell className="text-xxs text-ink-40" colSpan={7}>
-												{ev.rows.length} position
-												{ev.rows.length === 1 ? "" : "s"} ·{" "}
-												{new Set(ev.rows.map((r) => r.conditionId)).size} market
-												{new Set(ev.rows.map((r) => r.conditionId)).size === 1
-													? ""
-													: "s"}
-												{ev.rows.some((r) => r.hedge) ? " · hedge present" : ""}
-											</Cell>
-										</Row>
-										{ev.rows.map((a) => (
-											<Row
-												key={`${a.conditionId}:${a.side}:${a.ts}`}
-												className={a.hedge ? "opacity-60" : ""}
-											>
-												<Cell className="whitespace-nowrap text-xs text-ink-55">
-													{ago(a.ts)}
-												</Cell>
-												<Cell
-													className="pl-4 font-mono text-xs text-ink-70"
-													title={a.question ?? ""}
-												>
-													{lineLabel(a.question, a.marketType)}
-												</Cell>
-												<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
-													{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
-													{a.hedge ? (
-														<span className="ml-1 font-mono text-xxs uppercase text-signal-warn">
-															hedge
-														</span>
-													) : null}
-												</Cell>
-												<Cell right className="font-mono text-xs">
-													{a.price != null
-														? `${Math.round(a.price * 100)}¢`
-														: "—"}
-												</Cell>
-												<Cell right className="font-mono text-xs">
-													{a.usd != null
-														? `$${Math.round(a.usd).toLocaleString()}`
-														: "—"}
-													{a.fills != null && a.fills > 1 ? (
-														<span className="ml-1 text-ink-40">×{a.fills}</span>
-													) : null}
-												</Cell>
-												<Cell
-													right
-													className="font-mono text-xs"
-													title="wallet ROI t-stat · settled markets · ROI"
-												>
-													{a.walletRoiT != null
-														? `t${a.walletRoiT.toFixed(1)}`
-														: "—"}
-													{a.walletMarkets != null ? (
-														<span className="ml-1 text-ink-40">
-															{a.walletMarkets}m
-															{a.walletRoi != null
-																? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
-																: ""}
-														</span>
-													) : null}
-												</Cell>
-												<Cell
-													right
-													className={`font-mono text-xs ${
-														a.streak != null && a.streak > 0.1
-															? "text-ink-95"
-															: a.streak != null && a.streak < -0.1
-																? "text-ink-40"
-																: ""
-													}`}
-													title="trailing-20 settled ROI"
-												>
-													{a.streak != null
-														? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
-														: "—"}
-												</Cell>
-												<Cell
-													right
-													className="font-mono text-xs"
-													title="square $ already on the opposite side"
-												>
-													{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
-														? `${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
-														: "—"}
-												</Cell>
-												<Cell className="text-xs text-ink-40">
-													{a.marketType ?? ""}
-												</Cell>
-											</Row>
-										))}
-									</Fragment>
-								))}
-							</Tape>
-						</div>
-					) : (
-						<Empty>
-							{isLoading && !data
-								? "Loading…"
-								: "No sharp fills on games we have a bet on."}
-						</Empty>
 					)}
 				</Panel>
 
@@ -823,7 +702,7 @@ function TerminalPage() {
 							Positions ↗
 						</a>
 					}
-					span={12}
+					span={7}
 					meta={data ? `${data.activeBets.length} open` : undefined}
 				>
 					{data && data.activeBets.length > 0 ? (
@@ -839,6 +718,7 @@ function TerminalPage() {
 									<p className="mt-0.5 flex items-baseline justify-between gap-3 text-sm">
 										<Side pick={p} />
 										<span className="shrink-0 font-mono text-xs tabular-nums text-ink-70">
+											{laneLabel(p.lane)} ·{" "}
 											{p.price !== null ? p.price.toFixed(2) : "—"} ·{" "}
 											{clock(p.eventTime)}
 										</span>
@@ -853,16 +733,15 @@ function TerminalPage() {
 								head={[
 									{ label: "Market" },
 									{ label: "Side" },
+									{ label: "Lane" },
 									{ label: "Px", align: "right" },
-									{ label: "Grd", align: "right" },
-									{ label: "Mkt" },
-									{ label: "Fill" },
+									{ label: "$", align: "right" },
 									{ label: "Starts", align: "right" },
 								]}
 							>
 								{data.activeBets.map((p) => (
 									<Row key={p.id}>
-										<Cell className="max-w-[18rem]">
+										<Cell className="max-w-[16rem]">
 											<a
 												href={`/sharp/market/${p.conditionId}`}
 												className="block truncate text-ink-95 hover:text-brand-blue"
@@ -873,14 +752,23 @@ function TerminalPage() {
 										<Cell>
 											<Side pick={p} />
 										</Cell>
+										<Cell className="whitespace-nowrap text-xs text-ink-70">
+											{laneLabel(p.lane)}
+											{p.lane === null && p.grade ? (
+												<span className="ml-1 text-ink-40">{p.grade}</span>
+											) : null}
+											{p.fillStatus && p.fillStatus !== "matched" ? (
+												<span className="ml-1 text-signal-warn">
+													{p.fillStatus}
+												</span>
+											) : null}
+										</Cell>
 										<Cell right>
 											{p.price !== null ? p.price.toFixed(2) : "—"}
 										</Cell>
-										<Cell right>{p.grade ?? "—"}</Cell>
-										<Cell>
-											<Tag>{p.sportTag ?? "—"}</Tag>
+										<Cell right className="text-ink-70">
+											{p.stake !== null ? `$${p.stake.toFixed(0)}` : "—"}
 										</Cell>
-										<Cell className="text-ink-55">{p.fillStatus ?? "—"}</Cell>
 										<Cell right className="text-ink-55">
 											{clock(p.eventTime)}
 										</Cell>
@@ -894,6 +782,174 @@ function TerminalPage() {
 						</Empty>
 					)}
 				</Panel>
+
+				{/* Sharp tape: ranked-wallet fills on upcoming markets (VPS polysharp → D1) */}
+				{data && data.sharpAlerts.length > 0 ? (
+					<Panel
+						title="Sharp tape · our games"
+						span={12}
+						meta={
+							data?.sharp.all ? (
+								<>
+									<span className="sm:hidden">
+										{data.sharp.all.n} signals · ROI{" "}
+										{pct((data.sharp.all.roi ?? 0) * 100)}
+									</span>
+									<span className="hidden sm:inline">{`${data.sharp.sharpWallets ?? "—"} sharp wallets · ${data.sharp.all.n} signals · ROI ${pct(
+										(data.sharp.all.roi ?? 0) * 100,
+									)} · CLV ${
+										data.sharp.all.clv != null
+											? `${(data.sharp.all.clv * 100).toFixed(2)}c`
+											: "—"
+									}`}</span>
+								</>
+							) : (
+								"no polysharp report yet"
+							)
+						}
+					>
+						{data && data.sharpAlerts.length > 0 ? (
+							<SharpTapeList events={groupSharpEvents(data.sharpAlerts)} />
+						) : null}
+						{data && data.sharpAlerts.length > 0 ? (
+							<div className="hidden sm:block">
+								<Tape
+									minWidth="min-w-[560px]"
+									head={[
+										{ label: "Seen" },
+										{ label: "Line" },
+										{ label: "Side" },
+										{ label: "Px", align: "right" },
+										{ label: "$", align: "right" },
+										{ label: "Wallet", align: "right" },
+										{ label: "Form", align: "right" },
+										{ label: "Sq opp", align: "right" },
+										{ label: "Type" },
+									]}
+								>
+									{groupSharpEvents(data.sharpAlerts).map((ev) => (
+										<Fragment key={ev.key}>
+											<Row>
+												<Cell className="whitespace-nowrap text-xs text-ink-40">
+													{clock(ev.start)}
+												</Cell>
+												<Cell className="text-xs font-semibold text-ink-85">
+													{ev.sport ? (
+														<span className="mr-1 font-mono text-xxs uppercase tracking-[0.12em] text-ink-55">
+															{ev.sport}
+														</span>
+													) : null}
+													{ev.title}
+												</Cell>
+												<Cell className="text-xxs text-ink-40" colSpan={7}>
+													{ev.rows.length} position
+													{ev.rows.length === 1 ? "" : "s"} ·{" "}
+													{new Set(ev.rows.map((r) => r.conditionId)).size}{" "}
+													market
+													{new Set(ev.rows.map((r) => r.conditionId)).size === 1
+														? ""
+														: "s"}
+													{ev.rows.some((r) => r.hedge)
+														? " · hedge present"
+														: ""}
+												</Cell>
+											</Row>
+											{ev.rows.map((a) => (
+												<Row
+													key={`${a.conditionId}:${a.side}:${a.ts}`}
+													className={a.hedge ? "opacity-60" : ""}
+												>
+													<Cell className="whitespace-nowrap text-xs text-ink-55">
+														{ago(a.ts)}
+													</Cell>
+													<Cell
+														className="pl-4 font-mono text-xs text-ink-70"
+														title={a.question ?? ""}
+													>
+														{lineLabel(a.question, a.marketType)}
+													</Cell>
+													<Cell className="max-w-[9rem] truncate text-xs text-ink-85">
+														{a.sideLabel ?? (a.side === 0 ? "A" : "B")}
+														{a.hedge ? (
+															<span className="ml-1 font-mono text-xxs uppercase text-signal-warn">
+																hedge
+															</span>
+														) : null}
+													</Cell>
+													<Cell right className="font-mono text-xs">
+														{a.price != null
+															? `${Math.round(a.price * 100)}¢`
+															: "—"}
+													</Cell>
+													<Cell right className="font-mono text-xs">
+														{a.usd != null
+															? `$${Math.round(a.usd).toLocaleString()}`
+															: "—"}
+														{a.fills != null && a.fills > 1 ? (
+															<span className="ml-1 text-ink-40">
+																×{a.fills}
+															</span>
+														) : null}
+													</Cell>
+													<Cell
+														right
+														className="font-mono text-xs"
+														title="wallet ROI t-stat · settled markets · ROI"
+													>
+														{a.walletRoiT != null
+															? `t${a.walletRoiT.toFixed(1)}`
+															: "—"}
+														{a.walletMarkets != null ? (
+															<span className="ml-1 text-ink-40">
+																{a.walletMarkets}m
+																{a.walletRoi != null
+																	? ` ${a.walletRoi >= 0 ? "+" : ""}${Math.round(a.walletRoi * 100)}%`
+																	: ""}
+															</span>
+														) : null}
+													</Cell>
+													<Cell
+														right
+														className={`font-mono text-xs ${
+															a.streak != null && a.streak > 0.1
+																? "text-ink-95"
+																: a.streak != null && a.streak < -0.1
+																	? "text-ink-40"
+																	: ""
+														}`}
+														title="trailing-20 settled ROI"
+													>
+														{a.streak != null
+															? `${a.streak >= 0 ? "+" : ""}${Math.round(a.streak * 100)}%`
+															: "—"}
+													</Cell>
+													<Cell
+														right
+														className="font-mono text-xs"
+														title="square $ already on the opposite side"
+													>
+														{a.sqOppUsd != null && Math.abs(a.sqOppUsd) >= 100
+															? `${a.sqOppUsd > 0 ? "+" : "−"}$${(Math.abs(a.sqOppUsd) / 1000).toFixed(1)}k`
+															: "—"}
+													</Cell>
+													<Cell className="text-xs text-ink-40">
+														{a.marketType ?? ""}
+													</Cell>
+												</Row>
+											))}
+										</Fragment>
+									))}
+								</Tape>
+							</div>
+						) : (
+							<Empty>
+								{isLoading && !data
+									? "Loading…"
+									: "No sharp fills on games we have a bet on."}
+							</Empty>
+						)}
+					</Panel>
+				) : null}
 
 				{/* P&L */}
 				<Panel

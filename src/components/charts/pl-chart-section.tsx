@@ -175,7 +175,7 @@ export function PlChartSection({
 	compact = false,
 }: {
 	range: PlRange;
-	/** Terminal panel mode: only the units line, no section chrome. */
+	/** Terminal panel mode: real-money dollar lines only, no section chrome. */
 	compact?: boolean;
 }) {
 	const [data, setData] = useState<PlTimeseriesResult | null>(null);
@@ -239,6 +239,20 @@ export function PlChartSection({
 			stakes.length > 0
 				? { min: Math.min(...stakes), max: Math.max(...stakes) }
 				: null;
+		// Home money curve: every real dollar from the range start — holder
+		// book plus the $4 lanes (lane bets are excluded from the strategy
+		// series above).
+		const bookDollars = cumulativeByDay(data.picks, days, {
+			value: (point) => point.dollars,
+		});
+		const laneDollars = cumulativeByDay(data.lanePicks ?? [], days, {
+			value: (point) => point.dollars,
+		});
+		const totalDollars = days.map((_, i) =>
+			bookDollars[i] === null && laneDollars[i] === null
+				? null
+				: (bookDollars[i] ?? 0) + (laneDollars[i] ?? 0),
+		);
 		const netUnits = [...realCum].reverse().find((v) => v !== null) ?? 0;
 		const netDollars = [...dollarCum].reverse().find((v) => v !== null) ?? 0;
 		return {
@@ -246,6 +260,9 @@ export function PlChartSection({
 			realCum,
 			dollarCum,
 			dollarsAllNull: dollarCum.every((v) => v === null),
+			bookDollars,
+			laneDollars,
+			totalDollars,
 			stakeRange,
 			netDollars,
 			shadowCum,
@@ -270,22 +287,27 @@ export function PlChartSection({
 					days={chart.days}
 					series={[
 						{
-							key: "real",
-							label: "Real book",
+							key: "total",
+							label: "All real bets",
 							color: SERIES_COLORS.real,
-							values: chart.realCum,
+							values: chart.totalDollars,
 						},
 						{
-							key: "shadow",
-							label: "Shadow book",
+							key: "lanes",
+							label: "$4 lanes",
+							color: "var(--brand-cyan)",
+							values: chart.laneDollars,
+						},
+						{
+							key: "book",
+							label: "Holder book",
 							color: SERIES_COLORS.shadow,
-							values: chart.shadowCum,
+							values: chart.bookDollars,
 						},
 					]}
-					markers={chart.markers}
-					height={200}
-					formatValue={formatUnits}
-					ariaLabel="Cumulative profit and loss in units for the real book and the shadow book"
+					height={220}
+					formatValue={formatDollars}
+					ariaLabel="Cumulative real-money profit and loss in dollars: all bets, the $4 lanes, and the holder book"
 				/>
 			</div>
 		);

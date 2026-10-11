@@ -43,6 +43,10 @@ export interface DashboardPickRow {
 	roi: number | null;
 	clv: number | null;
 	settledAt: number | null;
+	/** Execution lane that placed it (NULL = holder book). */
+	lane: string | null;
+	/** Filled USD notional. */
+	stake: number | null;
 }
 
 export interface DashboardRecap {
@@ -209,7 +213,7 @@ export interface DashboardSharpSummary {
 
 const PICK_COLUMNS = `id, condition_id, market_title, event_time, picked_at,
 	grade, sharp_side, sharp_side_label, price, bet_type, sport_tag,
-	fill_status, status, roi, clv, settled_at`;
+	fill_status, status, roi, clv, settled_at, lane, fill_notional`;
 
 interface PickRowRaw {
 	id: string;
@@ -228,6 +232,8 @@ interface PickRowRaw {
 	roi: number | null;
 	clv: number | null;
 	settled_at: number | null;
+	lane: string | null;
+	fill_notional: number | null;
 }
 
 function toPickRow(r: PickRowRaw): DashboardPickRow {
@@ -248,6 +254,8 @@ function toPickRow(r: PickRowRaw): DashboardPickRow {
 		roi: r.roi,
 		clv: r.clv,
 		settledAt: r.settled_at,
+		lane: r.lane,
+		stake: r.fill_notional,
 	};
 }
 
