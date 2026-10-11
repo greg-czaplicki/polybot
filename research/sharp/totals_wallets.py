@@ -8,7 +8,7 @@ wallet state at T over all the game's total lines; qualifiers S1/S2/S3/S4/S5/S6 
 B: trigger cells (NBA method) on every total line. C: overlay on our own NCAAF totals shadow rows (context only).
 Records: pregame positions in every CFB market, settled = start+4h before use. z clustered by game.
 DISCOVERY start < 2026-07-01 (2025 season) / HOLDOUT >=. CANDIDATE = disc n>=50 |z|>=2 AND holdout same sign |z|>=1 n>=30.
-usage: SPORT=nfl python3 totals_wallets.py <db> [shadow_json]
+usage: SPORT=nfl python3 totals_wallets.py <db> [shadow_json]   (BET_SPORT=epl restricts the bet population, records stay SPORT-wide)
 """
 import sqlite3, math, re, sys, time, bisect, json, os
 from collections import defaultdict
@@ -16,6 +16,7 @@ from collections import defaultdict
 DB = sys.argv[1]
 SPORT = os.environ.get("SPORT", "cfb")
 SHADOW = sys.argv[2] if len(sys.argv) > 2 else None
+BET_SPORT = os.environ.get("BET_SPORT")   # optional: records from all of SPORT, bet population only these sport tags (2026-10-11 EPL slice)
 SPLIT = int(os.environ.get("SPLIT", 1782864000))    # default 2026-07-01T00:00Z (season boundary); NBA uses 2026-02-01
 SETTLE_LAG = 4 * 3600
 TRIG_USD, ON_USD, MIN_STAKE, LAT = 100, 100, 50, 60
@@ -34,13 +35,13 @@ def teams_of(q, mt):
 
 # ---- markets: every resolved CFB market feeds records; game totals are the bet population
 mk, games = {}, defaultdict(list)
-for cid, mt, q, st, w0, tok0 in db.execute(
-        "SELECT condition_id, market_type, question, start, winner0, token0 FROM markets "
+for cid, mt, q, st, w0, tok0, sp in db.execute(
+        "SELECT condition_id, market_type, question, start, winner0, token0, sport FROM markets "
         "WHERE status='done' AND winner0 IN (0,1) AND sport IN (" + ",".join("?" * len(SPORT.split(","))) + ") AND condition_id IN (SELECT condition_id FROM fills_done)", tuple(SPORT.split(","))):
     teams = teams_of(q, mt)
     gk = (tuple(sorted(teams)), (st - 6 * 3600) // 86400) if len(teams) == 2 else None
     mk[cid] = dict(mt=mt, st=st, w0=w0, tok0=tok0, teams=teams, hold=st >= SPLIT, g=gk or cid)
-    if mt == "total" and gk: games[gk].append(cid)
+    if mt == "total" and gk and (not BET_SPORT or sp in BET_SPORT.split(",")): games[gk].append(cid)
 log(f"{len(mk)} markets, {len(games)} games with totals, fills_all rows {db.execute('SELECT count(*) FROM fills_all').fetchone()[0]}")
 
 # ---- pregame positions -> point-in-time records
