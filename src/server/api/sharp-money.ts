@@ -61,8 +61,11 @@ const MIN_UNIT_SIZE_SAMPLES = 3;
 const UNIT_SIZE_TOP_SAMPLE = 10;
 // Gamma caps /events responses at 100 rows regardless of the requested limit;
 // asking for more silently truncates and desyncs offset-based pagination.
-const GAMMA_EVENTS_PAGE_LIMIT = 100;
-const GAMMA_EVENTS_MAX_PAGES = 12;
+// Pages are kept small for memory, not for Gamma: once NFL props are listed
+// (~280 markets per game, 2026-10-10) one 100-event page is 50MB+ of JSON and
+// parsing it blew the SharpPipeline DO memory limit. 10 events ≈ 8MB.
+const GAMMA_EVENTS_PAGE_LIMIT = 10;
+const GAMMA_EVENTS_MAX_PAGES = 120;
 const GAMMA_RETRY_LIMIT = 3;
 const GAMMA_RETRY_BASE_MS = 250;
 const MIN_READY_HOLDER_COUNT = 10;
@@ -1056,6 +1059,12 @@ export async function fetchTrendingSportsMarkets(
 
 					eventsOffset += events.length;
 					eventCount += events.length;
+					// Sorted by startTime descending: once a page reaches games that
+					// already started, every later page is older still.
+					const reachedPast = events.some((event) => {
+						const start = event.startTime ? Date.parse(event.startTime) : NaN;
+						return !Number.isNaN(start) && start < now.getTime();
+					});
 
 					for (const event of events) {
 						const rawMarkets = event.markets ?? [];
@@ -1121,6 +1130,7 @@ export async function fetchTrendingSportsMarkets(
 							rawMarketCount: rawMarkets.length,
 						});
 					}
+					if (reachedPast || events.length < GAMMA_EVENTS_PAGE_LIMIT) break;
 				}
 
 				if (eventCount >= GAMMA_EVENTS_PAGE_LIMIT * GAMMA_EVENTS_MAX_PAGES) {
