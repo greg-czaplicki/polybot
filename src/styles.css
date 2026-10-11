@@ -18,6 +18,8 @@ body {
 
 html {
   background-color: var(--ink-00);
+  /* Dark-only app: native scrollbars and form controls render dark. */
+  color-scheme: dark;
 }
 
 code,

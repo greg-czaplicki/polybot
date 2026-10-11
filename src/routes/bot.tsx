@@ -505,7 +505,7 @@ function BotPage() {
 								<div className="text-ink-55">No logs yet.</div>
 							) : (
 								logs.map((entry) => (
-									<div key={entry.id} className="whitespace-pre-wrap">
+									<div key={entry.id} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
 										{entry.line || " "}
 									</div>
 								))
