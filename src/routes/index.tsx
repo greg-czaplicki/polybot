@@ -959,7 +959,7 @@ function TerminalPage() {
 						</a>
 					}
 					span={12}
-					meta="flat-stake units · real vs shadow"
+					meta="real money · book + $4 lanes"
 				>
 					<PlChartSection range={chartRange} compact />
 				</Panel>
