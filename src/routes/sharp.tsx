@@ -78,6 +78,10 @@ const SERIES_LABELS: Record<number, string> = {
 	10204: "UCL",
 	10365: "ATP",
 	10366: "WTA",
+	10310: "CS2",
+	10311: "LOL",
+	10309: "DOTA2",
+	10369: "VAL",
 	38: "MMA",
 };
 
@@ -1669,7 +1673,7 @@ function SharpMoneyPage() {
 				)}
 				{/* Header */}
 				<header className="sticky top-10 z-20 w-full border-b border-ink-15 bg-ink-05">
-					<div className="mx-auto flex h-8 max-w-7xl items-center justify-between gap-3 px-4">
+					<div className="flex h-8 items-center justify-between gap-3 px-3">
 						<div className="flex min-w-0 items-center gap-3">
 							<h1 className="font-mono text-xxs font-semibold uppercase tracking-[0.18em] text-ink-55">
 								Tape · sharp-money board
@@ -1714,7 +1718,7 @@ function SharpMoneyPage() {
 				</header>
 
 				{/* Main Content */}
-				<main className="mx-auto max-w-7xl px-4 py-6">
+				<main className="px-3 py-3">
 					{isLoading && entries.length === 0 && (
 						<div className="mb-6 flex items-center justify-center gap-2 rounded-md bg-ink-05 px-4 py-6 ring-1 ring-inset ring-ink-15 font-mono text-sm text-ink-70">
 							<Loader2 className="h-4 w-4 animate-spin text-brand-blue" />
@@ -2400,7 +2404,7 @@ function TapeRow({
 					{getSeriesLabel(entry.sportSeriesId) ?? "—"}
 				</td>
 				<td
-					className={`px-3 text-right font-mono text-xs tabular-nums ${startsClass}`}
+					className={`whitespace-nowrap px-3 text-right font-mono text-xs tabular-nums ${startsClass}`}
 				>
 					{startsText}
 				</td>
@@ -2447,7 +2451,7 @@ function TapeRow({
 					{entry.confidence.toLowerCase()}
 				</td>
 				<td
-					className={`px-3 font-mono text-xxs uppercase tracking-[0.12em] ${pickClass}`}
+					className={`whitespace-nowrap px-3 font-mono text-xxs uppercase tracking-[0.12em] ${pickClass}`}
 				>
 					{pickText}
 				</td>

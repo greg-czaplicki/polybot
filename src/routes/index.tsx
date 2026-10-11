@@ -22,6 +22,7 @@ import {
 } from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
 import { roiZScore } from "@/lib/gate-verdict";
+import { laneLabel } from "@/lib/lane-labels";
 import { formatSideLabel } from "@/lib/side-label";
 import {
 	type DashboardHealth,
@@ -97,23 +98,6 @@ function laneRows(h: DashboardHealth) {
 			state: h.soccerHotFade,
 		},
 	];
-}
-
-/** Short lane names for position rows (lane column of manual_picks). */
-const LANE_LABELS: Record<string, string> = {
-	cs2_pickem_dog: "CS2 dogs",
-	ncaaf_totals_pilot: "NCAAF totals",
-	nfl_totals_pilot: "NFL totals",
-	nba_totals_fade: "NBA fade",
-	cfb_hot_follow: "CFB hot",
-	nfl_wallet_follow: "NFL wallets",
-	nhl_hot_fade: "NHL fade",
-	soccer_hot_fade: "Soccer fade",
-};
-
-function laneLabel(lane: string | null): string {
-	if (lane === null) return "Book";
-	return LANE_LABELS[lane] ?? lane.replaceAll("_", " ");
 }
 
 function laneStateText(p: DashboardHealth["cs2Pilot"]): string {

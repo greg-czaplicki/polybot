@@ -29,7 +29,7 @@ interface PlLineChartProps {
 	ariaLabel: string;
 }
 
-const MARGIN_LEFT = 44;
+const MARGIN_LEFT = 56;
 const MARGIN_RIGHT = 14;
 const MARGIN_BOTTOM = 22;
 

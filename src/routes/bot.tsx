@@ -379,65 +379,140 @@ function BotPage() {
 			)}
 
 			<Workspace>
-				{/* Service */}
-				<Panel
-					title="Service"
-					span={8}
-					meta={status?.service ?? "polywhaler-bot"}
-					tone={
-						status?.activeState === "active"
-							? "pos"
-							: status?.activeState
-								? "bad"
-								: undefined
-					}
-				>
-					{statusError && (
-						<div
-							role="alert"
-							className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
-						>
-							{statusError}
-						</div>
-					)}
-					<div className="grid grid-cols-2 gap-x-6 gap-y-3 px-3 py-3 text-sm sm:grid-cols-5">
-						<StatusCell label="Active" value={status?.activeState} />
-						<StatusCell label="Substate" value={status?.subState} />
-						<StatusCell label="Main PID" value={status?.mainPid} />
-						<StatusCell label="Exit code" value={status?.execMainStatus} />
-						<StatusCell label="Started" value={status?.startedAt} />
-					</div>
-					{/* biome-ignore lint/a11y/useSemanticElements: role="group" with
-					    aria-label is the right ARIA pattern for a non-landmark control cluster. */}
-					<div
-						className="flex flex-wrap gap-2 border-t border-ink-15 px-3 py-2"
-						role="group"
-						aria-label="Bot service actions"
+				{/* Left column: service controls with the log tail under them, so
+				    the column is never a block of empty space beside Config. */}
+				<div className="flex min-w-0 flex-col gap-px bg-ink-15 md:col-span-8">
+					{/* Service */}
+					<Panel
+						title="Service"
+						span={8}
+						meta={status?.service ?? "polywhaler-bot"}
+						tone={
+							status?.activeState === "active"
+								? "pos"
+								: status?.activeState
+									? "bad"
+									: undefined
+						}
 					>
-						<ActionButton
-							label="Start"
-							loadingLabel="Starting…"
-							isActive={actionLoading === "start"}
-							isLocked={actionLoading !== null && actionLoading !== "start"}
-							onClick={() => void runAction("start")}
-						/>
-						<ActionButton
-							label="Stop"
-							loadingLabel="Stopping…"
-							tone="bad"
-							isActive={actionLoading === "stop"}
-							isLocked={actionLoading !== null && actionLoading !== "stop"}
-							onClick={() => void runAction("stop")}
-						/>
-						<ActionButton
-							label="Restart"
-							loadingLabel="Restarting…"
-							isActive={actionLoading === "restart"}
-							isLocked={actionLoading !== null && actionLoading !== "restart"}
-							onClick={() => void runAction("restart")}
-						/>
-					</div>
-				</Panel>
+						{statusError && (
+							<div
+								role="alert"
+								className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
+							>
+								{statusError}
+							</div>
+						)}
+						<div className="grid grid-cols-2 gap-x-6 gap-y-3 px-3 py-3 text-sm sm:grid-cols-5">
+							<StatusCell label="Active" value={status?.activeState} />
+							<StatusCell label="Substate" value={status?.subState} />
+							<StatusCell label="Main PID" value={status?.mainPid} />
+							<StatusCell label="Exit code" value={status?.execMainStatus} />
+							<StatusCell label="Started" value={status?.startedAt} />
+						</div>
+						{/* biome-ignore lint/a11y/useSemanticElements: role="group" with
+					    aria-label is the right ARIA pattern for a non-landmark control cluster. */}
+						<div
+							className="flex flex-wrap gap-2 border-t border-ink-15 px-3 py-2"
+							role="group"
+							aria-label="Bot service actions"
+						>
+							<ActionButton
+								label="Start"
+								loadingLabel="Starting…"
+								isActive={actionLoading === "start"}
+								isLocked={actionLoading !== null && actionLoading !== "start"}
+								onClick={() => void runAction("start")}
+							/>
+							<ActionButton
+								label="Stop"
+								loadingLabel="Stopping…"
+								tone="bad"
+								isActive={actionLoading === "stop"}
+								isLocked={actionLoading !== null && actionLoading !== "stop"}
+								onClick={() => void runAction("stop")}
+							/>
+							<ActionButton
+								label="Restart"
+								loadingLabel="Restarting…"
+								isActive={actionLoading === "restart"}
+								isLocked={actionLoading !== null && actionLoading !== "restart"}
+								onClick={() => void runAction("restart")}
+							/>
+						</div>
+					</Panel>
+
+					{/* Logs */}
+					<Panel
+						title="Logs"
+						span={8}
+						className="flex-1"
+						meta={
+							<span className="flex items-center gap-2">
+								{isStreaming ? (
+									<span className="flex items-center gap-1.5 text-brand-blue">
+										<span
+											className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-blue"
+											aria-hidden
+										/>
+										streaming
+									</span>
+								) : (
+									<button
+										type="button"
+										onClick={() => void startStream()}
+										className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95"
+									>
+										start stream
+									</button>
+								)}
+								<button
+									type="button"
+									onClick={stopStream}
+									disabled={!isStreaming}
+									className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95 disabled:opacity-40"
+								>
+									stop
+								</button>
+							</span>
+						}
+					>
+						{logsError && (
+							<div
+								role="alert"
+								className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
+							>
+								{logsError}
+							</div>
+						)}
+						{streamError && (
+							<div
+								role="alert"
+								className="border-b border-ink-15 bg-signal-warn/10 px-3 py-2 text-sm text-signal-warn"
+							>
+								{streamError}
+							</div>
+						)}
+						<div
+							ref={logsContainerRef}
+							onScroll={handleLogsScroll}
+							role="log"
+							aria-label="Bot service logs"
+							aria-live="off"
+							className="max-h-96 overflow-auto px-3 py-2 font-mono text-xs leading-5 text-ink-85 md:max-h-[70vh]"
+						>
+							{logs.length === 0 ? (
+								<div className="text-ink-55">No logs yet.</div>
+							) : (
+								logs.map((entry) => (
+									<div key={entry.id} className="whitespace-pre-wrap">
+										{entry.line || " "}
+									</div>
+								))
+							)}
+						</div>
+					</Panel>
+				</div>
 
 				{/* Config */}
 				<Panel
@@ -546,76 +621,6 @@ function BotPage() {
 					{!envLoading && !envPayload && (
 						<Empty>Env editing is not configured.</Empty>
 					)}
-				</Panel>
-
-				{/* Logs */}
-				<Panel
-					title="Logs"
-					span={12}
-					meta={
-						<span className="flex items-center gap-2">
-							{isStreaming ? (
-								<span className="flex items-center gap-1.5 text-brand-blue">
-									<span
-										className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-blue"
-										aria-hidden
-									/>
-									streaming
-								</span>
-							) : (
-								<button
-									type="button"
-									onClick={() => void startStream()}
-									className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95"
-								>
-									start stream
-								</button>
-							)}
-							<button
-								type="button"
-								onClick={stopStream}
-								disabled={!isStreaming}
-								className="uppercase tracking-[0.15em] text-ink-55 hover:text-ink-95 disabled:opacity-40"
-							>
-								stop
-							</button>
-						</span>
-					}
-				>
-					{logsError && (
-						<div
-							role="alert"
-							className="border-b border-ink-15 bg-signal-bad/10 px-3 py-2 text-sm text-signal-bad"
-						>
-							{logsError}
-						</div>
-					)}
-					{streamError && (
-						<div
-							role="alert"
-							className="border-b border-ink-15 bg-signal-warn/10 px-3 py-2 text-sm text-signal-warn"
-						>
-							{streamError}
-						</div>
-					)}
-					<div
-						ref={logsContainerRef}
-						onScroll={handleLogsScroll}
-						role="log"
-						aria-label="Bot service logs"
-						aria-live="off"
-						className="max-h-96 overflow-auto px-3 py-2 font-mono text-xs leading-5 text-ink-85 md:max-h-[60vh]"
-					>
-						{logs.length === 0 ? (
-							<div className="text-ink-55">No logs yet.</div>
-						) : (
-							logs.map((entry) => (
-								<div key={entry.id} className="whitespace-pre-wrap">
-									{entry.line || " "}
-								</div>
-							))
-						)}
-					</div>
 				</Panel>
 			</Workspace>
 		</Shell>

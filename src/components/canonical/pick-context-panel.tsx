@@ -117,7 +117,7 @@ export function usePickContext(pickId: string) {
 			onClick={toggle}
 			aria-expanded={expanded}
 			aria-controls={panelId}
-			className="inline-flex h-8 items-center rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-70 ring-1 ring-inset ring-ink-25 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
+			className="inline-flex h-8 items-center rounded-md px-2.5 font-mono text-xxs font-semibold uppercase tracking-wider text-ink-55 ring-1 ring-inset ring-ink-15 sm:h-6 sm:px-2 transition-colors hover:bg-ink-15 hover:text-ink-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue"
 		>
 			{expanded ? "hide" : "context"}
 		</button>

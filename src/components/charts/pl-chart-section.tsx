@@ -180,6 +180,9 @@ export function PlChartSection({
 }) {
 	const [data, setData] = useState<PlTimeseriesResult | null>(null);
 	const [loadFailed, setLoadFailed] = useState(false);
+	// The shadow book runs ~30x the real book in units and flattens it, so
+	// it is opt-in.
+	const [showShadow, setShowShadow] = useState(false);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -350,6 +353,18 @@ export function PlChartSection({
 							<span className="ml-2 font-mono text-xxs font-normal uppercase tracking-wider text-ink-55">
 								flat-stake units, from range start
 							</span>
+							<button
+								type="button"
+								onClick={() => setShowShadow((v) => !v)}
+								aria-pressed={showShadow}
+								className={`ml-3 inline-flex h-6 items-center rounded px-2 font-mono text-xxs uppercase tracking-wider ring-1 ring-inset transition-colors ${
+									showShadow
+										? "text-ink-95 ring-ink-40"
+										: "text-ink-55 ring-ink-15 hover:text-ink-85"
+								}`}
+							>
+								{showShadow ? "hide shadow book" : "show shadow book"}
+							</button>
 						</h3>
 						<PlLineChart
 							days={chart.days}
@@ -360,12 +375,16 @@ export function PlChartSection({
 									color: SERIES_COLORS.real,
 									values: chart.realCum,
 								},
-								{
-									key: "shadow",
-									label: "Shadow book (gate rejects)",
-									color: SERIES_COLORS.shadow,
-									values: chart.shadowCum,
-								},
+								...(showShadow
+									? [
+											{
+												key: "shadow",
+												label: "Shadow book (gate rejects)",
+												color: SERIES_COLORS.shadow,
+												values: chart.shadowCum,
+											},
+										]
+									: []),
 							]}
 							markers={chart.markers}
 							height={260}

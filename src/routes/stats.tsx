@@ -23,6 +23,7 @@ import {
 	Workspace,
 } from "@/components/terminal/panel";
 import { Shell, ShellButton } from "@/components/terminal/shell";
+import { laneLabel } from "@/lib/lane-labels";
 import { formatSideLabel } from "@/lib/side-label";
 import {
 	clearManualPicksFn,
@@ -155,7 +156,7 @@ function BookPage() {
 	const byGrade = useMemo(
 		() =>
 			GRADES.map((g) => {
-				const rows = filtered.filter((p) => p.grade === g);
+				const rows = filtered.filter((p) => !p.lane && p.grade === g);
 				const win = rows.filter((p) => p.status === "win").length;
 				const loss = rows.filter((p) => p.status === "loss").length;
 				const push = rows.filter((p) => p.status === "push").length;
@@ -183,6 +184,44 @@ function BookPage() {
 			}),
 		[filtered],
 	);
+
+	// Scoreboard per lane (holder book first) — real dollars from the fill.
+	const byLane = useMemo(() => {
+		const groups = new Map<
+			string,
+			{ win: number; loss: number; push: number; open: number; usd: number }
+		>();
+		for (const p of filtered) {
+			const key = laneLabel(p.lane);
+			const g = groups.get(key) ?? {
+				win: 0,
+				loss: 0,
+				push: 0,
+				open: 0,
+				usd: 0,
+			};
+			if (p.status === "win") g.win += 1;
+			else if (p.status === "loss") g.loss += 1;
+			else if (p.status === "push") g.push += 1;
+			else g.open += 1;
+			if (
+				(p.status === "win" || p.status === "loss") &&
+				p.roi != null &&
+				p.fillNotional != null
+			)
+				g.usd += p.roi * p.fillNotional;
+			groups.set(key, g);
+		}
+		return [...groups.entries()]
+			.map(([lane, g]) => ({ lane, ...g }))
+			.sort((a, b) =>
+				a.lane === "Book" ? -1 : b.lane === "Book" ? 1 : b.usd - a.usd,
+			);
+	}, [filtered]);
+
+	const [showAll, setShowAll] = useState(false);
+	const LEDGER_PAGE = 40;
+	const ledgerRows = showAll ? filtered : filtered.slice(0, LEDGER_PAGE);
 
 	return (
 		<Shell
@@ -276,29 +315,82 @@ function BookPage() {
 						<Empty>No picks in range.</Empty>
 					) : (
 						<Tape
-							minWidth="min-w-[760px]"
+							minWidth="min-w-[720px]"
 							head={[
 								{ label: "Market" },
 								{ label: "Side" },
+								{ label: "Lane" },
 								{ label: "Grd", align: "right" },
-								{ label: "Sig", align: "right" },
 								{ label: "Px", align: "right" },
-								{ label: "Fill" },
 								{ label: "R", align: "right" },
 								{ label: "Units", align: "right" },
-								{ label: "CLV", align: "right" },
 								{ label: "Picked", align: "right" },
 								{ label: "" },
 							]}
 						>
-							{filtered.map((p) => (
+							{ledgerRows.map((p) => (
 								<LedgerRow key={p.id} pick={p} />
 							))}
 						</Tape>
 					)}
+					{filtered.length > LEDGER_PAGE ? (
+						<div className="border-t border-ink-10 px-3 py-2">
+							<button
+								type="button"
+								onClick={() => setShowAll((v) => !v)}
+								className="font-mono text-xxs uppercase tracking-wider text-ink-55 hover:text-ink-95"
+							>
+								{showAll
+									? `show latest ${LEDGER_PAGE}`
+									: `show all ${filtered.length}`}
+							</button>
+						</div>
+					) : null}
 				</Panel>
 
-				<Panel title="By grade" span={3} meta="in range">
+				<Panel title="By lane" span={3} meta="in range · real $">
+					<table className="w-full text-sm text-ink-85">
+						<thead>
+							<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
+								<th className="px-3 text-left font-medium">Lane</th>
+								<th className="px-3 text-right font-medium">W-L</th>
+								<th className="px-3 text-right font-medium">$</th>
+							</tr>
+						</thead>
+						<tbody>
+							{byLane.map((l) => (
+								<Row key={l.lane}>
+									<Cell className="whitespace-nowrap text-ink-95">
+										{l.lane}
+										{l.open > 0 ? (
+											<span className="ml-1.5 font-mono text-xxs text-ink-40">
+												{l.open} open
+											</span>
+										) : null}
+									</Cell>
+									<Cell right className="text-ink-70">
+										{l.win}-{l.loss}
+										{l.push ? (
+											<span className="text-ink-40">-{l.push}p</span>
+										) : null}
+									</Cell>
+									<Cell right>
+										<Num
+											value={l.usd}
+											text={
+												l.win + l.loss > 0
+													? `${l.usd >= 0 ? "+" : "−"}$${Math.abs(l.usd).toFixed(2)}`
+													: "—"
+											}
+										/>
+									</Cell>
+								</Row>
+							))}
+						</tbody>
+					</table>
+					<p className="border-t border-ink-15 px-3 pt-3 pb-1 font-mono text-xxs uppercase tracking-[0.15em] text-ink-55">
+						By grade · holder book
+					</p>
 					<table className="w-full text-sm text-ink-85">
 						<thead>
 							<tr className="h-6 border-b border-ink-10 font-mono text-xxs uppercase tracking-[0.12em] text-ink-40">
@@ -380,14 +472,20 @@ function LedgerRow({ pick }: { pick: ManualPickEntry }) {
 						</span>
 					) : null}
 				</Cell>
-				<Cell right className="font-sans font-semibold text-ink-85">
-					{pick.grade ?? "—"}
+				<Cell className="whitespace-nowrap text-xs text-ink-70">
+					{laneLabel(pick.lane)}
+					{pick.fillStatus && pick.fillStatus !== "matched" ? (
+						<span className="ml-1 text-signal-warn">{pick.fillStatus}</span>
+					) : null}
 				</Cell>
-				<Cell right className="text-ink-55">
-					{pick.signalScore?.toFixed(0) ?? "—"}
+				<Cell right className="font-sans font-semibold text-ink-85">
+					{pick.lane ? (
+						<span className="text-ink-40">—</span>
+					) : (
+						(pick.grade ?? "—")
+					)}
 				</Cell>
 				<Cell right>{pick.price != null ? pick.price.toFixed(2) : "—"}</Cell>
-				<Cell className="text-xs text-ink-55">{pick.fillStatus ?? "—"}</Cell>
 				<Cell right className={`font-semibold ${resultClass(pick.status)}`}>
 					{resultWord(pick.status)}
 				</Cell>
@@ -395,12 +493,6 @@ function LedgerRow({ pick }: { pick: ManualPickEntry }) {
 					<Num
 						value={pick.roi}
 						text={pick.status === "pending" ? "—" : units(pick.roi)}
-					/>
-				</Cell>
-				<Cell right>
-					<Num
-						value={pick.clv}
-						text={pick.clv != null ? pct(pick.clv * 100) : "—"}
 					/>
 				</Cell>
 				<Cell right className="text-ink-55" title={clock(pick.pickedAt)}>
@@ -412,7 +504,7 @@ function LedgerRow({ pick }: { pick: ManualPickEntry }) {
 			</Row>
 			{body ? (
 				<tr className="border-b border-ink-10 bg-ink-05/60">
-					<td colSpan={11} className="px-3 py-2">
+					<td colSpan={9} className="px-3 py-2">
 						{body}
 					</td>
 				</tr>

@@ -1,7 +1,7 @@
 /** Human labels for shadow reject reasons (gates and paper lanes). */
 export const REASON_LABELS: Record<string, string> = {
-	outside_window: "Earlier than window (>180m)",
-	too_close_to_start: "Later than window (<60m)",
+	outside_window: "Too early (>3h out)",
+	too_close_to_start: "Too late (<60m out)",
 	spread_market_excluded: "Spread gate",
 	ncaab_spread_excluded: "NCAAB spread gate",
 	nhl_league_probation: "NHL probation",
