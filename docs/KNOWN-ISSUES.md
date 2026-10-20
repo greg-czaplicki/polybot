@@ -794,3 +794,16 @@ the downstream fields per event, prop stats computed inline; first ticks
 after deploy `ok`, cache fresh. `eventDetails.marketCount` now counts kept
 markets (`rawMarketCount` still the total). Re-adding the four soccer
 competitions is unblocked but untested — tail `/tick` after doing it.
+
+## polysharp daily OOM-killed (2026-10-11 → 2026-10-19), RETIRED 2026-10-20
+
+VPS `polysharp-daily` (11:45Z) was OOM-killed every day from 10/11: `load_fills`
+pulls every labelled fill from `sharp.db` (20 GB) into RAM, 7.5 GB RSS on the
+8 GB box. The crawl step ran first and kept succeeding, so the DB kept growing.
+No live lane depends on it (lanes use desktop-shipped records pickles).
+Consequences: the polysharp daily report, the forward cell lanes / hot-record
+lane reads, and the wallet scores used by `polysharp-live` alerts are frozen
+at 2026-10-10. The timer was disabled 2026-10-20 instead of being fixed (the
+remaining reads were dead: atp_dog_cell failed forward 10/5, MLB is over, and
+following sharps was negative in every sport). `sharp.db` is left in place. To revive it, move it
+to the desktop per the research-on-desktop rule and stream fills, don't load them all.
