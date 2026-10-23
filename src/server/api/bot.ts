@@ -13,6 +13,10 @@ import {
 	matchTeamKeys,
 	pickemSide,
 } from "@/lib/cs2-pickem-lane";
+import {
+	DOTA2_WALLET_FOLLOW_LANE,
+	dota2WalletFollowSide,
+} from "@/lib/dota2-wallet-follow-lane";
 import { MAX_OPEN_NOTIONAL_USD } from "@/lib/exposure";
 import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
 import {
@@ -2823,6 +2827,7 @@ async function listBotCandidates(
 		NFL_WALLET_FOLLOW_LANE,
 		NHL_HOT_FADE_LANE,
 		SOCCER_HOT_FADE_LANE,
+		DOTA2_WALLET_FOLLOW_LANE,
 	].filter((lane) => lane.enabled);
 	const laneSignals = new Map<string, Map<string, LaneSignal>>(
 		walletLanes.map((lane) => [lane.name, new Map()]),
@@ -2994,6 +2999,25 @@ async function listBotCandidates(
 			notes: (entry) => [
 				`bet ${signalOf(SOCCER_HOT_FADE_LANE, entry.conditionId)?.betLabel ?? "none"} (against hot/team-specialist wallets)`,
 				`price band ${SOCCER_HOT_FADE_LANE.priceLo}-${SOCCER_HOT_FADE_LANE.priceHi}`,
+			],
+		},
+		// Era v26: Dota 2 match-winner sharp / team-specialist FOLLOW pilot
+		// (src/lib/dota2-wallet-follow-lane.ts). Bet label is the outcome
+		// index (A/B), not the cache's title-parsed esports labels.
+		{
+			lane: DOTA2_WALLET_FOLLOW_LANE,
+			segmentLabel:
+				"Dota 2 wallet follow lane (era v26 pilot, follow sharps/specialists)",
+			side: (entry) =>
+				dota2WalletFollowSide(
+					signalOf(DOTA2_WALLET_FOLLOW_LANE, entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					Math.floor(now / 1000),
+				),
+			notes: (entry) => [
+				`follow ${signalOf(DOTA2_WALLET_FOLLOW_LANE, entry.conditionId)?.betLabel ?? "none"} (sharp/team-specialist wallets)`,
+				`price band ${DOTA2_WALLET_FOLLOW_LANE.priceLo}-${DOTA2_WALLET_FOLLOW_LANE.priceHi}`,
 			],
 		},
 	];

@@ -97,6 +97,11 @@ function laneRows(h: DashboardHealth) {
 			label: "Soccer hot-wallet fade",
 			state: h.soccerHotFade,
 		},
+		{
+			key: "dota2_wallet",
+			label: "Dota wallets",
+			state: h.dota2WalletFollow,
+		},
 	];
 }
 

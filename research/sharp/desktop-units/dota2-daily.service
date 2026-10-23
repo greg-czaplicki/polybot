@@ -1,0 +1,6 @@
+[Unit]
+Description=Polywhaler dota2 wallet records refresh (desktop) -> VPS, era v26 dota2_wallet_follow
+[Service]
+Type=oneshot
+ExecStart=/home/greg-czaplicki/Documents/Projects/polywhaler/research/sharp/wallet-daily.sh dota2
+TimeoutStartSec=3600

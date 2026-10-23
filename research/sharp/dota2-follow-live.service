@@ -1,0 +1,8 @@
+[Unit]
+Description=Dota 2 sharp/team-specialist FOLLOW: push wallet signals for upcoming match winners (era v26)
+[Service]
+Type=oneshot
+WorkingDirectory=/root/polysharp
+Environment=LANE=dota2_wallet_follow SERIES_ID=10309 RECORDS=/root/polysharp/data/dota2/dota2_records.pkl "TITLE_PREFIX=Dota 2: " LOOKAHEAD_H=24
+ExecStart=/root/polyarb/.venv/bin/python /root/polysharp/esports_follow_live.py
+TimeoutStartSec=540

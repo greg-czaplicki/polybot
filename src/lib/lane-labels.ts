@@ -8,6 +8,7 @@ const LANE_LABELS: Record<string, string> = {
 	nfl_wallet_follow: "NFL wallets",
 	nhl_hot_fade: "NHL fade",
 	soccer_hot_fade: "Soccer fade",
+	dota2_wallet_follow: "Dota wallets",
 };
 
 /** NULL / missing lane = the holder book. */

@@ -1,0 +1,7 @@
+[Unit]
+Description=Dota 2 follow signal poll every 10 minutes
+[Timer]
+OnCalendar=*:6/10
+Persistent=false
+[Install]
+WantedBy=timers.target

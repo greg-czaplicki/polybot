@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily dota2-daily (catches up after sleep)
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

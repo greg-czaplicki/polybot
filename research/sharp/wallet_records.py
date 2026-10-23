@@ -17,8 +17,13 @@ DB, OUT = sys.argv[1], sys.argv[2]
 SPORT = os.environ.get("SPORT", "cfb")
 SETTLE_LAG, MIN_STAKE = 4 * 3600, 50
 
+ESPORTS_RE = re.compile(r"^(?:Dota 2|Counter-Strike): (.+?) vs\.? (.+?)(?: \(BO\d\))?(?: - |$)")   # = dota2_wallets.py TEAMS_RE
+
 def teams_of(q, mt):
     q = q or ""
+    m = ESPORTS_RE.match(q)
+    if m: return (m.group(1).strip(), m.group(2).strip())
+    if q.startswith(("Dota 2:", "Counter-Strike:")): return ()
     if mt == "spread":
         m = re.match(r"^Spread: (.+?) \(", q)
         return (m.group(1).strip(),) if m else ()

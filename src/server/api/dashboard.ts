@@ -7,6 +7,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { CFB_HOT_FOLLOW_LANE } from "@/lib/cfb-hot-follow-lane";
 import { CS2_PICKEM_DOG_LANE, evaluateLaneState } from "@/lib/cs2-pickem-lane";
+import { DOTA2_WALLET_FOLLOW_LANE } from "@/lib/dota2-wallet-follow-lane";
 import { evaluateLadder } from "@/lib/lane-ladder";
 import {
 	evaluateLiveLadder,
@@ -125,6 +126,8 @@ export interface DashboardHealth {
 	nhlHotFade: LanePilotState | null;
 	/** Era v23 soccer totals hot/team-specialist fade pilot (src/lib/soccer-hot-fade-lane.ts). */
 	soccerHotFade: LanePilotState | null;
+	/** Era v26 Dota 2 match-winner wallet follow pilot (src/lib/dota2-wallet-follow-lane.ts). */
+	dota2WalletFollow: LanePilotState | null;
 }
 
 export interface LanePilotState {
@@ -709,6 +712,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const nflWalletFollow = await pilotState(NFL_WALLET_FOLLOW_LANE);
 		const nhlHotFade = await pilotState(NHL_HOT_FADE_LANE);
 		const soccerHotFade = await pilotState(SOCCER_HOT_FADE_LANE);
+		const dota2WalletFollow = await pilotState(DOTA2_WALLET_FOLLOW_LANE);
 
 		const health: DashboardHealth = {
 			botLastSeenAt: botRow?.last ?? null,
@@ -740,6 +744,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			nflWalletFollow,
 			nhlHotFade,
 			soccerHotFade,
+			dota2WalletFollow,
 		};
 
 		// Sharp tape: fills by ranked wallets on markets that have not started.

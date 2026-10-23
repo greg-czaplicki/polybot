@@ -1,9 +1,10 @@
 #!/bin/bash
-# DESKTOP daily: refresh a wallet lane's records and ship them to the VPS.  usage: wallet-daily.sh <nhl|soccer>
+# DESKTOP daily: refresh a wallet lane's records and ship them to the VPS.  usage: wallet-daily.sh <nhl|soccer|dota2>
 set -euo pipefail
 case "$1" in
   nhl)    SP=nhl;    SPORTS=nhl;                                  DB=nhl_2025.db ;;
   soccer) SP=soccer; SPORTS=epl,lal,bun,sea,fl1,ucl,uel,mls,elc;  DB=soccer_2025.db ;;
+  dota2)  SP=dota2;  SPORTS=dota2;                                DB=dota2_2025.db ;;
   *) echo "unknown $1"; exit 2 ;;
 esac
 D=$HOME/Documents/Projects/polywhaler-data/$SP
