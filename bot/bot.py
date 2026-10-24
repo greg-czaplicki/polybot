@@ -453,6 +453,7 @@ def prune_placed_group_meta(
 # places bets makes several picks/execution POSTs on top of the candidates
 # fetch. Only counting the poll undercounted by up to ~10x at the worst time.
 _worker_call_timestamps: List[float] = []
+READ_TIMEOUT_SECONDS = float(os.environ.get("BOT_READ_TIMEOUT_SECONDS", "60"))
 
 
 def request_json(url: str, api_key: str) -> Dict[str, Any]:
@@ -464,7 +465,9 @@ def request_json(url: str, api_key: str) -> Dict[str, Any]:
 		"Mozilla/5.0 (compatible; PolywhalerBot/1.0; +https://workers.dev)",
 	)
 	try:
-		with urllib.request.urlopen(request, timeout=20) as response:
+		# GETs are idempotent; /api/bot/candidates can run past 20s on heavy
+		# slates (2026-10-24 CFB Saturday: 12-34s), so reads get a longer cap.
+		with urllib.request.urlopen(request, timeout=READ_TIMEOUT_SECONDS) as response:
 			payload = response.read().decode("utf-8")
 			return json.loads(payload)
 	except urllib.error.HTTPError as exc:

@@ -169,6 +169,8 @@ type BotCandidateNearMiss = {
 };
 
 type BotCandidatesDebug = {
+	/** Wall-clock ms per phase (2026-10-24: the endpoint ran past the bot's 20s cap on a CFB Saturday). */
+	timingsMs?: Record<string, number>;
 	totalEntries: number;
 	upcomingEntries: number;
 	candidatesBeforeDedup: number;
@@ -1808,10 +1810,18 @@ async function listBotCandidates(
 	db: D1Database,
 	options: BotCandidatesOptions,
 ): Promise<BotCandidatesResult> {
+	const timingsMs: Record<string, number> = {};
+	let phaseStartedAt = Date.now();
+	const markPhase = (phase: string) => {
+		const at = Date.now();
+		timingsMs[phase] = (timingsMs[phase] ?? 0) + at - phaseStartedAt;
+		phaseStartedAt = at;
+	};
 	// Sport-keyed policy gates resolve series -> tag through the registry
 	// snapshot; warm it so a cold isolate can label new-season series IDs
 	// (otherwise nfl_preseason_excluded etc. silently don't fire).
 	await warmSeriesRegistry();
+	markPhase("registry");
 	const windowMinutes =
 		typeof options.windowMinutes === "number" && options.windowMinutes > 0
 			? options.windowMinutes
@@ -1854,6 +1864,7 @@ async function listBotCandidates(
 		limit,
 		windowHours,
 	});
+	markPhase("cache");
 	// Defense-in-depth against duplicate bets (2026-07-23 recon P1): the
 	// bot's own guard is a local state file that can be lost; exclude
 	// conditions already picked in the last 7 days server-side too.
@@ -1876,7 +1887,9 @@ async function listBotCandidates(
 			pickedMarketGroupKeys.add(getMarketGroupKey(entry));
 		}
 	}
+	markPhase("recentPicks");
 	const debug: BotCandidatesDebug = {
+		timingsMs,
 		totalEntries: entries.length,
 		upcomingEntries: 0,
 		candidatesBeforeDedup: 0,
@@ -2222,8 +2235,10 @@ async function listBotCandidates(
 			})),
 		);
 	};
+	markPhase("prefilter");
 	if (upcomingEntries.length === 0) {
 		await recordShadowBook();
+		markPhase("shadowBook");
 		const result = {
 			candidates: [],
 			requested: 0,
@@ -2256,11 +2271,13 @@ async function listBotCandidates(
 				returnedBySportSeries: debug.returnedBySportSeries,
 			});
 		}
+		markPhase("snapshot");
 		return result;
 	}
 	const gradesResult = await computeSharpMoneyGrades(db, {
 		conditionIds: upcomingEntries.map((entry) => entry.conditionId),
 	});
+	markPhase("grades");
 	if (gradesResult.error) {
 		throw new Error(gradesResult.error);
 	}
@@ -2689,6 +2706,7 @@ async function listBotCandidates(
 			}),
 		)
 	).filter((candidate) => candidate !== null);
+	markPhase("scoring");
 	const candidates = baseCandidates;
 	debug.candidatesBeforeDedup = candidates.length;
 	// Shadow the same-scan dedup losers (alternate lines that graded worse
@@ -2761,7 +2779,9 @@ async function listBotCandidates(
 		}
 	}
 	// After the dedup loop so alt_line_deduped rows land in the same batch.
+	markPhase("dedup");
 	await recordShadowBook();
+	markPhase("shadowBook");
 	const dedupedCandidates = [...deduped.values()].sort((left, right) =>
 		compareBotCandidates(left, right),
 	);
@@ -3143,6 +3163,7 @@ async function listBotCandidates(
 			stage: "not_found_in_entries",
 		};
 	}
+	markPhase("lanes");
 	const result = {
 		candidates: [...dedupedCandidates, ...laneCandidates],
 		requested: gradesResult.requested,
@@ -3175,6 +3196,7 @@ async function listBotCandidates(
 			returnedBySportSeries: debug.returnedBySportSeries,
 		});
 	}
+	markPhase("snapshot");
 	return result;
 }
 
