@@ -2133,17 +2133,20 @@ async function listBotCandidates(
 			debug.paperLanes = await evaluatePinDivergenceLanes(db, []);
 			return;
 		}
+		let existingKeys: Set<string> | undefined;
 		try {
 			// Enrichment only for first sightings (rows the INSERT OR IGNORE
 			// will actually keep) — repeat sightings on later ticks skip the
 			// work. Enrichment failure must not lose the rows themselves.
-			const existingKeys = await listExistingShadowKeys(
+			existingKeys = await listExistingShadowKeys(
 				db,
 				shadowInputs.map((input) => input.conditionId),
 			);
+			markPhase("shadow.existingKeys");
+			const knownKeys = existingKeys;
 			const firstSightings = shadowInputs.filter(
 				(input) =>
-					!existingKeys.has(`${input.conditionId}|${input.rejectReason}`),
+					!knownKeys.has(`${input.conditionId}|${input.rejectReason}`),
 			);
 			// Pre-filter rejects (timing, not_ready) are pushed before the
 			// scan's grade pass runs, so grade them here — otherwise their
@@ -2174,6 +2177,7 @@ async function listBotCandidates(
 					input.warnings = grade.warnings;
 				}
 			}
+			markPhase("shadow.lateGrades");
 			// Trend context: cache is shared with the survivors' canonical
 			// scoring, so a matchup's teams/snapshots load once.
 			const trendContextByConditionId = new Map<
@@ -2207,11 +2211,13 @@ async function listBotCandidates(
 		} catch (error) {
 			console.warn("[bot] shadow enrichment failed:", error);
 		}
+		markPhase("shadow.trendContext");
 		try {
-			await recordShadowCandidates(db, shadowInputs);
+			await recordShadowCandidates(db, shadowInputs, existingKeys);
 		} catch (error) {
 			console.warn("[bot] shadow-book record failed:", error);
 		}
+		markPhase("shadow.record");
 		// Pin-divergence paper lanes (tennis_v2_paper + pin_div_paper,
 		// charters tennis-ground-up.md + pin-divergence-benchmark.md):
 		// PM-vs-fresh-Pinnacle divergence on this tick's entries.

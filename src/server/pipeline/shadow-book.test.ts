@@ -56,6 +56,17 @@ describe("recordShadowCandidates", () => {
 		expect(noContextParams.filter((p) => p === null).length).toBeGreaterThan(0);
 	});
 
+	it("skips keys already stored", async () => {
+		vi.mocked(run).mockClear();
+		const recorded = await recordShadowCandidates(
+			{} as Db,
+			[baseInput, { ...baseInput, rejectReason: "spread_market_excluded" }],
+			new Set([`${baseInput.conditionId}|${baseInput.rejectReason}`]),
+		);
+		expect(recorded).toBe(1);
+		expect(vi.mocked(run)).toHaveBeenCalledTimes(1);
+	});
+
 	it("dedupes by condition and reason within a batch", async () => {
 		vi.mocked(run).mockClear();
 		const recorded = await recordShadowCandidates({} as Db, [

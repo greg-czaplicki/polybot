@@ -159,9 +159,13 @@ export async function listExistingShadowKeys(
 export async function recordShadowCandidates(
 	db: Db,
 	inputs: ShadowCandidateInput[],
+	/** `${conditionId}|${rejectReason}` keys already stored — skipped instead of
+	 * re-sent as no-op INSERT OR IGNOREs (2026-10-24: re-inserting every
+	 * repeat sighting serially took ~6s per bot poll on a CFB Saturday). */
+	existingKeys?: Set<string>,
 ): Promise<number> {
 	let recorded = 0;
-	const seen = new Set<string>();
+	const seen = new Set<string>(existingKeys);
 	for (const input of inputs) {
 		// Only settleable candidates: need a side and an entry price.
 		if (input.sharpSide !== "A" && input.sharpSide !== "B") continue;
