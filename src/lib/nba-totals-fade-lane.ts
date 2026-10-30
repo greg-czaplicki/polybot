@@ -42,8 +42,13 @@ export const NBA_TOTALS_FADE_LANE: LaneConfig & {
 	killZ: -1,
 	/** 2026-10-20T00:00:00Z — NBA opening night; nothing before it. */
 	forwardStart: 1792454400,
-	/** Master switch (era-gated; flipping it is an era bump). */
-	enabled: true,
+	/**
+	 * Master switch. RETIRED 2026-10-30: stopped by kill_z at 12-19 (final per
+	 * charter; v2 below replaces it, era v27). Disabled so the dashboard shows
+	 * it as retired instead of a standing kill alarm; it placed no bets after
+	 * the kill either way.
+	 */
+	enabled: false,
 };
 
 /**
@@ -65,6 +70,7 @@ export const NBA_TOTALS_FADE_V2_LANE: typeof NBA_TOTALS_FADE_LANE & {
 	maxLeadMinutes: 360,
 	/** 2026-12-01T00:00:00Z. */
 	forwardStart: 1796083200,
+	enabled: true,
 };
 
 export interface NbaFadeSignal {

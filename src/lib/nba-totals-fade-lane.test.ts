@@ -96,6 +96,8 @@ describe("NBA_TOTALS_FADE_V2_LANE (era v27)", () => {
 		expect(V2.stakeUsd).toBe(4);
 		expect(V2.killDrawdownUsd).toBe(-40);
 		expect(V2.maxLeadMinutes).toBe(360);
+		expect(V2.enabled).toBe(true);
+		expect(NBA_TOTALS_FADE_LANE.enabled).toBe(false);
 		expect(V2.forwardStart).toBe(Date.UTC(2026, 11, 1) / 1000);
 	});
 });
