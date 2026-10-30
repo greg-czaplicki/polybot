@@ -21,6 +21,7 @@ import { MAX_OPEN_NOTIONAL_USD } from "@/lib/exposure";
 import { evaluateLadder, type LadderState } from "@/lib/lane-ladder";
 import {
 	NBA_TOTALS_FADE_LANE,
+	NBA_TOTALS_FADE_V2_LANE,
 	type NbaFadeSignal,
 	nbaFadeSide,
 } from "@/lib/nba-totals-fade-lane";
@@ -2145,8 +2146,7 @@ async function listBotCandidates(
 			markPhase("shadow.existingKeys");
 			const knownKeys = existingKeys;
 			const firstSightings = shadowInputs.filter(
-				(input) =>
-					!knownKeys.has(`${input.conditionId}|${input.rejectReason}`),
+				(input) => !knownKeys.has(`${input.conditionId}|${input.rejectReason}`),
 			);
 			// Pre-filter rejects (timing, not_ready) are pushed before the
 			// scan's grade pass runs, so grade them here — otherwise their
@@ -2821,7 +2821,7 @@ async function listBotCandidates(
 	type LaneDebug = NonNullable<BotCandidatesDebug["lane"]>;
 	// Era v19: NBA totals fade signals pushed by polysharp (nba_fade_live.py).
 	const nbaFadeSignals = new Map<string, NbaFadeSignal>();
-	if (NBA_TOTALS_FADE_LANE.enabled) {
+	if (NBA_TOTALS_FADE_LANE.enabled || NBA_TOTALS_FADE_V2_LANE.enabled) {
 		try {
 			const rows = await all<{
 				condition_id: string;
@@ -2987,6 +2987,26 @@ async function listBotCandidates(
 			notes: (entry) => [
 				`fade ${nbaFadeSignals.get(entry.conditionId)?.fadeLabel ?? "none"} (consensus on the other side)`,
 				`price band ${NBA_TOTALS_FADE_LANE.priceLo}-${NBA_TOTALS_FADE_LANE.priceHi}`,
+			],
+		},
+		// Era v27: NBA fade v2 — same signals, consensus within 6h of tip,
+		// fade side [0.50, 0.60), from 2026-12-01.
+		{
+			lane: NBA_TOTALS_FADE_V2_LANE,
+			segmentLabel:
+				"NBA totals fade v2 lane (era v27, late consensus, fade side 0.50-0.60)",
+			side: (entry) =>
+				nbaFadeSide(
+					nbaFadeSignals.get(entry.conditionId),
+					entry.sideA,
+					entry.sideB,
+					parseEventTime(entry.eventTime)?.getTime() ?? null,
+					Math.floor(now / 1000),
+					NBA_TOTALS_FADE_V2_LANE,
+				),
+			notes: (entry) => [
+				`fade ${nbaFadeSignals.get(entry.conditionId)?.fadeLabel ?? "none"} (late consensus on the other side)`,
+				`price band ${NBA_TOTALS_FADE_V2_LANE.priceLo}-${NBA_TOTALS_FADE_V2_LANE.priceHi}, lead <= ${NBA_TOTALS_FADE_V2_LANE.maxLeadMinutes}m`,
 			],
 		},
 		// Era v23: NHL totals hot/team-specialist FADE pilot

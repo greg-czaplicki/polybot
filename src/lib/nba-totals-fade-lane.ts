@@ -46,6 +46,27 @@ export const NBA_TOTALS_FADE_LANE: LaneConfig & {
 	enabled: true,
 };
 
+/**
+ * Era v27 (2026-10-30): v2 of the fade, after v1's kill_z stop (12-19,
+ * docs/audits/2026-10-30-nba-totals-fade-pilot.md). Charter
+ * docs/charters/nba-totals-fade-v2.md. Same signals; bets only when the
+ * consensus formed within 6h of tip-off and the fade side is priced
+ * [0.50, 0.60), from 2026-12-01 (both seasons' Oct-Nov fades lost, 21-34).
+ * Own pick rows, so v1's kill does not carry over.
+ */
+export const NBA_TOTALS_FADE_V2_LANE: typeof NBA_TOTALS_FADE_LANE & {
+	maxLeadMinutes: number;
+} = {
+	...NBA_TOTALS_FADE_LANE,
+	name: "nba_totals_fade_v2",
+	priceLo: 0.5,
+	priceHi: 0.6,
+	/** Consensus trigger at most this many minutes before the event start. */
+	maxLeadMinutes: 360,
+	/** 2026-12-01T00:00:00Z. */
+	forwardStart: 1796083200,
+};
+
 export interface NbaFadeSignal {
 	conditionId: string;
 	fadeLabel: string | null;
@@ -64,6 +85,11 @@ export function nbaFadeSide(
 	sideB: { label?: string | null; price?: number | null },
 	eventTimeMs: number | null | undefined,
 	nowSeconds: number,
+	band: {
+		priceLo: number;
+		priceHi: number;
+		maxLeadMinutes?: number;
+	} = NBA_TOTALS_FADE_LANE,
 ): LaneSide | null {
 	if (!signal || signal.voided || !signal.fadeLabel) return null;
 	if (signal.triggerTs === null || signal.triggerTs > nowSeconds) return null;
@@ -71,6 +97,12 @@ export function nbaFadeSide(
 		return null;
 	}
 	if (isNbaPreseasonTime(eventTimeMs)) return null;
+	if (
+		band.maxLeadMinutes !== undefined &&
+		eventTimeMs / 1000 - signal.triggerTs > band.maxLeadMinutes * 60
+	) {
+		return null;
+	}
 	const want = signal.fadeLabel.trim().toLowerCase();
 	const side: LaneSide | null =
 		(sideA.label ?? "").trim().toLowerCase() === want
@@ -80,7 +112,7 @@ export function nbaFadeSide(
 				: null;
 	if (side === null) return null;
 	const price = side === "A" ? sideA.price : sideB.price;
-	const { priceLo, priceHi } = NBA_TOTALS_FADE_LANE;
+	const { priceLo, priceHi } = band;
 	if (
 		typeof price !== "number" ||
 		!Number.isFinite(price) ||
