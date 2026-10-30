@@ -5,6 +5,7 @@ const LANE_LABELS: Record<string, string> = {
 	nfl_totals_pilot: "NFL totals",
 	nba_totals_fade: "NBA fade",
 	nba_totals_fade_v2: "NBA fade v2",
+	ncaab_ml_dog: "NCAAB dogs",
 	cfb_hot_follow: "CFB hot",
 	nfl_wallet_follow: "NFL wallets",
 	nhl_hot_fade: "NHL fade",

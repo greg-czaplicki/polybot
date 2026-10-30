@@ -19,6 +19,7 @@ import {
 	NBA_TOTALS_FADE_LANE,
 	NBA_TOTALS_FADE_V2_LANE,
 } from "@/lib/nba-totals-fade-lane";
+import { NCAAB_ML_DOG_LANE } from "@/lib/ncaab-ml-dog-lane";
 import { NCAAF_TOTALS_PILOT_LANE } from "@/lib/ncaaf-totals-lane";
 import { NFL_TOTALS_PILOT_LANE } from "@/lib/nfl-totals-lane";
 import { NFL_WALLET_FOLLOW_LANE } from "@/lib/nfl-wallet-follow-lane";
@@ -122,6 +123,7 @@ export interface DashboardHealth {
 	nflTotalsPilot: LanePilotState | null;
 	nbaTotalsFade: LanePilotState | null;
 	nbaTotalsFadeV2: LanePilotState | null;
+	ncaabMlDog: LanePilotState | null;
 	/** Era v21 CFB totals hot/team-specialist follow pilot (src/lib/cfb-hot-follow-lane.ts). */
 	cfbHotFollow: LanePilotState | null;
 	/** Era v22 NFL totals wallet follow pilot (src/lib/nfl-wallet-follow-lane.ts). */
@@ -713,6 +715,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		const nflTotalsPilot = await pilotState(NFL_TOTALS_PILOT_LANE);
 		const nbaTotalsFade = await pilotState(NBA_TOTALS_FADE_LANE);
 		const nbaTotalsFadeV2 = await pilotState(NBA_TOTALS_FADE_V2_LANE);
+		const ncaabMlDog = await pilotState(NCAAB_ML_DOG_LANE);
 		const cfbHotFollow = await pilotState(CFB_HOT_FOLLOW_LANE);
 		const nflWalletFollow = await pilotState(NFL_WALLET_FOLLOW_LANE);
 		const nhlHotFade = await pilotState(NHL_HOT_FADE_LANE);
@@ -746,6 +749,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 			nflTotalsPilot,
 			nbaTotalsFade,
 			nbaTotalsFadeV2,
+			ncaabMlDog,
 			cfbHotFollow,
 			nflWalletFollow,
 			nhlHotFade,

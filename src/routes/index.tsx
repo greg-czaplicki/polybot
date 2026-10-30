@@ -90,6 +90,7 @@ function laneRows(h: DashboardHealth) {
 		{ key: "nfl_totals", label: "NFL totals", state: h.nflTotalsPilot },
 		{ key: "nba_fade", label: "NBA totals fade", state: h.nbaTotalsFade },
 		{ key: "nba_fade_v2", label: "NBA fade v2", state: h.nbaTotalsFadeV2 },
+		{ key: "ncaab_dog", label: "NCAAB dogs", state: h.ncaabMlDog },
 		{ key: "cfb_hot", label: "CFB hot wallets", state: h.cfbHotFollow },
 		{ key: "nfl_wallet", label: "NFL wallets", state: h.nflWalletFollow },
 		{ key: "nhl_fade", label: "NHL hot-wallet fade", state: h.nhlHotFade },

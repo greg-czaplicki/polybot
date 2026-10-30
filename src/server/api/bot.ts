@@ -25,6 +25,7 @@ import {
 	type NbaFadeSignal,
 	nbaFadeSide,
 } from "@/lib/nba-totals-fade-lane";
+import { NCAAB_ML_DOG_LANE, ncaabMlDogSide } from "@/lib/ncaab-ml-dog-lane";
 import { NCAAF_TOTALS_PILOT_LANE, totalsSide } from "@/lib/ncaaf-totals-lane";
 import { NFL_TOTALS_PILOT_LANE, nflTotalsSide } from "@/lib/nfl-totals-lane";
 import {
@@ -2899,6 +2900,15 @@ async function listBotCandidates(
 			side: (entry) => pickemSide(entry.sideA.price, entry.sideB.price),
 			notes: () => [
 				`price band ${CS2_PICKEM_DOG_LANE.priceLo}-${CS2_PICKEM_DOG_LANE.priceHi}`,
+			],
+		},
+		// Era v28: NCAAB moneyline underdog 30-50c (src/lib/ncaab-ml-dog-lane.ts).
+		{
+			lane: NCAAB_ML_DOG_LANE,
+			segmentLabel: "NCAAB moneyline dog lane (era v28 pilot, 30-50c)",
+			side: (entry) => ncaabMlDogSide(entry.sideA.price, entry.sideB.price),
+			notes: () => [
+				`price band ${NCAAB_ML_DOG_LANE.priceLo}-${NCAAB_ML_DOG_LANE.priceHi}`,
 			],
 		},
 		// Era v21: CFB totals hot/team-specialist FOLLOW pilot
