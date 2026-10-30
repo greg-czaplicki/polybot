@@ -683,7 +683,7 @@ export const getDashboardFn = createServerFn({ method: "GET" }).handler(
 		): Promise<LanePilotState | null> => {
 			try {
 				const laneRows = await listLanePickRows(db, lane.name);
-				const ladder = evaluateLadder(laneRows);
+				const ladder = evaluateLadder(laneRows, lane.name);
 				const laneState = evaluateLaneState(laneRows, now, {
 					...lane,
 					stakeUsd: ladder.stakeUsd,

@@ -29,6 +29,16 @@ export const LANE_LADDER = {
 	demoteTrailingN: 100,
 } as const;
 
+/**
+ * Owner-set minimum stakes, above the ladder (USD per bet). Owner 2026-10-30:
+ * NCAAF totals to $6 — it clears level 1's z bar (1.16 >= 0.8, ROI +20 %) but
+ * the season ends before it can reach 100 settled. The lane's dollar kill and
+ * BOT_LANE_MAX_STAKE still apply.
+ */
+export const LANE_OWNER_STAKES: Readonly<Record<string, number>> = {
+	ncaaf_totals_pilot: 6,
+};
+
 export interface LadderState {
 	level: 0 | 1 | 2;
 	stakeUsd: number;
@@ -41,9 +51,14 @@ export interface LadderState {
 	demoted: boolean;
 	/** z >= 2 on >= 250: stakes above $8 are the owner's decision. */
 	ownerCall: boolean;
+	/** LANE_OWNER_STAKES entry for this lane, when set. */
+	ownerStake: number | null;
 }
 
-export function evaluateLadder(rows: LanePickRow[]): LadderState {
+export function evaluateLadder(
+	rows: LanePickRow[],
+	laneName?: string,
+): LadderState {
 	const L = LANE_LADDER;
 	const settled = rows
 		.filter(
@@ -76,9 +91,11 @@ export function evaluateLadder(rows: LanePickRow[]): LadderState {
 			: null;
 	const demoted = target > 0 && trailingRoi !== null && trailingRoi < 0;
 	const level = (demoted ? target - 1 : target) as 0 | 1 | 2;
+	const ownerStake =
+		laneName !== undefined ? (LANE_OWNER_STAKES[laneName] ?? null) : null;
 	return {
 		level,
-		stakeUsd: L.stakes[level],
+		stakeUsd: Math.max(L.stakes[level], ownerStake ?? 0),
 		settled: n,
 		roi,
 		z,
@@ -86,5 +103,6 @@ export function evaluateLadder(rows: LanePickRow[]): LadderState {
 		demoted,
 		ownerCall:
 			n >= L.ownerCall.minSettled && z !== null && z >= L.ownerCall.minZ,
+		ownerStake,
 	};
 }

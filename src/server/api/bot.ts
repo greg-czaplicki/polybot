@@ -3084,7 +3084,7 @@ async function listBotCandidates(
 			try {
 				const laneRows = await listLanePickRows(db, lane.name);
 				// Stake ladder sets the stake; the open-bet limit is per lane.
-				const ladder = evaluateLadder(laneRows);
+				const ladder = evaluateLadder(laneRows, lane.name);
 				laneDebug.ladder = ladder;
 				const laneAtStake: LaneConfig = { ...lane, stakeUsd: ladder.stakeUsd };
 				const laneState = evaluateLaneState(

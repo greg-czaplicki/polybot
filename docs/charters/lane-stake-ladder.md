@@ -65,3 +65,11 @@ signals on a full Saturday. Owner, after the proposal to go to $100 on a
 ~$208 bankroll: "Raise it". Open cap **$100**; bot 24h backstop
 `BOT_DAILY_NOTIONAL_CAP=150` so it never binds before the open cap. Per-lane
 5-open and −$40 kill unchanged.
+
+## Owner stakes (2026-10-30)
+`LANE_OWNER_STAKES` in `src/lib/lane-ladder.ts` sets a per-lane minimum
+stake above the ladder. First entry: `ncaaf_totals_pilot` = $6 (owner:
+"Yes"), because it clears level 1's z bar (z 1.16 ≥ 0.8, ROI +20 % on 35
+ladder bets; lifetime 33-22 +$41.92) but the CFB season ends before 100
+settled. The lane's −$40 kill and `BOT_LANE_MAX_STAKE` still apply. Not a
+picking change — no era bump.

@@ -61,3 +61,14 @@ describe("evaluateLadder", () => {
 		expect(evaluateLadder(exact(150, 60)).level).toBe(0);
 	});
 });
+
+describe("owner stakes", () => {
+	it("lifts ncaaf_totals_pilot to $6 and leaves other lanes on the ladder", () => {
+		expect(evaluateLadder(exact(10, 5), "ncaaf_totals_pilot").stakeUsd).toBe(6);
+		expect(evaluateLadder(exact(10, 5), "ncaaf_totals_pilot").ownerStake).toBe(
+			6,
+		);
+		expect(evaluateLadder(exact(10, 5), "cs2_pickem_dog").stakeUsd).toBe(4);
+		expect(evaluateLadder(exact(10, 5)).ownerStake).toBeNull();
+	});
+});
